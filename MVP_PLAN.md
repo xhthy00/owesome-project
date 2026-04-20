@@ -64,10 +64,92 @@ awesome-project 是一个智能数据查询系统，用户可以用自然语言�
 - [ ] JWT 密钥配置
 - [ ] 用户注册 / 登录 API
 - [ ] Token 验证中间件
-- [ ] 简单的用户模型（id, username, password_hash）
+- [ ] 简单的用户模型(表结构如下)
+```SQL
+CREATE TABLE "public"."sys_user" (
+  "id" int8 NOT NULL GENERATED ALWAYS AS IDENTITY (
+INCREMENT 1
+MINVALUE  1
+MAXVALUE 9223372036854775807
+START 1
+CACHE 1
+),
+  "account" varchar(255) COLLATE "pg_catalog"."default" NOT NULL,
+  "name" varchar(255) COLLATE "pg_catalog"."default" NOT NULL,
+  "password" varchar(255) COLLATE "pg_catalog"."default" NOT NULL,
+  "email" varchar(255) COLLATE "pg_catalog"."default",
+  "oid" int8 NOT NULL,
+  "status" int4 NOT NULL,
+  "create_time" int8 NOT NULL,
+  "language" varchar(255) COLLATE "pg_catalog"."default" NOT NULL DEFAULT 'zh-CN'::character varying,
+  "origin" int4 NOT NULL DEFAULT 0,
+  "system_variables" jsonb,
+  CONSTRAINT "sys_user_pkey" PRIMARY KEY ("id")
+);
+```
 
 #### 1.3 数据源管理 CRUD
-- [ ] 数据源模型（id, name, type, host, port, database, username, password）
+- [ ] 数据源相关模型（数据源-core_datasource、数据表-core_table、数据表字段-core_field）
+```sql
+CREATE TABLE "public"."core_datasource" (
+  "id" int8 NOT NULL GENERATED ALWAYS AS IDENTITY (INCREMENT 1
+MINVALUE  1
+MAXVALUE 9223372036854775807
+START 1
+CACHE 1
+),
+  "name" varchar(128) COLLATE "pg_catalog"."default" NOT NULL,
+  "description" varchar(512) COLLATE "pg_catalog"."default",
+  "type" varchar(64) COLLATE "pg_catalog"."default" NOT NULL,
+  "configuration" text COLLATE "pg_catalog"."default",
+  "create_time" timestamp(6),
+  "create_by" int8,
+  "status" varchar(64) COLLATE "pg_catalog"."default",
+  "type_name" varchar(64) COLLATE "pg_catalog"."default",
+  "num" varchar(256) COLLATE "pg_catalog"."default",
+  "oid" int8,
+  "table_relation" jsonb,
+  "embedding" text COLLATE "pg_catalog"."default",
+  "recommended_config" int8,
+  CONSTRAINT "core_datasource_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "public"."core_table" (
+  "id" int8 NOT NULL GENERATED ALWAYS AS IDENTITY (
+INCREMENT 1
+MINVALUE  1
+MAXVALUE 9223372036854775807
+START 1
+CACHE 1
+),
+  "ds_id" int8,
+  "checked" bool NOT NULL,
+  "table_name" text COLLATE "pg_catalog"."default",
+  "table_comment" text COLLATE "pg_catalog"."default",
+  "custom_comment" text COLLATE "pg_catalog"."default",
+  "embedding" text COLLATE "pg_catalog"."default",
+  CONSTRAINT "core_table_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "public"."core_field" (
+  "id" int8 NOT NULL GENERATED ALWAYS AS IDENTITY (
+INCREMENT 1
+MINVALUE  1
+MAXVALUE 9223372036854775807
+START 1
+CACHE 1
+),
+  "ds_id" int8,
+  "table_id" int8,
+  "checked" bool NOT NULL,
+  "field_name" text COLLATE "pg_catalog"."default",
+  "field_type" varchar(128) COLLATE "pg_catalog"."default",
+  "field_comment" text COLLATE "pg_catalog"."default",
+  "custom_comment" text COLLATE "pg_catalog"."default",
+  "field_index" int8,
+  CONSTRAINT "core_field_pkey" PRIMARY KEY ("id")
+);
+```
 - [ ] 创建 / 查询 / 更新 / 删除数据源
 - [ ] 密码 AES 加密存储
 - [ ] 连接测试接口

@@ -7,8 +7,9 @@ from sqlalchemy import engine_from_config, pool
 from alembic import context
 
 # Import SQLModel models to ensure they are registered with metadata
-from src.datasource.models.datasource import CoreDatasource, CoreTable, CoreField, DsRecommendedProblem
-from src.common.core.database import Base  # Base from our database module
+from common.core.database import Base  # Base from our database module
+from system.models.user import SysUser
+from datasource.models.datasource import CoreDatasource, CoreTable, CoreField, DsRecommendedProblem
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

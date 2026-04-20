@@ -5,8 +5,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.common.core.config import get_settings
-from src.common.core.database import init_db
+from common.core.config import get_settings
+from common.core.database import init_db
+from system.api.system import router as system_router
+from datasource.api.datasource import router as datasource_router
 
 settings = get_settings()
 
@@ -33,6 +35,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register routers
+app.include_router(system_router, prefix=settings.api_prefix)
+app.include_router(datasource_router, prefix=settings.api_prefix)
 
 
 @app.get("/health")
