@@ -1,0 +1,62 @@
+{
+  "menu": {
+    "Data Q&A": "智能问数",
+    "Data Connections": "数据源"
+  },
+  "common": {
+    "ok": "确定",
+    "cancel": "取消",
+    "save": "保存",
+    "delete": "删除",
+    "edit": "编辑",
+    "add": "新增",
+    "search": "搜索",
+    "back": "返回",
+    "language": "语言",
+    "logout": "退出登录"
+  },
+  "chat": {
+    "new_conversation": "新建对话",
+    "search_placeholder": "搜索",
+    "select_datasource": "请选择数据源",
+    "selected_datasource": "已选择数据源",
+    "input_placeholder": "按下 Enter 提交问题，或使用 Ctrl + Enter 换行",
+    "welcome_title": "你好，欢迎使用",
+    "welcome_subtitle": "我可以查询数据、生成图表、检测数据异常、预测数据等赶快开启智能问数吧～",
+    "start_chat": "开启问数",
+    "no_conversation": "暂无对话",
+    "no_message": "选择左侧对话，或新建一个开始",
+    "delete_confirm": "确定删除该对话？",
+    "send": "发送",
+    "result": "结果",
+    "rows": "共 {n} 行",
+    "execution_failed": "执行失败",
+    "thinking": "思考过程",
+    "thinking_now": "思考中…",
+    "step_pending": "进行中",
+    "step_done": "完成",
+    "step_failed": "失败",
+    "today": "今天",
+    "week": "7天内",
+    "earlier": "更早",
+    "no_time": "未分组"
+  },
+  "datasource": {
+    "title": "数据源管理",
+    "name": "名称",
+    "type": "类型",
+    "host": "主机",
+    "port": "端口",
+    "database": "数据库",
+    "username": "用户名",
+    "password": "密码",
+    "operation": "操作",
+    "create_time": "创建时间",
+    "test_connection": "测试连接",
+    "add_datasource": "新增数据源",
+    "edit_datasource": "编辑数据源",
+    "delete_confirm": "确定删除数据源 {name}？",
+    "test_success": "连接成功",
+    "test_failed": "连接失败"
+  }
+}

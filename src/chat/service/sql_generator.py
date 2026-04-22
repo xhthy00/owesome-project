@@ -1,9 +1,13 @@
 """SQL generation service based on SQLBot patterns."""
 
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Tuple, Callable
 import logging
 import json
 import re
+import time
+
+StepCallback = Callable[[Dict[str, Any]], None]
+ReasoningCallback = Callable[[str], None]
 
 from src.llm.service import create_llm, build_chat_messages
 from src.templates.sql_gen_prompt import (
@@ -15,6 +19,31 @@ from src.chat.utils.sql_validator import validate_sql, extract_sql, format_sql
 from src.common.utils.aes import decrypt_conf
 
 logger = logging.getLogger(__name__)
+
+
+def extract_reasoning(raw_response: str) -> str:
+    """Extract LLM's natural-language reasoning from the raw response.
+
+    Priority:
+    1. ``<think>...</think>`` blocks (DeepSeek-R1 / Qwen-style reasoning models)
+    2. Text outside the JSON / code-block payload (everything the model wrote
+       around the structured answer)
+    """
+    if not raw_response:
+        return ""
+
+    think_match = re.search(r"<think>\s*(.*?)\s*</think>", raw_response, re.DOTALL | re.IGNORECASE)
+    if think_match:
+        return think_match.group(1).strip()
+
+    cleaned = re.sub(
+        r"```(?:json)?\s*\{.*?\}\s*```", "", raw_response, flags=re.DOTALL
+    )
+    first = cleaned.find("{")
+    last = cleaned.rfind("}")
+    if first != -1 and last > first:
+        cleaned = cleaned[:first] + cleaned[last + 1 :]
+    return cleaned.strip()
 
 
 class SQLGenerator:
@@ -33,6 +62,8 @@ class SQLGenerator:
         data_training: str = "",
         custom_prompt: str = "",
         need_title: bool = True,
+        step_callback: Optional[StepCallback] = None,
+        reasoning_callback: Optional[ReasoningCallback] = None,
     ) -> Dict[str, Any]:
         """
         Generate SQL from natural language question.
@@ -48,30 +79,65 @@ class SQLGenerator:
             need_title: Whether to generate conversation title
 
         Returns:
-            Dict with keys: sql, is_valid, error, formatted_sql, tables, chart_type, brief
+            Dict with keys: sql, is_valid, error, formatted_sql, tables,
+            chart_type, brief, reasoning, steps
         """
+        steps: List[Dict[str, Any]] = []
+
+        def add_step(name: str, label: str, started: float, status: str = "ok", detail: str = "") -> None:
+            step = {
+                "name": name,
+                "label": label,
+                "status": status,
+                "elapsed_ms": int((time.time() - started) * 1000),
+                "detail": detail,
+            }
+            steps.append(step)
+            if step_callback:
+                try:
+                    step_callback(step)
+                except Exception as cb_err:
+                    logger.warning(f"step_callback raised: {cb_err}")
+
+        def fail(error: str, sql: str = "", parse_result: Optional[Dict[str, Any]] = None,
+                 reasoning: str = "") -> Dict[str, Any]:
+            return {
+                "sql": sql,
+                "is_valid": False,
+                "error": error,
+                "formatted_sql": "",
+                "tables": (parse_result or {}).get("tables", []),
+                "chart_type": (parse_result or {}).get("chart_type", "table"),
+                "brief": (parse_result or {}).get("brief", ""),
+                "reasoning": reasoning,
+                "steps": steps,
+            }
+
         # 1. Get datasource and decrypt config
         from src.datasource.crud import crud_datasource
 
+        t0 = time.time()
         datasource = crud_datasource.get_datasource_by_id(session, datasource_id)
         if not datasource:
-            return {
-                "sql": "",
-                "is_valid": False,
-                "error": f"Datasource {datasource_id} not found",
-                "formatted_sql": "",
-                "tables": [],
-                "chart_type": "table",
-                "brief": "",
-            }
+            add_step("schema", "读取数据源", t0, status="error", detail=f"数据源 {datasource_id} 不存在")
+            return fail(f"Datasource {datasource_id} not found")
 
         config = decrypt_conf(datasource.configuration) if datasource.configuration else {}
         db_type = datasource.type or "pg"
+        add_step("datasource", f"加载数据源 {datasource.name}", t0, detail=f"类型: {db_type}")
 
         # 2. Get schema information from database
+        t1 = time.time()
         schema_info = self._get_schema(session, datasource, config, db_type)
+        add_step(
+            "schema",
+            "读取数据库 schema",
+            t1,
+            detail=f"长度 {len(schema_info)} 字符",
+        )
 
         # 3. Build prompt using SQLBot templates
+        t2 = time.time()
         system_prompt, user_prompt = build_sql_generation_prompt(
             question=question,
             database_type=db_type,
@@ -83,8 +149,10 @@ class SQLGenerator:
             error_msg="",
             need_title=need_title,
         )
+        add_step("prompt", "构建提示词", t2)
 
         # 4. Call LLM
+        t3 = time.time()
         try:
             messages = build_chat_messages(system_prompt, user_prompt)
             raw_response = self.llm.chat(messages)
@@ -92,47 +160,47 @@ class SQLGenerator:
             logger.info(f"LLM raw response: {raw_response[:1000]}")
         except Exception as e:
             logger.error(f"LLM call failed: {e}")
-            return {
-                "sql": "",
-                "is_valid": False,
-                "error": f"LLM call failed: {str(e)}",
-                "formatted_sql": "",
-                "tables": [],
-                "chart_type": "table",
-                "brief": "",
-            }
+            add_step("llm", "调用大模型", t3, status="error", detail=str(e))
+            return fail(f"LLM call failed: {str(e)}")
+
+        reasoning = extract_reasoning(raw_response)
+        add_step(
+            "llm",
+            "调用大模型生成 SQL",
+            t3,
+            detail=f"响应 {len(raw_response)} 字符" + (
+                f"，含思考 {len(reasoning)} 字符" if reasoning else ""
+            ),
+        )
+        if reasoning and reasoning_callback:
+            try:
+                reasoning_callback(reasoning)
+            except Exception as cb_err:
+                logger.warning(f"reasoning_callback raised: {cb_err}")
 
         # 5. Parse LLM response using SQLBot-style JSON parsing
+        t4 = time.time()
         parse_result = parse_llm_sql_response(raw_response)
-
         if not parse_result.get("success", False):
-            return {
-                "sql": "",
-                "is_valid": False,
-                "error": parse_result.get("message", "Failed to generate SQL"),
-                "formatted_sql": "",
-                "tables": [],
-                "chart_type": "table",
-                "brief": "",
-            }
+            add_step("parse", "解析模型输出", t4, status="error",
+                     detail=parse_result.get("message", "解析失败"))
+            return fail(parse_result.get("message", "Failed to generate SQL"),
+                        reasoning=reasoning)
+        add_step("parse", "解析模型输出", t4)
 
         # 6. Extract and validate SQL
+        t5 = time.time()
         sql = extract_sql(parse_result.get("sql", ""))
         is_valid, error_msg = validate_sql(sql)
-
         if not is_valid:
-            return {
-                "sql": sql,
-                "is_valid": False,
-                "error": error_msg,
-                "formatted_sql": "",
-                "tables": parse_result.get("tables", []),
-                "chart_type": parse_result.get("chart_type", "table"),
-                "brief": parse_result.get("brief", ""),
-            }
+            add_step("validate", "校验 SQL", t5, status="error", detail=error_msg)
+            return fail(error_msg, sql=sql, parse_result=parse_result, reasoning=reasoning)
+        add_step("validate", "校验 SQL 安全性", t5)
 
         # 7. Format SQL
+        t6 = time.time()
         formatted_sql = format_sql(sql, db_type)
+        add_step("format", "格式化 SQL", t6)
 
         return {
             "sql": sql,
@@ -142,6 +210,8 @@ class SQLGenerator:
             "tables": parse_result.get("tables", []),
             "chart_type": parse_result.get("chart_type", "table"),
             "brief": parse_result.get("brief", ""),
+            "reasoning": reasoning,
+            "steps": steps,
         }
 
     def generate_sql_with_retry(
