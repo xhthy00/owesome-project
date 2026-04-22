@@ -39,7 +39,16 @@
     "today": "今天",
     "week": "7天内",
     "earlier": "更早",
-    "no_time": "未分组"
+    "no_time": "未分组",
+    "chart_type": {
+      "table": "表格",
+      "column": "柱状图",
+      "bar": "条形图",
+      "line": "折线图",
+      "pie": "饼图"
+    },
+    "show_label": "显示数值",
+    "hide_label": "隐藏数值"
   },
   "datasource": {
     "title": "数据源管理",

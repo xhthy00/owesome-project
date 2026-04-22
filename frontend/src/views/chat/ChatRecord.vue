@@ -6,8 +6,17 @@ import {
   ArrowDown,
   CircleCheckFilled,
   CircleCloseFilled,
+  Grid,
+  Histogram,
+  TrendCharts,
+  PieChart,
+  DataAnalysis,
+  View,
+  Hide,
 } from '@element-plus/icons-vue'
 import type { ChatMessage } from './typed'
+import type { ChartTypes } from './component/BaseChart'
+import ChartComponent from './component/ChartComponent.vue'
 import { datetimeFormat } from '@/utils/utils'
 
 const props = defineProps<{ messages: ChatMessage[] }>()
@@ -16,6 +25,25 @@ const PAGE_SIZE = 20
 
 const pageMap = ref<Record<number, number>>({})
 const expandThinking = ref<Record<number, boolean>>({})
+const chartTypeMap = ref<Record<number, ChartTypes>>({})
+const showLabelMap = ref<Record<number, boolean>>({})
+
+const CHART_OPTIONS: { value: ChartTypes; label: string; icon: any }[] = [
+  { value: 'table', label: 'chat.chart_type.table', icon: Grid },
+  { value: 'column', label: 'chat.chart_type.column', icon: DataAnalysis },
+  { value: 'bar', label: 'chat.chart_type.bar', icon: Histogram },
+  { value: 'line', label: 'chat.chart_type.line', icon: TrendCharts },
+  { value: 'pie', label: 'chat.chart_type.pie', icon: PieChart },
+]
+
+const getChartType = (i: number, fallback?: string): ChartTypes => {
+  if (chartTypeMap.value[i]) return chartTypeMap.value[i]
+  const t = (fallback || 'table') as ChartTypes
+  return ['table', 'column', 'bar', 'line', 'pie'].includes(t) ? t : 'table'
+}
+const setChartType = (i: number, t: ChartTypes) => (chartTypeMap.value[i] = t)
+const getShowLabel = (i: number) => !!showLabelMap.value[i]
+const toggleShowLabel = (i: number) => (showLabelMap.value[i] = !showLabelMap.value[i])
 
 const getPage = (i: number) => pageMap.value[i] || 1
 const setPage = (i: number, p: number) => (pageMap.value[i] = p)
@@ -176,41 +204,106 @@ void props
               </el-alert>
             </div>
             <div v-else-if="msg.record.exec_result" class="result-block">
-              <div class="block-title">
-                {{ $t('chat.result') }}
-                <span class="muted">
-                  {{ $t('chat.rows', { n: msg.record.exec_result.row_count ?? 0 }) }}
-                </span>
+              <div class="result-header">
+                <div class="block-title">
+                  {{ $t('chat.result') }}
+                  <span class="muted">
+                    {{ $t('chat.rows', { n: msg.record.exec_result.row_count ?? 0 }) }}
+                  </span>
+                </div>
+                <div class="chart-toolbar">
+                  <el-tooltip
+                    v-for="opt in CHART_OPTIONS"
+                    :key="opt.value"
+                    :content="$t(opt.label)"
+                    placement="top"
+                    :show-after="300"
+                  >
+                    <el-button
+                      text
+                      class="tool-btn"
+                      :class="{
+                        active:
+                          getChartType(i, msg.record!.chart_type) === opt.value,
+                      }"
+                      @click="setChartType(i, opt.value)"
+                    >
+                      <el-icon :size="16">
+                        <component :is="opt.icon" />
+                      </el-icon>
+                    </el-button>
+                  </el-tooltip>
+                  <span
+                    v-if="getChartType(i, msg.record!.chart_type) !== 'table'"
+                    class="divider"
+                  />
+                  <el-tooltip
+                    v-if="getChartType(i, msg.record!.chart_type) !== 'table'"
+                    :content="getShowLabel(i) ? $t('chat.hide_label') : $t('chat.show_label')"
+                    placement="top"
+                    :show-after="300"
+                  >
+                    <el-button
+                      text
+                      class="tool-btn"
+                      :class="{ active: getShowLabel(i) }"
+                      @click="toggleShowLabel(i)"
+                    >
+                      <el-icon :size="16">
+                        <View v-if="getShowLabel(i)" />
+                        <Hide v-else />
+                      </el-icon>
+                    </el-button>
+                  </el-tooltip>
+                </div>
               </div>
-              <el-table
-                :data="
-                  slicedRows(i, msg.record.exec_result.rows)?.map((row) =>
-                    Object.fromEntries(
-                      (msg.record!.exec_result!.columns || []).map((c, idx) => [c, row[idx]])
+
+              <template v-if="getChartType(i, msg.record!.chart_type) === 'table'">
+                <el-table
+                  :data="
+                    slicedRows(i, msg.record.exec_result.rows)?.map((row) =>
+                      Object.fromEntries(
+                        (msg.record!.exec_result!.columns || []).map((c, idx) => [c, row[idx]])
+                      )
                     )
-                  )
-                "
-                stripe
-                size="small"
-                border
-              >
-                <el-table-column
-                  v-for="col in msg.record.exec_result.columns || []"
-                  :key="col"
-                  :prop="col"
-                  :label="col"
+                  "
+                  stripe
+                  size="small"
+                  border
+                >
+                  <el-table-column
+                    v-for="col in msg.record.exec_result.columns || []"
+                    :key="col"
+                    :prop="col"
+                    :label="col"
+                  />
+                </el-table>
+                <el-pagination
+                  v-if="(msg.record.exec_result.row_count ?? 0) > PAGE_SIZE"
+                  :current-page="getPage(i)"
+                  :page-size="PAGE_SIZE"
+                  :total="msg.record.exec_result.row_count ?? 0"
+                  layout="prev, pager, next, total"
+                  small
+                  class="pagination"
+                  @current-change="(p: number) => setPage(i, p)"
                 />
-              </el-table>
-              <el-pagination
-                v-if="(msg.record.exec_result.row_count ?? 0) > PAGE_SIZE"
-                :current-page="getPage(i)"
-                :page-size="PAGE_SIZE"
-                :total="msg.record.exec_result.row_count ?? 0"
-                layout="prev, pager, next, total"
-                small
-                class="pagination"
-                @current-change="(p: number) => setPage(i, p)"
-              />
+              </template>
+              <div v-else class="chart-wrapper">
+                <ChartComponent
+                  :id="msg.record!.id || i"
+                  :type="
+                    getChartType(i, msg.record!.chart_type) as
+                      | 'column'
+                      | 'bar'
+                      | 'line'
+                      | 'pie'
+                  "
+                  :columns="msg.record.exec_result.columns || []"
+                  :rows="msg.record.exec_result.rows || []"
+                  :show-label="getShowLabel(i)"
+                />
+              </div>
             </div>
           </div>
 
@@ -436,11 +529,66 @@ void props
         margin: 0;
       }
 
-      .result-block {
+          .result-block {
         background: #fafbfc;
         padding: 12px;
         border-radius: 8px;
         border: 1px solid #eef0f2;
+
+        .result-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          margin-bottom: 8px;
+
+          .block-title {
+            margin-bottom: 0;
+          }
+
+          .chart-toolbar {
+            display: flex;
+            align-items: center;
+            gap: 2px;
+            padding: 2px;
+            border-radius: 6px;
+            border: 1px solid #dee0e3;
+            background: #fff;
+
+            .tool-btn {
+              width: 26px;
+              height: 26px;
+              min-width: 26px;
+              border-radius: 4px;
+              color: #646a73;
+              padding: 0;
+
+              &:hover {
+                background: rgba(31, 35, 41, 0.06);
+              }
+
+              &.active {
+                background: var(--el-color-primary-light-9);
+                color: var(--el-color-primary);
+              }
+            }
+
+            .divider {
+              width: 1px;
+              height: 14px;
+              background: rgba(31, 35, 41, 0.15);
+              margin: 0 2px;
+            }
+          }
+        }
+
+        .chart-wrapper {
+          width: 100%;
+          height: 360px;
+          background: #fff;
+          border-radius: 6px;
+          padding: 8px;
+        }
 
         .pagination {
           margin-top: 12px;
