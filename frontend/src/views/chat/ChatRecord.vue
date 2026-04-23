@@ -348,7 +348,7 @@ void props
           </div>
 
           <div class="assistant-card">
-            <div class="assistant-split" :class="{ 'stacked-layout': !msg.pending }">
+            <div class="assistant-split">
               <section class="thinking-col">
                 <div class="panel-title">思考过程</div>
                 <div class="thinking-panel">
@@ -830,30 +830,9 @@ void props
 
     .assistant-split {
       display: grid;
-      grid-template-columns: minmax(300px, 38%) minmax(0, 1fr);
-      gap: 10px;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 8px;
       align-items: start;
-
-      &.stacked-layout {
-        grid-template-columns: minmax(0, 1fr);
-        gap: 8px;
-
-        .thinking-col {
-          border-right: 0;
-          padding-right: 0;
-
-          .thinking-panel {
-            position: static;
-            max-height: none;
-            overflow: visible;
-            padding-right: 0;
-          }
-        }
-
-        .result-col {
-          padding-left: 0;
-        }
-      }
     }
 
     .thinking-col,
@@ -865,21 +844,20 @@ void props
     }
 
     .thinking-col {
-      padding-right: 6px;
-      border-right: 1px solid #edf1f6;
+      padding-right: 0;
+      border-right: 0;
       position: relative;
 
       .thinking-panel {
-        position: sticky;
-        top: 4px;
-        max-height: calc(100vh - 220px);
-        overflow: auto;
-        padding-right: 2px;
+        position: static;
+        max-height: none;
+        overflow: visible;
+        padding-right: 0;
       }
     }
 
     .result-col {
-      padding-left: 4px;
+      padding-left: 0;
     }
 
     .result-card {
