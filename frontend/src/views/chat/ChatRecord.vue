@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onBeforeUnmount } from 'vue'
 import {
   ChatDotRound,
   User,
@@ -49,6 +49,7 @@ const chartTypeMap = ref<Record<number, ChartTypes>>({})
 const showLabelMap = ref<Record<number, boolean>>({})
 const resultPanelTabMap = ref<Record<number, 'chart' | 'sql' | 'data'>>({})
 const queryIndexMap = ref<Record<number, number>>({})
+const axesCache = new WeakMap<object, ChartAxis[] | undefined>()
 
 interface QuerySnapshot {
   key: string
@@ -101,8 +102,14 @@ const getResultPanelTab = (i: number, msg: ChatMessage): 'chart' | 'sql' | 'data
   resultPanelTabMap.value[i] = hasChart ? 'chart' : hasData ? 'data' : 'sql'
   return resultPanelTabMap.value[i]
 }
-const setResultPanelTab = (i: number, tab: 'chart' | 'sql' | 'data') => {
+const setResultPanelTab = (i: number, tab: 'chart' | 'sql' | 'data', msg?: ChatMessage) => {
   resultPanelTabMap.value[i] = tab
+  if (tab === 'chart' && msg) {
+    const current = getChartType(i, msg.record?.chart_type)
+    if (current === 'table') {
+      setChartType(i, 'column')
+    }
+  }
 }
 
 const querySnapshots = (msg: ChatMessage): QuerySnapshot[] => {
@@ -261,13 +268,18 @@ const groupedToolCalls = (calls: ToolCallRecord[] | undefined) => {
 
 const chartConfigToAxes = (cfg: ChartConfig | undefined): ChartAxis[] | undefined => {
   if (!cfg) return undefined
+  const keyObj = cfg as object
+  const cached = axesCache.get(keyObj)
+  if (cached) return cached
   const axes: ChartAxis[] = []
   if (cfg.x) axes.push({ name: cfg.x, value: cfg.x, type: 'x' })
   const ys = Array.isArray(cfg.y) ? cfg.y.filter(Boolean) : []
   ys.forEach((y) =>
     axes.push({ name: y, value: y, type: 'y', 'multi-quota': ys.length > 1 })
   )
-  return axes.length ? axes : undefined
+  const out = axes.length ? axes : undefined
+  axesCache.set(keyObj, out)
+  return out
 }
 
 const planStateIcon = (state: string) => {
@@ -390,7 +402,35 @@ const slicedRows = (i: number, rows: any[][] | undefined) => {
 }
 
 const dotInterval = ref(0)
-setInterval(() => (dotInterval.value = (dotInterval.value + 1) % 4), 500)
+const hasPendingMessage = computed(() => props.messages.some((m) => !!m.pending))
+let dotTimer: ReturnType<typeof setInterval> | null = null
+
+watch(
+  hasPendingMessage,
+  (pending) => {
+    if (pending) {
+      if (!dotTimer) {
+        dotTimer = setInterval(() => {
+          dotInterval.value = (dotInterval.value + 1) % 4
+        }, 500)
+      }
+      return
+    }
+    if (dotTimer) {
+      clearInterval(dotTimer)
+      dotTimer = null
+    }
+    dotInterval.value = 0
+  },
+  { immediate: true }
+)
+
+onBeforeUnmount(() => {
+  if (dotTimer) {
+    clearInterval(dotTimer)
+    dotTimer = null
+  }
+})
 const dots = computed(() => '.'.repeat(dotInterval.value))
 
 const onCopy = async (msg: ChatMessage) => {
@@ -684,32 +724,28 @@ void props
                       <button
                         class="switch-tab"
                         :class="{ active: getResultPanelTab(i, msg) === 'chart' }"
-                        @click="setResultPanelTab(i, 'chart')"
+                        @click="setResultPanelTab(i, 'chart', msg)"
                       >
                         {{ $t('chat.result_tab.chart') }}
                       </button>
                       <button
                         class="switch-tab"
                         :class="{ active: getResultPanelTab(i, msg) === 'data' }"
-                        @click="setResultPanelTab(i, 'data')"
+                        @click="setResultPanelTab(i, 'data', msg)"
                       >
                         {{ $t('chat.result_tab.data') }}
                       </button>
                       <button
                         class="switch-tab"
                         :class="{ active: getResultPanelTab(i, msg) === 'sql' }"
-                        @click="setResultPanelTab(i, 'sql')"
+                        @click="setResultPanelTab(i, 'sql', msg)"
                       >
                         {{ $t('chat.result_tab.sql') }}
                       </button>
                     </div>
 
                     <div
-                      v-if="
-                        getResultPanelTab(i, msg) === 'chart' &&
-                        getChartType(i, msg.record!.chart_type) !== 'table' &&
-                        activeQuery(i, msg)?.exec_result
-                      "
+                      v-if="getResultPanelTab(i, msg) === 'chart' && activeQuery(i, msg)?.exec_result"
                       class="result-section"
                     >
                       <div class="result-header">
@@ -753,6 +789,7 @@ void props
                       </div>
                       <div class="chart-wrapper">
                         <ChartComponent
+                          v-if="getChartType(i, msg.record!.chart_type) !== 'table'"
                           :id="msg.record!.id || i"
                           :type="
                             getChartType(i, msg.record!.chart_type) as
@@ -770,6 +807,7 @@ void props
                               : undefined
                           "
                         />
+                        <div v-else class="chart-empty">请选择图表类型以展示数据</div>
                       </div>
                     </div>
 
@@ -1688,6 +1726,15 @@ void props
       background: #fff;
       border-radius: 6px;
       padding: 8px;
+
+      .chart-empty {
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #98a2b3;
+        font-size: 12px;
+      }
     }
 
     .pagination {

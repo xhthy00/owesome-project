@@ -152,9 +152,11 @@ const toggleCollapse = () => emit('update:collapsed', !props.collapsed)
             >
               <el-icon class="item-icon" :size="14"><ChatDotRound /></el-icon>
               <span class="title-text ellipsis">{{ item.title || '未命名对话' }}</span>
-              <el-icon class="delete-icon" :size="14" @click.stop="emit('remove', item)">
-                <Delete />
-              </el-icon>
+              <button class="delete-btn" @click.stop="emit('remove', item)" title="删除会话">
+                <el-icon class="delete-icon" :size="17">
+                  <Delete />
+                </el-icon>
+              </button>
             </div>
           </template>
         </div>
@@ -313,24 +315,40 @@ const toggleCollapse = () => emit('update:collapsed', !props.collapsed)
           min-width: 0;
         }
 
-        .delete-icon {
-          opacity: 0;
-          color: #98a2b3;
+        .delete-btn {
+          margin-left: 6px;
+          width: 28px;
+          height: 28px;
+          border: 1px solid #fecdca;
+          border-radius: 7px;
+          background: #fef3f2;
+          color: #d92d20;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
           cursor: pointer;
-          padding: 4px;
-          border-radius: 4px;
+          flex-shrink: 0;
+          opacity: 0;
+          pointer-events: none;
+          transition: all 0.15s ease;
+
+          .delete-icon {
+            color: currentColor;
+          }
 
           &:hover {
-            color: var(--el-color-danger);
-            background: rgba(245, 39, 39, 0.08);
+            background: #fee4e2;
+            border-color: #fda29b;
+            transform: scale(1.08);
           }
         }
 
         &:hover {
           background: rgba(31, 35, 41, 0.05);
 
-          .delete-icon {
-            opacity: 1;
+          .delete-btn {
+            opacity: 0.92;
+            pointer-events: auto;
           }
         }
 
@@ -343,6 +361,13 @@ const toggleCollapse = () => emit('update:collapsed', !props.collapsed)
 
           .item-icon {
             color: var(--el-color-primary);
+          }
+
+          .delete-btn {
+            opacity: 0.92;
+            pointer-events: auto;
+            border-color: #fda29b;
+            background: #fee4e2;
           }
         }
       }

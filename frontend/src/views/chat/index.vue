@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Top, Bottom } from '@element-plus/icons-vue'
 import ChatSider from './ChatSider.vue'
@@ -86,18 +86,52 @@ const onSelect = async (c: Chat) => {
 }
 
 const onRemove = (c: Chat) => {
-  ElMessageBox.confirm('确定删除该对话？', '提示', { type: 'warning' })
+  const currentList = [...conversations.value]
+  const idx = currentList.findIndex((it) => it.id === c.id)
+  const fallbackNext =
+    idx >= 0
+      ? currentList[idx + 1] || currentList[idx - 1] || null
+      : null
+
+  ElMessageBox.confirm('确定删除该会话？删除后不可恢复。', '提示', { type: 'warning' })
     .then(async () => {
       if (!c.id) return
       await chatApi.delete(c.id)
       ElMessage.success('已删除')
-      if (active.value?.id === c.id) {
-        active.value = null
-        messages.value = []
-      }
       await loadConversations()
+      if (active.value?.id === c.id) {
+        const next =
+          (fallbackNext?.id
+            ? conversations.value.find((it) => it.id === fallbackNext.id)
+            : null) || null
+        if (next) {
+          await onSelect(next)
+        } else {
+          active.value = null
+          messages.value = []
+          recordViewKey.value += 1
+        }
+      }
     })
     .catch(() => {})
+}
+
+const _isTextInputLike = (target: EventTarget | null): boolean => {
+  const el = target as HTMLElement | null
+  if (!el) return false
+  const tag = (el.tagName || '').toLowerCase()
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return true
+  if (el.isContentEditable) return true
+  return !!el.closest('input, textarea, select, [contenteditable="true"]')
+}
+
+const onGlobalKeydown = (e: KeyboardEvent) => {
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return
+  if (_isTextInputLike(e.target)) return
+  const current = conversations.value.find((it) => it.id === active.value?.id)
+  if (!current) return
+  e.preventDefault()
+  onRemove(current)
 }
 
 const ensureConversation = async (question: string): Promise<ChatInfo> => {
@@ -309,6 +343,11 @@ const onSend = async (text: string) => {
 
 onMounted(async () => {
   await Promise.all([loadConversations(), loadDatasources()])
+  window.addEventListener('keydown', onGlobalKeydown)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onGlobalKeydown)
 })
 </script>
 

@@ -116,8 +116,17 @@ export function inferAxes(
   const categoricalCols = columns.filter((c) => !isNumericColumn(c))
 
   const axes: ChartAxis[] = []
+  const hasOnlyNumericCols = categoricalCols.length === 0 && numericCols.length > 0
 
   if (chartType === 'pie') {
+    if (hasOnlyNumericCols && data.length === 1) {
+      const metricCol = '指标'
+      const valueCol = '数值'
+      const pivoted = numericCols.map((c) => ({ [metricCol]: c, [valueCol]: data[0][c] }))
+      axes.push({ name: metricCol, value: metricCol, type: 'series' })
+      axes.push({ name: valueCol, value: valueCol, type: 'y' })
+      return { axes, data: pivoted }
+    }
     const series = categoricalCols[0] ?? columns[0]
     const value = numericCols[0] ?? columns[columns.length - 1]
     axes.push({ name: series, value: series, type: 'series' })
@@ -125,10 +134,19 @@ export function inferAxes(
     return { axes, data }
   }
 
+  if (hasOnlyNumericCols && data.length === 1) {
+    const metricCol = '指标'
+    const valueCol = '数值'
+    const pivoted = numericCols.map((c) => ({ [metricCol]: c, [valueCol]: data[0][c] }))
+    axes.push({ name: metricCol, value: metricCol, type: 'x' })
+    axes.push({ name: valueCol, value: valueCol, type: 'y' })
+    return { axes, data: pivoted }
+  }
+
   const xCol = categoricalCols[0] ?? columns[0]
   axes.push({ name: xCol, value: xCol, type: 'x' })
 
-  const yCols = numericCols.length ? numericCols : columns.filter((c) => c !== xCol)
+  const yCols = (numericCols.length ? numericCols : columns).filter((c) => c !== xCol)
   yCols.forEach((c, idx) =>
     axes.push({
       name: c,

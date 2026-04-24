@@ -30,11 +30,16 @@ function render() {
   if (!props.columns?.length || !props.rows?.length) return
 
   // 先用后端 axes（若传且 columns 里都存在），否则前端启发式推断。
-  const override = (props.axesOverride || []).filter((a) =>
+  const overrideRaw = (props.axesOverride || []).filter((a) =>
     a && a.value && props.columns.includes(a.value)
   )
   const { axes: inferred, data } = inferAxes(props.columns, props.rows, props.type)
-  const axes = override.length > 0 ? override : inferred
+  const hasX = overrideRaw.some((a) => a.type === 'x')
+  const hasY = overrideRaw.some((a) => a.type === 'y')
+  const hasSeries = overrideRaw.some((a) => a.type === 'series')
+  const overrideUsable =
+    props.type === 'pie' ? hasSeries && hasY : hasX && hasY
+  const axes = overrideUsable ? overrideRaw : inferred
 
   instance = getChartInstance(props.type, chartId.value)
   if (!instance) return
