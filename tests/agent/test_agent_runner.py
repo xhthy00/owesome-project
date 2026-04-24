@@ -16,7 +16,13 @@ import pytest
 
 from src.agent.resource.tool import business as biz
 from src.chat.schemas import ChatRequest
-from src.chat.service.agent_runner import run_agent_stream
+from src.chat.service.agent_runner import (
+    _RunConstraints,
+    _RunState,
+    _maybe_emit_report,
+    _sql_hits_locked_tables,
+    run_agent_stream,
+)
 
 
 class _ScriptedLlm:
@@ -304,3 +310,44 @@ def test_chat_request_agent_mode_accepts_agent_team_legacy():
 
     with pytest.raises(Exception):
         ChatRequest(question="q", datasource_id=1, agent_mode="wizard")
+
+
+def test_sql_hits_locked_tables_helper():
+    assert _sql_hits_locked_tables("SELECT * FROM chusan_zhengzhi LIMIT 10", ["chusan_zhengzhi"])
+    assert _sql_hits_locked_tables("SELECT * FROM `chusan_zhengzhi` LIMIT 10", ["chusan_zhengzhi"])
+    assert not _sql_hits_locked_tables("SELECT * FROM student_score LIMIT 10", ["chusan_zhengzhi"])
+
+
+def test_report_is_blocked_when_sql_violates_locked_tables():
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event: str, data: dict) -> None:
+        events.append((event, dict(data)))
+
+    state = _RunState(
+        sub_task_index=1,
+        constraints=_RunConstraints(
+            locked_tables=["chusan_zhengzhi"],
+            required_keywords=["初三", "政治"],
+            source_sub_task_index=0,
+        ),
+    )
+    state.last_sql = "SELECT * FROM student_score ORDER BY 总分 DESC LIMIT 10"
+    payload = {
+        "agent": "ToolExpert",
+        "sub_task_index": 1,
+        "data": {
+            "output_type": "html",
+            "title": "R",
+            "mode": "inline",
+            "html": "<html><body>wrong scope</body></html>",
+        },
+    }
+
+    _run(_maybe_emit_report(payload, emit, state))
+
+    names = [e for e, _ in events]
+    assert "report" not in names
+    assert "error" in names
+    err = next(p for e, p in events if e == "error")
+    assert "报告已拦截" in err.get("error", "")

@@ -35,9 +35,21 @@ def find_related_datasources(question: str) -> str:
     return f"ds-for:{question}"
 
 
+@tool()
+def describe_table(table_name: str) -> str:
+    """Describe table by name."""
+    return f"describe:{table_name}"
+
+
+@tool()
+def execute_sql(sql: str) -> str:
+    """Execute read-only sql."""
+    return f"sql:{sql}"
+
+
 @pytest.fixture()
 def pack():
-    return ToolPack(tools=[add, find_related_datasources, TerminateTool(), boom])
+    return ToolPack(tools=[add, find_related_datasources, describe_table, execute_sql, TerminateTool(), boom])
 
 
 @pytest.fixture()
@@ -133,11 +145,45 @@ def test_tool_call_pseudo_syntax_is_parsed_and_invoked(pack):
     assert out.observations == "ds-for:学生成绩分数分布 各班平均分"
 
 
+def test_guard_blocks_describe_table_on_non_locked_table(pack):
+    action = ToolAction(tool_pack=pack)
+    out = _run(
+        action.run(
+            '{"tool":"describe_table","args":{"table_name":"student_score"}}',
+            constraints={"locked_tables": ["chusan_zhengzhi"]},
+        )
+    )
+    assert out.is_exe_success is False
+    assert "约束冲突" in out.content
+    assert "chusan_zhengzhi" in out.content
+
+
+def test_guard_allows_execute_sql_when_locked_table_is_used(pack):
+    action = ToolAction(tool_pack=pack)
+    out = _run(
+        action.run(
+            '{"tool":"execute_sql","args":{"sql":"SELECT * FROM chusan_zhengzhi LIMIT 10"}}',
+            constraints={"locked_tables": ["chusan_zhengzhi"]},
+        )
+    )
+    assert out.is_exe_success is True
+    assert out.action == "execute_sql"
+
+
 def test_missing_tool_field_returns_fail(pack):
     action = ToolAction(tool_pack=pack)
     out = _run(action.run('{"args": {"a": 1}}'))
     assert out.is_exe_success is False
     assert "tool" in out.content
+
+
+def test_missing_tool_field_with_final_answer_fallbacks_to_terminate(pack):
+    action = ToolAction(tool_pack=pack)
+    out = _run(action.run('{"final_answer": "任务已完成"}'))
+    assert out.is_exe_success is True
+    assert out.action == "terminate"
+    assert out.terminate is True
+    assert out.content == "任务已完成"
 
 
 def test_unknown_tool_returns_fail_with_available_list(pack):

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
@@ -41,6 +42,63 @@ EmitCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 
 # Summarizer / Charter 上下文里塞给 LLM 的样例行数上限，避免 prompt 爆炸
 _SAMPLE_ROWS_LIMIT = 20
+_SQL_TABLE_RE = re.compile(r"""(?i)\b(?:from|join)\s+([`"]?[A-Za-z0-9_.]+[`"]?)""")
+
+
+@dataclass
+class _RunConstraints:
+    """team 会话级约束（第 1 步：只做状态与传递，不做拦截）。"""
+
+    locked_tables: list[str]
+    required_keywords: list[str]
+    source_sub_task_index: int | None = None
+
+    def to_context(self) -> dict[str, Any]:
+        return {
+            "locked_tables": list(self.locked_tables),
+            "required_keywords": list(self.required_keywords),
+            "source_sub_task_index": self.source_sub_task_index,
+        }
+
+
+def _extract_required_keywords(question: str) -> list[str]:
+    q = (question or "").strip()
+    if not q:
+        return []
+    # 轻量关键词：中文连续段 + 英文 token，长度 >= 2。仅用于上下文提示，不作强校验。
+    import re
+
+    tokens = re.findall(r"[A-Za-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", q)
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in tokens:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out[:12]
+
+
+def _normalize_ident(v: str) -> str:
+    return str(v or "").strip().strip("`\"").lower()
+
+
+def _extract_sql_tables(sql: str) -> list[str]:
+    out: list[str] = []
+    for m in _SQL_TABLE_RE.finditer(sql or ""):
+        t = _normalize_ident(m.group(1))
+        if t and t not in out:
+            out.append(t)
+    return out
+
+
+def _sql_hits_locked_tables(sql: str, locked_tables: list[str]) -> bool:
+    if not sql or not locked_tables:
+        return True
+    hit = _extract_sql_tables(sql)
+    allowed = {_normalize_ident(x) for x in locked_tables if str(x or "").strip()}
+    if not allowed:
+        return True
+    return any(t in allowed for t in hit)
 
 
 # --------------------------------------------------------------------------- #
@@ -136,6 +194,12 @@ async def run_team_stream(
     plan_agents = [team_cfg.resolve_sub_task_agent(it["sub_task_agent"]) for it in plan_items]
     await emit("plan", {"plans": plans, "sub_task_agents": plan_agents})
 
+    shared_constraints = _RunConstraints(
+        locked_tables=[],
+        required_keywords=_extract_required_keywords(request.question),
+        source_sub_task_index=None,
+    )
+
     sub_phases: list[tuple[str, _DataAnalystPhase]] = []
     last_good_phase: _DataAnalystPhase | None = None
     all_steps: list[dict[str, Any]] = []
@@ -160,6 +224,7 @@ async def run_team_stream(
                 llm_client=llm_client,
                 question_override=sub_task,
                 sub_task_index=idx,
+                constraints=shared_constraints,
             )
         else:
             phase = await _run_data_analyst_phase(
@@ -169,6 +234,7 @@ async def run_team_stream(
                 llm_client=llm_client,
                 question_override=sub_task,
                 sub_task_index=idx,
+                constraints=shared_constraints,
             )
         # 把本 sub_task 的 steps 标上前缀后汇总，便于前端按子任务折叠
         for step in phase.state.steps:
@@ -334,6 +400,7 @@ async def _run_data_analyst_phase(
     llm_client: Any | None,
     question_override: str | None = None,
     sub_task_index: int | None = None,
+    constraints: _RunConstraints | None = None,
 ) -> _DataAnalystPhase:
     """跑一次独立的 DataAnalyst ReAct 循环。
 
@@ -345,7 +412,7 @@ async def _run_data_analyst_phase(
             产生的 ``tool_call`` / ``tool_result`` / ``agent_thought`` /
             ``final_answer`` 事件 payload 里，前端据此按子任务折叠展示。
     """
-    state = _RunState(sub_task_index=sub_task_index)
+    state = _RunState(sub_task_index=sub_task_index, constraints=constraints)
 
     if llm_client is None:
         llm_client = LangChainLlmClient()
@@ -360,9 +427,14 @@ async def _run_data_analyst_phase(
     question = question_override if question_override is not None else request.question
     try:
         reply = await agent.generate_reply(
-            received_message=AgentMessage(content=question, role="user"),
+            received_message=AgentMessage(
+                content=question,
+                role="user",
+                context={"constraints": constraints.to_context() if constraints else {}},
+            ),
             sender=UserProxyAgent(),
             sub_task_index=sub_task_index,
+            constraints=constraints.to_context() if constraints else {},
         )
     except Exception as e:  # noqa: BLE001 - 端点级兜底，禁止异常外溢
         logger.exception("agent run failed")
@@ -409,8 +481,9 @@ async def _run_tool_expert_phase(
     llm_client: Any | None,
     question_override: str | None = None,
     sub_task_index: int | None = None,
+    constraints: _RunConstraints | None = None,
 ) -> _DataAnalystPhase:
-    state = _RunState(sub_task_index=sub_task_index)
+    state = _RunState(sub_task_index=sub_task_index, constraints=constraints)
 
     if llm_client is None:
         llm_client = LangChainLlmClient()
@@ -425,9 +498,14 @@ async def _run_tool_expert_phase(
     question = question_override if question_override is not None else request.question
     try:
         reply = await agent.generate_reply(
-            received_message=AgentMessage(content=question, role="user"),
+            received_message=AgentMessage(
+                content=question,
+                role="user",
+                context={"constraints": constraints.to_context() if constraints else {}},
+            ),
             sender=UserProxyAgent(),
             sub_task_index=sub_task_index,
+            constraints=constraints.to_context() if constraints else {},
         )
     except Exception as e:  # noqa: BLE001
         logger.exception("tool expert run failed")
@@ -659,7 +737,11 @@ def _format_sample_rows(columns: list[str], rows: list[Any]) -> str:
 class _RunState:
     """在 emit 回调里累积的跨事件状态。"""
 
-    def __init__(self, sub_task_index: int | None = None) -> None:
+    def __init__(
+        self,
+        sub_task_index: int | None = None,
+        constraints: _RunConstraints | None = None,
+    ) -> None:
         self.last_sql: str = ""
         self.last_exec_result: dict[str, Any] | None = None
         self.steps: list[dict[str, Any]] = []
@@ -669,6 +751,7 @@ class _RunState:
         # tool_call / tool_result / agent_thought 等 payload 里，前端才能按子任务归组。
         self.sub_task_index: int | None = sub_task_index
         self.reports: list[dict[str, Any]] = []
+        self.constraints = constraints
 
 
 #: "sub_task 内部产生"的事件——在 team 模式下给它们统一贴 sub_task_index。
@@ -771,6 +854,20 @@ def _on_tool_result(state: _RunState, payload: dict[str, Any]) -> None:
     rec["elapsed_ms"] = elapsed
 
     data = payload.get("data") or {}
+    # 第 1 步：仅记录并传递锁表线索（describe_table 成功后锁定该表），后续步骤再做守卫拦截。
+    if payload.get("tool") == "describe_table" and success and isinstance(data, dict):
+        table_name = str(data.get("name") or "").strip()
+        if table_name and state.constraints is not None and table_name not in state.constraints.locked_tables:
+            state.constraints.locked_tables.append(table_name)
+            if state.sub_task_index is not None:
+                state.constraints.source_sub_task_index = state.sub_task_index
+            logger.info(
+                "constraints_locked_table_added sub_task=%s table=%s locked_tables=%s",
+                state.sub_task_index,
+                table_name,
+                state.constraints.locked_tables,
+            )
+
     if (
         payload.get("tool") == "execute_sql"
         and success
@@ -822,6 +919,16 @@ async def _maybe_emit_report(
     html = str(data.get("html") or "")
     if not html.strip():
         return
+    if state is not None and state.constraints is not None:
+        locked = list(state.constraints.locked_tables or [])
+        if locked and not _sql_hits_locked_tables(state.last_sql or "", locked):
+            warn = (
+                f"报告已拦截：当前报告来源 SQL 未命中锁定表 {locked}。"
+                f" 当前 SQL={state.last_sql or '(空)'}"
+            )
+            logger.warning(warn)
+            await emit("error", {"error": warn})
+            return
     report_payload: dict[str, Any] = {
         "title": str(data.get("title") or "Report"),
         "html": html,
