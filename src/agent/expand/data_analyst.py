@@ -56,8 +56,8 @@ DATA_ANALYST_DESC = """[可用工具]
    - 一段中文结论（先结论后依据）；
    - 最终使用的 SQL（用 ```sql 代码块 包裹）；
    - 若适用，关键数值摘要（如 "共 37 条，Top1 为 …"）。
-6. 当用户明确要求“输出 HTML 报告/可视化页面”时，优先调用 `render_html_report`
-   产出 HTML，再 `terminate` 简短说明已生成报告。
+6. 当用户要求“可视化报告/分析报告/图表页面/HTML 报告”时，优先调用
+   `render_html_report` 产出 HTML，再 `terminate` 简短说明已生成报告。
    报告类任务在调用 `render_html_report` 前不要直接 terminate。
 7. 轮数有上限——尽量每一步都向结论推进，避免重复探查同一张表。"""
 

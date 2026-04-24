@@ -18,16 +18,19 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
 from src.agent.audit.tool_call_log import log_tool_call_fire_and_forget
 from src.agent.core.action.base import Action, ActionOutput
 from src.agent.resource.tool.base import ToolResult
+from src.agent.resource.tool.builtin import TERMINATE_TOOL_NAME
 from src.agent.resource.tool.pack import ToolNotFoundError, ToolPack
 from src.agent.util.json_parser import parse_json_tolerant
 
 logger = logging.getLogger(__name__)
+_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
 class ToolAction(Action):
@@ -63,9 +66,49 @@ class ToolAction(Action):
                 result_preview=result_preview,
             )
 
+        def _extract_non_json_final_answer(raw_text: str) -> str | None:
+            cleaned = _THINK_BLOCK_RE.sub("", str(raw_text or "")).strip()
+            if not cleaned:
+                return None
+            # 有 JSON 结构痕迹时不要做 terminate 猜测，交给下一轮严格重试。
+            if any(ch in cleaned for ch in "{}[]"):
+                return None
+            # 太短通常是噪声，不作为最终答案。
+            if len(cleaned) < 24:
+                return None
+            return cleaned
+
         try:
             parsed = parse_json_tolerant(ai_message)
         except ValueError as e:
+            fallback_answer = _extract_non_json_final_answer(ai_message)
+            if fallback_answer and TERMINATE_TOOL_NAME in self.tool_pack:
+                try:
+                    result = await self.tool_pack.invoke(
+                        TERMINATE_TOOL_NAME,
+                        {"final_answer": fallback_answer},
+                    )
+                    _audit(
+                        tool_name=TERMINATE_TOOL_NAME,
+                        success=True,
+                        args={"final_answer": fallback_answer},
+                        result_preview=result.content,
+                    )
+                    return ActionOutput(
+                        is_exe_success=True,
+                        content=result.content,
+                        action=TERMINATE_TOOL_NAME,
+                        thoughts=None,
+                        observations=result.content,
+                        terminate=result.is_final,
+                        extra={
+                            "tool_args": {"final_answer": fallback_answer},
+                            "tool_data": result.data,
+                            "tool_extra": result.extra,
+                        },
+                    )
+                except Exception:
+                    logger.exception("fallback terminate failed")
             msg = f"无法从 LLM 输出解析 JSON：{e}. 请严格返回 {{\"tool\": ..., \"args\": ...}} 结构。"
             _audit(tool_name=self.name, success=False, args=None, result_preview=msg)
             return ActionOutput(

@@ -183,6 +183,28 @@ class ReActAgent(ConversableAgent):
                 content="ReAct loop produced no action",
                 have_retry=False,
             )
+        elif last_action_out.is_exe_success and (
+            (last_action_out.observations and str(last_action_out.observations).strip())
+            or (last_action_out.content and str(last_action_out.content).strip())
+        ):
+            # 兜底收敛：达到轮数上限但最后一次工具结果有效时，自动收敛成最终答复，
+            # 避免前端把这类“已拿到结果但忘了 terminate”的场景误判为失败。
+            final_text = str(last_action_out.observations or last_action_out.content or "").strip()
+            reply.content = final_text
+            reply.action_report = ActionOutput(
+                is_exe_success=True,
+                content=final_text,
+                thoughts=last_action_out.thoughts,
+                action=last_action_out.action,
+                observations=last_action_out.observations,
+                terminate=True,
+                have_retry=False,
+                extra=dict(last_action_out.extra or {}),
+            )
+            await self._emit(
+                "final_answer",
+                {"agent": self.name, "text": reply.content or ""},
+            )
         else:
             reply.action_report = ActionOutput(
                 is_exe_success=False,

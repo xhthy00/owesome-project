@@ -40,6 +40,19 @@ def test_substring_fallback_array():
     assert parse_json_tolerant(text) == ["a", "b"]
 
 
+def test_parses_json_after_think_block():
+    text = "<think>先想一下步骤</think>\n{\"tool\":\"list_tables\",\"args\":{}}"
+    assert parse_json_tolerant(text) == {"tool": "list_tables", "args": {}}
+
+
+def test_parses_embedded_json_object_without_code_fence():
+    text = "prefix text\n{\"tool\":\"describe_table\",\"args\":{\"table_name\":\"users\"}}\ntrailing"
+    assert parse_json_tolerant(text) == {
+        "tool": "describe_table",
+        "args": {"table_name": "users"},
+    }
+
+
 def test_empty_raises():
     with pytest.raises(ValueError):
         parse_json_tolerant("")

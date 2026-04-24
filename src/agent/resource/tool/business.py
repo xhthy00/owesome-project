@@ -214,9 +214,25 @@ def _render_template_html(template_name: str, data: dict[str, Any]) -> str:
     if not _REPORT_TEMPLATE_SAFE_RE.match(template_name):
         raise ValueError("template_name 仅允许字母/数字/._-")
 
-    path = (template_dir / template_name).resolve()
-    path.relative_to(template_dir.resolve())
-    if not path.is_file():
+    template_dir_resolved = template_dir.resolve()
+
+    def _resolve(candidate: str) -> Path:
+        p = (template_dir / candidate).resolve()
+        p.relative_to(template_dir_resolved)
+        return p
+
+    candidates: list[str] = [template_name]
+    # 兼容无后缀模板名：传 `score_analysis_report` 时自动尝试 `.html`。
+    if "." not in Path(template_name).name:
+        candidates.append(f"{template_name}.html")
+
+    path: Path | None = None
+    for candidate in candidates:
+        p = _resolve(candidate)
+        if p.is_file():
+            path = p
+            break
+    if path is None:
         raise ValueError(f"模板不存在: {template_name}")
     raw = path.read_text(encoding="utf-8")
 
@@ -243,11 +259,30 @@ def _parse_report_data(data: Any) -> dict[str, Any]:
 
 def _read_report_file(file_path: str) -> str:
     base = _report_base_dir().resolve()
-    target = Path(file_path).expanduser().resolve()
-    target.relative_to(base)
-    if not target.is_file():
-        raise ValueError(f"文件不存在: {file_path}")
-    return target.read_text(encoding="utf-8")
+    raw = (file_path or "").strip()
+    if not raw:
+        raise ValueError("文件不存在: ")
+
+    p = Path(raw).expanduser()
+    candidates: list[Path] = []
+    if p.is_absolute():
+        candidates.append(p.resolve())
+    else:
+        # 先按工作区相对路径找。
+        candidates.append((base / p).resolve())
+        # 兼容调用方把模板文件名误传到 file_path：回退到模板目录查找。
+        if len(p.parts) == 1:
+            candidates.append((_report_template_dir() / p.name).resolve())
+
+    for target in candidates:
+        try:
+            target.relative_to(base)
+        except Exception:
+            continue
+        if target.is_file():
+            return target.read_text(encoding="utf-8")
+
+    raise ValueError(f"文件不存在: {file_path}")
 
 
 @tool()

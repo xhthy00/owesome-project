@@ -26,7 +26,7 @@ import {
   Connection,
 } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
-import type { ChatMessage, ChartConfig, ChatRecord, ToolCallRecord } from './typed'
+import type { ChatMessage, ChartConfig, ChatRecord, ExecResult, ToolCallRecord } from './typed'
 import type { ChartAxis, ChartTypes } from './component/BaseChart'
 import ChartComponent from './component/ChartComponent.vue'
 import ReportPreview from './component/ReportPreview.vue'
@@ -48,6 +48,31 @@ const expandToolCalls = ref<Record<string, boolean>>({})
 const chartTypeMap = ref<Record<number, ChartTypes>>({})
 const showLabelMap = ref<Record<number, boolean>>({})
 const resultPanelTabMap = ref<Record<number, 'chart' | 'sql' | 'data'>>({})
+const queryIndexMap = ref<Record<number, number>>({})
+
+interface QuerySnapshot {
+  key: string
+  label: string
+  sql: string
+  exec_result: ExecResult
+  round?: number
+  sub_task_index?: number
+}
+
+const queryDataName = (msg: ChatMessage, query: QuerySnapshot, idx: number, total: number): string => {
+  const isFinal = idx === total - 1
+  const cfg = msg.record?.chart_config
+  if (isFinal && cfg?.y?.length) {
+    return cfg.y.slice(0, 3).join(' / ')
+  }
+  const cols = query.exec_result?.columns || []
+  if (cols.length >= 2) {
+    // 默认图表通常把第 1 列当维度，后续列是指标。
+    return cols.slice(1, 4).join(' / ')
+  }
+  if (cols.length === 1) return cols[0]
+  return isFinal ? '最终查询' : `查询 #${idx + 1}`
+}
 
 const CHART_OPTIONS: { value: ChartTypes; label: string; icon: any }[] = [
   { value: 'table', label: 'chat.chart_type.table', icon: Grid },
@@ -70,13 +95,91 @@ const getPage = (i: number) => pageMap.value[i] || 1
 const setPage = (i: number, p: number) => (pageMap.value[i] = p)
 const getResultPanelTab = (i: number, msg: ChatMessage): 'chart' | 'sql' | 'data' => {
   if (resultPanelTabMap.value[i]) return resultPanelTabMap.value[i]
-  const hasChart = getChartType(i, msg.record?.chart_type) !== 'table' && !!msg.record?.exec_result
-  const hasData = !!msg.record?.exec_result
+  const query = activeQuery(i, msg)
+  const hasChart = getChartType(i, msg.record?.chart_type) !== 'table' && !!query?.exec_result
+  const hasData = !!query?.exec_result
   resultPanelTabMap.value[i] = hasChart ? 'chart' : hasData ? 'data' : 'sql'
   return resultPanelTabMap.value[i]
 }
 const setResultPanelTab = (i: number, tab: 'chart' | 'sql' | 'data') => {
   resultPanelTabMap.value[i] = tab
+}
+
+const querySnapshots = (msg: ChatMessage): QuerySnapshot[] => {
+  const record = msg.record
+  if (!record) return []
+  const out: QuerySnapshot[] = []
+  const seen = new Set<string>()
+  const toolCalls = Array.isArray(record.tool_calls) ? record.tool_calls : []
+  for (const call of toolCalls) {
+    if (call.tool !== 'execute_sql' || call.success !== true) continue
+    const data = call.data
+    if (!data || typeof data !== 'object') continue
+    const sql = typeof data.sql === 'string' ? data.sql : ''
+    const columns = Array.isArray(data.columns) ? data.columns : []
+    const rows = Array.isArray(data.rows) ? data.rows : []
+    if (!sql || !columns.length) continue
+    const rowCount = typeof data.row_count === 'number' ? data.row_count : rows.length
+    const key = `${call.sub_task_index ?? -1}-${call.round ?? -1}-${out.length}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push({
+      key,
+      label: '',
+      sql,
+      exec_result: { columns, rows, row_count: rowCount },
+      round: call.round,
+      sub_task_index: call.sub_task_index,
+    })
+  }
+  if (record.sql && record.exec_result) {
+    const fallbackKey = `${record.sql}|${record.exec_result.row_count ?? record.exec_result.rows?.length ?? 0}`
+    const exists = out.some(
+      (it) =>
+        it.sql === record.sql &&
+        (it.exec_result.row_count ?? it.exec_result.rows?.length ?? 0) ===
+          (record.exec_result?.row_count ?? record.exec_result?.rows?.length ?? 0)
+    )
+    if (!exists && !seen.has(fallbackKey)) {
+      out.push({
+        key: fallbackKey,
+        label: '',
+        sql: record.sql,
+        exec_result: record.exec_result,
+      })
+    }
+  }
+  return out.map((item, idx) => ({
+    ...item,
+    label: queryDataName(msg, item, idx, out.length),
+  }))
+}
+
+const getQueryIndex = (i: number, msg: ChatMessage): number => {
+  const snapshots = querySnapshots(msg)
+  if (!snapshots.length) return 0
+  const maxIdx = snapshots.length - 1
+  const current = queryIndexMap.value[i]
+  if (typeof current !== 'number' || current < 0 || current > maxIdx) {
+    queryIndexMap.value[i] = maxIdx
+    return maxIdx
+  }
+  return current
+}
+
+const setQueryIndex = (i: number, idx: number, msg: ChatMessage) => {
+  const snapshots = querySnapshots(msg)
+  if (!snapshots.length) {
+    queryIndexMap.value[i] = 0
+    return
+  }
+  queryIndexMap.value[i] = Math.max(0, Math.min(idx, snapshots.length - 1))
+}
+
+const activeQuery = (i: number, msg: ChatMessage): QuerySnapshot | undefined => {
+  const snapshots = querySnapshots(msg)
+  if (!snapshots.length) return undefined
+  return snapshots[getQueryIndex(i, msg)]
 }
 
 const isThinkingExpanded = (i: number, pending = false): boolean => {
@@ -350,7 +453,7 @@ void props
           <div class="assistant-card">
             <div class="assistant-split">
               <section class="thinking-col">
-                <div class="panel-title">思考过程</div>
+                <div class="panel-title">执行情况</div>
                 <div class="thinking-panel">
                 <div v-if="hasPlans(msg)" class="block plans-block">
                   <div class="block-header" @click="togglePlan(i, msg.pending)">
@@ -499,7 +602,7 @@ void props
                 </div>
               </section>
 
-              <section class="result-col">
+              <section v-if="!msg.pending" class="result-col">
                 <div class="panel-title">结果展现</div>
                 <div v-if="hasSummary(msg)" class="block summary-block result-card">
                   <div class="block-header static">
@@ -547,7 +650,7 @@ void props
                 </div>
 
                 <div
-                  v-if="msg.record && (msg.record.sql || msg.record.exec_result || msg.record.sql_error)"
+                  v-if="msg.record && (querySnapshots(msg).length || msg.record.sql_error)"
                   class="answer"
                 >
                   <div v-if="msg.record.sql_error" class="block error-block result-card">
@@ -556,8 +659,28 @@ void props
                     </el-alert>
                   </div>
 
-                  <div v-if="msg.record.exec_result || msg.record.sql" class="result-block result-card">
+                  <div v-if="querySnapshots(msg).length" class="result-block result-card">
                     <div class="result-switch">
+                      <div class="query-picker">
+                        <span class="picker-label">{{ $t('chat.query_set') }}</span>
+                        <el-select
+                          :model-value="getQueryIndex(i, msg)"
+                          size="small"
+                          class="query-select"
+                          @change="(v:number) => setQueryIndex(i, v, msg)"
+                        >
+                          <el-option
+                            v-for="(q, qi) in querySnapshots(msg)"
+                            :key="q.key"
+                            :label="
+                              qi === querySnapshots(msg).length - 1
+                                ? `${q.label}（最终）`
+                                : q.label
+                            "
+                            :value="qi"
+                          />
+                        </el-select>
+                      </div>
                       <button
                         class="switch-tab"
                         :class="{ active: getResultPanelTab(i, msg) === 'chart' }"
@@ -585,7 +708,7 @@ void props
                       v-if="
                         getResultPanelTab(i, msg) === 'chart' &&
                         getChartType(i, msg.record!.chart_type) !== 'table' &&
-                        msg.record.exec_result
+                        activeQuery(i, msg)?.exec_result
                       "
                       class="result-section"
                     >
@@ -638,15 +761,22 @@ void props
                               | 'line'
                               | 'pie'
                           "
-                          :columns="msg.record.exec_result?.columns || []"
-                          :rows="msg.record.exec_result?.rows || []"
+                          :columns="activeQuery(i, msg)?.exec_result?.columns || []"
+                          :rows="activeQuery(i, msg)?.exec_result?.rows || []"
                           :show-label="getShowLabel(i)"
-                          :axes-override="chartConfigToAxes(msg.record.chart_config)"
+                          :axes-override="
+                            getQueryIndex(i, msg) === querySnapshots(msg).length - 1
+                              ? chartConfigToAxes(msg.record.chart_config)
+                              : undefined
+                          "
                         />
                       </div>
                     </div>
 
-                    <div v-if="getResultPanelTab(i, msg) === 'data' && msg.record.exec_result" class="result-section">
+                    <div
+                      v-if="getResultPanelTab(i, msg) === 'data' && activeQuery(i, msg)?.exec_result"
+                      class="result-section"
+                    >
                       <div class="result-header">
                         <div class="result-title">
                           {{ $t('chat.result_tab.data') }}
@@ -654,8 +784,8 @@ void props
                             {{
                               $t('chat.rows', {
                                 n:
-                                  msg.record.exec_result.row_count ??
-                                  msg.record.exec_result.rows?.length ??
+                                  activeQuery(i, msg)?.exec_result?.row_count ??
+                                  activeQuery(i, msg)?.exec_result?.rows?.length ??
                                   0,
                               })
                             }}
@@ -664,9 +794,9 @@ void props
                       </div>
                       <el-table
                         :data="
-                          slicedRows(i, msg.record.exec_result.rows)?.map((row) =>
+                          slicedRows(i, activeQuery(i, msg)?.exec_result?.rows)?.map((row) =>
                             Object.fromEntries(
-                              (msg.record!.exec_result!.columns || []).map((c, idx) => [c, row[idx]])
+                              (activeQuery(i, msg)?.exec_result?.columns || []).map((c, idx) => [c, row[idx]])
                             )
                           )
                         "
@@ -675,17 +805,17 @@ void props
                         border
                       >
                         <el-table-column
-                          v-for="col in msg.record.exec_result.columns || []"
+                          v-for="col in activeQuery(i, msg)?.exec_result?.columns || []"
                           :key="col"
                           :prop="col"
                           :label="col"
                         />
                       </el-table>
                       <el-pagination
-                        v-if="(msg.record.exec_result.row_count ?? 0) > PAGE_SIZE"
+                        v-if="(activeQuery(i, msg)?.exec_result?.row_count ?? 0) > PAGE_SIZE"
                         :current-page="getPage(i)"
                         :page-size="PAGE_SIZE"
-                        :total="msg.record.exec_result.row_count ?? 0"
+                        :total="activeQuery(i, msg)?.exec_result?.row_count ?? 0"
                         layout="prev, pager, next, total"
                         small
                         class="pagination"
@@ -698,7 +828,7 @@ void props
                         <div class="result-title">{{ $t('chat.result_tab.sql') }}</div>
                       </div>
                       <div class="sql-block">
-                        <pre><code>{{ msg.record.sql || '--' }}</code></pre>
+                        <pre><code>{{ activeQuery(i, msg)?.sql || '--' }}</code></pre>
                       </div>
                     </div>
                   </div>
@@ -853,6 +983,9 @@ void props
         max-height: none;
         overflow: visible;
         padding-right: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
       }
     }
 
@@ -1047,11 +1180,6 @@ void props
         }
       }
     }
-  }
-
-  /* 执行计划与工具调用之间增加一点呼吸感 */
-  .plans-block + .tools-block {
-    margin-top: 6px;
   }
 
   @keyframes spin {
@@ -1309,10 +1437,11 @@ void props
 
     &.pending {
       display: inline-flex;
+      align-self: flex-start;
       align-items: center;
       gap: 8px;
       color: #475467;
-      padding: 8px 12px;
+      padding: 6px 10px;
 
       .icon {
         color: var(--el-color-primary);
@@ -1444,11 +1573,28 @@ void props
       align-self: flex-end;
       display: inline-flex;
       align-items: center;
-      gap: 2px;
+      gap: 8px;
       padding: 2px;
       border: 1px solid #d9e2ef;
       border-radius: 7px;
       background: #fff;
+
+      .query-picker {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 4px 0 6px;
+
+        .picker-label {
+          font-size: 11px;
+          color: #98a2b3;
+          white-space: nowrap;
+        }
+
+        .query-select {
+          width: 132px;
+        }
+      }
 
       .switch-tab {
         height: 22px;

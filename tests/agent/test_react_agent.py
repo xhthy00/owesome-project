@@ -170,7 +170,7 @@ def test_react_framework_error_feeds_observation_and_recovers():
     assert any("observation from" in m["content"] and "JSON" in m["content"] for m in round_2)
 
 
-def test_react_exceeds_max_rounds_returns_failure_reply():
+def test_react_exceeds_max_rounds_auto_terminates_when_last_observation_is_valid():
     llm = FakeLlmClient(['{"tool": "list_things", "args": {}}'])
     agent = _TrivialReActAgent(
         llm_client=llm,
@@ -185,11 +185,32 @@ def test_react_exceeds_max_rounds_returns_failure_reply():
         )
     )
 
+    assert reply.action_report.is_exe_success is True
+    assert reply.action_report.terminate is True
+    assert reply.action_report.have_retry is False
+    assert "[alpha, beta]" in reply.action_report.content
+    assert reply.rounds == 3
+    assert len(llm.calls) == 3
+
+
+def test_react_exceeds_max_rounds_still_fails_when_last_action_failed():
+    llm = FakeLlmClient(["this is not JSON at all"])
+    agent = _TrivialReActAgent(
+        llm_client=llm,
+        tool_pack=_pack_with(list_things),
+        max_react_rounds=2,
+    )
+
+    reply = _run(
+        agent.generate_reply(
+            received_message=AgentMessage(content="hmm", role="user"),
+            sender=UserProxyAgent(),
+        )
+    )
+
     assert reply.action_report.is_exe_success is False
     assert reply.action_report.have_retry is False
     assert "未调用 terminate" in reply.action_report.content
-    assert reply.rounds == 3
-    assert len(llm.calls) == 3
 
 
 def test_react_requires_tool_pack():

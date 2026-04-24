@@ -34,6 +34,9 @@
       "sql": "SQL",
       "data": "数据"
     },
+    "query_set": "查询集",
+    "query_item": "查询 #{n}",
+    "query_item_final": "查询 #{n}（最终）",
     "rows": "共 {n} 行",
     "execution_failed": "执行失败",
     "thinking": "思考过程",

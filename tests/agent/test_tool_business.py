@@ -416,6 +416,31 @@ def test_render_html_report_template_path_and_string_data(fake_datasource, monke
     assert "<div>x-y</div>" in result.data["html"]
 
 
+def test_render_html_report_template_name_without_suffix_uses_html(fake_datasource, monkeypatch):
+    base = Path(__file__).resolve().parents[2]
+    template_dir = base / "src" / "agent" / "resource" / "templates"
+    template_dir.mkdir(parents=True, exist_ok=True)
+    template_path = template_dir / "score_analysis_report.html"
+    original = template_path.read_text(encoding="utf-8") if template_path.exists() else None
+    template_path.write_text("<div>{{TITLE}}</div>", encoding="utf-8")
+    monkeypatch.setattr(biz, "_report_template_dir", lambda: template_dir)
+    try:
+        result = _run(
+            biz.render_html_report.execute(
+                datasource_id=1,
+                template_name="score_analysis_report",
+                data={"TITLE": "ok"},
+            )
+        )
+    finally:
+        if original is None:
+            template_path.unlink(missing_ok=True)
+        else:
+            template_path.write_text(original, encoding="utf-8")
+    assert result.data["mode"] == "template"
+    assert "<div>ok</div>" in result.data["html"]
+
+
 def test_render_html_report_template_failure_falls_back_to_inline(fake_datasource):
     result = _run(
         biz.render_html_report.execute(
@@ -445,6 +470,31 @@ def test_render_html_report_file_mode_reads_workspace_file(fake_datasource):
         file_path.unlink(missing_ok=True)
     assert result.data["mode"] == "file"
     assert "hello" in result.data["html"]
+
+
+def test_render_html_report_file_mode_fallbacks_to_template_dir(fake_datasource, monkeypatch):
+    base = Path(__file__).resolve().parents[2]
+    template_dir = base / "src" / "agent" / "resource" / "templates"
+    template_dir.mkdir(parents=True, exist_ok=True)
+    template_path = template_dir / "score_analysis_report.html"
+    original = template_path.read_text(encoding="utf-8") if template_path.exists() else None
+    template_path.write_text("<html><body>template-file-mode</body></html>", encoding="utf-8")
+    monkeypatch.setattr(biz, "_report_template_dir", lambda: template_dir)
+    try:
+        result = _run(
+            biz.render_html_report.execute(
+                datasource_id=1,
+                file_path="score_analysis_report.html",
+                title="from-template-dir",
+            )
+        )
+    finally:
+        if original is None:
+            template_path.unlink(missing_ok=True)
+        else:
+            template_path.write_text(original, encoding="utf-8")
+    assert result.data["mode"] == "file"
+    assert "template-file-mode" in result.data["html"]
 
 
 def test_find_related_datasources_lists_active(monkeypatch):

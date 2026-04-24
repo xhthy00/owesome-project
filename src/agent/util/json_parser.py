@@ -17,14 +17,10 @@ import re
 from typing import Any
 
 _CODE_BLOCK_RE = re.compile(r"```(?:json|JSON)?\s*(.+?)\s*```", re.DOTALL)
+_THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
-def parse_json_tolerant(text: str) -> Any:
-    if text is None or not str(text).strip():
-        raise ValueError("empty text")
-
-    raw = str(text)
-
+def _try_parse_one(raw: str) -> Any:
     m = _CODE_BLOCK_RE.search(raw)
     if m:
         candidate = m.group(1).strip()
@@ -38,14 +34,34 @@ def parse_json_tolerant(text: str) -> Any:
     except json.JSONDecodeError:
         pass
 
-    for open_ch, close_ch in (("{", "}"), ("[", "]")):
-        start = raw.find(open_ch)
-        end = raw.rfind(close_ch)
-        if start != -1 and end > start:
-            try:
-                return json.loads(raw[start : end + 1])
-            except json.JSONDecodeError:
-                continue
+    decoder = json.JSONDecoder()
+    for idx, ch in enumerate(raw):
+        if ch not in "{[":
+            continue
+        try:
+            parsed, _ = decoder.raw_decode(raw, idx)
+            return parsed
+        except json.JSONDecodeError:
+            continue
+
+    raise ValueError("no valid json found")
+
+
+def parse_json_tolerant(text: str) -> Any:
+    if text is None or not str(text).strip():
+        raise ValueError("empty text")
+
+    raw = str(text)
+    candidates = [raw]
+    without_think = _THINK_BLOCK_RE.sub("", raw)
+    if without_think != raw:
+        candidates.append(without_think)
+
+    for candidate in candidates:
+        try:
+            return _try_parse_one(candidate)
+        except ValueError:
+            continue
 
     snippet = raw[:200]
     raise ValueError(f"Cannot parse JSON from: {snippet!r}")

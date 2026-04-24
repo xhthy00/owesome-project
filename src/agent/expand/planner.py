@@ -67,8 +67,8 @@ PLANNER_DESC = """[你的职责]
 3. 子任务之间应尽量独立——不要让后一个依赖前一个的具体数值；
 4. 绝对不要超过 6 个子任务；拆不动就合并；
 5. 不要在子任务里写 SQL 或表名——那是 DataAnalyst 的工作，你只写"查什么"；
-6. 除非子任务是纯计算/工具操作（如“根据已知数字算同比”），否则 `sub_task_agent`
-   默认 DataAnalyst；仅这类任务可标 ToolExpert。"""
+6. 对“可视化报告/分析报告/图表页面/HTML 报告”类子任务，优先标 `sub_task_agent`
+   为 ToolExpert；其余场景默认 DataAnalyst，纯计算/工具操作也可标 ToolExpert。"""
 
 
 class PlanAction(Action):

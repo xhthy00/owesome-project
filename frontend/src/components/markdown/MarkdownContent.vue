@@ -48,10 +48,10 @@ const renderVisBlock = (lang: string, content: string): string | null => {
   const escaped = md.utils.escapeHtml(content)
   if (lang === 'vis-thinking') {
     return `
-      <div class="vis-thinking-block">
-        <div class="vis-block-title">思考过程</div>
+      <details class="vis-thinking-block">
+        <summary class="vis-block-title">思考过程</summary>
         <pre>${escaped}</pre>
-      </div>
+      </details>
     `
   }
   if (lang === 'vis-chart') {
@@ -302,6 +302,36 @@ const html = computed(() => md.render(normalizeThinkTags(props.content)))
   .vis-thinking-block {
     border-color: var(--el-color-primary-light-7);
     background: var(--el-color-primary-light-9);
+
+    .vis-block-title {
+      cursor: pointer;
+      user-select: none;
+      list-style: none;
+    }
+
+    .vis-block-title::-webkit-details-marker {
+      display: none;
+    }
+
+    .vis-block-title::before {
+      content: '';
+      width: 0;
+      height: 0;
+      border-left: 4px solid transparent;
+      border-right: 4px solid transparent;
+      border-top: 6px solid #98a2b3;
+      margin-right: 8px;
+      transform: rotate(-90deg);
+      transition: transform 0.15s ease;
+    }
+
+    &[open] .vis-block-title::before {
+      transform: rotate(0deg);
+    }
+
+    &:not([open]) pre {
+      display: none;
+    }
   }
 }
 </style>

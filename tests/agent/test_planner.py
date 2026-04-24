@@ -194,3 +194,21 @@ def test_planner_infers_tool_expert_for_html_report_task():
     )
     assert reply.action_report.extra["plans"] == ["输出一份 HTML 可视化报告"]
     assert reply.action_report.extra["plan_agents"] == ["ToolExpert"]
+
+
+def test_planner_infers_tool_expert_for_visual_analysis_report_task():
+    llm = _ScriptedLlm('{"plans":["帮我生成学生成绩可视化分析报告"]}')
+    agent = PlannerAgent(llm_client=llm)
+
+    reply = _run(
+        agent.generate_reply(
+            received_message=AgentMessage(
+                content="帮我生成学生成绩可视化分析报告",
+                role="user",
+                context=_ctx("帮我生成学生成绩可视化分析报告"),
+            ),
+            sender=UserProxyAgent(),
+        )
+    )
+    assert reply.action_report.extra["plans"] == ["帮我生成学生成绩可视化分析报告"]
+    assert reply.action_report.extra["plan_agents"] == ["ToolExpert"]

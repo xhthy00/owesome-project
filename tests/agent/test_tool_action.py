@@ -95,6 +95,23 @@ def test_unparsable_json_returns_fail(pack, audit_spy):
     assert audit_spy[0]["success"] is False
 
 
+def test_unparsable_json_with_report_text_fallbacks_to_terminate(pack, audit_spy):
+    action = ToolAction(tool_pack=pack)
+    ai_msg = (
+        "<think>数据已齐全，准备给出报告</think>\n\n"
+        "女生成绩统计分析已完成。\n\n"
+        "平均分、最高分、最低分、及格率与标准差均已计算完成。"
+    )
+    out = _run(action.run(ai_msg))
+    assert out.is_exe_success is True
+    assert out.action == "terminate"
+    assert out.terminate is True
+    assert "女生成绩统计分析已完成" in out.content
+    assert len(audit_spy) == 1
+    assert audit_spy[0]["tool_name"] == "terminate"
+    assert audit_spy[0]["success"] is True
+
+
 def test_missing_tool_field_returns_fail(pack):
     action = ToolAction(tool_pack=pack)
     out = _run(action.run('{"args": {"a": 1}}'))
