@@ -1,5 +1,8 @@
-# Awesome-DB
 
+![Awesome-DB logo](docs/img/logo-horizontal.svg)
+
+[![github](https://img.shields.io/badge/Github%2FAwesome--DB-181717?logo=github)](https://github.com/xhthy00/owesome-project)
+[![atomgit](https://img.shields.io/badge/AtomGit%2FAwesome--DB-2B5AED)](https://atomgit.com/xhthy00/awesome-data)
 [![build](https://img.shields.io/badge/build-uv-lightgrey)](./pyproject.toml)
 [![test](https://img.shields.io/badge/test-pytest-lightgrey)](./tests)
 [![license](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
