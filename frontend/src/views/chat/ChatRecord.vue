@@ -1042,6 +1042,8 @@ void props
       border-radius: 12px 12px 12px 4px;
       padding: 12px 14px;
       box-shadow: 0 1px 3px rgba(16, 24, 40, 0.05);
+      overflow: hidden;
+      min-width: 0;
     }
 
     .assistant-split {
@@ -1358,6 +1360,7 @@ void props
             background: #fff;
             cursor: pointer;
             transition: background 0.15s ease;
+            overflow: hidden;
 
             &:hover {
               background: #f8fafc;
@@ -1386,13 +1389,17 @@ void props
               align-items: center;
               gap: 6px;
               min-width: 0;
+              overflow: hidden;
             }
 
             .tool-name {
               font-size: 11.5px;
               font-weight: 500;
               color: #344054;
-              flex-shrink: 0;
+              flex-shrink: 1;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
             }
 
             .tool-subtitle {
@@ -1401,6 +1408,7 @@ void props
               overflow: hidden;
               text-overflow: ellipsis;
               white-space: nowrap;
+              flex-shrink: 1;
             }
 
             .tool-args {

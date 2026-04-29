@@ -1,0 +1,13 @@
+:root {
+  --oc-bg: #f6f8fb;
+  --oc-card-bg: #ffffff;
+  --oc-text: #1f2329;
+  --oc-sub-text: #5f6773;
+}
+
+.dark {
+  --oc-bg: #14181f;
+  --oc-card-bg: #1e242d;
+  --oc-text: #edf1f8;
+  --oc-sub-text: #9aa4b2;
+}

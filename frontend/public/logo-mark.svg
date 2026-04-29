@@ -1,0 +1,39 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="70" y1="58" x2="458" y2="452" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#0E1638"/>
+      <stop offset="0.55" stop-color="#12307F"/>
+      <stop offset="1" stop-color="#0A5EEA"/>
+    </linearGradient>
+    <linearGradient id="neon" x1="128" y1="124" x2="390" y2="386" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6DEBFF"/>
+      <stop offset="0.5" stop-color="#5B8CFF"/>
+      <stop offset="1" stop-color="#7A5CFF"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="168" y1="314" x2="344" y2="190" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7FF4FF"/>
+      <stop offset="1" stop-color="#A7B5FF"/>
+    </linearGradient>
+    <filter id="glow" x="36" y="36" width="440" height="440" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feFlood flood-opacity="0" result="BackgroundImageFix"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="8" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.35 0 0 0 0 0.67 0 0 0 0 1 0 0 0 0.55 0"/>
+    </filter>
+  </defs>
+  <rect x="64" y="64" width="384" height="384" rx="96" fill="url(#bg)"/>
+  <rect x="64" y="64" width="384" height="384" rx="96" stroke="url(#neon)" stroke-width="2"/>
+  <circle cx="256" cy="256" r="138" stroke="url(#neon)" stroke-opacity="0.55" stroke-width="2"/>
+  <circle cx="256" cy="256" r="104" stroke="#7AC4FF" stroke-opacity="0.32" stroke-width="1.5" stroke-dasharray="7 9"/>
+  <path d="M160 212C160 201.507 168.507 193 179 193H279C289.493 193 298 201.507 298 212V214C298 224.493 289.493 233 279 233H179C168.507 233 160 224.493 160 214V212Z" fill="#A8D6FF" fill-opacity="0.28"/>
+  <path d="M160 254C160 243.507 168.507 235 179 235H322C332.493 235 341 243.507 341 254V256C341 266.493 332.493 275 322 275H179C168.507 275 160 266.493 160 256V254Z" fill="#96C8FF" fill-opacity="0.28"/>
+  <path d="M160 296C160 285.507 168.507 277 179 277H258C268.493 277 277 285.507 277 296V298C277 308.493 268.493 317 258 317H179C168.507 317 160 308.493 160 298V296Z" fill="#7FB8FF" fill-opacity="0.3"/>
+  <g filter="url(#glow)">
+    <path d="M170 306L222 266L270 280L338 202" stroke="url(#beam)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <path d="M170 306L222 266L270 280L338 202" stroke="url(#beam)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="170" cy="306" r="8" fill="#7FF4FF"/>
+  <circle cx="222" cy="266" r="8" fill="#91DBFF"/>
+  <circle cx="270" cy="280" r="8" fill="#9DBFFF"/>
+  <circle cx="338" cy="202" r="10" fill="#B0C1FF"/>
+  <path d="M326 142L332 157L348 158L336 168L339 184L326 177L313 184L316 168L304 158L320 157L326 142Z" fill="#86C8FF"/>
+</svg>

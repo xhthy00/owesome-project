@@ -23,7 +23,7 @@ const sidebarWidth = computed(() => (collapse.value ? '64px' : '240px'))
       :style="{ width: sidebarWidth }"
     >
       <div class="brand" :class="collapse && 'collapse'">
-        <div class="logo">A</div>
+        <img class="logo" src="/logo-mark.svg" alt="logo" />
         <span v-if="!collapse" class="brand-name ellipsis">Awesome Project</span>
       </div>
 
@@ -79,13 +79,7 @@ const sidebarWidth = computed(() => (collapse.value ? '64px' : '240px'))
         width: 24px;
         height: 24px;
         border-radius: 6px;
-        background: var(--el-color-primary);
-        color: #fff;
-        font-weight: 700;
-        font-size: 14px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+        object-fit: cover;
       }
 
       .brand-name {

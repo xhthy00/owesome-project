@@ -1,0 +1,132 @@
+@import "./theme.css";
+@import "./opencode-theme.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#__next {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: "Josefin Sans", "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.5;
+  --antd-primary-color: #0069fe;
+  background: var(--oc-bg-base);
+  color: var(--oc-text-base, var(--oc-text));
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+  -webkit-appearance: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.light {
+  color: #333;
+  background-color: #f7f7f7;
+}
+
+.dark {
+  color: #f7f7f7;
+  background-color: #151622;
+}
+
+.dark-sub-bg {
+  background-color: #23262c;
+}
+
+.dbgpt-ui-font {
+  font-family: "Josefin Sans", "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.dbgpt-title-font {
+  font-family: "Times New Roman", Georgia, "Noto Serif SC", serif;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  font-size: 3rem;
+  line-height: 1.1;
+}
+
+.dbgpt-subtitle-font {
+  font-family: "Times New Roman", Georgia, "Noto Serif SC", serif;
+  font-weight: 400;
+  letter-spacing: 0.18em;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.dbgpt-input-font {
+  font-family: "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  font-weight: 400;
+  font-size: 1.125rem;
+  line-height: 1.5;
+}
+
+.ant-typography,
+.ant-btn,
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-input-number,
+.ant-select,
+.ant-menu {
+  font-family: "Josefin Sans", "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+#home-container .ant-tabs-tab-active {
+  font-size: 16px;
+}
+
+#home-container .ant-tabs-tab {
+  font-size: 16px;
+}
+
+#home-container .ant-card-body {
+  padding: 12px 24px;
+}
+
+.ant-btn-primary {
+  background-color: var(--antd-primary-color);
+}
+
+.scrollbar-default::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(117, 127, 148, 0.55);
+  border-radius: 100px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(162, 174, 194, 0.4);
+}
+
+.z-float-helper {
+  z-index: 997;
+}
+
+.z-prompt-bot {
+  z-index: 998;
+}
+
+.z-scroll-buttons {
+  z-index: 999;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
