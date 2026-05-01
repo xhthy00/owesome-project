@@ -44,6 +44,19 @@ export interface ConnectionTestResult {
   version?: string;
 }
 
+export interface DatasourceTableItem {
+  id: number;
+  table_name: string;
+  table_comment?: string;
+}
+
+export interface DatasourceFieldItem {
+  id: number;
+  field_name: string;
+  field_type?: string;
+  field_comment?: string;
+}
+
 export const datasourceApi = {
   list: (params?: { skip?: number; limit?: number; oid?: number }) =>
     apiRequest<DatasourceListResult>(`/datasource${params ? `?${new URLSearchParams(params as Record<string, string>).toString()}` : ""}`),
@@ -65,5 +78,9 @@ export const datasourceApi = {
   testConnection: (id: number) =>
     apiRequest<ConnectionTestResult>(`/datasource/${id}/test-connection`, {
       method: "POST"
-    })
+    }),
+  tableList: (datasourceId: number) =>
+    apiRequest<DatasourceTableItem[]>(`/datasource/${datasourceId}/tables`),
+  fieldList: (tableId: number) =>
+    apiRequest<DatasourceFieldItem[]>(`/datasource/table/${tableId}/fields`)
 };

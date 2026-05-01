@@ -9,7 +9,9 @@ from alembic import context
 # Import SQLModel models to ensure they are registered with metadata
 from common.core.database import Base  # Base from our database module
 from system.models.user import SysUser
+from system.models.workspace import SysWorkspace, SysUserWorkspace
 from datasource.models.datasource import CoreDatasource, CoreTable, CoreField, DsRecommendedProblem
+from datasource.models.permission import DsPermission, DsRule
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

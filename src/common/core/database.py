@@ -29,6 +29,7 @@ def init_db() -> None:
     """Initialize database tables and run lightweight column migrations."""
     SQLModel.metadata.create_all(bind=engine)
     _ensure_columns()
+    _ensure_default_workspace_seed()
 
 
 def _ensure_columns() -> None:
@@ -66,6 +67,23 @@ def _ensure_columns() -> None:
                 if col in existing:
                     continue
                 conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {col} {col_type}'))
+        if inspector.has_table("sys_user_ws"):
+            existing = {c["name"] for c in inspector.get_columns("sys_user_ws")}
+            if "create_time" not in existing:
+                if dialect == "postgresql":
+                    conn.execute(
+                        text(
+                            "ALTER TABLE sys_user_ws ADD COLUMN create_time "
+                            "TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                        )
+                    )
+                else:
+                    conn.execute(
+                        text(
+                            "ALTER TABLE sys_user_ws ADD COLUMN create_time "
+                            "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                        )
+                    )
 
 
 def _ensure_tool_call_log_table(conn, dialect: str) -> None:
@@ -112,6 +130,45 @@ def _ensure_tool_call_log_table(conn, dialect: str) -> None:
 
     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_tool_call_log_trace_id ON tool_call_log(trace_id)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_tool_call_log_created_at ON tool_call_log(created_at)"))
+
+
+def _ensure_default_workspace_seed() -> None:
+    """Ensure default workspace and admin membership exist."""
+    with engine.begin() as conn:
+        if engine.dialect.name == "postgresql":
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO sys_workspace(id, name, create_time)
+                    OVERRIDING SYSTEM VALUE
+                    VALUES (1, '默认工作空间', 1672531199000)
+                    ON CONFLICT (id) DO NOTHING
+                    """
+                )
+            )
+        else:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO sys_workspace(id, name, create_time)
+                    SELECT 1, '默认工作空间', 1672531199000
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM sys_workspace WHERE id = 1
+                    )
+                    """
+                )
+            )
+        conn.execute(
+            text(
+                """
+                INSERT INTO sys_user_ws(uid, oid, weight, create_time)
+                SELECT 1, 1, 1, CURRENT_TIMESTAMP
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM sys_user_ws WHERE uid = 1 AND oid = 1
+                )
+                """
+            )
+        )
 
 
 def get_session() -> Generator[Session, None, None]:

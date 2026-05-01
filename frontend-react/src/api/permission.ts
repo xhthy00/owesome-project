@@ -32,9 +32,41 @@ export interface DataRuleItem {
   enabled: boolean;
 }
 
+export interface PermissionRuleDetail {
+  id?: number;
+  name: string;
+  type: "row" | "column";
+  ds_id?: number;
+  table_id?: number;
+  expression_tree?: string;
+  permissions?: string;
+}
+
+export interface PermissionGroup {
+  id: number;
+  name: string;
+  users: number[];
+  permissions: PermissionRuleDetail[];
+}
+
 export const permissionApi = {
   listRoles: () => apiRequest<RoleItem[]>("/permission/roles"),
   listUserRoleGrants: () => apiRequest<UserRoleGrant[]>("/permission/grants/user-role"),
   listResourceGrants: () => apiRequest<ResourceGrant[]>("/permission/grants/resource"),
-  listDataRules: () => apiRequest<DataRuleItem[]>("/permission/data-rules")
+  listDataRules: () => apiRequest<DataRuleItem[]>("/permission/data-rules"),
+  listPermissionGroups: () => apiRequest<PermissionGroup[]>("/ds_permission/list", { method: "POST" }),
+  savePermissionGroup: (payload: {
+    id?: number;
+    name: string;
+    users: number[];
+    permissions: PermissionRuleDetail[];
+  }) =>
+    apiRequest<{ id: number }>("/ds_permission/save", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }),
+  deletePermissionGroup: (id: number) =>
+    apiRequest<{ id: number }>(`/ds_permission/delete/${id}`, {
+      method: "POST"
+    })
 };

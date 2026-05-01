@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
-from src.common.exceptions.base import AppException, ValidationException
+from common.exceptions.base import AppException, ValidationException
 
 
 def register_exception_handlers(app: FastAPI) -> None:

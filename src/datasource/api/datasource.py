@@ -5,16 +5,17 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.orm import Session
 
-from src.common.core.database import get_session
-from src.common.exceptions.base import NotFoundException
-from src.common.schemas.response import success_response, error_response
-from src.datasource.schemas import (
+from common.core.database import get_session
+from common.exceptions.base import NotFoundException
+from common.schemas.response import success_response
+from datasource.schemas import (
     ConnectionTestResult,
     DatasourceCreate,
     DatasourceUpdate,
 )
-from src.datasource.crud import crud_datasource
-from src.common.utils.aes import decrypt_conf
+from datasource.crud import crud_datasource
+from common.utils.aes import decrypt_conf
+from datasource.models.datasource import CoreTable, CoreField
 
 router = APIRouter(prefix="/datasource", tags=["datasource"])
 
@@ -175,7 +176,7 @@ def test_connection(
     config = decrypt_conf(ds.configuration) if ds.configuration else {}
 
     try:
-        from src.datasource.db.db import test_db_connection
+        from datasource.db.db import test_db_connection
         success, message, version = test_db_connection(ds.type, config)
         return success_response(
             data={
@@ -192,3 +193,50 @@ def test_connection(
                 "version": None,
             }
         )
+
+
+@router.get("/{datasource_id}/tables")
+def list_tables(
+    datasource_id: int,
+    session: Session = Depends(get_session),
+):
+    rows = (
+        session.query(CoreTable)
+        .filter(CoreTable.ds_id == datasource_id)
+        .order_by(CoreTable.id.asc())
+        .all()
+    )
+    return success_response(
+        data=[
+            {
+                "id": row.id,
+                "table_name": row.table_name,
+                "table_comment": row.table_comment,
+            }
+            for row in rows
+        ]
+    )
+
+
+@router.get("/table/{table_id}/fields")
+def list_table_fields(
+    table_id: int,
+    session: Session = Depends(get_session),
+):
+    rows = (
+        session.query(CoreField)
+        .filter(CoreField.table_id == table_id)
+        .order_by(CoreField.field_index.asc())
+        .all()
+    )
+    return success_response(
+        data=[
+            {
+                "id": row.id,
+                "field_name": row.field_name,
+                "field_type": row.field_type,
+                "field_comment": row.field_comment,
+            }
+            for row in rows
+        ]
+    )

@@ -3,6 +3,12 @@
   --oc-card-bg: #ffffff;
   --oc-text: #1f2329;
   --oc-sub-text: #5f6773;
+  --oc-primary: #1677ff;
+  --oc-primary-hover: #4096ff;
+  --oc-primary-light: #e6f4ff;
+  --oc-gradient-1: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  --oc-gradient-2: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
+  --oc-gradient-blue: linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%);
 }
 
 .dark {
@@ -10,4 +16,7 @@
   --oc-card-bg: #1e242d;
   --oc-text: #edf1f8;
   --oc-sub-text: #9aa4b2;
+  --oc-primary: #3b82f6;
+  --oc-primary-hover: #60a5fa;
+  --oc-primary-light: #1e3a8a;
 }

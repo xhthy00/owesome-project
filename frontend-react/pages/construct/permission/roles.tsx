@@ -1,19 +1,8 @@
 import { ReloadOutlined } from "@ant-design/icons";
-import { Alert, Button, Table, Tag, Typography, message } from "antd";
+import { Button, Empty, Table, Tag, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useEffect, useState } from "react";
 import { permissionApi, type RoleItem, type UserRoleGrant } from "@/api/permission";
-
-const fallbackRoles: RoleItem[] = [
-  { id: 1, code: "admin", name: "系统管理员", description: "全局管理权限" },
-  { id: 2, code: "ws_admin", name: "工作空间管理员", description: "工作空间内资源管理权限" },
-  { id: 3, code: "member", name: "普通成员", description: "基础使用与查询权限" }
-];
-
-const fallbackUserGrants: UserRoleGrant[] = [
-  { id: 1, user_id: 1, account: "admin", role_codes: ["admin"], oid: 1 },
-  { id: 2, user_id: 1001, account: "demo.user", role_codes: ["member"], oid: 1 }
-];
 
 const roleColumns: ColumnsType<RoleItem> = [
   { title: "角色编码", dataIndex: "code", width: 160 },
@@ -33,10 +22,10 @@ const grantColumns: ColumnsType<UserRoleGrant> = [
 ];
 
 export default function ConstructPermissionRolesPage() {
-  const [roles, setRoles] = useState<RoleItem[]>(fallbackRoles);
-  const [grants, setGrants] = useState<UserRoleGrant[]>(fallbackUserGrants);
+  const [roles, setRoles] = useState<RoleItem[]>([]);
+  const [grants, setGrants] = useState<UserRoleGrant[]>([]);
   const [loading, setLoading] = useState(false);
-  const [usingFallback, setUsingFallback] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const reload = async () => {
     setLoading(true);
@@ -47,12 +36,12 @@ export default function ConstructPermissionRolesPage() {
       ]);
       setRoles(rolesRes);
       setGrants(grantsRes);
-      setUsingFallback(false);
+      setLoadFailed(false);
     } catch (err) {
-      setRoles(fallbackRoles);
-      setGrants(fallbackUserGrants);
-      setUsingFallback(true);
-      message.warning(err instanceof Error ? `${err.message}，当前显示示例数据` : "后端接口未就绪，显示示例数据");
+      setLoadFailed(true);
+      setRoles([]);
+      setGrants([]);
+      message.error(err instanceof Error ? err.message : "加载角色数据失败");
     } finally {
       setLoading(false);
     }
@@ -76,7 +65,7 @@ export default function ConstructPermissionRolesPage() {
         </Button>
       </div>
 
-      {usingFallback ? <Alert className="mb-4" type="warning" showIcon message="当前为示例数据，请联调权限接口后切换为真实数据。" /> : null}
+      {loadFailed ? <Empty className="mb-4" description="角色数据加载失败，请检查后端接口" /> : null}
 
       <Typography.Title level={5}>角色定义</Typography.Title>
       <div className="mb-6 overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white shadow-sm">

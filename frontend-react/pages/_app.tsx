@@ -1,7 +1,9 @@
 import { App as AntApp, ConfigProvider, theme } from "antd";
 import type { AppProps } from "next/app";
 import { useContext, useEffect, useMemo } from "react";
+import { getCurrentUser } from "@/api/auth";
 import { ChatContext, ChatContextProvider } from "@/app/chat-context";
+import { clearAccessToken, getAccessToken } from "@/auth/session";
 import SideBar from "@/components/layout/side-bar";
 import "../styles/globals.css";
 
@@ -16,7 +18,10 @@ function LayoutWrapper({
 }) {
   const { mode, setMode } = useContext(ChatContext);
   const isBypassLayout =
-    pathname.startsWith("/mobile") || pathname.startsWith("/share") || pathname === "/construct/app/extra";
+    pathname === "/login" ||
+    pathname.startsWith("/mobile") ||
+    pathname.startsWith("/share") ||
+    pathname === "/construct/app/extra";
 
   useEffect(() => {
     const savedMode = window.localStorage.getItem(APP_MODE_KEY);
@@ -61,6 +66,31 @@ function LayoutWrapper({
 }
 
 export default function MyApp({ Component, pageProps, router }: AppProps) {
+  useEffect(() => {
+    if (!router.isReady) return;
+
+    const path = router.pathname;
+    const isPublicPage = path === "/login" || path.startsWith("/share") || path.startsWith("/mobile");
+    const token = getAccessToken();
+
+    if (!token && !isPublicPage) {
+      void router.replace(`/login?redirect=${encodeURIComponent(router.asPath)}`);
+      return;
+    }
+
+    if (token && path === "/login") {
+      void router.replace("/");
+      return;
+    }
+
+    if (!token || isPublicPage) return;
+
+    void getCurrentUser().catch(() => {
+      clearAccessToken();
+      void router.replace(`/login?redirect=${encodeURIComponent(router.asPath)}`);
+    });
+  }, [router]);
+
   return (
     <ChatContextProvider>
       <LayoutWrapper pathname={router.pathname}>

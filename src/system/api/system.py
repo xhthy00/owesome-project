@@ -5,10 +5,10 @@ from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from common.core.database import get_session
-from common.core.security import create_access_token
+from common.core.security import create_access_token, decode_access_token
 from common.exceptions.base import UnauthorizedException, BadRequestException, NotFoundException
 from common.schemas.response import success_response
-from system.schemas import UserCreate, UserResponse, TokenResponse
+from system.schemas import UserCreate, UserResponse
 from system.crud.crud_user import (
     get_user_by_account,
     create_user,
@@ -26,8 +26,6 @@ def get_current_user(
     session: Session = Depends(get_session),
 ) -> UserResponse:
     """Get current authenticated user from JWT token."""
-    from src.common.core.security import decode_access_token
-
     payload = decode_access_token(token)
     if payload is None:
         raise UnauthorizedException("Invalid or expired token")

@@ -1,25 +1,8 @@
 import { ReloadOutlined } from "@ant-design/icons";
-import { Alert, Button, Table, Tag, Typography, message } from "antd";
+import { Button, Empty, Table, Tag, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useEffect, useState } from "react";
 import { permissionApi, type ResourceGrant } from "@/api/permission";
-
-const fallbackData: ResourceGrant[] = [
-  {
-    id: 1,
-    principal_type: "role",
-    principal: "ws_admin",
-    resource_type: "datasource",
-    resource_ids: [1, 2, 3]
-  },
-  {
-    id: 2,
-    principal_type: "user",
-    principal: "demo.user",
-    resource_type: "chat",
-    resource_ids: [10001, 10002]
-  }
-];
 
 const columns: ColumnsType<ResourceGrant> = [
   {
@@ -53,20 +36,20 @@ const columns: ColumnsType<ResourceGrant> = [
 ];
 
 export default function ConstructPermissionResourcesPage() {
-  const [list, setList] = useState<ResourceGrant[]>(fallbackData);
+  const [list, setList] = useState<ResourceGrant[]>([]);
   const [loading, setLoading] = useState(false);
-  const [usingFallback, setUsingFallback] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const reload = async () => {
     setLoading(true);
     try {
       const res = await permissionApi.listResourceGrants();
       setList(res);
-      setUsingFallback(false);
+      setLoadFailed(false);
     } catch (err) {
-      setList(fallbackData);
-      setUsingFallback(true);
-      message.warning(err instanceof Error ? `${err.message}，当前显示示例数据` : "后端接口未就绪，显示示例数据");
+      setList([]);
+      setLoadFailed(true);
+      message.error(err instanceof Error ? err.message : "加载资源授权失败");
     } finally {
       setLoading(false);
     }
@@ -90,7 +73,7 @@ export default function ConstructPermissionResourcesPage() {
         </Button>
       </div>
 
-      {usingFallback ? <Alert className="mb-4" type="warning" showIcon message="当前为示例数据，请联调资源授权接口后切换为真实数据。" /> : null}
+      {loadFailed ? <Empty className="mb-4" description="资源授权数据加载失败，请检查后端接口" /> : null}
 
       <div className="overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white shadow-sm">
         <Table rowKey="id" columns={columns} dataSource={list} loading={loading} pagination={false} />

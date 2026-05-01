@@ -1,5 +1,4 @@
 import {
-  ApartmentOutlined,
   DownOutlined,
   DatabaseOutlined,
   GlobalOutlined,
@@ -25,8 +24,14 @@ const routes = [
   { key: "skills", path: "/construct/skills", label: "技能", icon: <ThunderboltOutlined /> },
   { key: "datasource", path: "/construct/database", label: "数据源", icon: <DatabaseOutlined /> },
   { key: "permission", path: "/construct/permission", label: "权限管理", icon: <SafetyCertificateOutlined /> },
-  { key: "knowledge", path: "/construct/knowledge", label: "知识库", icon: <ReadOutlined /> },
-  { key: "app", path: "/construct/app", label: "应用管理", icon: <ApartmentOutlined /> }
+  { key: "knowledge", path: "/construct/knowledge", label: "知识库", icon: <ReadOutlined /> }
+];
+
+const permissionSubRoutes = [
+  { key: "permission-config", path: "/construct/permission/config", label: "权限配置" },
+  { key: "permission-users", path: "/construct/permission/users", label: "用户管理" },
+  { key: "permission-workspaces", path: "/construct/permission/workspaces", label: "工作空间" },
+  { key: "permission-members", path: "/construct/permission/members", label: "成员管理" }
 ];
 
 export default function SideBar() {
@@ -35,6 +40,7 @@ export default function SideBar() {
   const pathname = router.pathname;
   const [historyList, setHistoryList] = useState<Conversation[]>([]);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [permissionExpanded, setPermissionExpanded] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -184,17 +190,53 @@ export default function SideBar() {
       <div className="flex flex-col gap-1">
         {routes.map((item) => {
           const active = pathname === item.path || pathname.startsWith(item.path + "/");
+          const isPermissionRoot = item.key === "permission";
           return (
-            <Link
-              href={item.path}
-              className={`flex h-12 w-full items-center px-4 transition-colors hover:rounded-xl hover:bg-blue-50/50 dark:hover:bg-blue-900/10 ${
-                active ? "rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400" : "text-[#2e3a52] dark:text-gray-300"
-              }`}
-              key={item.key}
-            >
-              <div className="mr-3">{item.icon}</div>
-              <span className="dbgpt-ui-font text-sm">{item.label}</span>
-            </Link>
+            <div key={item.key}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (isPermissionRoot) {
+                    setPermissionExpanded((prev) => !prev);
+                  } else {
+                    void router.push(item.path);
+                  }
+                }}
+                className={`flex h-12 w-full items-center px-4 transition-colors hover:rounded-xl hover:bg-blue-50/50 dark:hover:bg-blue-900/10 ${
+                  active ? "rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400" : "text-[#2e3a52] dark:text-gray-300"
+                }`}
+              >
+                <div className="mr-3">{item.icon}</div>
+                <span className="dbgpt-ui-font text-sm">{item.label}</span>
+                {isPermissionRoot ? (
+                  <DownOutlined
+                    className={`ml-auto text-xs transition-transform ${
+                      permissionExpanded ? "rotate-0" : "-rotate-90"
+                    }`}
+                  />
+                ) : null}
+              </button>
+              {isPermissionRoot && permissionExpanded ? (
+                <div className="ml-11 mt-1 flex flex-col gap-1">
+                  {permissionSubRoutes.map((sub) => {
+                    const subActive = pathname === sub.path || pathname.startsWith(sub.path + "/");
+                    return (
+                      <Link
+                        key={sub.key}
+                        href={sub.path}
+                        className={`flex h-10 items-center rounded-lg px-3 text-sm transition-colors ${
+                          subActive
+                            ? "bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400"
+                            : "text-[#3d4a64] hover:bg-blue-50/50 dark:text-gray-400 dark:hover:bg-blue-900/10"
+                        }`}
+                      >
+                        {sub.label}
+                      </Link>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
           );
         })}
       </div>

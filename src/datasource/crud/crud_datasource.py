@@ -5,8 +5,8 @@ from typing import List, Optional
 
 from sqlalchemy.orm import Session
 
-from src.datasource.models.datasource import CoreDatasource
-from src.common.utils.aes import encrypt_conf, decrypt_conf
+from datasource.models.datasource import CoreDatasource
+from common.utils.aes import encrypt_conf, decrypt_conf
 
 
 def get_datasource_by_id(session: Session, datasource_id: int) -> Optional[CoreDatasource]:
