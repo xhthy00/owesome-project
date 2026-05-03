@@ -145,7 +145,8 @@ def test_tool_call_pseudo_syntax_is_parsed_and_invoked(pack):
     assert out.observations == "ds-for:学生成绩分数分布 各班平均分"
 
 
-def test_guard_blocks_describe_table_on_non_locked_table(pack):
+def test_locked_tables_constraint_kwarg_is_ignored_describe_any_table(pack):
+    """已不再根据 constraints.locked_tables 拦截工具调用。"""
     action = ToolAction(tool_pack=pack)
     out = _run(
         action.run(
@@ -153,12 +154,11 @@ def test_guard_blocks_describe_table_on_non_locked_table(pack):
             constraints={"locked_tables": ["chusan_zhengzhi"]},
         )
     )
-    assert out.is_exe_success is False
-    assert "约束冲突" in out.content
-    assert "chusan_zhengzhi" in out.content
+    assert out.is_exe_success is True
+    assert out.observations == "describe:student_score"
 
 
-def test_guard_allows_execute_sql_when_locked_table_is_used(pack):
+def test_execute_sql_succeeds_even_when_constraints_list_other_locked_tables(pack):
     action = ToolAction(tool_pack=pack)
     out = _run(
         action.run(

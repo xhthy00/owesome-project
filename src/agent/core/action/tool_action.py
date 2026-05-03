@@ -33,7 +33,6 @@ logger = logging.getLogger(__name__)
 _THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
 _TOOL_NAME_RE = re.compile(r"""tool\s*:\s*["']?([A-Za-z_][A-Za-z0-9_]*)["']?""", re.IGNORECASE)
 _CLI_ARG_RE = re.compile(r"""--([A-Za-z_][A-Za-z0-9_]*)\s+("([^"]*)"|'([^']*)'|([^\s,}\]]+))""")
-_SQL_TABLE_RE = re.compile(r"""(?i)\b(?:from|join)\s+([`"]?[A-Za-z0-9_.]+[`"]?)""")
 
 
 class ToolAction(Action):
@@ -49,7 +48,6 @@ class ToolAction(Action):
         agent_name = str(kwargs.get("agent_name") or "")
         round_idx = kwargs.get("round_idx")
         sub_task_index = kwargs.get("sub_task_index")
-        constraints = kwargs.get("constraints") if isinstance(kwargs.get("constraints"), dict) else {}
 
         def _audit(
             *,
@@ -103,42 +101,6 @@ class ToolAction(Action):
                     args["question"] = m_q.group(2) or m_q.group(3) or ""
 
             return {"tool": tool_name, "args": args}
-
-        def _normalize_ident(v: str) -> str:
-            return str(v or "").strip().strip("`\"").lower()
-
-        def _extract_sql_tables(sql: str) -> list[str]:
-            out: list[str] = []
-            for m in _SQL_TABLE_RE.finditer(sql or ""):
-                t = _normalize_ident(m.group(1))
-                if t and t not in out:
-                    out.append(t)
-            return out
-
-        def _guard_constraints(tool: str, tool_args: dict[str, Any]) -> str | None:
-            locked = constraints.get("locked_tables")
-            if not isinstance(locked, list) or not locked:
-                return None
-            allowed = {_normalize_ident(x) for x in locked if str(x or "").strip()}
-            if not allowed:
-                return None
-            tname = str(tool or "")
-            if tname in {"describe_table", "sample_rows"}:
-                cand = _normalize_ident(str(tool_args.get("table_name") or ""))
-                if cand and cand not in allowed:
-                    return (
-                        f"约束冲突：当前子任务必须使用已锁定表 {sorted(allowed)}，"
-                        f"但你传入了 `{cand}`。请改用锁定表，或先解释为何需要切表。"
-                    )
-            if tname == "execute_sql":
-                sql = str(tool_args.get("sql") or "")
-                tables = _extract_sql_tables(sql)
-                if tables and all(tb not in allowed for tb in tables):
-                    return (
-                        f"约束冲突：SQL 未命中已锁定表 {sorted(allowed)}，当前命中表={tables}。"
-                        "请改写 SQL 使用锁定表。"
-                    )
-            return None
 
         try:
             parsed = parse_json_tolerant(ai_message)
@@ -248,23 +210,6 @@ class ToolAction(Action):
             return ActionOutput(
                 is_exe_success=False,
                 content=msg,
-                action=self.name,
-                thoughts=thoughts,
-            )
-
-        guard_msg = _guard_constraints(str(tool_name), args)
-        if guard_msg:
-            logger.info(
-                "[%s] constraint_guard_blocked tool=%s sub_task=%s msg=%s",
-                agent_name or "agent",
-                str(tool_name),
-                sub_task_index,
-                guard_msg,
-            )
-            _audit(tool_name=str(tool_name), success=False, args=args, result_preview=guard_msg)
-            return ActionOutput(
-                is_exe_success=False,
-                content=guard_msg,
                 action=self.name,
                 thoughts=thoughts,
             )

@@ -262,7 +262,11 @@ def execute_sql(
     from common.utils.aes import decrypt_conf
     from datasource.crud import crud_datasource
     from datasource.db.db import execute_sql as db_execute_sql
-    from datasource.service.query_permission import apply_permissions_for_execute
+    from datasource.service.query_permission import (
+        apply_permissions_for_execute,
+        filter_exec_result_by_column_permissions,
+        validate_sql_column_permissions,
+    )
 
     # Get datasource
     datasource = crud_datasource.get_datasource_by_id(session, request.datasource_id)
@@ -320,12 +324,65 @@ def execute_sql(
         result["sql"],
         result.get("tables"),
     )
+    col_perm_err = validate_sql_column_permissions(
+        session,
+        current_user,
+        int(datasource.id),
+        datasource.type or "pg",
+        sql_exec,
+    )
+    if col_perm_err:
+        steps.append(
+            {
+                "name": "execute",
+                "label": "执行 SQL",
+                "status": "error",
+                "elapsed_ms": 0,
+                "detail": col_perm_err,
+            }
+        )
+        record_id = _persist_record(
+            session=session,
+            current_user_id=current_user.id,
+            request=request,
+            question=request.question,
+            sql=sql_exec,
+            sql_error=col_perm_err,
+            exec_result=None,
+            chart_type=result.get("chart_type", "table"),
+            is_success=False,
+            reasoning=reasoning,
+            steps=steps,
+            agent_mode="legacy",
+        )
+        return success_response(
+            data={
+                "record_id": record_id,
+                "sql": sql_exec,
+                "result": None,
+                "error": col_perm_err,
+                "chart_type": result.get("chart_type", "table"),
+                "reasoning": reasoning,
+                "steps": steps,
+            },
+            message="SQL violates column permission",
+        )
+
     _t_exec = time.time()
     success, message, exec_result = db_execute_sql(
         db_type=datasource.type,
         config=config,
         sql=sql_exec,
     )
+    if success and isinstance(exec_result, dict):
+        exec_result = filter_exec_result_by_column_permissions(
+            session,
+            current_user,
+            int(datasource.id),
+            datasource.type or "pg",
+            sql_exec,
+            exec_result,
+        )
     steps.append({
         "name": "execute",
         "label": "执行 SQL",
@@ -521,7 +578,11 @@ async def chat_stream(
         from src.common.utils.aes import decrypt_conf
         from src.datasource.crud import crud_datasource
         from src.datasource.db.db import execute_sql as db_execute_sql
-        from src.datasource.service.query_permission import apply_permissions_for_execute
+        from src.datasource.service.query_permission import (
+            apply_permissions_for_execute,
+            filter_exec_result_by_column_permissions,
+            validate_sql_column_permissions,
+        )
         from src.system.crud.crud_user import get_user_by_id
 
         steps_acc = []
@@ -594,12 +655,55 @@ async def chat_stream(
                     "tables": result.get("tables", []),
                     "chart_type": result.get("chart_type", "table"),
                 })
+                col_perm_err = validate_sql_column_permissions(
+                    session,
+                    user_row,
+                    int(datasource.id),
+                    datasource.type or "pg",
+                    sql_exec,
+                )
+                if col_perm_err:
+                    exec_step = {
+                        "name": "execute",
+                        "label": "执行 SQL",
+                        "status": "error",
+                        "elapsed_ms": 0,
+                        "detail": col_perm_err,
+                    }
+                    steps_acc.append(exec_step)
+                    push("step", exec_step)
+                    record_id = _persist_record(
+                        session=session,
+                        current_user_id=current_user_id,
+                        request=request,
+                        question=request.question,
+                        sql=sql_exec,
+                        sql_error=col_perm_err,
+                        exec_result=None,
+                        chart_type=result.get("chart_type", "table"),
+                        is_success=False,
+                        reasoning=reasoning_text,
+                        steps=steps_acc,
+                        agent_mode="legacy",
+                    )
+                    push("error", {"error": col_perm_err})
+                    return
+
                 t_exec = time.time()
                 success, message, exec_result = db_execute_sql(
                     db_type=datasource.type,
                     config=config,
                     sql=sql_exec,
                 )
+                if success and isinstance(exec_result, dict):
+                    exec_result = filter_exec_result_by_column_permissions(
+                        session,
+                        user_row,
+                        int(datasource.id),
+                        datasource.type or "pg",
+                        sql_exec,
+                        exec_result,
+                    )
                 exec_step = {
                     "name": "execute",
                     "label": "执行 SQL",

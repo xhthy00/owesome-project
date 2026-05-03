@@ -493,7 +493,11 @@ def sample_rows(
     """
     from src.common.core.database import get_db_session
     from src.datasource.db.db import execute_sql as db_execute_sql
-    from src.datasource.service.query_permission import apply_permissions_for_execute
+    from src.datasource.service.query_permission import (
+        apply_permissions_for_execute,
+        filter_exec_result_by_column_permissions,
+        validate_sql_column_permissions,
+    )
     from src.system.crud.crud_user import get_user_by_id
 
     limit = max(1, min(int(limit or SAMPLE_ROWS_DEFAULT), SAMPLE_ROWS_LLM_MAX))
@@ -521,10 +525,20 @@ def sample_rows(
             sql_run = apply_permissions_for_execute(
                 session, u, datasource_id, db_type, sql, [table_name.split(".")[-1]]
             )
+            err = validate_sql_column_permissions(session, u, datasource_id, db_type, sql_run)
+            if err:
+                return ToolResult(content=f"采样失败：{err}", data=None)
 
     success, message, result = db_execute_sql(db_type=db_type, config=config, sql=sql_run)
     if not success:
         return ToolResult(content=f"采样失败：{message}", data=None)
+
+    if user_id is not None and isinstance(result, dict):
+        with get_db_session() as session:
+            u = get_user_by_id(session, user_id)
+            result = filter_exec_result_by_column_permissions(
+                session, u, datasource_id, db_type, sql_run, result
+            )
 
     columns = result.get("columns", [])
     rows = result.get("rows", [])
@@ -542,7 +556,11 @@ def execute_sql(datasource_id: int, sql: str, user_id: int | None = None) -> Too
     """
     from src.common.core.database import get_db_session
     from src.datasource.db.db import execute_sql as db_execute_sql
-    from src.datasource.service.query_permission import apply_permissions_for_execute
+    from src.datasource.service.query_permission import (
+        apply_permissions_for_execute,
+        filter_exec_result_by_column_permissions,
+        validate_sql_column_permissions,
+    )
     from src.system.crud.crud_user import get_user_by_id
 
     db_type, config, _ = _load_datasource(datasource_id)
@@ -551,6 +569,12 @@ def execute_sql(datasource_id: int, sql: str, user_id: int | None = None) -> Too
         with get_db_session() as session:
             u = get_user_by_id(session, user_id)
             sql_run = apply_permissions_for_execute(session, u, datasource_id, db_type, sql, None)
+            err = validate_sql_column_permissions(session, u, datasource_id, db_type, sql_run)
+            if err:
+                return ToolResult(
+                    content=err,
+                    data={"sql": sql_run, "error": err},
+                )
     success, message, result = db_execute_sql(db_type=db_type, config=config, sql=sql_run)
     if not success:
         return ToolResult(
@@ -563,6 +587,13 @@ def execute_sql(datasource_id: int, sql: str, user_id: int | None = None) -> Too
             content=f"SQL 执行成功，影响 {result.get('row_count', 0) if isinstance(result, dict) else 0} 行。",
             data={"sql": sql_run, **(result if isinstance(result, dict) else {})},
         )
+
+    if user_id is not None and isinstance(result, dict):
+        with get_db_session() as session:
+            u = get_user_by_id(session, user_id)
+            result = filter_exec_result_by_column_permissions(
+                session, u, datasource_id, db_type, sql_run, result
+            )
 
     columns = result.get("columns", [])
     rows = result.get("rows", [])

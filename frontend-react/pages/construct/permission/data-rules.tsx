@@ -1,4 +1,13 @@
-import { DeleteOutlined, EditOutlined, PlusOutlined, ReloadOutlined } from "@ant-design/icons";
+import {
+  ClusterOutlined,
+  DeleteOutlined,
+  EditOutlined,
+  PlusOutlined,
+  ReloadOutlined,
+  SettingOutlined,
+  TeamOutlined,
+  UserOutlined
+} from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -7,21 +16,19 @@ import {
   Divider,
   Form,
   Input,
-  InputNumber,
   Modal,
   Popconfirm,
   Row,
   Select,
   Space,
   Steps,
-  Switch,
-  Table,
   Tag,
+  Tooltip,
   Typography,
   message
 } from "antd";
 import { useEffect, useMemo, useState } from "react";
-import { datasourceApi, type DatasourceFieldItem, type DatasourceItem, type DatasourceTableItem } from "@/api/datasource";
+import { datasourceApi, type DatasourceItem } from "@/api/datasource";
 import { permissionApi, type PermissionGroup } from "@/api/permission";
 import { systemApi } from "@/api/system";
 
@@ -40,11 +47,31 @@ type RuleForm = {
 };
 
 type ColumnPermissionRow = {
-  field_id: number;
+  /** 元数据同步场景下的字段 ID；手动配置时可省略，运行时按 field_name 匹配 */
+  field_id?: number;
   field_name: string;
   field_comment?: string;
-  enable: boolean;
+  /** 与后端一致：false 表示隐藏该列；本页仅维护「需隐藏的列」，持久化时一律写 false */
+  enable?: boolean;
 };
+
+/** 列权限为拒绝列表：每条均为隐藏列，加载旧数据时统一为 enable:false */
+function normalizeColumnPermissionsJson(raw: unknown): string {
+  try {
+    const arr = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!Array.isArray(arr)) return "[]";
+    const out = arr
+      .filter((x) => x && typeof x === "object")
+      .map((x: Record<string, unknown>) => {
+        const row = { ...x } as Record<string, unknown>;
+        row.enable = false;
+        return row;
+      });
+    return JSON.stringify(out);
+  } catch {
+    return "[]";
+  }
+}
 
 function toJsonString(value: unknown, fallback: string) {
   if (typeof value === "string") return value;
@@ -64,8 +91,6 @@ export default function ConstructPermissionDataRulesPage() {
   const [candidateUsers, setCandidateUsers] = useState<Array<{ id: number; name: string; account: string }>>([]);
   const [activeStep, setActiveStep] = useState(0);
   const [datasources, setDatasources] = useState<DatasourceItem[]>([]);
-  const [tableOptions, setTableOptions] = useState<Record<number, DatasourceTableItem[]>>({});
-  const [fieldOptions, setFieldOptions] = useState<Record<number, DatasourceFieldItem[]>>({});
   const [form] = Form.useForm<RuleForm>();
 
   const buildFormValuesFromGroup = (group: PermissionGroup): RuleForm => {
@@ -82,7 +107,10 @@ export default function ConstructPermissionDataRulesPage() {
             ds_id: p.ds_id,
             table_name: p.table_name,
             expression_tree: toJsonString(p.expression_tree, "{}"),
-            permissions: toJsonString(p.permissions, "[]")
+            permissions:
+              p.type === "column"
+                ? normalizeColumnPermissionsJson(p.permissions)
+                : toJsonString(p.permissions, "[]")
           }))
         : [{ name: "rule_1", type: "row", expression_tree: "{}", permissions: "[]" }]
     };
@@ -166,11 +194,36 @@ export default function ConstructPermissionDataRulesPage() {
           return (
           <Col key={group.id} xs={24} md={12} lg={8}>
             <Card
-              title={group.name}
+              bordered={false}
+              className="h-full overflow-hidden rounded-2xl border border-[#e2e8f0] bg-gradient-to-br from-white via-[#fafcff] to-[#f1f6ff] shadow-[0_2px_14px_rgba(15,23,42,0.06)] transition-all duration-200 hover:-translate-y-0.5 hover:border-[#93c5fd] hover:shadow-[0_10px_28px_rgba(37,99,235,0.12)] dark:border-[#334155] dark:from-[#141923] dark:via-[#11161f] dark:to-[#0f141c] dark:hover:border-[#3b82f6]/50"
+              styles={{
+                header: {
+                  borderBottom: "1px solid rgba(226, 232, 240, 0.9)",
+                  padding: "14px 16px",
+                  minHeight: 56
+                },
+                body: { padding: "14px 16px 16px" }
+              }}
+              title={
+                <div className="flex min-w-0 flex-col gap-0.5 pr-2">
+                  <Typography.Text
+                    ellipsis={{ tooltip: group.name }}
+                    className="text-[15px] font-semibold leading-snug text-[#0f172a] dark:text-[#f1f5f9]"
+                  >
+                    {group.name}
+                  </Typography.Text>
+                  <span className="text-[11px] font-medium tracking-wide text-[#94a3b8] dark:text-[#64748b]">
+                    规则组 #{group.id}
+                  </span>
+                </div>
+              }
               extra={
-                <Space>
+                <Space size={0} wrap className="max-w-[min(100%,11rem)] justify-end sm:max-w-none" split={<span className="mx-0.5 text-[#cbd5e1] dark:text-[#475569]">|</span>}>
                   <Button
-                    type="text"
+                    type="link"
+                    size="small"
+                    icon={<SettingOutlined className="text-[13px]" />}
+                    className="!px-1.5 text-[12px] font-medium text-[#475569] hover:text-[#2563eb] dark:text-[#94a3b8] dark:hover:text-[#93c5fd]"
                     onClick={() => {
                       setEditing(group);
                       form.setFieldsValue(buildFormValuesFromGroup(group));
@@ -182,7 +235,10 @@ export default function ConstructPermissionDataRulesPage() {
                     设置规则
                   </Button>
                   <Button
-                    type="text"
+                    type="link"
+                    size="small"
+                    icon={<TeamOutlined className="text-[13px]" />}
+                    className="!px-1.5 text-[12px] font-medium text-[#475569] hover:text-[#2563eb] dark:text-[#94a3b8] dark:hover:text-[#93c5fd]"
                     onClick={() => {
                       setEditing(group);
                       form.setFieldsValue(buildFormValuesFromGroup(group));
@@ -193,17 +249,21 @@ export default function ConstructPermissionDataRulesPage() {
                   >
                     设置用户
                   </Button>
-                  <Button
-                    type="text"
-                    icon={<EditOutlined />}
-                    onClick={() => {
-                      setEditing(group);
-                      form.setFieldsValue(buildFormValuesFromGroup(group));
-                      setActiveStep(0);
-                      setOpen(true);
-                      void searchUsers();
-                    }}
-                  />
+                  <Tooltip title="编辑名称与说明">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<EditOutlined />}
+                      className="text-[#64748b] hover:bg-[#eff6ff] hover:text-[#2563eb] dark:hover:bg-[#1e293b]"
+                      onClick={() => {
+                        setEditing(group);
+                        form.setFieldsValue(buildFormValuesFromGroup(group));
+                        setActiveStep(0);
+                        setOpen(true);
+                        void searchUsers();
+                      }}
+                    />
+                  </Tooltip>
                   <Popconfirm
                     title={`删除规则组 ${group.name} ?`}
                     description="删除后该组全部规则立即失效，相关成员恢复对应数据访问权限。"
@@ -217,16 +277,49 @@ export default function ConstructPermissionDataRulesPage() {
                       }
                     }}
                   >
-                    <Button type="text" danger icon={<DeleteOutlined />} />
+                    <Tooltip title="删除规则组">
+                      <Button type="text" size="small" danger icon={<DeleteOutlined />} className="hover:bg-[#fef2f2]" />
+                    </Tooltip>
                   </Popconfirm>
                 </Space>
               }
             >
-              <div className="mb-2 text-sm text-gray-500">限制用户数: {groupUsers.length}</div>
-              <div className="mb-2 text-sm text-gray-500">规则条数: {groupPermissions.length}</div>
-              <Space wrap>
+              <div className="mb-3 grid grid-cols-2 gap-3">
+                <div className="flex items-center gap-2.5 rounded-xl border border-[#e8eef5] bg-white/80 px-3 py-2.5 dark:border-[#2f3d52] dark:bg-[#0f172a]/60">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#eff6ff] text-[#2563eb] dark:bg-[#1e3a5f] dark:text-[#93c5fd]">
+                    <UserOutlined />
+                  </span>
+                  <div>
+                    <div className="text-[11px] font-medium uppercase tracking-wide text-[#94a3b8]">受限用户</div>
+                    <div className="text-lg font-semibold tabular-nums leading-none text-[#0f172a] dark:text-[#e2e8f0]">
+                      {groupUsers.length}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2.5 rounded-xl border border-[#e8eef5] bg-white/80 px-3 py-2.5 dark:border-[#2f3d52] dark:bg-[#0f172a]/60">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#f0fdf4] text-[#16a34a] dark:bg-[#14532d]/50 dark:text-[#86efac]">
+                    <ClusterOutlined />
+                  </span>
+                  <div>
+                    <div className="text-[11px] font-medium uppercase tracking-wide text-[#94a3b8]">规则条数</div>
+                    <div className="text-lg font-semibold tabular-nums leading-none text-[#0f172a] dark:text-[#e2e8f0]">
+                      {groupPermissions.length}
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <Divider className="!my-3 border-[#eef2f7] dark:border-[#2f3d52]" />
+              <div className="text-[11px] font-semibold uppercase tracking-wide text-[#94a3b8] dark:text-[#64748b]">规则类型</div>
+              <Space wrap className="mt-2">
                 {groupPermissions.map((item) => (
-                  <Tag key={`${group.id}-${item.id || item.name}`} color={item.type === "row" ? "green" : "blue"}>
+                  <Tag
+                    key={`${group.id}-${item.id || item.name}`}
+                    className={`m-0 rounded-full border-0 px-2.5 py-0.5 text-xs font-medium ${
+                      item.type === "row"
+                        ? "bg-[#dcfce7] text-[#166534] dark:bg-[#14532d]/40 dark:text-[#bbf7d0]"
+                        : "bg-[#dbeafe] text-[#1d4ed8] dark:bg-[#1e3a8a]/50 dark:text-[#bfdbfe]"
+                    }`}
+                  >
                     {item.type === "row" ? "行权限" : "列权限"}
                   </Tag>
                 ))}
@@ -276,11 +369,39 @@ export default function ConstructPermissionDataRulesPage() {
                           id: values.id,
                           name: values.name,
                           users: values.users || [],
-                          permissions: permissionItems.map((item) => ({
-                            ...item,
-                            expression_tree: item.expression_tree || "{}",
-                            permissions: item.permissions || "[]"
-                          }))
+                          permissions: permissionItems.map((item) => {
+                            const base = {
+                              ...item,
+                              expression_tree: item.expression_tree || "{}"
+                            };
+                            if (item.type !== "column") {
+                              return { ...base, permissions: item.permissions || "[]" };
+                            }
+                            try {
+                              const raw = item.permissions || "[]";
+                              const rows = typeof raw === "string" ? JSON.parse(raw) : raw;
+                              if (!Array.isArray(rows)) {
+                                return { ...base, permissions: "[]" };
+                              }
+                              const cleaned = rows
+                                .filter((r: ColumnPermissionRow) => (r.field_name || "").trim().length > 0)
+                                .map((r: ColumnPermissionRow) => {
+                                  const out: Record<string, unknown> = {
+                                    field_name: (r.field_name || "").trim(),
+                                    enable: false
+                                  };
+                                  const c = (r.field_comment || "").trim();
+                                  if (c) out.field_comment = c;
+                                  if (typeof r.field_id === "number" && r.field_id > 0) {
+                                    out.field_id = r.field_id;
+                                  }
+                                  return out;
+                                });
+                              return { ...base, permissions: JSON.stringify(cleaned) };
+                            } catch {
+                              return { ...base, permissions: "[]" };
+                            }
+                          })
                         });
                         message.success("保存成功");
                         setOpen(false);
@@ -354,12 +475,6 @@ export default function ConstructPermissionDataRulesPage() {
                           <Select
                             showSearch
                             options={datasources.map((ds) => ({ label: `${ds.name}(${ds.id})`, value: ds.id }))}
-                            onChange={(value) => {
-                              void datasourceApi.tableList(value).then((rows) => {
-                                setTableOptions((prev) => ({ ...prev, [field.name]: rows }));
-                                setFieldOptions((prev) => ({ ...prev, [field.name]: [] }));
-                              });
-                            }}
                           />
                         </Form.Item>
                         <Form.Item name={[field.name, "table_name"]} label="数据表名称">
@@ -371,7 +486,9 @@ export default function ConstructPermissionDataRulesPage() {
                             prev.permissions?.[field.name]?.type !== next.permissions?.[field.name]?.type ||
                             prev.permissions?.[field.name]?.table_name !== next.permissions?.[field.name]?.table_name ||
                             prev.permissions?.[field.name]?.expression_tree !==
-                              next.permissions?.[field.name]?.expression_tree
+                              next.permissions?.[field.name]?.expression_tree ||
+                            prev.permissions?.[field.name]?.permissions !==
+                              next.permissions?.[field.name]?.permissions
                           }
                         >
                           {() => {
@@ -492,36 +609,80 @@ export default function ConstructPermissionDataRulesPage() {
                                 return [];
                               }
                             })();
+                            const syncColumnRows = (next: ColumnPermissionRow[]) => {
+                              const fixed = next.map((r) => ({ ...r, enable: false }));
+                              form.setFieldValue(
+                                ["permissions", field.name, "permissions"],
+                                JSON.stringify(fixed)
+                              );
+                            };
+                            const patchRow = (index: number, patch: Partial<ColumnPermissionRow>) => {
+                              const next = [...parsedRows];
+                              const cur = next[index] || {
+                                field_name: "",
+                                field_comment: "",
+                                enable: false
+                              };
+                              next[index] = { ...cur, ...patch, enable: false };
+                              syncColumnRows(next);
+                            };
                             return (
                               <>
-                                <div className="mb-2 text-xs text-gray-500">列权限（与 SQLBot 一样按字段开关）</div>
-                                <Table
+                                <div className="mb-2 text-xs text-gray-500">
+                                  列权限（拒绝列表）：以下字段对受限用户不可见（不出现在对话 schema 与查询结果中）。仅填写需隐藏的列名，与库中列名一致（大小写不敏感）。
+                                </div>
+                                <div className="mb-2 hidden text-xs font-medium text-gray-500 sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:gap-2 sm:px-1">
+                                  <span>隐藏字段名</span>
+                                  <span>备注</span>
+                                  <span className="text-right">操作</span>
+                                </div>
+                                {parsedRows.length === 0 ? (
+                                  <div className="mb-3 rounded-lg border border-dashed border-gray-200 bg-gray-50/80 px-3 py-6 text-center text-sm text-gray-500 dark:border-gray-600 dark:bg-gray-900/40">
+                                    暂无受限列，点击下方添加需隐藏的字段
+                                  </div>
+                                ) : null}
+                                {parsedRows.map((row, index) => (
+                                  <div
+                                    key={`${field.key}-col-${index}`}
+                                    className="mb-2 flex flex-col gap-2 rounded-lg border border-gray-100 bg-white/60 p-2 sm:grid sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-center sm:gap-2 dark:border-gray-700 dark:bg-gray-900/30"
+                                  >
+                                    <Input
+                                      placeholder="需隐藏的列名（与表结构一致）"
+                                      value={row.field_name}
+                                      onChange={(e) => patchRow(index, { field_name: e.target.value })}
+                                    />
+                                    <Input
+                                      placeholder="备注（可选）"
+                                      value={row.field_comment ?? ""}
+                                      onChange={(e) => patchRow(index, { field_comment: e.target.value })}
+                                    />
+                                    <div className="flex justify-end">
+                                      <Button
+                                        danger
+                                        type="text"
+                                        size="small"
+                                        icon={<DeleteOutlined />}
+                                        onClick={() => {
+                                          syncColumnRows(parsedRows.filter((_, i) => i !== index));
+                                        }}
+                                      />
+                                    </div>
+                                  </div>
+                                ))}
+                                <Button
+                                  type="dashed"
                                   size="small"
-                                  rowKey="field_id"
-                                  columns={[
-                                    { title: "字段名", dataIndex: "field_name" },
-                                    { title: "备注", dataIndex: "field_comment" },
-                                    {
-                                      title: "可见",
-                                      width: 120,
-                                      render: (_, row: ColumnPermissionRow, index) => (
-                                        <Switch
-                                          checked={row.enable}
-                                          onChange={(checked) => {
-                                            const cloned = [...parsedRows];
-                                            cloned[index] = { ...cloned[index], enable: checked };
-                                            form.setFieldValue(
-                                              ["permissions", field.name, "permissions"],
-                                              JSON.stringify(cloned)
-                                            );
-                                          }}
-                                        />
-                                      )
-                                    }
-                                  ]}
-                                  dataSource={parsedRows}
-                                  pagination={false}
-                                />
+                                  className="mt-1"
+                                  icon={<PlusOutlined />}
+                                  onClick={() => {
+                                    syncColumnRows([
+                                      ...parsedRows,
+                                      { field_name: "", field_comment: "", enable: false }
+                                    ]);
+                                  }}
+                                >
+                                  添加需隐藏的字段
+                                </Button>
                               </>
                             );
                           }}
