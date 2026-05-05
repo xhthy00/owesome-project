@@ -1,5 +1,8 @@
 import { clearAccessToken, getAccessToken } from "@/auth/session";
 
+/** 与 pages/_app.tsx LayoutWrapper 中 WORKSPACE_OID_KEY 保持一致 */
+const WORKSPACE_OID_STORAGE_KEY = "frontend_react_workspace_oid";
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
 const AUTH_EXPIRED_TIP_KEY = "auth_expired_tip";
 
@@ -23,9 +26,12 @@ export function getApiBaseUrl() {
 
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getAccessToken();
+  const wsOid =
+    typeof window !== "undefined" ? window.localStorage.getItem(WORKSPACE_OID_STORAGE_KEY) : null;
   const baseHeaders: HeadersInit = {
     "Content-Type": "application/json",
-    ...(token ? { Authorization: `Bearer ${token}` } : {})
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    ...(wsOid ? { "X-Workspace-Oid": wsOid.trim() } : {})
   };
   const response = await fetch(`${API_BASE_URL}${path}`, {
     headers: { ...baseHeaders, ...(init?.headers ?? {}) },

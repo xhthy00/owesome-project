@@ -28,6 +28,11 @@ class DsRule(SQLModel, table=True):
     __tablename__ = "ds_rules"
 
     id: int = Field(sa_column=Column(Integer, Identity(always=True), primary_key=True, nullable=False))
+    #: 规则组所属工作空间；仅当与目标数据源的 ``CoreDatasource.oid`` 一致时参与命中
+    oid: int = Field(
+        default=1,
+        sa_column=Column(BigInteger, nullable=False, server_default="1"),
+    )
     enable: bool = Field(sa_column=Column(Boolean, nullable=False, default=True))
     name: str = Field(max_length=128, nullable=False)
     description: Optional[str] = Field(default=None, max_length=512)

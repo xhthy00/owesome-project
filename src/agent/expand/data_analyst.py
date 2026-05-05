@@ -81,6 +81,7 @@ def build_data_analyst(
     llm_client: Any,
     datasource_id: int | None = None,
     user_id: int | None = None,
+    workspace_oid: int | None = 1,
     tool_pack: ToolPack | None = None,
     pack_name: str = DEFAULT_PACK_NAME,
     max_react_rounds: int | None = None,
@@ -114,12 +115,15 @@ def build_data_analyst(
                 bindings["datasource_id"] = datasource_id
             if user_id is not None:
                 bindings["user_id"] = user_id
+            if workspace_oid is not None:
+                bindings["workspace_oid"] = workspace_oid
             tool_pack = template.bind(**bindings) if bindings else template
         else:
             # 非默认 pack 名且未注册——走即时构造兜底（现阶段也只有 default 一个实现）
             tool_pack = build_default_toolpack(
                 datasource_id=datasource_id,
                 user_id=user_id,
+                workspace_oid=workspace_oid,
             )
     return DataAnalystAgent(
         llm_client=llm_client,

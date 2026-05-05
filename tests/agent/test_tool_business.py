@@ -502,7 +502,7 @@ def test_find_related_datasources_lists_active(monkeypatch):
     def fake_session():
         yield object()
 
-    def fake_list(*, session, skip=0, limit=200):
+    def fake_list(*, session, skip=0, limit=200, oid=None):
         return [
             SimpleNamespace(id=1, name="prod-pg", description="生产", type="pg", status="active"),
             SimpleNamespace(id=2, name="legacy", description="", type="mysql", status="inactive"),
@@ -515,7 +515,7 @@ def test_find_related_datasources_lists_active(monkeypatch):
         fake_list,
     )
 
-    result = _run(biz.find_related_datasources.execute(question="销售额"))
+    result = _run(biz.find_related_datasources.execute(question="销售额", workspace_oid=1))
     ids = [d["id"] for d in result.data]
     assert ids == [1, 3]
     assert "prod-pg" in result.content

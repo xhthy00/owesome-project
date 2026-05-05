@@ -27,6 +27,7 @@ class ConversationResponse(BaseModel):
     datasource_id: Optional[int] = None
     datasource_name: Optional[str] = ""
     db_type: Optional[str] = ""
+    oid: int = 1
     create_time: Optional[datetime] = None
     update_time: Optional[datetime] = None
 
@@ -96,6 +97,7 @@ class ConversationDetailResponse(BaseModel):
     datasource_id: Optional[int] = None
     datasource_name: Optional[str] = ""
     db_type: Optional[str] = ""
+    oid: int = 1
     create_time: Optional[datetime] = None
     update_time: Optional[datetime] = None
     records: List[ConversationRecordResponse] = []

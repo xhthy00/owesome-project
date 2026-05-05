@@ -21,10 +21,12 @@ const emptyForm = (): FormValues => ({
   }
 });
 
+/** 使用 UTC 字符串，保证 SSR 与浏览器水合一致（避免 toLocaleString / 本地 getter 时区差） */
 function formatDate(value?: string) {
   if (!value) return "-";
   const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleString();
+  if (Number.isNaN(d.getTime())) return value;
+  return d.toISOString().slice(0, 19).replace("T", " ");
 }
 
 export default function ConstructDatabasePage() {
@@ -264,7 +266,6 @@ export default function ConstructDatabasePage() {
         )}
         width={640}
         destroyOnHidden
-        forceRender
       >
         <Form
           form={form}

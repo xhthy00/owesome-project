@@ -114,6 +114,7 @@ async def run_agent_stream(
     llm_client: Any | None = None,
     persist: bool = True,
     enable_tool_agent: bool = True,
+    workspace_oid: int = 1,
 ) -> int:
     """单 Agent 模式：跑 DataAnalyst ReAct 循环，全程 emit SSE。
 
@@ -125,6 +126,7 @@ async def run_agent_stream(
         current_user_id=current_user_id,
         emit=emit,
         llm_client=llm_client,
+        workspace_oid=workspace_oid,
     )
     if phase.fatal_error:
         return 0
@@ -151,6 +153,7 @@ async def run_agent_stream(
         agent_mode="agent",
         tool_calls=list(phase.state.tool_calls),
         reports=list(phase.state.reports),
+        workspace_oid=workspace_oid,
     )
 
 
@@ -162,6 +165,7 @@ async def run_team_stream(
     llm_client: Any | None = None,
     persist: bool = True,
     enable_tool_agent: bool = True,
+    workspace_oid: int = 1,
 ) -> int:
     """Team 模式：Planner → N × DataAnalyst → Charter → Summarizer。
 
@@ -225,6 +229,7 @@ async def run_team_stream(
                 question_override=sub_task,
                 sub_task_index=idx,
                 constraints=shared_constraints,
+                workspace_oid=workspace_oid,
             )
         else:
             phase = await _run_data_analyst_phase(
@@ -235,6 +240,7 @@ async def run_team_stream(
                 question_override=sub_task,
                 sub_task_index=idx,
                 constraints=shared_constraints,
+                workspace_oid=workspace_oid,
             )
         # 把本 sub_task 的 steps 标上前缀后汇总，便于前端按子任务折叠
         for step in phase.state.steps:
@@ -321,6 +327,7 @@ async def run_team_stream(
                 plan_states=plan_states_for_persist,
                 tool_calls=[tc for _, p in sub_phases for tc in p.state.tool_calls],
                 reports=[rp for _, p in sub_phases for rp in p.state.reports],
+                workspace_oid=workspace_oid,
             )
         return 0
 
@@ -365,6 +372,7 @@ async def run_team_stream(
         tool_calls=[tc for _, p in sub_phases for tc in p.state.tool_calls],
         summary=summary_text or None,
         reports=[rp for _, p in sub_phases for rp in p.state.reports],
+        workspace_oid=workspace_oid,
     )
 
 
@@ -401,6 +409,7 @@ async def _run_data_analyst_phase(
     question_override: str | None = None,
     sub_task_index: int | None = None,
     constraints: _RunConstraints | None = None,
+    workspace_oid: int = 1,
 ) -> _DataAnalystPhase:
     """跑一次独立的 DataAnalyst ReAct 循环。
 
@@ -421,6 +430,7 @@ async def _run_data_analyst_phase(
         llm_client=llm_client,
         datasource_id=request.datasource_id,
         user_id=current_user_id,
+        workspace_oid=workspace_oid,
     )
     agent.stream_callback = _make_forwarder(state, emit)
 
@@ -482,6 +492,7 @@ async def _run_tool_expert_phase(
     question_override: str | None = None,
     sub_task_index: int | None = None,
     constraints: _RunConstraints | None = None,
+    workspace_oid: int = 1,
 ) -> _DataAnalystPhase:
     state = _RunState(sub_task_index=sub_task_index, constraints=constraints)
 
@@ -492,6 +503,7 @@ async def _run_tool_expert_phase(
         llm_client=llm_client,
         datasource_id=request.datasource_id,
         user_id=current_user_id,
+        workspace_oid=workspace_oid,
     )
     agent.stream_callback = _make_forwarder(state, emit)
 
@@ -967,6 +979,7 @@ def _persist_sync(
     tool_calls: list[dict[str, Any]] | None = None,
     summary: str | None = None,
     reports: list[dict[str, Any]] | None = None,
+    workspace_oid: int = 1,
 ) -> int:
     """在工作线程里开短事务并写 record。失败吞掉返回 0。"""
     if not request.conversation_id:
@@ -996,6 +1009,7 @@ def _persist_sync(
                 tool_calls=tool_calls,
                 summary=summary,
                 reports=reports,
+                workspace_oid=workspace_oid,
             )
             return record.id or 0
     except Exception as e:  # noqa: BLE001

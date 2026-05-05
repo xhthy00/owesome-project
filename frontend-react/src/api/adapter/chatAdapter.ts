@@ -2,6 +2,26 @@ import { getApiBaseUrl, apiRequest } from "@/api/client";
 import { getAccessToken } from "@/auth/session";
 import { streamSSE } from "@/utils/sse";
 
+/** 与 `pages/_app.tsx` / `api/client.ts` 中工作空间键一致 */
+const WORKSPACE_OID_STORAGE_KEY = "frontend_react_workspace_oid";
+
+function chatStreamHeaders(): Record<string, string> {
+  const token = getAccessToken();
+  const wsOid =
+    typeof window !== "undefined" ? window.localStorage.getItem(WORKSPACE_OID_STORAGE_KEY) : null;
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "text/event-stream"
+  };
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  if (wsOid?.trim()) {
+    headers["X-Workspace-Oid"] = wsOid.trim();
+  }
+  return headers;
+}
+
 export type SendMessagePayload = {
   conversationId?: string;
   message: string;
@@ -138,11 +158,10 @@ export async function sendMessageStream(
   handlers: StreamHandlers,
   signal?: AbortSignal
 ) {
-  const token = getAccessToken();
   return streamSSE({
     url: `${getApiBaseUrl()}/chat/chat-stream`,
     body: payload,
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    headers: chatStreamHeaders(),
     signal,
     onEvent: (evt) => {
       const data = (evt.data ?? {}) as Record<string, unknown>;

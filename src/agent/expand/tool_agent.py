@@ -53,6 +53,7 @@ def build_tool_agent(
     llm_client: Any,
     datasource_id: int | None = None,
     user_id: int | None = None,
+    workspace_oid: int | None = 1,
     tool_pack: ToolPack | None = None,
     pack_name: str = DEFAULT_PACK_NAME,
     max_react_rounds: int | None = None,
@@ -70,11 +71,14 @@ def build_tool_agent(
                 bindings["datasource_id"] = datasource_id
             if user_id is not None:
                 bindings["user_id"] = user_id
+            if workspace_oid is not None:
+                bindings["workspace_oid"] = workspace_oid
             tool_pack = template.bind(**bindings) if bindings else template
         else:
             tool_pack = build_default_toolpack(
                 datasource_id=datasource_id,
                 user_id=user_id,
+                workspace_oid=workspace_oid,
             )
 
     return ToolAgent(

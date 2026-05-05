@@ -2,7 +2,7 @@
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from common.core.database import get_session
@@ -16,6 +16,13 @@ from datasource.schemas import (
 from datasource.crud import crud_datasource
 from common.utils.aes import decrypt_conf
 from datasource.models.datasource import CoreTable, CoreField
+from system.api.system import get_current_user
+from system.schemas import UserResponse
+from system.workspace_scope import (
+    assert_datasource_accessible,
+    get_workspace_oid,
+    is_platform_admin_user,
+)
 
 router = APIRouter(prefix="/datasource", tags=["datasource"])
 
@@ -24,12 +31,15 @@ router = APIRouter(prefix="/datasource", tags=["datasource"])
 def list_datasources(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
-    oid: Optional[int] = Query(None),
+    oid: Optional[int] = Query(None, description="仅平台管理员可指定其它工作空间 oid"),
     session: Session = Depends(get_session),
+    workspace_oid: int = Depends(get_workspace_oid),
+    current_user: UserResponse = Depends(get_current_user),
 ):
-    """List all datasources."""
-    items = crud_datasource.get_datasources(session, skip, limit, oid)
-    total = crud_datasource.count_datasources(session, oid)
+    """列出当前工作空间下的数据源；平台管理员可通过 oid 查询指定空间。"""
+    filter_oid = oid if is_platform_admin_user(current_user) and oid is not None else workspace_oid
+    items = crud_datasource.get_datasources(session, skip, limit, filter_oid)
+    total = crud_datasource.count_datasources(session, filter_oid)
 
     response_items = []
     for ds in items:
@@ -56,11 +66,11 @@ def list_datasources(
 def get_datasource(
     datasource_id: int,
     session: Session = Depends(get_session),
+    workspace_oid: int = Depends(get_workspace_oid),
+    current_user: UserResponse = Depends(get_current_user),
 ):
     """Get datasource by ID."""
-    ds = crud_datasource.get_datasource_by_id(session, datasource_id)
-    if not ds:
-        raise NotFoundException("Datasource not found")
+    ds = assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
 
     config = decrypt_conf(ds.configuration) if ds.configuration else {}
 
@@ -83,6 +93,8 @@ def get_datasource(
 def create_datasource(
     datasource_in: DatasourceCreate,
     session: Session = Depends(get_session),
+    workspace_oid: int = Depends(get_workspace_oid),
+    current_user: UserResponse = Depends(get_current_user),
 ):
     """Create a new datasource."""
     config = datasource_in.config.model_dump()
@@ -93,6 +105,8 @@ def create_datasource(
         type=datasource_in.type,
         config=config,
         description=datasource_in.description,
+        oid=workspace_oid,
+        create_by=current_user.id,
     )
 
     return success_response(
@@ -115,8 +129,12 @@ def update_datasource(
     datasource_id: int,
     datasource_in: DatasourceUpdate,
     session: Session = Depends(get_session),
+    workspace_oid: int = Depends(get_workspace_oid),
+    current_user: UserResponse = Depends(get_current_user),
 ):
     """Update datasource."""
+    assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
+
     update_data = datasource_in.model_dump(exclude_unset=True)
 
     if "config" in update_data:
@@ -151,8 +169,12 @@ def update_datasource(
 def delete_datasource(
     datasource_id: int,
     session: Session = Depends(get_session),
+    workspace_oid: int = Depends(get_workspace_oid),
+    current_user: UserResponse = Depends(get_current_user),
 ):
     """Delete datasource."""
+    assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
+
     success = crud_datasource.delete_datasource(session, datasource_id)
     if not success:
         raise NotFoundException("Datasource not found")
@@ -167,11 +189,11 @@ def delete_datasource(
 def test_connection(
     datasource_id: int,
     session: Session = Depends(get_session),
+    workspace_oid: int = Depends(get_workspace_oid),
+    current_user: UserResponse = Depends(get_current_user),
 ):
     """Test datasource connection."""
-    ds = crud_datasource.get_datasource_by_id(session, datasource_id)
-    if not ds:
-        raise NotFoundException("Datasource not found")
+    ds = assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
 
     config = decrypt_conf(ds.configuration) if ds.configuration else {}
 
@@ -199,7 +221,11 @@ def test_connection(
 def list_tables(
     datasource_id: int,
     session: Session = Depends(get_session),
+    workspace_oid: int = Depends(get_workspace_oid),
+    current_user: UserResponse = Depends(get_current_user),
 ):
+    assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
+
     rows = (
         session.query(CoreTable)
         .filter(CoreTable.ds_id == datasource_id)
@@ -222,7 +248,14 @@ def list_tables(
 def list_table_fields(
     table_id: int,
     session: Session = Depends(get_session),
+    workspace_oid: int = Depends(get_workspace_oid),
+    current_user: UserResponse = Depends(get_current_user),
 ):
+    ct = session.query(CoreTable).filter(CoreTable.id == table_id).first()
+    if not ct:
+        raise NotFoundException("Table not found")
+    assert_datasource_accessible(session, current_user, int(ct.ds_id), workspace_oid)
+
     rows = (
         session.query(CoreField)
         .filter(CoreField.table_id == table_id)

@@ -42,6 +42,9 @@ def _ensure_columns() -> None:
     from sqlalchemy import inspect
 
     additions = {
+        "chat_conversation": {
+            "oid": "BIGINT NOT NULL DEFAULT 1",
+        },
         "chat_conversation_record": {
             "reasoning": "TEXT",
             "steps": "TEXT",
@@ -55,6 +58,9 @@ def _ensure_columns() -> None:
         },
         "ds_permission": {
             "table_name": "TEXT",
+        },
+        "ds_rules": {
+            "oid": "BIGINT NOT NULL DEFAULT 1",
         },
     }
 

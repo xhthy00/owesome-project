@@ -11,6 +11,8 @@ from common.schemas.response import success_response
 from system.api.system import get_current_user
 from system.models.user import SysUser
 from system.models.workspace import SysUserWorkspace, SysWorkspace
+from system.schemas import UserResponse
+from system.workspace_scope import is_platform_admin_user
 
 router = APIRouter(prefix="/system/workspace", tags=["workspace"])
 
@@ -18,10 +20,28 @@ router = APIRouter(prefix="/system/workspace", tags=["workspace"])
 @router.get("")
 def list_workspaces(
     session: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
+    current_user: UserResponse = Depends(get_current_user),
 ):
-    _ = current_user
-    rows = session.query(SysWorkspace).order_by(SysWorkspace.id.asc()).all()
+    """列出当前用户可切换的工作空间（成员关系内）。平台管理员返回全部。"""
+    if is_platform_admin_user(current_user):
+        rows = session.query(SysWorkspace).order_by(SysWorkspace.id.asc()).all()
+    else:
+        oids = [
+            int(r.oid)
+            for r in session.query(SysUserWorkspace)
+            .filter(SysUserWorkspace.uid == current_user.id)
+            .order_by(SysUserWorkspace.oid.asc())
+            .all()
+        ]
+        if not oids:
+            rows = []
+        else:
+            rows = (
+                session.query(SysWorkspace)
+                .filter(SysWorkspace.id.in_(oids))
+                .order_by(SysWorkspace.id.asc())
+                .all()
+            )
     return success_response(
         data=[{"id": item.id, "name": item.name, "create_time": item.create_time} for item in rows]
     )
@@ -44,9 +64,8 @@ def get_workspace(
 def create_workspace(
     payload: dict,
     session: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
+    current_user: UserResponse = Depends(get_current_user),
 ):
-    _ = current_user
     name = (payload.get("name") or "").strip()
     if not name:
         raise BadRequestException("Workspace name is required")
@@ -55,6 +74,16 @@ def create_workspace(
         raise BadRequestException("Workspace already exists")
     row = SysWorkspace(name=name, create_time=int(datetime.now().timestamp() * 1000))
     session.add(row)
+    session.flush()
+    # 创建者加入新空间，否则 list_workspaces 按成员过滤后列表中看不到该空间
+    session.add(
+        SysUserWorkspace(
+            uid=current_user.id,
+            oid=row.id,
+            weight=1,
+            create_time=datetime.now(),
+        )
+    )
     session.commit()
     session.refresh(row)
     return success_response(data={"id": row.id, "name": row.name}, message="Workspace created")

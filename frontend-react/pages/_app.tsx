@@ -25,6 +25,8 @@ function LayoutWrapper({
   const router = useRouter();
   const [workspaceOptions, setWorkspaceOptions] = useState<Array<{ value: number; label: string }>>([]);
   const [workspaceOid, setWorkspaceOid] = useState<number | undefined>(undefined);
+  /** 仅在用户切换工作空间时递增，用于强制主内容区 remount，刷新当前页状态与接口数据 */
+  const [mainContentKey, setMainContentKey] = useState(0);
   const isBypassLayout =
     pathname === "/login" ||
     pathname.startsWith("/mobile") ||
@@ -126,6 +128,7 @@ function LayoutWrapper({
                           setWorkspaceOid(value);
                           window.localStorage.setItem(WORKSPACE_OID_KEY, String(value));
                           window.dispatchEvent(new CustomEvent("workspace:changed", { detail: { oid: value } }));
+                          setMainContentKey((k) => k + 1);
                         }}
                       />
                     </div>
@@ -143,7 +146,9 @@ function LayoutWrapper({
                   </Dropdown>
                 </div>
               </div>
-              <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+              <div key={mainContentKey} className="min-h-0 flex-1 overflow-hidden">
+                {children}
+              </div>
             </div>
           </div>
         )}

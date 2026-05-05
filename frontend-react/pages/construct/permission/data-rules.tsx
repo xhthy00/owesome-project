@@ -32,6 +32,15 @@ import { datasourceApi, type DatasourceItem } from "@/api/datasource";
 import { permissionApi, type PermissionGroup } from "@/api/permission";
 import { systemApi } from "@/api/system";
 
+/** 与全局 Layout / api/client 中工作空间存储键一致 */
+const WORKSPACE_OID_STORAGE_KEY = "frontend_react_workspace_oid";
+
+function currentWorkspaceOid(): number {
+  if (typeof window === "undefined") return 1;
+  const n = Number(window.localStorage.getItem(WORKSPACE_OID_STORAGE_KEY) || "");
+  return Number.isFinite(n) && n > 0 ? n : 1;
+}
+
 type RuleForm = {
   id?: number;
   name: string;
@@ -117,9 +126,10 @@ export default function ConstructPermissionDataRulesPage() {
   };
 
   const searchUsers = async (keyword = "") => {
+    const oid = currentWorkspaceOid();
     const res = keyword
-      ? await systemApi.searchWorkspaceMembers(1, keyword, 1, 500)
-      : await systemApi.pagerWorkspaceMembers(1, 1, 500);
+      ? await systemApi.searchWorkspaceMembers(oid, keyword, 1, 500)
+      : await systemApi.pagerWorkspaceMembers(oid, 1, 500);
     const mapped = (res.items || []).map((item) => ({
       id: item.uid,
       name: item.name,
@@ -145,6 +155,15 @@ export default function ConstructPermissionDataRulesPage() {
   useEffect(() => {
     void reload();
     void datasourceApi.list({ limit: 500 }).then((res) => setDatasources(res.items || []));
+  }, []);
+
+  useEffect(() => {
+    const onWs = () => {
+      void reload();
+      void datasourceApi.list({ limit: 500 }).then((res) => setDatasources(res.items || []));
+    };
+    window.addEventListener("workspace:changed", onWs);
+    return () => window.removeEventListener("workspace:changed", onWs);
   }, []);
 
   return (
@@ -194,7 +213,7 @@ export default function ConstructPermissionDataRulesPage() {
           return (
           <Col key={group.id} xs={24} md={12} lg={8}>
             <Card
-              bordered={false}
+              variant="borderless"
               className="h-full overflow-hidden rounded-2xl border border-[#e2e8f0] bg-gradient-to-br from-white via-[#fafcff] to-[#f1f6ff] shadow-[0_2px_14px_rgba(15,23,42,0.06)] transition-all duration-200 hover:-translate-y-0.5 hover:border-[#93c5fd] hover:shadow-[0_10px_28px_rgba(37,99,235,0.12)] dark:border-[#334155] dark:from-[#141923] dark:via-[#11161f] dark:to-[#0f141c] dark:hover:border-[#3b82f6]/50"
               styles={{
                 header: {

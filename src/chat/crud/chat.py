@@ -16,7 +16,8 @@ def create_conversation(
     title: str = "",
     datasource_id: Optional[int] = None,
     datasource_name: str = "",
-    db_type: str = ""
+    db_type: str = "",
+    oid: int = 1,
 ) -> Conversation:
     """Create a new conversation."""
     conversation = Conversation(
@@ -25,6 +26,7 @@ def create_conversation(
         datasource_id=datasource_id,
         datasource_name=datasource_name,
         db_type=db_type,
+        oid=oid,
         create_time=datetime.now(),
         update_time=datetime.now(),
     )
@@ -34,25 +36,29 @@ def create_conversation(
     return conversation
 
 
-def get_conversation_by_id(session: Session, conversation_id: int, user_id: int) -> Optional[Conversation]:
-    """Get conversation by ID."""
+def get_conversation_by_id(
+    session: Session, conversation_id: int, user_id: int, oid: int
+) -> Optional[Conversation]:
+    """Get conversation by ID（限定工作空间）。"""
     statement = select(Conversation).where(
         and_(
             Conversation.id == conversation_id,
             Conversation.user_id == user_id,
+            Conversation.oid == oid,
             Conversation.is_deleted == False
         )
     )
     return session.exec(statement).first()
 
 
-def list_conversations(session: Session, user_id: int, limit: int = 50) -> List[Conversation]:
-    """List user's conversations."""
+def list_conversations(session: Session, user_id: int, oid: int, limit: int = 50) -> List[Conversation]:
+    """List user's conversations in a workspace."""
     statement = (
         select(Conversation)
         .where(
             and_(
                 Conversation.user_id == user_id,
+                Conversation.oid == oid,
                 Conversation.is_deleted == False
             )
         )
@@ -66,11 +72,12 @@ def update_conversation(
     session: Session,
     conversation_id: int,
     user_id: int,
+    oid: int,
     title: Optional[str] = None,
     datasource_id: Optional[int] = None
 ) -> Optional[Conversation]:
     """Update conversation."""
-    conversation = get_conversation_by_id(session, conversation_id, user_id)
+    conversation = get_conversation_by_id(session, conversation_id, user_id, oid)
     if not conversation:
         return None
 
@@ -86,9 +93,9 @@ def update_conversation(
     return conversation
 
 
-def delete_conversation(session: Session, conversation_id: int, user_id: int) -> bool:
+def delete_conversation(session: Session, conversation_id: int, user_id: int, oid: int) -> bool:
     """Soft delete a conversation."""
-    conversation = get_conversation_by_id(session, conversation_id, user_id)
+    conversation = get_conversation_by_id(session, conversation_id, user_id, oid)
     if not conversation:
         return False
 
@@ -120,8 +127,9 @@ def create_conversation_record(
     tool_calls: Optional[List[Any]] = None,
     summary: Optional[str] = None,
     reports: Optional[List[Any]] = None,
+    workspace_oid: int = 1,
 ) -> ConversationRecord:
-    """Create a new conversation record."""
+    """Create a new conversation record。"""
     exec_result_str = None
     if exec_result is not None:
         if isinstance(exec_result, dict):
@@ -176,7 +184,7 @@ def create_conversation_record(
     session.add(record)
 
     # Update conversation's update_time
-    conversation = get_conversation_by_id(session, conversation_id, user_id)
+    conversation = get_conversation_by_id(session, conversation_id, user_id, workspace_oid)
     if conversation:
         conversation.update_time = datetime.now()
         session.add(conversation)

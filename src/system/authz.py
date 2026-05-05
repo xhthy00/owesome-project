@@ -34,6 +34,17 @@ def can_manage_data_permissions(session: Session, user: SysUser | None) -> bool:
     return is_workspace_admin(session, user.id)
 
 
+def bypasses_column_visibility(session: Session, user: SysUser | None) -> bool:
+    """列级隐藏（schema/校验/结果列裁剪）是否跳过：平台管理员或任一工作空间管理员。"""
+    if user is None:
+        return False
+    if is_platform_admin(user):
+        return True
+    return is_workspace_admin(session, user.id)
+
+
 def bypasses_data_row_column_scope(user: SysUser | None) -> bool:
-    """执行与生成 SQL 时是否跳过行列权限裁剪（仅平台管理员）。"""
+    """是否跳过**行级**权限谓词合并（如 WHERE 注入）；仅平台管理员跳过。
+
+    列级可见性豁免见 ``bypasses_column_visibility``。"""
     return is_platform_admin(user)

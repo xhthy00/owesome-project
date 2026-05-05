@@ -16,6 +16,7 @@ class Conversation(SQLModel, table=True):
     datasource_id: Optional[int] = Field(default=None, sa_column=Column(BigInteger, nullable=True))
     datasource_name: Optional[str] = Field(default="", sa_column=Column(Text))
     db_type: Optional[str] = Field(default="", sa_column=Column(Text))
+    oid: int = Field(default=1, sa_column=Column(BigInteger(), nullable=False))
     create_time: Optional[datetime] = Field(default_factory=datetime.now, sa_column=Column(DateTime(timezone=False)))
     update_time: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=False)))
     is_deleted: bool = Field(default=False, sa_column=Column(Boolean))

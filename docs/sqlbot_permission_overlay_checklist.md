@@ -87,6 +87,16 @@
    - 步骤二选择受限用户并保存；
    - 刷新页面后确认回显一致。
 
+## 工作空间隔离（P0）
+
+- [x] 请求级工作空间：`X-Workspace-Oid` + `get_workspace_oid`（`src/system/workspace_scope.py`）。
+- [x] 数据源 API 按 `CoreDatasource.oid` 列表与读写校验；`assert_datasource_accessible`。
+- [x] 会话 `chat_conversation.oid`；聊天 / `generate-sql` / `execute-sql` / `chat-stream` 校验数据源归属。
+- [x] Agent 工具链绑定 `workspace_oid`；`find_related_datasources` 仅枚举当前空间数据源。
+- [x] `ds_rules.oid`；`/ds_permission` 列表与保存按当前空间过滤；运行时规则命中与数据源 `oid` 一致（`query_permission`）。
+- [x] 前端 `apiRequest` 与 SSE `chat-stream` 携带 `X-Workspace-Oid`；切换工作空间后刷新侧栏会话列表；数据权限页成员搜索使用当前空间。
+- [x] 基础越权单测：`tests/workspace/test_workspace_scope.py`（可按环境扩充双空间集成测试）。
+
 ## 风险与注意事项
 
 - 行级规则 SQL 拼接需防注入，优先 AST 方式改写。

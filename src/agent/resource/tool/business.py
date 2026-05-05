@@ -66,11 +66,14 @@ def _validate_read_only_select(sql: str, db_type: str) -> None:
             raise ValueError(f"禁止使用写操作 {wt.__name__}")
 
 
-def _load_datasource(datasource_id: int) -> tuple[str, dict[str, Any], str]:
+def _load_datasource(
+    datasource_id: int,
+    workspace_oid: int | None = None,
+) -> tuple[str, dict[str, Any], str]:
     """返回 (db_type, decrypted_config, datasource_name)。
 
-    仅在"数据源不存在"时抛 ValueError——这属于调用方传入的 binding 错误，
-    不是业务错误。其余数据库访问错误由调用方处理。
+    仅在"数据源不存在"或归属工作空间不匹配时抛 ValueError——这属于调用方传入的
+    binding 错误，不是业务错误。其余数据库访问错误由调用方处理。
     """
     from src.common.core.database import get_db_session
     from src.common.utils.aes import decrypt_conf
@@ -80,6 +83,10 @@ def _load_datasource(datasource_id: int) -> tuple[str, dict[str, Any], str]:
         ds = crud_datasource.get_datasource_by_id(session, datasource_id)
         if ds is None:
             raise ValueError(f"datasource not found: id={datasource_id}")
+        if workspace_oid is not None and int(ds.oid) != int(workspace_oid):
+            raise ValueError(
+                f"datasource {datasource_id} does not belong to workspace {workspace_oid}"
+            )
         config = decrypt_conf(ds.configuration) if ds.configuration else {}
         return ds.type, config, ds.name
 
@@ -106,7 +113,7 @@ def _format_rows_as_markdown(columns: list[str], rows: list[list[Any]], max_rows
 
 
 @tool()
-def list_tables(datasource_id: int) -> ToolResult:
+def list_tables(datasource_id: int, workspace_oid: int | None = None) -> ToolResult:
     """列出当前数据源的所有表。
 
     Returns:
@@ -114,7 +121,7 @@ def list_tables(datasource_id: int) -> ToolResult:
     """
     from src.datasource.db.db import get_schema_info
 
-    db_type, config, ds_name = _load_datasource(datasource_id)
+    db_type, config, ds_name = _load_datasource(datasource_id, workspace_oid)
     schema = get_schema_info(db_type, config)
     items = [{"name": t["name"], "comment": t.get("comment", "")} for t in schema]
 
@@ -352,6 +359,7 @@ def find_related_tables(
     datasource_id: int,
     question: str,
     limit: int = _FIND_RELATED_DEFAULT_LIMIT,
+    workspace_oid: int | None = None,
 ) -> ToolResult:
     """根据问题关键词从当前数据源**筛出可能相关的表**（top-K），降低 Schema 推理成本。
 
@@ -376,7 +384,7 @@ def find_related_tables(
     from src.datasource.db.db import get_schema_info
 
     limit = max(1, min(int(limit or _FIND_RELATED_DEFAULT_LIMIT), _FIND_RELATED_HARD_CAP))
-    db_type, config, ds_name = _load_datasource(datasource_id)
+    db_type, config, ds_name = _load_datasource(datasource_id, workspace_oid)
     schema = get_schema_info(db_type, config)
 
     tokens = _tokenize_question(question)
@@ -430,7 +438,12 @@ def find_related_tables(
 
 
 @tool()
-def describe_table(datasource_id: int, table_name: str, user_id: int | None = None) -> ToolResult:
+def describe_table(
+    datasource_id: int,
+    table_name: str,
+    user_id: int | None = None,
+    workspace_oid: int | None = None,
+) -> ToolResult:
     """返回指定表的列清单（name / type / comment）。
 
     Args:
@@ -441,7 +454,7 @@ def describe_table(datasource_id: int, table_name: str, user_id: int | None = No
     from src.datasource.service.query_permission import schema_tables_for_user
     from src.system.crud.crud_user import get_user_by_id
 
-    db_type, config, _ = _load_datasource(datasource_id)
+    db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
     schema = get_schema_info(db_type, config)
     match = next((t for t in schema if t["name"] == table_name), None)
     if match is None:
@@ -477,6 +490,7 @@ def sample_rows(
     limit: int = SAMPLE_ROWS_DEFAULT,
     where_clause: str = "",
     user_id: int | None = None,
+    workspace_oid: int | None = None,
 ) -> ToolResult:
     """采样表的若干行（可带 WHERE 过滤），用于理解真实数据样貌、枚举值、业务含义。
 
@@ -501,7 +515,7 @@ def sample_rows(
     from src.system.crud.crud_user import get_user_by_id
 
     limit = max(1, min(int(limit or SAMPLE_ROWS_DEFAULT), SAMPLE_ROWS_LLM_MAX))
-    db_type, config, _ = _load_datasource(datasource_id)
+    db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
     quoted = _safe_identifier(table_name, db_type)
 
     clause = (where_clause or "").strip().rstrip(";").strip()
@@ -548,7 +562,12 @@ def sample_rows(
 
 
 @tool()
-def execute_sql(datasource_id: int, sql: str, user_id: int | None = None) -> ToolResult:
+def execute_sql(
+    datasource_id: int,
+    sql: str,
+    user_id: int | None = None,
+    workspace_oid: int | None = None,
+) -> ToolResult:
     """在当前数据源上执行只读 SQL 并返回结果。
 
     Args:
@@ -563,7 +582,7 @@ def execute_sql(datasource_id: int, sql: str, user_id: int | None = None) -> Too
     )
     from src.system.crud.crud_user import get_user_by_id
 
-    db_type, config, _ = _load_datasource(datasource_id)
+    db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
     sql_run = sql
     if user_id is not None:
         with get_db_session() as session:
@@ -606,18 +625,20 @@ def execute_sql(datasource_id: int, sql: str, user_id: int | None = None) -> Too
 
 
 @tool()
-def find_related_datasources(question: str) -> ToolResult:
-    """列出全部可用数据源，供 LLM 根据问题自选。
+def find_related_datasources(question: str, workspace_oid: int = 1) -> ToolResult:
+    """列出当前工作空间内可用数据源，供 LLM 根据问题自选。
 
     Note:
-        MVP 阶段暂不做向量匹配，先返回全量 active 数据源；后续接入 embedding
+        MVP 阶段暂不做向量匹配，先返回本空间 active 数据源；后续接入 embedding
         后再做真正的 top-k 召回。
     """
     from src.common.core.database import get_db_session
     from src.datasource.crud import crud_datasource
 
     with get_db_session() as session:
-        all_ds = crud_datasource.get_datasources(session=session, skip=0, limit=200)
+        all_ds = crud_datasource.get_datasources(
+            session=session, skip=0, limit=200, oid=int(workspace_oid)
+        )
     items = [
         {"id": d.id, "name": d.name, "description": d.description or "", "type": d.type}
         for d in all_ds
@@ -690,6 +711,7 @@ def build_default_toolpack(
     *,
     datasource_id: int | None = None,
     user_id: int | None = None,
+    workspace_oid: int | None = 1,
     include_terminate: bool = True,
 ) -> ToolPack:
     """构造默认业务 ToolPack，并按需绑定运行时参数。
@@ -710,4 +732,6 @@ def build_default_toolpack(
         bindings["datasource_id"] = datasource_id
     if user_id is not None:
         bindings["user_id"] = user_id
+    if workspace_oid is not None:
+        bindings["workspace_oid"] = workspace_oid
     return pack.bind(**bindings) if bindings else pack

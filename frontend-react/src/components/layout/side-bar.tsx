@@ -52,6 +52,14 @@ export default function SideBar() {
     };
   }, [pathname]);
 
+  useEffect(() => {
+    const reloadHistory = () => {
+      void listConversations(50).then((items) => setHistoryList(items));
+    };
+    window.addEventListener("workspace:changed", reloadHistory);
+    return () => window.removeEventListener("workspace:changed", reloadHistory);
+  }, []);
+
   const activeConversationId = useMemo(() => {
     const raw = router.query.conversation_id;
     const id = Array.isArray(raw) ? raw[0] : raw;

@@ -7,12 +7,14 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from common.core.database import get_session
-from common.exceptions.base import ForbiddenException
+from common.exceptions.base import ForbiddenException, NotFoundException
 from common.schemas.response import success_response
+from datasource.crud import crud_datasource
 from datasource.models.datasource import CoreTable
 from datasource.models.permission import DsPermission, DsRule
 from system.api.system import get_current_user
 from system.authz import can_manage_data_permissions
+from system.workspace_scope import get_workspace_oid
 
 router = APIRouter(prefix="/ds_permission", tags=["ds_permission"])
 
@@ -36,10 +38,16 @@ def _require_data_permission_manager(session: Session, current_user) -> None:
 def list_permissions(
     session: Session = Depends(get_session),
     current_user=Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
 ):
     _require_data_permission_manager(session, current_user)
     table_map = {int(t.id): t.table_name for t in session.query(CoreTable.id, CoreTable.table_name).all()}
-    rules = session.query(DsRule).order_by(DsRule.id.desc()).all()
+    rules = (
+        session.query(DsRule)
+        .filter(DsRule.oid == int(workspace_oid))
+        .order_by(DsRule.id.desc())
+        .all()
+    )
     data = []
     for rule in rules:
         permission_ids = json.loads(rule.permission_list or "[]")
@@ -76,14 +84,19 @@ def save_permissions(
     payload: dict,
     session: Session = Depends(get_session),
     current_user=Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
 ):
     _require_data_permission_manager(session, current_user)
     now = datetime.now()
     rule_id = payload.get("id")
     if rule_id:
         rule = session.query(DsRule).filter(DsRule.id == rule_id).first()
+        if rule is None:
+            raise NotFoundException("规则不存在")
+        if int(getattr(rule, "oid", 1) or 1) != int(workspace_oid):
+            raise NotFoundException("规则不存在")
     else:
-        rule = DsRule(enable=True, create_time=now, name="")
+        rule = DsRule(enable=True, create_time=now, name="", oid=int(workspace_oid))
         session.add(rule)
         session.flush()
 
@@ -104,7 +117,13 @@ def save_permissions(
             )
             session.add(model)
             session.flush()
-        model.ds_id = item.get("ds_id")
+        ds_id_raw = item.get("ds_id")
+        model.ds_id = ds_id_raw
+        if ds_id_raw is not None:
+            ds_row = crud_datasource.get_datasource_by_id(session, int(ds_id_raw))
+            if ds_row is None or int(ds_row.oid) != int(workspace_oid):
+                raise ForbiddenException("权限条目必须引用当前工作空间内的数据源")
+
         table_name = (item.get("table_name") or "").strip()
         if not table_name and item.get("table_id"):
             table = session.query(CoreTable.table_name).filter(CoreTable.id == int(item.get("table_id"))).first()
@@ -118,6 +137,7 @@ def save_permissions(
 
     rule.name = payload.get("name", rule.name)
     rule.enable = True
+    rule.oid = int(workspace_oid)
     rule.permission_list = json.dumps(permission_ids)
     rule.user_list = json.dumps(payload.get("users", []))
     rule.create_time = now
@@ -131,9 +151,12 @@ def delete_permission_rule(
     rule_id: int,
     session: Session = Depends(get_session),
     current_user=Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
 ):
     _require_data_permission_manager(session, current_user)
     rule = session.query(DsRule).filter(DsRule.id == rule_id).first()
+    if rule and int(getattr(rule, "oid", 1) or 1) != int(workspace_oid):
+        raise NotFoundException("规则不存在")
     if rule:
         permission_ids = json.loads(rule.permission_list or "[]")
         if permission_ids:

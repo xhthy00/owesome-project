@@ -27,6 +27,8 @@ from common.core.trace import new_trace_id, set_trace_id
 from common.exceptions.base import NotFoundException
 from common.schemas.response import success_response
 from system.api.system import get_current_user
+from system.schemas import UserResponse
+from system.workspace_scope import assert_datasource_accessible, get_workspace_oid
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +41,8 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 def create_conversation(
     request: ConversationCreate,
     session: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
 ):
     """Create a new conversation."""
     conversation = chat_crud.create_conversation(
@@ -47,6 +50,7 @@ def create_conversation(
         user_id=current_user.id,
         title=request.title,
         datasource_id=request.datasource_id,
+        oid=workspace_oid,
     )
     return success_response(
         data=ConversationResponse.model_validate(conversation),
@@ -58,13 +62,15 @@ def create_conversation(
 def list_conversations(
     limit: int = 50,
     session: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
 ):
     """List user's conversations."""
     conversations = chat_crud.list_conversations(
         session=session,
         user_id=current_user.id,
-        limit=limit
+        oid=workspace_oid,
+        limit=limit,
     )
     items = [ConversationResponse.model_validate(c) for c in conversations]
     return success_response(
@@ -77,13 +83,15 @@ def list_conversations(
 def get_conversation(
     conversation_id: int,
     session: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
 ):
     """Get conversation with records."""
     conversation = chat_crud.get_conversation_by_id(
         session=session,
         conversation_id=conversation_id,
-        user_id=current_user.id
+        user_id=current_user.id,
+        oid=workspace_oid,
     )
     if not conversation:
         raise NotFoundException("Conversation not found")
@@ -138,6 +146,7 @@ def get_conversation(
         datasource_id=conversation.datasource_id,
         datasource_name=conversation.datasource_name or "",
         db_type=conversation.db_type or "",
+        oid=int(getattr(conversation, "oid", 1) or 1),
         create_time=conversation.create_time,
         update_time=conversation.update_time,
         records=record_responses
@@ -151,13 +160,15 @@ def update_conversation(
     conversation_id: int,
     request: ConversationUpdate,
     session: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
 ):
     """Update a conversation."""
     conversation = chat_crud.update_conversation(
         session=session,
         conversation_id=conversation_id,
         user_id=current_user.id,
+        oid=workspace_oid,
         title=request.title,
         datasource_id=request.datasource_id
     )
@@ -174,13 +185,15 @@ def update_conversation(
 def delete_conversation(
     conversation_id: int,
     session: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
 ):
     """Delete a conversation."""
     success = chat_crud.delete_conversation(
         session=session,
         conversation_id=conversation_id,
-        user_id=current_user.id
+        user_id=current_user.id,
+        oid=workspace_oid,
     )
     if not success:
         raise NotFoundException("Conversation not found")
@@ -194,7 +207,8 @@ def delete_conversation(
 def generate_sql(
     request: ChatRequest,
     session: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
 ):
     """
     Generate SQL from natural language question.
@@ -206,6 +220,8 @@ def generate_sql(
     4. Validates the generated SQL
     5. Returns the result with chart type and tables info
     """
+    assert_datasource_accessible(session, current_user, request.datasource_id, workspace_oid)
+
     generator = SQLGenerator()
 
     result = generator.generate_sql(
@@ -248,7 +264,8 @@ def generate_sql(
 def execute_sql(
     request: ChatRequest,
     session: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
 ):
     """
     Generate and execute SQL from natural language question.
@@ -260,7 +277,6 @@ def execute_sql(
     """
 
     from common.utils.aes import decrypt_conf
-    from datasource.crud import crud_datasource
     from datasource.db.db import execute_sql as db_execute_sql
     from datasource.service.query_permission import (
         apply_permissions_for_execute,
@@ -268,10 +284,7 @@ def execute_sql(
         validate_sql_column_permissions,
     )
 
-    # Get datasource
-    datasource = crud_datasource.get_datasource_by_id(session, request.datasource_id)
-    if not datasource:
-        raise NotFoundException("Datasource not found")
+    datasource = assert_datasource_accessible(session, current_user, request.datasource_id, workspace_oid)
 
     config = decrypt_conf(datasource.configuration) if datasource.configuration else {}
 
@@ -301,6 +314,7 @@ def execute_sql(
             is_success=False,
             reasoning=reasoning,
             steps=steps,
+            workspace_oid=workspace_oid,
             agent_mode="legacy",
         )
         return success_response(
@@ -353,6 +367,7 @@ def execute_sql(
             is_success=False,
             reasoning=reasoning,
             steps=steps,
+            workspace_oid=workspace_oid,
             agent_mode="legacy",
         )
         return success_response(
@@ -406,6 +421,7 @@ def execute_sql(
         is_success=success,
         reasoning=reasoning,
         steps=steps,
+        workspace_oid=workspace_oid,
         agent_mode="legacy",
     )
 
@@ -451,6 +467,7 @@ def _persist_record(
     is_success: bool,
     reasoning: str,
     steps,
+    workspace_oid: int,
     agent_mode: Optional[str] = None,
     plans: Optional[list[str]] = None,
     sub_task_agents: Optional[list[str]] = None,
@@ -482,6 +499,7 @@ def _persist_record(
             tool_calls=tool_calls,
             summary=summary,
             reports=reports,
+            workspace_oid=workspace_oid,
         )
         return record.id or 0
     except Exception as e:
@@ -494,7 +512,9 @@ def _persist_record(
 @router.post("/chat-stream", summary="Chat with streaming output")
 async def chat_stream(
     request: ChatRequest,
-    current_user=Depends(get_current_user),
+    session: Session = Depends(get_session),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
 ):
     """
     Chat endpoint with Server-Sent Events (SSE) streaming output.
@@ -524,6 +544,9 @@ async def chat_stream(
     """
     trace_id = new_trace_id()
     set_trace_id(trace_id)
+    if request.datasource_id:
+        assert_datasource_accessible(session, current_user, request.datasource_id, workspace_oid)
+
     logger.info(
         "chat_stream start mode=%s ds=%s conv=%s user=%s q_len=%d",
         request.agent_mode,
@@ -565,6 +588,7 @@ async def chat_stream(
                 current_user_id=current_user_id,
                 emit=emit_async,
                 enable_tool_agent=request.enable_tool_agent,
+                workspace_oid=workspace_oid,
             )
         except Exception as e:  # noqa: BLE001
             logger.error(f"Agent chat stream error: {e}")
@@ -628,6 +652,7 @@ async def chat_stream(
                         is_success=False,
                         reasoning=reasoning_text,
                         steps=steps_acc,
+                        workspace_oid=workspace_oid,
                         agent_mode="legacy",
                     )
                     push("error", {"error": result["error"]})
@@ -684,6 +709,7 @@ async def chat_stream(
                         is_success=False,
                         reasoning=reasoning_text,
                         steps=steps_acc,
+                        workspace_oid=workspace_oid,
                         agent_mode="legacy",
                     )
                     push("error", {"error": col_perm_err})
@@ -730,6 +756,7 @@ async def chat_stream(
                     is_success=success,
                     reasoning=reasoning_text,
                     steps=steps_acc,
+                    workspace_oid=workspace_oid,
                     agent_mode="legacy",
                 )
 
@@ -808,6 +835,8 @@ def validate_sql_endpoint(
 def format_sql_endpoint(
     request: SQLFormatRequest,
     session: Session = Depends(get_session),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
 ):
     """
     Format a SQL query for specific database type.
@@ -816,12 +845,13 @@ def format_sql_endpoint(
     The input should be a SQL query, not a natural language question.
     """
     from chat.utils.sql_validator import format_sql
-    from datasource.crud import crud_datasource
 
     # Get datasource to determine database type
     datasource = None
     if request.datasource_id:
-        datasource = crud_datasource.get_datasource_by_id(session, request.datasource_id)
+        datasource = assert_datasource_accessible(
+            session, current_user, request.datasource_id, workspace_oid
+        )
 
     db_type = datasource.type if datasource else "pg"
 

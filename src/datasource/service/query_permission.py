@@ -10,9 +10,10 @@ from typing import Any, Iterable, Optional
 from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
+from datasource.crud import crud_datasource
 from datasource.models.datasource import CoreField, CoreTable
 from datasource.models.permission import DsPermission, DsRule
-from system.authz import bypasses_data_row_column_scope
+from system.authz import bypasses_column_visibility, bypasses_data_row_column_scope
 from system.models.user import SysUser
 
 logger = logging.getLogger(__name__)
@@ -34,11 +35,37 @@ def _norm_user_id(raw: Any) -> Optional[int]:
         return None
 
 
-def _active_permission_ids_for_user(session: Session, user_id: int) -> set[int]:
-    """命中规则组 ``user_list`` 后，收集关联的 ``DsPermission.id``。"""
+def _column_permission_entry_is_hidden(item: Any) -> bool:
+    """列权限为「拒绝列表」：显式 ``enable is True`` 表示该条为白名单可见；否则带 field 即视为隐藏。
+
+    兼容仅配置 ``field_name``/``field_id`` 而省略 ``enable`` 的旧数据（与 data-rules 保存体一致）。"""
+    if not isinstance(item, dict):
+        return False
+    if item.get("enable") is True:
+        return False
+    fn = item.get("field_name")
+    fid = item.get("field_id")
+    has_name = isinstance(fn, str) and bool(fn.strip())
+    has_id = _norm_user_id(fid) is not None
+    return bool(has_name or has_id)
+
+
+def _active_permission_ids_for_user(session: Session, user_id: int, ds_id: int) -> set[int]:
+    """命中规则组 ``user_list`` 后，收集关联的 ``DsPermission.id``。
+
+    仅包含 ``rule.oid`` 与数据源 ``ds_id`` 所在工作空间一致之规则，避免跨空间
+    规则误命中。
+    """
+    ds = crud_datasource.get_datasource_by_id(session, ds_id)
+    if ds is None:
+        return set()
+    ds_oid = int(ds.oid)
     out: set[int] = set()
     for rule in session.query(DsRule).all():
         if getattr(rule, "enable", True) is False:
+            continue
+        rule_oid = int(getattr(rule, "oid", 1) or 1)
+        if rule_oid != ds_oid:
             continue
         try:
             users = json.loads(rule.user_list or "[]")
@@ -128,7 +155,7 @@ def collect_row_predicate_sqls(
     db_type: str,
 ) -> list[str]:
     """对给定物理表名集合，返回应 AND 到最终 SQL 的谓词列表（已带表前缀）。"""
-    active = _active_permission_ids_for_user(session, user_id)
+    active = _active_permission_ids_for_user(session, user_id, ds_id)
     if not active:
         return []
     names = {n for n in table_names if n}
@@ -169,7 +196,7 @@ def apply_column_permissions_to_schema_tables(
     tables: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """按列权限从 schema 表结构中移除不可见字段（原地拷贝，不修改入参对象引用内的子结构可浅拷贝）。"""
-    active = _active_permission_ids_for_user(session, user_id)
+    active = _active_permission_ids_for_user(session, user_id, ds_id)
     if not active:
         return tables
     core_tables = session.query(CoreTable).filter(CoreTable.ds_id == ds_id).all()
@@ -224,13 +251,14 @@ def apply_column_permissions_to_schema_tables(
             for item in plist:
                 if not isinstance(item, dict):
                     continue
-                if item.get("enable") is False:
-                    fid = _norm_user_id(item.get("field_id"))
-                    if fid is not None:
-                        hidden_field_ids.add(fid)
-                    fname = item.get("field_name")
-                    if isinstance(fname, str) and fname.strip():
-                        hidden_field_names.add(fname.strip().lower())
+                if not _column_permission_entry_is_hidden(item):
+                    continue
+                fid = _norm_user_id(item.get("field_id"))
+                if fid is not None:
+                    hidden_field_ids.add(fid)
+                fname = item.get("field_name")
+                if isinstance(fname, str) and fname.strip():
+                    hidden_field_names.add(fname.strip().lower())
         if not hidden_field_ids and not hidden_field_names:
             out_tables.append(tcopy)
             continue
@@ -259,7 +287,7 @@ def collect_hidden_column_names_for_logical_table(
     table_name: str,
 ) -> set[str]:
     """指定逻辑表上列权限配置为不可见(enable=False)的列名（小写，用于比对）。"""
-    active = _active_permission_ids_for_user(session, user_id)
+    active = _active_permission_ids_for_user(session, user_id, ds_id)
     if not active:
         return set()
     tn = str(table_name or "").strip().lower()
@@ -299,13 +327,14 @@ def collect_hidden_column_names_for_logical_table(
         for item in plist:
             if not isinstance(item, dict):
                 continue
-            if item.get("enable") is False:
-                fid = _norm_user_id(item.get("field_id"))
-                if fid is not None:
-                    hidden_field_ids.add(fid)
-                fname = item.get("field_name")
-                if isinstance(fname, str) and fname.strip():
-                    hidden_field_names.add(fname.strip().lower())
+            if not _column_permission_entry_is_hidden(item):
+                continue
+            fid = _norm_user_id(item.get("field_id"))
+            if fid is not None:
+                hidden_field_ids.add(fid)
+            fname = item.get("field_name")
+            if isinstance(fname, str) and fname.strip():
+                hidden_field_names.add(fname.strip().lower())
     out: set[str] = set(hidden_field_names)
     if hidden_field_ids:
         q = session.query(CoreField).filter(CoreField.table_id == ct.id, CoreField.id.in_(list(hidden_field_ids)))
@@ -326,6 +355,23 @@ def merge_hidden_column_names_for_sql_tables(
     for t in tables_referenced_in_sql(sql, db_type):
         merged |= collect_hidden_column_names_for_logical_table(session, user_id, ds_id, t)
     return merged
+
+
+def _fallback_text_column_hits(sql: str, forbidden_lower: set[str]) -> list[str]:
+    """sqlglot 未识别列引用时的兜底：禁止列名是否出现在 SQL 文本中（大小写不敏感）。"""
+    if not forbidden_lower or not sql.strip():
+        return []
+    compact = sql.lower()
+    out: list[str] = []
+    seen: set[str] = set()
+    for low in forbidden_lower:
+        if not low or low not in compact:
+            continue
+        if low in seen:
+            continue
+        seen.add(low)
+        out.append(low)
+    return out
 
 
 def column_identifiers_referencing_forbidden(
@@ -364,13 +410,19 @@ def validate_sql_column_permissions(
     db_type: str,
     sql: str,
 ) -> Optional[str]:
-    """若受限用户在 SQL 中仍引用被隐藏的列，返回中文错误说明；否则 None。"""
-    if user is None or bypasses_data_row_column_scope(user):
+    """若用户在 SQL 中引用对其隐藏的列，返回中文错误说明；否则 None。
+
+    普通成员受列级隐藏约束；平台管理员与任一工作空间管理员豁免（见
+    ``bypasses_column_visibility``）。行级合并仍仅平台管理员豁免（见
+    ``bypasses_data_row_column_scope``）。"""
+    if user is None or bypasses_column_visibility(session, user):
         return None
     forbidden = merge_hidden_column_names_for_sql_tables(session, user.id, ds_id, db_type, sql)
     if not forbidden:
         return None
     hits = column_identifiers_referencing_forbidden(sql, db_type, forbidden)
+    if not hits:
+        hits = _fallback_text_column_hits(sql, forbidden)
     if not hits:
         return None
     cols = "、".join(hits)
@@ -389,7 +441,7 @@ def filter_exec_result_by_column_permissions(
     result: dict[str, Any],
 ) -> dict[str, Any]:
     """从查询结果中移除当前用户在该 SQL 涉及表上不可见的列（例如 SELECT * 时兜底）。"""
-    if user is None or bypasses_data_row_column_scope(user):
+    if user is None or bypasses_column_visibility(session, user):
         return result
     if not isinstance(result, dict):
         return result
@@ -512,7 +564,7 @@ def schema_tables_for_user(
     ds_id: int,
     raw_tables: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """若用户受数据权限约束，则对 ``get_schema_info`` 结果做列裁剪。"""
-    if user is None or bypasses_data_row_column_scope(user):
+    """对 ``get_schema_info`` 结果做列裁剪；普通成员裁剪，平台/空间管理员豁免。"""
+    if user is None or bypasses_column_visibility(session, user):
         return raw_tables
     return apply_column_permissions_to_schema_tables(session, user.id, ds_id, raw_tables)
