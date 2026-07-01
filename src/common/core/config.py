@@ -1,7 +1,8 @@
 """Configuration management using pydantic-settings."""
 
 from functools import lru_cache
-from typing import Optional
+from typing import Literal, Optional
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +32,9 @@ class Settings(BaseSettings):
     llm_base_url: Optional[str] = None
     llm_api_key: Optional[str] = None
     llm_model: str = "gpt-4o-mini"
+
+    # Team 模式编排：``legacy`` 为手写协程；``langgraph`` 为 LangGraph StateGraph（默认）。
+    team_orchestrator: Literal["legacy", "langgraph"] = "langgraph"
 
 
 @lru_cache

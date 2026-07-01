@@ -35,6 +35,7 @@ from src.agent.expand.summarizer import SummarizerAgent
 from src.agent.expand.tool_agent import build_tool_agent
 from src.agent.expand.user_proxy import UserProxyAgent
 from src.chat.schemas import ChatRequest
+from src.common.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +185,44 @@ async def run_team_stream(
     - 某个 DataAnalyst 失败 → emit plan_update(state=error)，继续下个 sub_task；
     - 全部 DataAnalyst 都失败 → 跳过 Chart/Summarizer，emit error；
     - Chart 失败 → chart_type=table；Summarizer 失败 → 回落 DataAnalyst 原文。
+
+    编排实现由配置 ``team_orchestrator``（环境变量 ``TEAM_ORCHESTRATOR``）选择：
+    ``langgraph``（默认）或 ``legacy``。
     """
+    if get_settings().team_orchestrator == "langgraph":
+        from src.chat.service.team_graph import run_team_stream_graph
+
+        return await run_team_stream_graph(
+            request=request,
+            current_user_id=current_user_id,
+            emit=emit,
+            llm_client=llm_client,
+            persist=persist,
+            enable_tool_agent=enable_tool_agent,
+            workspace_oid=workspace_oid,
+        )
+    return await _run_team_stream_legacy(
+        request=request,
+        current_user_id=current_user_id,
+        emit=emit,
+        llm_client=llm_client,
+        persist=persist,
+        enable_tool_agent=enable_tool_agent,
+        workspace_oid=workspace_oid,
+    )
+
+
+async def _run_team_stream_legacy(
+    *,
+    request: ChatRequest,
+    current_user_id: int,
+    emit: EmitCallback,
+    llm_client: Any | None = None,
+    persist: bool = True,
+    enable_tool_agent: bool = True,
+    workspace_oid: int = 1,
+) -> int:
+    """Team 模式手写协程实现（``team_orchestrator=legacy``）。"""
     if llm_client is None:
         llm_client = LangChainLlmClient()
     team_cfg = build_chat_team(enable_tool_agent=enable_tool_agent)

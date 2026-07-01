@@ -1,5 +1,8 @@
 """LinearDAG：一条线性执行链。
 
+说明：生产 **Team** 编排已迁至 LangGraph（见 ``src/chat/service/team_graph/``）；
+本模块仅保留线性 MapOperator 冒烟与历史兼容，不作为线上入口。
+
 Phase A 的 DAG 只做最简的串行调度：
 - 节点之间是 ``A.output -> B.input`` 的纯函数流；
 - 单节点异常直接冒泡，整个 DAG 失败（上层负责重试/降级）；

@@ -50,7 +50,11 @@ _FAKE_SCHEMA = [
 
 
 def _patch_db(monkeypatch, exec_sql_fn):
-    monkeypatch.setattr(biz, "_load_datasource", lambda ds_id: ("pg", {}, f"ds{ds_id}"))
+    monkeypatch.setattr(
+        biz,
+        "_load_datasource",
+        lambda ds_id, workspace_oid=None: ("pg", {}, f"ds{ds_id}"),
+    )
     import src.datasource.db.db as db_mod
 
     monkeypatch.setattr(db_mod, "get_schema_info", lambda db_type, config: _FAKE_SCHEMA)

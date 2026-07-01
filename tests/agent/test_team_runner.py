@@ -54,7 +54,11 @@ _FAKE_SCHEMA = [
 
 
 def _patch_db(monkeypatch, exec_sql_fn):
-    monkeypatch.setattr(biz, "_load_datasource", lambda ds_id: ("pg", {}, f"ds{ds_id}"))
+    monkeypatch.setattr(
+        biz,
+        "_load_datasource",
+        lambda ds_id, workspace_oid=None: ("pg", {}, f"ds{ds_id}"),
+    )
     import src.datasource.db.db as db_mod
 
     monkeypatch.setattr(db_mod, "get_schema_info", lambda db_type, config: _FAKE_SCHEMA)
@@ -202,6 +206,20 @@ def test_team_multi_sub_tasks_partial_failure(monkeypatch):
         lambda *_a, **_kw: (True, "ok", {"columns": ["n"], "rows": [[7]]}),
     )
 
+    # list_tables 成功且两轮触顶时会触发 react_agent 的「自动收敛」视为成功；
+    # ToolPack 持有 FunctionTool 实例，需替换 ``list_tables._fn`` 而非模块名。
+    _lt_tool = biz.list_tables
+    _orig_lt_fn = _lt_tool._fn
+    _list_tables_count: list[int] = [0]
+
+    def _list_tables_fail_twice(*args: object, **kwargs: object):
+        _list_tables_count[0] += 1
+        if _list_tables_count[0] <= 2:
+            raise RuntimeError("forced list_tables failure for sub2")
+        return _orig_lt_fn(*args, **kwargs)
+
+    monkeypatch.setattr(_lt_tool, "_fn", _list_tables_fail_twice)
+
     import src.agent.expand.data_analyst as da_mod
     import src.chat.service.agent_runner as runner_mod
 
@@ -268,6 +286,13 @@ def test_team_all_sub_tasks_fail_skips_chart_and_summary(monkeypatch):
         monkeypatch,
         lambda *_a, **_kw: (True, "ok", {"columns": [], "rows": []}),
     )
+
+    _lt_tool = biz.list_tables
+
+    def _list_tables_always_fail(*_a: object, **_kw: object) -> None:
+        raise RuntimeError("forced list_tables failure")
+
+    monkeypatch.setattr(_lt_tool, "_fn", _list_tables_always_fail)
 
     import src.agent.expand.data_analyst as da_mod
     import src.chat.service.agent_runner as runner_mod
