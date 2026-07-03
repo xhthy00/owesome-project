@@ -5,6 +5,79 @@ from datetime import datetime
 from typing import List, Optional
 
 
+#: 教育学情场景内置 SQL few-shot 示例。
+#:
+#: 覆盖班级均分、年级排名、分数段分布、个体查询、历次对比 5 类高频问法。
+#: 调用方（如 DataAnalyst 的 SQL 生成路径或 legacy SQLGenerator）可通过
+#: ``data_training=education_sql_training_block()`` 注入；不在
+#: ``build_sql_generation_prompt`` 内强制注入，避免污染非教育场景。
+EDUCATION_SQL_EXAMPLES = """<sql-examples>
+  <example>
+    <question>初三1班各科平均分和及格率</question>
+    <suggestion-answer>SELECT subject,
+       ROUND(AVG(score), 2) AS avg_score,
+       ROUND(SUM(CASE WHEN score >= 60 THEN 1 ELSE 0 END)::numeric / COUNT(*) * 100, 2) AS pass_rate
+FROM score s
+JOIN student st ON s.student_id = st.id
+WHERE st.class_name = '初三1班'
+GROUP BY subject
+LIMIT 1000;</suggestion-answer>
+  </example>
+  <example>
+    <question>年级各班级数学均分排名</question>
+    <suggestion-answer>SELECT st.class_name,
+       ROUND(AVG(sc.score), 2) AS class_avg,
+       RANK() OVER (ORDER BY AVG(sc.score) DESC) AS rank
+FROM score sc
+JOIN student st ON sc.student_id = st.id
+WHERE sc.subject = '数学'
+GROUP BY st.class_name
+LIMIT 1000;</suggestion-answer>
+  </example>
+  <example>
+    <question>初三1班数学分数段分布（60/70/80/90 分段）</question>
+    <suggestion-answer>SELECT
+  CASE
+    WHEN score &lt; 60 THEN '0-60'
+    WHEN score &lt; 70 THEN '60-70'
+    WHEN score &lt; 80 THEN '70-80'
+    WHEN score &lt; 90 THEN '80-90'
+    ELSE '90-100'
+  END AS segment,
+  COUNT(*) AS cnt
+FROM score sc
+JOIN student st ON sc.student_id = st.id
+WHERE sc.subject = '数学' AND st.class_name = '初三1班'
+GROUP BY segment
+ORDER BY segment
+LIMIT 1000;</suggestion-answer>
+  </example>
+  <example>
+    <question>张三本次考试各科成绩与总分</question>
+    <suggestion-answer>SELECT sc.subject, sc.score
+FROM score sc
+JOIN student st ON sc.student_id = st.id
+WHERE st.name = '张三'
+LIMIT 1000;</suggestion-answer>
+  </example>
+  <example>
+    <question>张三最近三次数学成绩变化</question>
+    <suggestion-answer>SELECT e.exam_name, sc.score
+FROM score sc
+JOIN student st ON sc.student_id = st.id
+JOIN exam e ON sc.exam_id = e.id
+WHERE st.name = '张三' AND sc.subject = '数学'
+ORDER BY e.exam_date
+LIMIT 1000;</suggestion-answer>
+  </example>
+</sql-examples>"""
+
+
+def education_sql_training_block() -> str:
+    """返回教育学情 SQL few-shot 块，供 ``data_training`` 参数注入。"""
+    return EDUCATION_SQL_EXAMPLES
+
+
 def build_sql_generation_prompt(
     question: str,
     database_type: str,

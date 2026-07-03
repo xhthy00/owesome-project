@@ -11,6 +11,7 @@ from langchain_core.runnables import RunnableConfig
 from src.agent.adapter.llm_adapter import LangChainLlmClient
 from src.agent.expand.chat_awel_team import build_chat_team
 from src.chat.schemas import ChatRequest
+from src.agent.education.query_parse import extract_student_target
 from src.chat.service.agent_runner import (
     _DataAnalystPhase,
     _extract_required_keywords,
@@ -96,7 +97,11 @@ async def node_sub_tasks_loop(state: TeamState, config: RunnableConfig) -> dict[
         locked_tables=[],
         required_keywords=_extract_required_keywords(request.question),
         source_sub_task_index=None,
+        report_audience=request.report_audience,
+        target_student=extract_student_target(request.question),
     )
+    # 累积上游 DataAnalyst 子任务的结构化产出，供下游 ToolExpert 组装报告时复用。
+    upstream_report_data: dict[str, Any] = {"sub_tasks": []}
 
     sub_phases: list[tuple[str, _DataAnalystPhase]] = []
     last_good_phase: _DataAnalystPhase | None = None
@@ -118,6 +123,8 @@ async def node_sub_tasks_loop(state: TeamState, config: RunnableConfig) -> dict[
             },
         )
         if sub_task_agent == "ToolExpert":
+            # 把上游累积的查数/报告数据交给 ToolExpert，避免重复 execute_sql。
+            shared_constraints.report_data = upstream_report_data or None
             phase = await _run_tool_expert_phase(
                 request=request,
                 current_user_id=current_user_id,
@@ -144,6 +151,17 @@ async def node_sub_tasks_loop(state: TeamState, config: RunnableConfig) -> dict[
             tagged["sub_task_index"] = idx
             all_steps.append(tagged)
         sub_phases.append((sub_task, phase))
+
+        # 累积本子任务的产出供后续 ToolExpert 复用（exec_result / reports / 结论）。
+        upstream_report_data["sub_tasks"].append({
+            "sub_task_index": idx,
+            "sub_task": sub_task,
+            "sub_task_agent": sub_task_agent,
+            "sql": phase.state.last_sql,
+            "exec_result": phase.state.last_exec_result,
+            "reports": list(phase.state.reports),
+            "final_answer": (phase.reply.content if phase.reply else ""),
+        })
 
         if phase.fatal_error:
             await emit(

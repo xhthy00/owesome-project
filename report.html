@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2025年度三次考试综合分析报告</title>
+<script src="https://cdn.jsdelivr.net/npm/highcharts@11.4.0/highcharts.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif; background:#f0f2f5; color:#2c3e50; line-height:1.7; }
+.container { max-width:1300px; margin:0 auto; padding:20px; }
+.cover { background:linear-gradient(135deg,#1a1a2e,#16213e 50%,#0f3460); color:white; padding:60px 40px; border-radius:16px; margin-bottom:30px; text-align:center; box-shadow:0 10px 40px rgba(0,0,0,0.2); }
+.cover h1 { font-size:42px; font-weight:700; margin-bottom:10px; letter-spacing:3px; }
+.cover .subtitle { font-size:18px; opacity:0.85; }
+.cover .meta { margin-top:25px; font-size:14px; opacity:0.6; }
+.section { background:white; border-radius:12px; padding:35px; margin-bottom:25px; box-shadow:0 2px 12px rgba(0,0,0,0.06); }
+.section h2 { font-size:26px; color:#1a1a2e; border-bottom:3px solid #3498db; padding-bottom:10px; margin-bottom:20px; display:flex; align-items:center; gap:10px; }
+.section h3 { font-size:20px; color:#2c3e50; margin:25px 0 15px; }
+.stat-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:18px; margin-bottom:25px; }
+.stat-card { background:linear-gradient(135deg,#f8f9fa,#e9ecef); border-radius:12px; padding:22px; text-align:center; border-left:4px solid #3498db; }
+.stat-card .value { font-size:32px; font-weight:700; color:#1a1a2e; }
+.stat-card .label { font-size:13px; color:#7f8c8d; margin-top:5px; }
+.stat-card.accent1 { border-left-color:#e74c3c; }
+.stat-card.accent2 { border-left-color:#2ecc71; }
+.stat-card.accent3 { border-left-color:#f39c12; }
+.chart-box { margin:25px 0; }
+.row { display:grid; grid-template-columns:1fr 1fr; gap:25px; }
+.table-wrap { overflow-x:auto; margin:20px 0; font-size:13px; }
+table { width:100%; border-collapse:collapse; }
+th { background:#1a1a2e; color:white; padding:12px 10px; text-align:left; font-weight:600; white-space:nowrap; }
+td { padding:10px; border-bottom:1px solid #ecf0f1; }
+tr:hover td { background:#f8f9fa; }
+.insight { background:#eaf2f8; border-left:4px solid #2980b9; padding:18px 22px; border-radius:8px; margin:18px 0; }
+.insight.warning { background:#fdedec; border-left-color:#e74c3c; }
+.insight.success { background:#eafaf1; border-left-color:#27ae60; }
+.insight strong { display:block; margin-bottom:6px; font-size:15px; }
+.toc { background:#f8f9fa; border-radius:10px; padding:25px 30px; margin-bottom:25px; }
+.toc h3 { margin-top:0; }
+.toc ol { columns:2; column-gap:40px; padding-left:20px; }
+.toc li { margin:6px 0; }
+.toc a { color:#2980b9; text-decoration:none; }
+.toc a:hover { text-decoration:underline; }
+@media (max-width:768px) { .row { grid-template-columns:1fr; } .toc ol { columns:1; } }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="cover">
+<h1>📊 2025年度三次考试综合分析报告</h1>
+<div class="subtitle">基于第一次、第二次、第三次考试数据的深度学业诊断</div>
+<div class="meta">班级人数: 30人 | 科目: 语文 / 数学 / 英语 | 分析维度: 总分水平 · 趋势变化 · 优势劣势科目 · 偏科诊断 · 相关性分析 · 个性化建议</div>
+</div>
+
+<div class="toc">
+<h3>📑 报告目录</h3>
+<ol>
+<li><a href="#s1">班级整体概览</a></li>
+<li><a href="#s2">各科成绩趋势分析</a></li>
+<li><a href="#s3">总分与各科相关性</a></li>
+<li><a href="#s4">学生趋势分布与水平分布</a></li>
+<li><a href="#s5">进步最快 & 退步最快学生</a></li>
+<li><a href="#s6">偏科生诊断</a></li>
+<li><a href="#s7">单科进步/退步之最</a></li>
+<li><a href="#s8">全体学生总分轨迹</a></li>
+<li><a href="#s9">每位学生详细档案与建议</a></li>
+</ol>
+</div>
+
+<!-- S1 -->
+<div class="section" id="s1">
+<h2>📋 一、班级整体概览</h2>
+<div class="stat-grid">
+<div class="stat-card"><div class="value">337.4</div><div class="label">第一次考试 班级总分均分</div></div>
+<div class="stat-card"><div class="value">337.6</div><div class="label">第二次考试 班级总分均分</div></div>
+<div class="stat-card"><div class="value">338.8</div><div class="label">第三次考试 班级总分均分</div></div>
+<div class="stat-card accent2"><div class="value">+1.4</div><div class="label">三次考试总分变化</div></div>
+</div>
+<div class="stat-grid">
+<div class="stat-card"><div class="value">17.4</div><div class="label">第一次 总分标准差</div></div>
+<div class="stat-card"><div class="value">18.6</div><div class="label">第二次 总分标准差</div></div>
+<div class="stat-card"><div class="value">20.2</div><div class="label">第三次 总分标准差</div></div>
+<div class="stat-card accent3"><div class="value">+2.8</div><div class="label">标准差变化 (分化趋势)</div></div>
+</div>
+<div class="insight">
+<strong>📌 班级诊断：</strong>
+三次考试班级总分均分稳定在 337–339 分之间，整体变化不大。但标准差从 17.4 扩大到 20.2，<b>说明班级内部分化在加剧</b>——头部学生持续进步的同时，尾部学生未见明显提升，需重点关注后进生。
+</div>
+</div>
+
+<!-- S2 -->
+<div class="section" id="s2">
+<h2>📈 二、各科成绩趋势分析</h2>
+<div class="row">
+<div class="chart-box"><div id="chart1" style="height:400px;"></div></div>
+<div class="chart-box"><div id="chart7" style="height:400px;"></div></div>
+</div>
+<div class="stat-grid">
+<div class="stat-card"><div class="value">113.0→113.6</div><div class="label">语文均分变化 (+0.6)</div></div>
+<div class="stat-card accent1"><div class="value">112.9→107.0</div><div class="label">数学均分变化 (-5.8)</div></div>
+<div class="stat-card accent2"><div class="value">111.5→118.1</div><div class="label">英语均分变化 (+6.6)</div></div>
+</div>
+<div class="insight warning">
+<strong>⚠️ 数学需重点关注：</strong>数学平均分从第一次 112.9 降至第三次 107.0（下降 5.8 分），是全科中唯一呈下降趋势的科目。第二次短暂升至 120.1 后回落，需探究试卷难度及教学效果。
+</div>
+<div class="insight success">
+<strong>✅ 英语稳步提升：</strong>英语平均分从第一次 111.5 升至第三次 118.1（提升 6.6 分），班级整体英语水平进步明显。语文保持稳定。
+</div>
+</div>
+
+<!-- S3 -->
+<div class="section" id="s3">
+<h2>🔗 三、总分与各科相关性分析</h2>
+<div class="chart-box"><div id="chart4" style="height:400px;"></div></div>
+<div class="insight">
+<strong>📌 关键发现：</strong>
+英语与总分的相关性最强（三次平均 r≈0.771），<b>英语成绩对总分排名影响最大</b>，且相关性逐次增强（0.756→0.740→0.817）。语文相关性次之（均 r≈0.686），同样呈增强趋势。<br>
+<b>⚠️ 数学与总分呈负相关</b>（三次均 r<0，且负相关越来越强：-0.223→-0.365→-0.406）：说明"数学高分学生总分往往不高"的现象在加剧——这些学生存在严重偏科（通常是语文/英语较弱），而总分排名靠前的学生数学反而不是最强项。此现象值得教学团队高度重视。
+</div>
+</div>
+
+<!-- S4 -->
+<div class="section" id="s4">
+<h2>📊 四、学生趋势分布与水平分布</h2>
+<div class="row">
+<div class="chart-box"><div id="chart2" style="height:380px;"></div></div>
+<div class="chart-box"><div id="chart3" style="height:380px;"></div></div>
+</div>
+<div class="stat-grid">
+<div class="stat-card accent2"><div class="value">10</div><div class="label">进步学生数</div></div>
+<div class="stat-card accent1"><div class="value">11</div><div class="label">退步学生数</div></div>
+<div class="stat-card"><div class="value">9</div><div class="label">稳定学生数</div></div>
+</div>
+<div class="insight">
+<strong>📌 分布解读：</strong>进步(10人)、退步(11人)、稳定(9人)三者接近均匀分布，班级处于正常波动状态。A/B水平学生占18/30=60%，需关注2位D水平学生。
+</div>
+</div>
+
+<!-- S5 -->
+<div class="section" id="s5">
+<h2>🏆 五、进步最快 & 退步最快学生（总分）</h2>
+<div class="chart-box"><div id="chart5" style="height:400px;"></div></div>
+<div class="row">
+<div>
+<h3 style="color:#27ae60;">🟢 进步最快 TOP5</h3>
+<table><tr><th>学生</th><th>第一次</th><th>第三次</th><th>变化</th></tr><tr><td>学生002</td><td>340</td><td>374</td><td style="color:#27ae60;font-weight:bold;">+34</td></tr>
+<tr><td>学生006</td><td>327</td><td>358</td><td style="color:#27ae60;font-weight:bold;">+31</td></tr>
+<tr><td>学生010</td><td>319</td><td>350</td><td style="color:#27ae60;font-weight:bold;">+31</td></tr>
+<tr><td>学生007</td><td>332</td><td>357</td><td style="color:#27ae60;font-weight:bold;">+25</td></tr>
+<tr><td>学生018</td><td>308</td><td>333</td><td style="color:#27ae60;font-weight:bold;">+25</td></tr></table>
+</div>
+<div>
+<h3 style="color:#e74c3c;">🔴 退步最快 TOP5</h3>
+<table><tr><th>学生</th><th>第一次</th><th>第三次</th><th>变化</th></tr><tr><td>学生024</td><td>358</td><td>322</td><td style="color:#e74c3c;font-weight:bold;">-36</td></tr>
+<tr><td>学生019</td><td>355</td><td>329</td><td style="color:#e74c3c;font-weight:bold;">-26</td></tr>
+<tr><td>学生026</td><td>340</td><td>318</td><td style="color:#e74c3c;font-weight:bold;">-22</td></tr>
+<tr><td>学生013</td><td>364</td><td>344</td><td style="color:#e74c3c;font-weight:bold;">-20</td></tr>
+<tr><td>学生021</td><td>348</td><td>329</td><td style="color:#e74c3c;font-weight:bold;">-19</td></tr></table>
+</div>
+</div>
+<div class="insight success">
+<strong>✅ 进步之星：学生002</strong>总分从340飙升至374（+34分），语文和英语均大幅提升，数学虽仍为短板但已有改善迹象。<b>学生006</b>和<b>学生010</b>各提升31分，是班级进步典范。
+</div>
+<div class="insight warning">
+<strong>⚠️ 退步预警：学生024</strong>总分从358骤降至322（-36分），从第4名跌至第24名，数学从满分150降至131（但仍是强项），语文从103降至89是主因。<b>学生019</b>从355降至329（-26分），需立即干预。
+</div>
+</div>
+
+<!-- S6 -->
+<div class="section" id="s6">
+<h2>⚖️ 六、偏科生诊断</h2>
+<div class="chart-box"><div id="chart9" style="height:420px;"></div></div>
+<p style="margin-bottom:15px;">偏科度 = 三科平均排名的标准差，数值越大表示科目间差距越大。以下是偏科度最高的10位学生：</p>
+<div class="table-wrap">
+<table><tr><th>学生</th><th>偏科度</th><th>优势科目</th><th>劣势科目</th><th>语文均分</th><th>数学均分</th><th>英语均分</th><th>诊断</th></tr><tr><td><strong>学生002</strong></td>
+<td style="color:#e74c3c;font-weight:bold;">14.8</td>
+<td style="color:#27ae60;">语文</td><td style="color:#e74c3c;">数学</td>
+<td>137</td><td>77</td><td>132</td>
+<td style="font-size:12px;">语文强数学弱，分差61分</td></tr>
+<tr><td><strong>学生029</strong></td>
+<td style="color:#e74c3c;font-weight:bold;">13.9</td>
+<td style="color:#27ae60;">数学</td><td style="color:#e74c3c;">英语</td>
+<td>83</td><td>139</td><td>90</td>
+<td style="font-size:12px;">数学强英语弱，分差50分</td></tr>
+<tr><td><strong>学生027</strong></td>
+<td style="color:#e74c3c;font-weight:bold;">13.0</td>
+<td style="color:#27ae60;">数学</td><td style="color:#e74c3c;">英语</td>
+<td>97</td><td>139</td><td>90</td>
+<td style="font-size:12px;">数学强英语弱，分差49分</td></tr>
+<tr><td><strong>学生016</strong></td>
+<td style="color:#e74c3c;font-weight:bold;">12.9</td>
+<td style="color:#27ae60;">语文</td><td style="color:#e74c3c;">数学</td>
+<td>140</td><td>87</td><td>119</td>
+<td style="font-size:12px;">语文强数学弱，分差53分</td></tr>
+<tr><td><strong>学生028</strong></td>
+<td style="color:#e74c3c;font-weight:bold;">12.3</td>
+<td style="color:#27ae60;">数学</td><td style="color:#e74c3c;">英语</td>
+<td>91</td><td>135</td><td>89</td>
+<td style="font-size:12px;">数学强英语弱，分差46分</td></tr>
+<tr><td><strong>学生013</strong></td>
+<td style="color:#e74c3c;font-weight:bold;">12.1</td>
+<td style="color:#27ae60;">英语</td><td style="color:#e74c3c;">数学</td>
+<td>130</td><td>87</td><td>134</td>
+<td style="font-size:12px;">英语强数学弱，分差47分</td></tr>
+<tr><td><strong>学生010</strong></td>
+<td style="color:#e74c3c;font-weight:bold;">12.1</td>
+<td style="color:#27ae60;">语文</td><td style="color:#e74c3c;">数学</td>
+<td>128</td><td>87</td><td>127</td>
+<td style="font-size:12px;">语文强数学弱，分差41分</td></tr>
+<tr><td><strong>学生024</strong></td>
+<td style="color:#f39c12;font-weight:bold;">11.4</td>
+<td style="color:#27ae60;">数学</td><td style="color:#e74c3c;">语文</td>
+<td>91</td><td>139</td><td>104</td>
+<td style="font-size:12px;">数学强语文弱，分差49分</td></tr>
+<tr><td><strong>学生020</strong></td>
+<td style="color:#f39c12;font-weight:bold;">11.2</td>
+<td style="color:#27ae60;">数学</td><td style="color:#e74c3c;">语文</td>
+<td>87</td><td>136</td><td>103</td>
+<td style="font-size:12px;">数学强语文弱，分差49分</td></tr>
+<tr><td><strong>学生017</strong></td>
+<td style="color:#f39c12;font-weight:bold;">10.8</td>
+<td style="color:#27ae60;">英语</td><td style="color:#e74c3c;">数学</td>
+<td>122</td><td>92</td><td>135</td>
+<td style="font-size:12px;">英语强数学弱，分差43分</td></tr></table>
+</div>
+<div class="insight warning">
+<strong>⚠️ 严重偏科预警：</strong>学生002（偏科度14.8）、学生029（13.9）、学生027（13.0）偏科程度最为严重。学生002语文137+英语132但数学仅77分，分差达60分。若不及时补短板，将严重制约总分上限。偏科生中"数学强-英语/语文弱"型占6席，反映出理科思维学生比例偏高。
+</div>
+</div>
+
+<!-- S7 -->
+<div class="section" id="s7">
+<h2>🔍 七、单科进步/退步之最</h2>
+<div class="chart-box"><div id="chart8" style="height:420px;"></div></div>
+<div class="row">
+<div>
+<h3 style="color:#27ae60;">🟢 单科进步 TOP5</h3>
+<table><tr><th>学生</th><th>科目</th><th>第一次</th><th>第三次</th><th>变化</th></tr><tr><td>学生018</td><td>英语</td><td>88</td><td>117</td><td style="color:#27ae60;">+29</td></tr>
+<tr><td>学生005</td><td>英语</td><td>93</td><td>121</td><td style="color:#27ae60;">+28</td></tr>
+<tr><td>学生006</td><td>语文</td><td>79</td><td>105</td><td style="color:#27ae60;">+26</td></tr>
+<tr><td>学生012</td><td>英语</td><td>103</td><td>127</td><td style="color:#27ae60;">+24</td></tr>
+<tr><td>学生003</td><td>英语</td><td>120</td><td>142</td><td style="color:#27ae60;">+22</td></tr></table>
+</div>
+<div>
+<h3 style="color:#e74c3c;">🔴 单科退步 TOP5</h3>
+<table><tr><th>学生</th><th>科目</th><th>第一次</th><th>第三次</th><th>变化</th></tr><tr><td>学生012</td><td>数学</td><td>132</td><td>105</td><td style="color:#e74c3c;">-27</td></tr>
+<tr><td>学生011</td><td>数学</td><td>102</td><td>81</td><td style="color:#e74c3c;">-21</td></tr>
+<tr><td>学生001</td><td>数学</td><td>119</td><td>99</td><td style="color:#e74c3c;">-20</td></tr>
+<tr><td>学生024</td><td>数学</td><td>150</td><td>131</td><td style="color:#e74c3c;">-19</td></tr>
+<tr><td>学生009</td><td>数学</td><td>104</td><td>86</td><td style="color:#e74c3c;">-18</td></tr></table>
+</div>
+</div>
+<div class="insight">
+<strong>📌 关键发现：</strong>单科退步TOP5<b>全部是数学</b>，进一步印证数学是班级最需关注的科目。学生012数学从132降至105（-27分）降幅最大。单科进步中英语占4席（学生018英语+29分、学生005英语+28分等），说明英语提升空间大且已见成效。
+</div>
+</div>
+
+<!-- S8 -->
+<div class="section" id="s8">
+<h2>📉 八、全体学生总分变化轨迹</h2>
+<div class="chart-box"><div id="chart6" style="height:550px;"></div></div>
+<p style="font-size:13px;color:#7f8c8d;">默认仅突出显示A水平及变化幅度≥15分的学生，点击图例可切换显示其他学生。整体来看，班级头部学生（学生001、003、004等）保持在350+高分区间，中部学生波动较大。</p>
+</div>
+
+<!-- S9 -->
+<div class="section" id="s9">
+<h2>👤 九、每位学生详细档案与个性化建议</h2>
+<div class="table-wrap">
+<table style="font-size:12px;">
+<tr><th>姓名</th><th>水平</th><th>第一次</th><th>第二次</th><th>第三次</th><th>均分</th><th>趋势</th><th>优势</th><th>劣势</th><th>偏科度</th><th style="min-width:280px;">个性化建议</th></tr>
+<tr>
+<td><strong>学生001</strong></td>
+<td><span style="background:#27ae60;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">A (优秀)</span></td>
+<td>376</td><td>356</td><td>378</td>
+<td>370</td>
+<td style="color:#7f8c8d;font-weight:bold;">📊 稳定 → (+2)</td>
+<td style="color:#27ae60;font-weight:bold;">英语</td>
+<td style="color:#e74c3c;font-weight:bold;">数学</td>
+<td>6.8</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】数学是相对薄弱科目，建议多做综合题型练习，整理错题本，强化薄弱章节的理解。；【保持优势】英语是优势科目，建议保持当前学习方法，适度拓展深度。；【维持稳定】成绩稳定，建议在保持现状的基础上寻求突破。</td></tr>
+<tr>
+<td><strong>学生002</strong></td>
+<td><span style="background:#2980b9;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">B (良好)</span></td>
+<td>340</td><td>324</td><td>374</td>
+<td>346</td>
+<td style="color:#27ae60;font-weight:bold;">📈 进步 ↑ (+34)</td>
+<td style="color:#27ae60;font-weight:bold;">语文</td>
+<td style="color:#e74c3c;font-weight:bold;">数学</td>
+<td>14.8</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】数学是相对薄弱科目，建议多做综合题型练习，整理错题本，强化薄弱章节的理解。；【保持优势】语文是优势科目，建议保持当前学习方法，适度拓展深度。；【趋势向好】总体呈进步趋势，说明学习方法有效，请继续坚持。；【数学补基】数学均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生003</strong></td>
+<td><span style="background:#27ae60;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">A (优秀)</span></td>
+<td>352</td><td>354</td><td>362</td>
+<td>356</td>
+<td style="color:#27ae60;font-weight:bold;">📈 进步 ↑ (+10)</td>
+<td style="color:#27ae60;font-weight:bold;">语文</td>
+<td style="color:#e74c3c;font-weight:bold;">数学</td>
+<td>9.2</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】数学是相对薄弱科目，建议多做综合题型练习，整理错题本，强化薄弱章节的理解。；【保持优势】语文是优势科目，建议保持当前学习方法，适度拓展深度。；【趋势向好】总体呈进步趋势，说明学习方法有效，请继续坚持。；【数学补基】数学均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生004</strong></td>
+<td><span style="background:#27ae60;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">A (优秀)</span></td>
+<td>339</td><td>369</td><td>361</td>
+<td>356</td>
+<td style="color:#27ae60;font-weight:bold;">📈 进步 ↑ (+22)</td>
+<td style="color:#27ae60;font-weight:bold;">英语</td>
+<td style="color:#e74c3c;font-weight:bold;">数学</td>
+<td>8.1</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】数学是相对薄弱科目，建议多做综合题型练习，整理错题本，强化薄弱章节的理解。；【保持优势】英语是优势科目，建议保持当前学习方法，适度拓展深度。；【趋势向好】总体呈进步趋势，说明学习方法有效，请继续坚持。</td></tr>
+<tr>
+<td><strong>学生005</strong></td>
+<td><span style="background:#2980b9;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">B (良好)</span></td>
+<td>337</td><td>353</td><td>360</td>
+<td>350</td>
+<td style="color:#27ae60;font-weight:bold;">📈 进步 ↑ (+23)</td>
+<td style="color:#27ae60;font-weight:bold;">数学</td>
+<td style="color:#e74c3c;font-weight:bold;">英语</td>
+<td>7.1</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】英语是相对薄弱科目，建议每天坚持背单词和阅读英文文章，加强听力和写作练习。；【保持优势】数学是优势科目，建议保持当前学习方法，适度拓展深度。；【趋势向好】总体呈进步趋势，说明学习方法有效，请继续坚持。</td></tr>
+<tr>
+<td><strong>学生006</strong></td>
+<td><span style="background:#f39c12;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">C (中等)</span></td>
+<td>327</td><td>318</td><td>358</td>
+<td>334</td>
+<td style="color:#27ae60;font-weight:bold;">📈 进步 ↑ (+31)</td>
+<td style="color:#27ae60;font-weight:bold;">数学</td>
+<td style="color:#e74c3c;font-weight:bold;">语文</td>
+<td>8.3</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】语文是相对薄弱科目，建议加强文言文阅读和作文训练，多读经典文学作品，积累素材。；【保持优势】数学是优势科目，建议保持当前学习方法，适度拓展深度。；【趋势向好】总体呈进步趋势，说明学习方法有效，请继续坚持。；【语文补基】语文均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生007</strong></td>
+<td><span style="background:#2980b9;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">B (良好)</span></td>
+<td>332</td><td>329</td><td>357</td>
+<td>339</td>
+<td style="color:#27ae60;font-weight:bold;">📈 进步 ↑ (+25)</td>
+<td style="color:#27ae60;font-weight:bold;">数学</td>
+<td style="color:#e74c3c;font-weight:bold;">英语</td>
+<td>4.7</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】英语是相对薄弱科目，建议每天坚持背单词和阅读英文文章，加强听力和写作练习。；【保持优势】数学是优势科目，建议保持当前学习方法，适度拓展深度。；【趋势向好】总体呈进步趋势，说明学习方法有效，请继续坚持。</td></tr>
+<tr>
+<td><strong>学生008</strong></td>
+<td><span style="background:#2980b9;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">B (良好)</span></td>
+<td>351</td><td>343</td><td>356</td>
+<td>350</td>
+<td style="color:#7f8c8d;font-weight:bold;">📊 稳定 → (+5)</td>
+<td style="color:#27ae60;font-weight:bold;">语文</td>
+<td style="color:#e74c3c;font-weight:bold;">数学</td>
+<td>5.9</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】数学是相对薄弱科目，建议多做综合题型练习，整理错题本，强化薄弱章节的理解。；【保持优势】语文是优势科目，建议保持当前学习方法，适度拓展深度。；【维持稳定】成绩稳定，建议在保持现状的基础上寻求突破。</td></tr>
+<tr>
+<td><strong>学生009</strong></td>
+<td><span style="background:#27ae60;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">A (优秀)</span></td>
+<td>360</td><td>372</td><td>352</td>
+<td>361</td>
+<td style="color:#e74c3c;font-weight:bold;">📉 退步 ↓ (-8)</td>
+<td style="color:#27ae60;font-weight:bold;">英语</td>
+<td style="color:#e74c3c;font-weight:bold;">数学</td>
+<td>8.0</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】数学是相对薄弱科目，建议多做综合题型练习，整理错题本，强化薄弱章节的理解。；【保持优势】英语是优势科目，建议保持当前学习方法，适度拓展深度。；【警惕下滑】总体呈退步趋势，建议认真复盘原因，调整学习计划和时间分配。</td></tr>
+<tr>
+<td><strong>学生010</strong></td>
+<td><span style="background:#2980b9;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">B (良好)</span></td>
+<td>319</td><td>358</td><td>350</td>
+<td>342</td>
+<td style="color:#27ae60;font-weight:bold;">📈 进步 ↑ (+31)</td>
+<td style="color:#27ae60;font-weight:bold;">语文</td>
+<td style="color:#e74c3c;font-weight:bold;">数学</td>
+<td>12.1</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】数学是相对薄弱科目，建议多做综合题型练习，整理错题本，强化薄弱章节的理解。；【保持优势】语文是优势科目，建议保持当前学习方法，适度拓展深度。；【趋势向好】总体呈进步趋势，说明学习方法有效，请继续坚持。；【数学补基】数学均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生011</strong></td>
+<td><span style="background:#2980b9;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">B (良好)</span></td>
+<td>347</td><td>327</td><td>345</td>
+<td>340</td>
+<td style="color:#7f8c8d;font-weight:bold;">📊 稳定 → (-2)</td>
+<td style="color:#27ae60;font-weight:bold;">语文</td>
+<td style="color:#e74c3c;font-weight:bold;">数学</td>
+<td>9.8</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】数学是相对薄弱科目，建议多做综合题型练习，整理错题本，强化薄弱章节的理解。；【保持优势】语文是优势科目，建议保持当前学习方法，适度拓展深度。；【维持稳定】成绩稳定，建议在保持现状的基础上寻求突破。；【数学补基】数学均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生012</strong></td>
+<td><span style="background:#f39c12;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">C (中等)</span></td>
+<td>344</td><td>314</td><td>344</td>
+<td>334</td>
+<td style="color:#7f8c8d;font-weight:bold;">📊 稳定 → (+0)</td>
+<td style="color:#27ae60;font-weight:bold;">数学</td>
+<td style="color:#e74c3c;font-weight:bold;">语文</td>
+<td>3.9</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】语文是相对薄弱科目，建议加强文言文阅读和作文训练，多读经典文学作品，积累素材。；【保持优势】数学是优势科目，建议保持当前学习方法，适度拓展深度。；【维持稳定】成绩稳定，建议在保持现状的基础上寻求突破。</td></tr>
+<tr>
+<td><strong>学生013</strong></td>
+<td><span style="background:#2980b9;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">B (良好)</span></td>
+<td>364</td><td>345</td><td>344</td>
+<td>351</td>
+<td style="color:#e74c3c;font-weight:bold;">📉 退步 ↓ (-20)</td>
+<td style="color:#27ae60;font-weight:bold;">英语</td>
+<td style="color:#e74c3c;font-weight:bold;">数学</td>
+<td>12.1</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】数学是相对薄弱科目，建议多做综合题型练习，整理错题本，强化薄弱章节的理解。；【保持优势】英语是优势科目，建议保持当前学习方法，适度拓展深度。；【警惕下滑】总体呈退步趋势，建议认真复盘原因，调整学习计划和时间分配。；【数学补基】数学均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生014</strong></td>
+<td><span style="background:#2980b9;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">B (良好)</span></td>
+<td>325</td><td>338</td><td>342</td>
+<td>335</td>
+<td style="color:#27ae60;font-weight:bold;">📈 进步 ↑ (+17)</td>
+<td style="color:#27ae60;font-weight:bold;">数学</td>
+<td style="color:#e74c3c;font-weight:bold;">英语</td>
+<td>9.6</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】英语是相对薄弱科目，建议每天坚持背单词和阅读英文文章，加强听力和写作练习。；【保持优势】数学是优势科目，建议保持当前学习方法，适度拓展深度。；【趋势向好】总体呈进步趋势，说明学习方法有效，请继续坚持。；【英语补基】英语均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生015</strong></td>
+<td><span style="background:#2980b9;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">B (良好)</span></td>
+<td>321</td><td>352</td><td>341</td>
+<td>338</td>
+<td style="color:#27ae60;font-weight:bold;">📈 进步 ↑ (+20)</td>
+<td style="color:#27ae60;font-weight:bold;">语文</td>
+<td style="color:#e74c3c;font-weight:bold;">数学</td>
+<td>8.6</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】数学是相对薄弱科目，建议多做综合题型练习，整理错题本，强化薄弱章节的理解。；【保持优势】语文是优势科目，建议保持当前学习方法，适度拓展深度。；【趋势向好】总体呈进步趋势，说明学习方法有效，请继续坚持。；【数学补基】数学均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生016</strong></td>
+<td><span style="background:#2980b9;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">B (良好)</span></td>
+<td>349</td><td>348</td><td>340</td>
+<td>346</td>
+<td style="color:#e74c3c;font-weight:bold;">📉 退步 ↓ (-9)</td>
+<td style="color:#27ae60;font-weight:bold;">语文</td>
+<td style="color:#e74c3c;font-weight:bold;">数学</td>
+<td>12.9</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】数学是相对薄弱科目，建议多做综合题型练习，整理错题本，强化薄弱章节的理解。；【保持优势】语文是优势科目，建议保持当前学习方法，适度拓展深度。；【警惕下滑】总体呈退步趋势，建议认真复盘原因，调整学习计划和时间分配。；【数学补基】数学均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生017</strong></td>
+<td><span style="background:#2980b9;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">B (良好)</span></td>
+<td>343</td><td>364</td><td>338</td>
+<td>348</td>
+<td style="color:#7f8c8d;font-weight:bold;">📊 稳定 → (-5)</td>
+<td style="color:#27ae60;font-weight:bold;">英语</td>
+<td style="color:#e74c3c;font-weight:bold;">数学</td>
+<td>10.8</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】数学是相对薄弱科目，建议多做综合题型练习，整理错题本，强化薄弱章节的理解。；【保持优势】英语是优势科目，建议保持当前学习方法，适度拓展深度。；【维持稳定】成绩稳定，建议在保持现状的基础上寻求突破。；【数学补基】数学均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生018</strong></td>
+<td><span style="background:#f39c12;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">C (中等)</span></td>
+<td>308</td><td>335</td><td>333</td>
+<td>325</td>
+<td style="color:#27ae60;font-weight:bold;">📈 进步 ↑ (+25)</td>
+<td style="color:#27ae60;font-weight:bold;">数学</td>
+<td style="color:#e74c3c;font-weight:bold;">英语</td>
+<td>2.9</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】英语是相对薄弱科目，建议每天坚持背单词和阅读英文文章，加强听力和写作练习。；【保持优势】数学是优势科目，建议保持当前学习方法，适度拓展深度。；【趋势向好】总体呈进步趋势，说明学习方法有效，请继续坚持。</td></tr>
+<tr>
+<td><strong>学生019</strong></td>
+<td><span style="background:#2980b9;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">B (良好)</span></td>
+<td>355</td><td>332</td><td>329</td>
+<td>339</td>
+<td style="color:#e74c3c;font-weight:bold;">📉 退步 ↓ (-26)</td>
+<td style="color:#27ae60;font-weight:bold;">英语</td>
+<td style="color:#e74c3c;font-weight:bold;">语文</td>
+<td>5.3</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】语文是相对薄弱科目，建议加强文言文阅读和作文训练，多读经典文学作品，积累素材。；【保持优势】英语是优势科目，建议保持当前学习方法，适度拓展深度。；【警惕下滑】总体呈退步趋势，建议认真复盘原因，调整学习计划和时间分配。</td></tr>
+<tr>
+<td><strong>学生020</strong></td>
+<td><span style="background:#f39c12;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">C (中等)</span></td>
+<td>334</td><td>315</td><td>329</td>
+<td>326</td>
+<td style="color:#7f8c8d;font-weight:bold;">📊 稳定 → (-5)</td>
+<td style="color:#27ae60;font-weight:bold;">数学</td>
+<td style="color:#e74c3c;font-weight:bold;">语文</td>
+<td>11.2</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】语文是相对薄弱科目，建议加强文言文阅读和作文训练，多读经典文学作品，积累素材。；【保持优势】数学是优势科目，建议保持当前学习方法，适度拓展深度。；【维持稳定】成绩稳定，建议在保持现状的基础上寻求突破。；【语文补基】语文均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生021</strong></td>
+<td><span style="background:#2980b9;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">B (良好)</span></td>
+<td>348</td><td>348</td><td>329</td>
+<td>342</td>
+<td style="color:#e74c3c;font-weight:bold;">📉 退步 ↓ (-19)</td>
+<td style="color:#27ae60;font-weight:bold;">英语</td>
+<td style="color:#e74c3c;font-weight:bold;">数学</td>
+<td>7.0</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】数学是相对薄弱科目，建议多做综合题型练习，整理错题本，强化薄弱章节的理解。；【保持优势】英语是优势科目，建议保持当前学习方法，适度拓展深度。；【警惕下滑】总体呈退步趋势，建议认真复盘原因，调整学习计划和时间分配。；【数学补基】数学均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生022</strong></td>
+<td><span style="background:#f39c12;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">C (中等)</span></td>
+<td>340</td><td>323</td><td>329</td>
+<td>331</td>
+<td style="color:#e74c3c;font-weight:bold;">📉 退步 ↓ (-11)</td>
+<td style="color:#27ae60;font-weight:bold;">数学</td>
+<td style="color:#e74c3c;font-weight:bold;">英语</td>
+<td>6.8</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】英语是相对薄弱科目，建议每天坚持背单词和阅读英文文章，加强听力和写作练习。；【保持优势】数学是优势科目，建议保持当前学习方法，适度拓展深度。；【警惕下滑】总体呈退步趋势，建议认真复盘原因，调整学习计划和时间分配。；【英语补基】英语均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生023</strong></td>
+<td><span style="background:#2980b9;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">B (良好)</span></td>
+<td>333</td><td>357</td><td>323</td>
+<td>338</td>
+<td style="color:#e74c3c;font-weight:bold;">📉 退步 ↓ (-10)</td>
+<td style="color:#27ae60;font-weight:bold;">数学</td>
+<td style="color:#e74c3c;font-weight:bold;">语文</td>
+<td>2.9</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】语文是相对薄弱科目，建议加强文言文阅读和作文训练，多读经典文学作品，积累素材。；【保持优势】数学是优势科目，建议保持当前学习方法，适度拓展深度。；【警惕下滑】总体呈退步趋势，建议认真复盘原因，调整学习计划和时间分配。</td></tr>
+<tr>
+<td><strong>学生024</strong></td>
+<td><span style="background:#f39c12;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">C (中等)</span></td>
+<td>358</td><td>321</td><td>322</td>
+<td>334</td>
+<td style="color:#e74c3c;font-weight:bold;">📉 退步 ↓ (-36)</td>
+<td style="color:#27ae60;font-weight:bold;">数学</td>
+<td style="color:#e74c3c;font-weight:bold;">语文</td>
+<td>11.4</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】语文是相对薄弱科目，建议加强文言文阅读和作文训练，多读经典文学作品，积累素材。；【保持优势】数学是优势科目，建议保持当前学习方法，适度拓展深度。；【警惕下滑】总体呈退步趋势，建议认真复盘原因，调整学习计划和时间分配。；【语文补基】语文均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生025</strong></td>
+<td><span style="background:#f39c12;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">C (中等)</span></td>
+<td>325</td><td>342</td><td>321</td>
+<td>329</td>
+<td style="color:#7f8c8d;font-weight:bold;">📊 稳定 → (-4)</td>
+<td style="color:#27ae60;font-weight:bold;">语文</td>
+<td style="color:#e74c3c;font-weight:bold;">英语</td>
+<td>4.0</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】英语是相对薄弱科目，建议每天坚持背单词和阅读英文文章，加强听力和写作练习。；【保持优势】语文是优势科目，建议保持当前学习方法，适度拓展深度。；【维持稳定】成绩稳定，建议在保持现状的基础上寻求突破。</td></tr>
+<tr>
+<td><strong>学生026</strong></td>
+<td><span style="background:#f39c12;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">C (中等)</span></td>
+<td>340</td><td>316</td><td>318</td>
+<td>325</td>
+<td style="color:#e74c3c;font-weight:bold;">📉 退步 ↓ (-22)</td>
+<td style="color:#27ae60;font-weight:bold;">数学</td>
+<td style="color:#e74c3c;font-weight:bold;">英语</td>
+<td>10.2</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】英语是相对薄弱科目，建议每天坚持背单词和阅读英文文章，加强听力和写作练习。；【保持优势】数学是优势科目，建议保持当前学习方法，适度拓展深度。；【警惕下滑】总体呈退步趋势，建议认真复盘原因，调整学习计划和时间分配。；【语文补基】语文均分低于100，需回归基础，查漏补缺。；【英语补基】英语均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生027</strong></td>
+<td><span style="background:#f39c12;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">C (中等)</span></td>
+<td>328</td><td>333</td><td>318</td>
+<td>326</td>
+<td style="color:#e74c3c;font-weight:bold;">📉 退步 ↓ (-10)</td>
+<td style="color:#27ae60;font-weight:bold;">数学</td>
+<td style="color:#e74c3c;font-weight:bold;">英语</td>
+<td>13.0</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】英语是相对薄弱科目，建议每天坚持背单词和阅读英文文章，加强听力和写作练习。；【保持优势】数学是优势科目，建议保持当前学习方法，适度拓展深度。；【警惕下滑】总体呈退步趋势，建议认真复盘原因，调整学习计划和时间分配。；【语文补基】语文均分低于100，需回归基础，查漏补缺。；【英语补基】英语均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生028</strong></td>
+<td><span style="background:#f39c12;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">C (中等)</span></td>
+<td>311</td><td>320</td><td>315</td>
+<td>315</td>
+<td style="color:#7f8c8d;font-weight:bold;">📊 稳定 → (+4)</td>
+<td style="color:#27ae60;font-weight:bold;">数学</td>
+<td style="color:#e74c3c;font-weight:bold;">英语</td>
+<td>12.3</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】英语是相对薄弱科目，建议每天坚持背单词和阅读英文文章，加强听力和写作练习。；【保持优势】数学是优势科目，建议保持当前学习方法，适度拓展深度。；【维持稳定】成绩稳定，建议在保持现状的基础上寻求突破。；【语文补基】语文均分低于100，需回归基础，查漏补缺。；【英语补基】英语均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生029</strong></td>
+<td><span style="background:#e74c3c;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">D (待提升)</span></td>
+<td>308</td><td>324</td><td>303</td>
+<td>312</td>
+<td style="color:#7f8c8d;font-weight:bold;">📊 稳定 → (-5)</td>
+<td style="color:#27ae60;font-weight:bold;">数学</td>
+<td style="color:#e74c3c;font-weight:bold;">英语</td>
+<td>13.9</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】英语是相对薄弱科目，建议每天坚持背单词和阅读英文文章，加强听力和写作练习。；【保持优势】数学是优势科目，建议保持当前学习方法，适度拓展深度。；【维持稳定】成绩稳定，建议在保持现状的基础上寻求突破。；【语文补基】语文均分低于100，需回归基础，查漏补缺。；【英语补基】英语均分低于100，需回归基础，查漏补缺。</td></tr>
+<tr>
+<td><strong>学生030</strong></td>
+<td><span style="background:#e74c3c;color:white;padding:2px 10px;border-radius:12px;font-size:12px;">D (待提升)</span></td>
+<td>307</td><td>297</td><td>292</td>
+<td>299</td>
+<td style="color:#e74c3c;font-weight:bold;">📉 退步 ↓ (-15)</td>
+<td style="color:#27ae60;font-weight:bold;">数学</td>
+<td style="color:#e74c3c;font-weight:bold;">语文</td>
+<td>10.5</td>
+<td style="font-size:12px;max-width:300px;">【短板提升】语文是相对薄弱科目，建议加强文言文阅读和作文训练，多读经典文学作品，积累素材。；【保持优势】数学是优势科目，建议保持当前学习方法，适度拓展深度。；【警惕下滑】总体呈退步趋势，建议认真复盘原因，调整学习计划和时间分配。；【语文补基】语文均分低于100，需回归基础，查漏补缺。；【英语补基】英语均分低于100，需回归基础，查漏补缺。</td></tr>
+</table>
+</div>
+</div>
+
+<div style="text-align:center;padding:30px;color:#95a5a6;font-size:13px;">
+<p>本报告由自动化分析系统生成 | 数据来源：2025年第一次/第二次/第三次考试 | 所有结论与数据严格对应</p>
+</div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    Highcharts.chart('chart1', {"chart": {"type": "line", "height": 400}, "title": {"text": "三次考试班级各科平均分趋势"}, "xAxis": {"categories": ["第一次考试", "第二次考试", "第三次考试"]}, "yAxis": {"title": {"text": "平均分"}, "min": 95, "max": 130}, "tooltip": {"shared": true, "valueSuffix": " 分"}, "series": [{"name": "语文", "data": [113.0, 108.9, 113.6], "color": "#e74c3c"}, {"name": "数学", "data": [112.9, 120.1, 107.0], "color": "#3498db"}, {"name": "英语", "data": [111.5, 108.6, 118.1], "color": "#2ecc71"}, {"name": "总分", "data": [337.4, 337.6, 338.8], "color": "#9b59b6", "dashStyle": "Dash"}], "credits": {"enabled": false}});
+    Highcharts.chart('chart2', {"chart": {"type": "pie", "height": 350}, "title": {"text": "学生成绩趋势分布 (进步/退步/稳定)"}, "tooltip": {"pointFormat": "{series.name}: <b>{point.y}</b> 人 ({point.percentage:.1f}%)"}, "plotOptions": {"pie": {"allowPointSelect": true, "dataLabels": {"enabled": true, "format": "{point.name}: {point.y}人"}}}, "series": [{"name": "人数", "colorByPoint": true, "data": [{"name": "进步 ↑", "y": 10, "color": "#2ecc71"}, {"name": "退步 ↓", "y": 11, "color": "#e74c3c"}, {"name": "稳定 →", "y": 9, "color": "#3498db"}]}], "credits": {"enabled": false}});
+    Highcharts.chart('chart3', {"chart": {"type": "pie", "height": 350}, "title": {"text": "学生总分水平分布"}, "tooltip": {"pointFormat": "{series.name}: <b>{point.y}</b> 人 ({point.percentage:.1f}%)"}, "plotOptions": {"pie": {"allowPointSelect": true, "dataLabels": {"enabled": true, "format": "{point.name}: {point.y}人"}}}, "series": [{"name": "人数", "colorByPoint": true, "data": [{"name": "A (优秀)", "y": 4, "color": "#2ecc71"}, {"name": "B (良好)", "y": 14, "color": "#3498db"}, {"name": "C (中等)", "y": 10, "color": "#f39c12"}, {"name": "D (待提升)", "y": 2, "color": "#e74c3c"}]}], "credits": {"enabled": false}});
+    Highcharts.chart('chart4', {"chart": {"type": "column", "height": 380}, "title": {"text": "各科与总分的相关性 (Pearson r) —— 三次考试对比"}, "xAxis": {"categories": ["语文", "数学", "英语"]}, "yAxis": {"title": {"text": "相关系数 r"}, "min": -0.6, "max": 1.0}, "tooltip": {"valueSuffix": "", "valueDecimals": 3}, "series": [{"name": "第一次考试", "data": [0.564, -0.223, 0.756], "color": "#e74c3c"}, {"name": "第二次考试", "data": [0.737, -0.365, 0.74], "color": "#3498db"}, {"name": "第三次考试", "data": [0.757, -0.406, 0.817], "color": "#2ecc71"}], "credits": {"enabled": false}});
+    Highcharts.chart('chart5', {"chart": {"type": "bar", "height": 400}, "title": {"text": "总分变化最大学生 (第一次→第三次)"}, "xAxis": {"categories": ["学生002 (+34)", "学生006 (+31)", "学生010 (+31)", "学生007 (+25)", "学生018 (+25)", "学生021 (-19)", "学生013 (-20)", "学生026 (-22)", "学生019 (-26)", "学生024 (-36)"], "title": {"text": "总分变化 (分)"}}, "yAxis": {"title": {"text": ""}}, "tooltip": {"valueSuffix": " 分"}, "series": [{"name": "总分变化", "data": [{"y": 34, "color": "#2ecc71"}, {"y": 31, "color": "#2ecc71"}, {"y": 31, "color": "#2ecc71"}, {"y": 25, "color": "#2ecc71"}, {"y": 25, "color": "#2ecc71"}, {"y": -19, "color": "#e74c3c"}, {"y": -20, "color": "#e74c3c"}, {"y": -22, "color": "#e74c3c"}, {"y": -26, "color": "#e74c3c"}, {"y": -36, "color": "#e74c3c"}]}], "credits": {"enabled": false}});
+    Highcharts.chart('chart6', {"chart": {"type": "line", "height": 500}, "title": {"text": "全体学生总分变化轨迹"}, "xAxis": {"categories": ["第一次", "第二次", "第三次"]}, "yAxis": {"title": {"text": "总分"}, "min": 280, "max": 390}, "tooltip": {"shared": false, "valueSuffix": " 分"}, "series": [{"name": "学生001", "data": [376, 356, 378], "visible": true}, {"name": "学生002", "data": [340, 324, 374], "visible": true}, {"name": "学生003", "data": [352, 354, 362], "visible": true}, {"name": "学生004", "data": [339, 369, 361], "visible": true}, {"name": "学生005", "data": [337, 353, 360], "visible": true}, {"name": "学生006", "data": [327, 318, 358], "visible": true}, {"name": "学生007", "data": [332, 329, 357], "visible": true}, {"name": "学生008", "data": [351, 343, 356], "visible": false}, {"name": "学生009", "data": [360, 372, 352], "visible": true}, {"name": "学生010", "data": [319, 358, 350], "visible": true}, {"name": "学生011", "data": [347, 327, 345], "visible": false}, {"name": "学生012", "data": [344, 314, 344], "visible": false}, {"name": "学生013", "data": [364, 345, 344], "visible": true}, {"name": "学生014", "data": [325, 338, 342], "visible": true}, {"name": "学生015", "data": [321, 352, 341], "visible": true}, {"name": "学生016", "data": [349, 348, 340], "visible": false}, {"name": "学生017", "data": [343, 364, 338], "visible": false}, {"name": "学生018", "data": [308, 335, 333], "visible": true}, {"name": "学生019", "data": [355, 332, 329], "visible": true}, {"name": "学生020", "data": [334, 315, 329], "visible": false}, {"name": "学生021", "data": [348, 348, 329], "visible": true}, {"name": "学生022", "data": [340, 323, 329], "visible": false}, {"name": "学生023", "data": [333, 357, 323], "visible": false}, {"name": "学生024", "data": [358, 321, 322], "visible": true}, {"name": "学生025", "data": [325, 342, 321], "visible": false}, {"name": "学生026", "data": [340, 316, 318], "visible": true}, {"name": "学生027", "data": [328, 333, 318], "visible": false}, {"name": "学生028", "data": [311, 320, 315], "visible": false}, {"name": "学生029", "data": [308, 324, 303], "visible": false}, {"name": "学生030", "data": [307, 297, 292], "visible": true}], "legend": {"layout": "vertical", "align": "right", "verticalAlign": "middle"}, "credits": {"enabled": false}});
+    Highcharts.chart('chart7', {"chart": {"type": "column", "height": 400}, "title": {"text": "三次考试班级各科平均分对比"}, "xAxis": {"categories": ["语文", "数学", "英语"]}, "yAxis": {"title": {"text": "平均分"}, "min": 95}, "tooltip": {"valueSuffix": " 分"}, "series": [{"name": "第一次考试", "data": [113.0, 112.9, 111.5], "color": "#e74c3c"}, {"name": "第二次考试", "data": [108.9, 120.1, 108.6], "color": "#3498db"}, {"name": "第三次考试", "data": [113.6, 107.0, 118.1], "color": "#2ecc71"}], "credits": {"enabled": false}});
+    Highcharts.chart('chart8', {"chart": {"type": "bar", "height": 400}, "title": {"text": "单科进步/退步最大 (第一次→第三次)"}, "xAxis": {"categories": ["学生018 英语", "学生005 英语", "学生006 语文", "学生012 英语", "学生003 英语", "学生009 数学", "学生024 数学", "学生001 数学", "学生011 数学", "学生012 数学"]}, "yAxis": {"title": {"text": "分数变化"}}, "tooltip": {"valueSuffix": " 分"}, "series": [{"name": "分数变化", "data": [{"y": 29, "color": "#2ecc71"}, {"y": 28, "color": "#2ecc71"}, {"y": 26, "color": "#2ecc71"}, {"y": 24, "color": "#2ecc71"}, {"y": 22, "color": "#2ecc71"}, {"y": -18, "color": "#e74c3c"}, {"y": -19, "color": "#e74c3c"}, {"y": -20, "color": "#e74c3c"}, {"y": -21, "color": "#e74c3c"}, {"y": -27, "color": "#e74c3c"}]}], "credits": {"enabled": false}});
+    Highcharts.chart('chart9', {"chart": {"type": "column", "height": 400}, "title": {"text": "偏科生三科均分对比 (偏科度>7)"}, "xAxis": {"categories": ["学生002\n(语文强/数学弱)", "学生029\n(数学强/英语弱)", "学生027\n(数学强/英语弱)", "学生016\n(语文强/数学弱)", "学生028\n(数学强/英语弱)", "学生013\n(英语强/数学弱)", "学生010\n(语文强/数学弱)", "学生024\n(数学强/语文弱)", "学生020\n(数学强/语文弱)", "学生017\n(英语强/数学弱)"]}, "yAxis": {"title": {"text": "均分"}}, "tooltip": {"shared": true, "valueSuffix": " 分"}, "series": [{"name": "语文", "data": [137.3, 82.7, 97.0, 139.7, 91.0, 129.7, 128.0, 90.7, 87.3, 121.7], "color": "#e74c3c"}, {"name": "数学", "data": [76.7, 139.3, 139.3, 86.7, 135.0, 87.3, 87.0, 139.3, 136.0, 92.0], "color": "#3498db"}, {"name": "英语", "data": [132.0, 89.7, 90.0, 119.3, 89.3, 134.0, 127.3, 103.7, 102.7, 134.7], "color": "#2ecc71"}], "credits": {"enabled": false}});
+});
+</script>
+</body>
+</html>

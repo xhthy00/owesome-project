@@ -1,18 +1,15 @@
-import { AudioOutlined, BarChartOutlined, DatabaseOutlined, SearchOutlined, FileTextOutlined, FundOutlined, ToolOutlined } from "@ant-design/icons";
-import { Card, Input, Popover, Typography } from "antd";
+import { AudioOutlined, BarChartOutlined, FileTextOutlined, FundOutlined, ToolOutlined } from "@ant-design/icons";
+import { Card, Input, Typography } from "antd";
 import Image from "next/image";
 import { useRouter } from "next/router";
-import { useEffect, useMemo, useState } from "react";
-import { datasourceApi, type DatasourceItem } from "@/api/datasource";
+import { useState } from "react";
+import DatasourcePicker from "@/components/chat/DatasourcePicker";
 
 export default function HomePage() {
   const router = useRouter();
   const [prompt, setPrompt] = useState("");
-  const [datasources, setDatasources] = useState<DatasourceItem[]>([]);
   const defaultDatasourceId = Number(process.env.NEXT_PUBLIC_DEFAULT_DATASOURCE_ID ?? 1);
   const [selectedDatasourceId, setSelectedDatasourceId] = useState<number>(defaultDatasourceId);
-  const [dbPickerOpen, setDbPickerOpen] = useState(false);
-  const [dbKeyword, setDbKeyword] = useState("");
   const cards = [
     { title: "销售数据分析", desc: "分析销售CSV数据，生成可视化网页报告", icon: <BarChartOutlined /> },
     { title: "数据库画像与分析报告", desc: "连接数据库后，生成数据库画像并生成可视化网页报告", icon: <FileTextOutlined /> },
@@ -22,32 +19,6 @@ export default function HomePage() {
 
   const canSend = !!prompt.trim();
 
-  useEffect(() => {
-    const loadDatasources = async () => {
-      try {
-        const res = await datasourceApi.list({ limit: 100 });
-        setDatasources(res.items || []);
-        if (res.items?.length && !res.items.some((item) => item.id === selectedDatasourceId)) {
-          setSelectedDatasourceId(res.items[0].id);
-        }
-      } catch {
-        setDatasources([]);
-      }
-    };
-    void loadDatasources();
-  }, [selectedDatasourceId]);
-
-  const selectedDatasource = useMemo(
-    () => datasources.find((item) => item.id === selectedDatasourceId),
-    [datasources, selectedDatasourceId]
-  );
-
-  const filteredDatasources = useMemo(() => {
-    const key = dbKeyword.trim().toLowerCase();
-    if (!key) return datasources;
-    return datasources.filter((item) => `${item.name} ${item.type}`.toLowerCase().includes(key));
-  }, [datasources, dbKeyword]);
-
   const handleSend = () => {
     const value = prompt.trim();
     if (!value) return;
@@ -56,60 +27,6 @@ export default function HomePage() {
       query: { q: value, ds: selectedDatasourceId }
     });
   };
-
-  const dbPickerPanel = (
-    <div className="w-[280px]">
-      <div className="rounded-lg border border-[#e5e7eb] bg-white p-2 dark:border-[#34384a] dark:bg-[#1f2430]">
-        <div className="mb-2 flex items-center rounded-lg border border-[#e5e7eb] bg-[#f8fafc] px-2 dark:border-[#34384a] dark:bg-[#232734]">
-          <SearchOutlined className="mr-2 text-xs text-[#94a3b8]" />
-          <input
-            value={dbKeyword}
-            onChange={(e) => setDbKeyword(e.target.value)}
-            placeholder="搜索数据库"
-            className="h-7 w-full border-0 bg-transparent text-xs text-[#334155] outline-none placeholder:text-[#94a3b8] dark:text-[#cbd5e1]"
-          />
-        </div>
-        <div className="max-h-52 overflow-y-auto">
-          {filteredDatasources.length ? (
-            filteredDatasources.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => {
-                  setSelectedDatasourceId(item.id);
-                  setDbPickerOpen(false);
-                }}
-                className={`mb-1 flex w-full items-center justify-between rounded-lg px-2 py-2 text-left text-xs transition-colors ${
-                  item.id === selectedDatasourceId
-                    ? "bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-300"
-                    : "text-[#334155] hover:bg-[#f8fafc] dark:text-[#cbd5e1] dark:hover:bg-[#232734]"
-                }`}
-              >
-                <span className="truncate">{item.name}</span>
-                <span className="ml-2 text-[10px] opacity-70">{item.type}</span>
-              </button>
-            ))
-          ) : (
-            <div className="flex h-32 flex-col items-center justify-center text-[#94a3b8]">
-              <DatabaseOutlined className="mb-2 text-2xl opacity-60" />
-              <span className="text-xs">暂无可用数据库</span>
-            </div>
-          )}
-        </div>
-      </div>
-      <div className="mt-1 flex items-center justify-between px-1 text-[10px] text-[#94a3b8]">
-        <span>{filteredDatasources.length} 个数据库可用</span>
-        <button
-          onClick={() => {
-            setDbPickerOpen(false);
-            void router.push("/construct/database");
-          }}
-          className="text-[#3b82f6] hover:underline"
-        >
-          管理数据库 -&gt;
-        </button>
-      </div>
-    </div>
-  );
 
   return (
     <div className="dbgpt-ui-font flex h-full flex-col bg-[#f7f7f9] dark:bg-[#0f1012]">
@@ -147,21 +64,7 @@ export default function HomePage() {
               <span>⚡</span>
               <span>▣</span>
               <span>◱</span>
-              <div className="ml-2 flex h-8 items-center gap-2 rounded-full border border-[#e5eaf3] bg-[#f6f8fc] px-3 text-[#64748b] dark:border-[#3a404d] dark:bg-[#242834] dark:text-[#a2aec2]">
-                <DatabaseOutlined className="text-sm" />
-                <Popover
-                  trigger="click"
-                  placement="topLeft"
-                  open={dbPickerOpen}
-                  onOpenChange={setDbPickerOpen}
-                  content={dbPickerPanel}
-                  overlayClassName="db-picker-overlay"
-                >
-                  <button className="max-w-[240px] truncate text-left text-xs text-[#64748b] dark:text-[#a2aec2]">
-                    {selectedDatasource ? `${selectedDatasource.name}` : "选择数据源"}
-                  </button>
-                </Popover>
-              </div>
+              <DatasourcePicker value={selectedDatasourceId} onChange={setSelectedDatasourceId} />
             </div>
             <div className="flex items-center gap-3">
               <AudioOutlined />

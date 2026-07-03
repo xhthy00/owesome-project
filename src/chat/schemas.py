@@ -126,6 +126,13 @@ class ChatRequest(BaseModel):
             "False: force all sub-tasks to DataAnalyst (Phase C compatible)."
         ),
     )
+    report_audience: Optional[str] = Field(
+        default=None,
+        description=(
+            "教育学情报告受众：principal / grade_head / head_teacher / "
+            "subject_teacher / parent / default。影响模板叙事密度，不影响数值。"
+        ),
+    )
 
 
 class SQLValidationRequest(BaseModel):

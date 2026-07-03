@@ -34,6 +34,7 @@ from src.agent.expand.planner import PlannerAgent
 from src.agent.expand.summarizer import SummarizerAgent
 from src.agent.expand.tool_agent import build_tool_agent
 from src.agent.expand.user_proxy import UserProxyAgent
+from src.agent.education.query_parse import extract_student_target, report_matches_student
 from src.chat.schemas import ChatRequest
 from src.common.core.config import get_settings
 
@@ -53,13 +54,27 @@ class _RunConstraints:
     locked_tables: list[str]
     required_keywords: list[str]
     source_sub_task_index: int | None = None
+    #: 上游 DataAnalyst 子任务产出的结构化数据（exec_result / reports / stats），
+    #: 供下游 ToolExpert 组装报告时复用，避免重复查数。Phase 2 引入。
+    report_data: dict[str, Any] | None = None
+    #: 报告受众（principal / head_teacher / parent ...），由前端或问题推断注入。
+    report_audience: str | None = None
+    #: 用户问题中指定的目标学生（如「学生001」），用于过滤偏离报告。
+    target_student: str | None = None
 
     def to_context(self) -> dict[str, Any]:
-        return {
+        ctx: dict[str, Any] = {
             "locked_tables": list(self.locked_tables),
             "required_keywords": list(self.required_keywords),
             "source_sub_task_index": self.source_sub_task_index,
         }
+        if self.report_data is not None:
+            ctx["report_data"] = self.report_data
+        if self.report_audience is not None:
+            ctx["report_audience"] = self.report_audience
+        if self.target_student is not None:
+            ctx["target_student"] = self.target_student
+        return ctx
 
 
 def _extract_required_keywords(question: str) -> list[str]:
@@ -67,8 +82,6 @@ def _extract_required_keywords(question: str) -> list[str]:
     if not q:
         return []
     # 轻量关键词：中文连续段 + 英文 token，长度 >= 2。仅用于上下文提示，不作强校验。
-    import re
-
     tokens = re.findall(r"[A-Za-z0-9_]{2,}|[\u4e00-\u9fff]{2,}", q)
     seen: set[str] = set()
     out: list[str] = []
@@ -240,6 +253,7 @@ async def _run_team_stream_legacy(
         locked_tables=[],
         required_keywords=_extract_required_keywords(request.question),
         source_sub_task_index=None,
+        target_student=extract_student_target(request.question),
     )
 
     sub_phases: list[tuple[str, _DataAnalystPhase]] = []
@@ -978,6 +992,12 @@ async def _maybe_emit_report(
             )
             logger.warning(warn)
             await emit("error", {"error": warn})
+            return
+        target = state.constraints.target_student
+        if target and not report_matches_student(
+            str(data.get("title") or ""), html, target
+        ):
+            logger.warning("报告已拦截：与目标学生 %s 不匹配（title=%s）", target, data.get("title"))
             return
     report_payload: dict[str, Any] = {
         "title": str(data.get("title") or "Report"),

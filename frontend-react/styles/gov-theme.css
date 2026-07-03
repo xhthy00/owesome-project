@@ -1,0 +1,40 @@
+:root {
+  --gov-primary: #1677ff;
+  --gov-primary-hover: #4096ff;
+  --gov-primary-active: #0958d9;
+  --gov-primary-bg: #e6f4ff;
+
+  --gov-header-bg: #001529;
+  --gov-header-text: rgba(255, 255, 255, 0.85);
+  --gov-sider-bg: #001529;
+  --gov-sider-sub-bg: #000c17;
+  --gov-sider-text: rgba(255, 255, 255, 0.65);
+  --gov-sider-text-active: #ffffff;
+  --gov-sider-item-active-bg: #1677ff;
+
+  --gov-layout-bg: #f0f2f5;
+  --gov-container-bg: #ffffff;
+
+  --gov-text-lv1: rgba(0, 0, 0, 0.88);
+  --gov-text-lv2: rgba(0, 0, 0, 0.65);
+  --gov-text-lv3: rgba(0, 0, 0, 0.45);
+  --gov-text-lv4: rgba(0, 0, 0, 0.25);
+
+  --gov-border: #f0f0f0;
+  --gov-split: rgba(5, 5, 5, 0.06);
+
+  --gov-success: #52c41a;
+  --gov-warning: #faad14;
+  --gov-error: #ff4d4f;
+
+  --gov-page-padding: 24px;
+  --gov-header-height: 48px;
+  --gov-top-menu-height: 40px;
+  --gov-sider-width: 208px;
+  --gov-sider-collapsed-width: 48px;
+
+  --gov-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial,
+    "PingFang SC", "Microsoft YaHei", sans-serif;
+  --gov-font-size: 14px;
+  --gov-line-height: 1.5714;
+}

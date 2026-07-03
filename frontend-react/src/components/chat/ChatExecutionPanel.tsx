@@ -11,10 +11,11 @@ import {
   FileTextOutlined,
   LineChartOutlined,
   PieChartOutlined,
-  TableOutlined
+  TableOutlined,
+  FilePdfOutlined
 } from "@ant-design/icons";
 import { Pagination, message, Modal } from "antd";
-import React from "react";
+import React, { useRef } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { ExecutionStep, QueryResult, ReportPayload } from "@/hooks/useChat";
 import G2Chart, { G2ChartType } from "@/components/chat/G2Chart";
@@ -84,6 +85,7 @@ export default function ChatExecutionPanel({
   const [summaryConclusionExpanded, setSummaryConclusionExpanded] = useState(true);
   const [stepDetailExpanded, setStepDetailExpanded] = useState(true);
   const [showReportDialog, setShowReportDialog] = useState(false);
+  const [selectedReportIndex, setSelectedReportIndex] = useState(-1);
   const [resultTab, setResultTab] = useState<"chart" | "data" | "sql">("chart");
   const [chartType, setChartType] = useState<G2ChartType>("column");
   const [selectedQueryIndex, setSelectedQueryIndex] = useState(-1);
@@ -97,7 +99,22 @@ export default function ChatExecutionPanel({
     Charter: "制图",
     Summarizer: "总结"
   };
-  const latestReport = reports.length ? reports[reports.length - 1] : undefined;
+  const activeReportIndex = useMemo(() => {
+    if (!reports.length) return -1;
+    if (selectedReportIndex < 0 || selectedReportIndex >= reports.length) {
+      return reports.length - 1;
+    }
+    return selectedReportIndex;
+  }, [reports, selectedReportIndex]);
+  const activeReport = reports.length ? reports[activeReportIndex] : undefined;
+  const reportOptionLabels = useMemo(() => {
+    return reports.map((r, idx) => {
+      const sub = r.subTaskIndex;
+      const prefix = sub != null ? `子任务 ${sub + 1} · ` : "";
+      const tail = idx === reports.length - 1 ? "（最新）" : `报告 ${idx + 1}`;
+      return `${prefix}${r.title || tail}`;
+    });
+  }, [reports]);
 
   const selectedStep = useMemo(
     () => steps.find((s) => s.id === selectedStepId) ?? steps[steps.length - 1],
@@ -130,8 +147,8 @@ export default function ChatExecutionPanel({
     return typeof normalized === "string" ? normalized : String(normalized ?? "");
   }, [summaryMarkdownText]);
   const markdownPlugins = useMemo(() => [remarkGfm], []);
-  const safeReportHtml = useMemo(() => normalizeToText(latestReport?.html || ""), [latestReport?.html]);
-  const safeReportTitle = useMemo(() => normalizeToText(latestReport?.title || "Report"), [latestReport?.title]);
+  const safeReportHtml = useMemo(() => normalizeToText(activeReport?.html || ""), [activeReport?.html]);
+  const safeReportTitle = useMemo(() => normalizeToText(activeReport?.title || "Report"), [activeReport?.title]);
   const activeQuery = useMemo(() => {
     if (!queryResults.length) return undefined;
     if (selectedQueryIndex < 0 || selectedQueryIndex >= queryResults.length) {
@@ -193,6 +210,50 @@ export default function ChatExecutionPanel({
     a.download = `${safeReportTitle || "report"}.html`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+  const reportIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const exportReportPdf = async () => {
+    const iframe = reportIframeRef.current;
+    const doc = iframe?.contentDocument;
+    if (!doc || !doc.body) {
+      message.error("无法访问报告内容");
+      return;
+    }
+    setExportingPdf(true);
+    try {
+      const [{ default: html2canvas }, jspdfMod] = await Promise.all([
+        import("html2canvas"),
+        import("jspdf")
+      ]);
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const JsPDF = (jspdfMod as any).jsPDF;
+      const canvas = await html2canvas(doc.body, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
+      const pdf = new JsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const imgW = pageW;
+      const imgH = (canvas.height * imgW) / canvas.width;
+      let remaining = imgH;
+      let position = 0;
+      const imgData = canvas.toDataURL("image/png");
+      pdf.addImage(imgData, "PNG", 0, position, imgW, imgH);
+      remaining -= pageH;
+      while (remaining > 0) {
+        position -= pageH;
+        pdf.addPage();
+        pdf.addImage(imgData, "PNG", 0, position, imgW, imgH);
+        remaining -= pageH;
+      }
+      pdf.save(`${safeReportTitle || "report"}.pdf`);
+      message.success("PDF 已导出");
+    } catch (e) {
+      message.error("PDF 导出失败");
+      // eslint-disable-next-line no-console
+      console.error(e);
+    } finally {
+      setExportingPdf(false);
+    }
   };
   const flowStatus = useMemo(() => {
     const statusMap: Record<string, "idle" | "running" | "done" | "error"> = {};
@@ -408,7 +469,7 @@ export default function ChatExecutionPanel({
                   ) : null}
                 </div>
               ) : null}
-              {latestReport?.html ? (
+              {activeReport?.html ? (
                 <div className="rounded-xl border border-[#e6eefc] bg-white p-4 dark:border-[#2f3441] dark:bg-[#11131a]">
                   <div className="overflow-hidden rounded-lg border border-[#dbe5f1] bg-white dark:border-[#2f3441] dark:bg-[#11131a]">
                     <div className="flex h-9 items-center justify-between gap-2 border-b border-[#dbe5f1] bg-[#f8fafc] px-3 dark:border-[#2f3441] dark:bg-[#141923]">
@@ -416,6 +477,20 @@ export default function ChatExecutionPanel({
                         {safeReportTitle}
                       </span>
                       <div className="flex items-center gap-1.5">
+                        {reports.length > 1 ? (
+                          <select
+                            value={activeReportIndex}
+                            onChange={(e) => setSelectedReportIndex(Number(e.target.value))}
+                            className="h-6 rounded-md border border-[#d9e2ef] bg-white px-1 text-[11px] text-[#475467] dark:border-[#334155] dark:bg-[#0f172a] dark:text-[#cbd5e1]"
+                            aria-label="选择报告"
+                          >
+                            {reportOptionLabels.map((label, idx) => (
+                              <option key={idx} value={idx}>
+                                {label}
+                              </option>
+                            ))}
+                          </select>
+                        ) : null}
                         <button
                           onClick={copyReportHtml}
                           className="inline-flex h-6 items-center gap-1 rounded-md border border-[#d9e2ef] bg-white px-2 text-[11px] text-[#475467] transition-colors hover:border-[#c5d4e8] dark:border-[#334155] dark:bg-[#0f172a] dark:text-[#cbd5e1]"
@@ -431,6 +506,14 @@ export default function ChatExecutionPanel({
                           <span>下载</span>
                         </button>
                         <button
+                          onClick={exportReportPdf}
+                          disabled={exportingPdf}
+                          className="inline-flex h-6 items-center gap-1 rounded-md border border-[#d9e2ef] bg-white px-2 text-[11px] text-[#475467] transition-colors hover:border-[#c5d4e8] disabled:opacity-50 dark:border-[#334155] dark:bg-[#0f172a] dark:text-[#cbd5e1]"
+                        >
+                          <FilePdfOutlined />
+                          <span>{exportingPdf ? "导出中…" : "PDF"}</span>
+                        </button>
+                        <button
                           onClick={() => setShowReportDialog(true)}
                           className="inline-flex h-6 items-center gap-1 rounded-md border border-[#d9e2ef] bg-white px-2 text-[11px] text-[#3b82f6] transition-colors hover:border-[#93c5fd] dark:border-[#334155] dark:bg-[#0f172a]"
                         >
@@ -440,10 +523,11 @@ export default function ChatExecutionPanel({
                       </div>
                     </div>
                     <iframe
+                      ref={reportIframeRef}
                       title={safeReportTitle}
                       className="h-[360px] w-full border-0"
                       srcDoc={safeReportHtml}
-                      sandbox="allow-scripts"
+                      sandbox="allow-scripts allow-same-origin"
                       referrerPolicy="no-referrer"
                     />
                   </div>
@@ -589,7 +673,7 @@ export default function ChatExecutionPanel({
                   ) : null}
                 </div>
               ) : null}
-              {!parsedSummary.thinkBlocks.length && !parsedSummary.plain && !latestReport?.html && !activeQuery ? (
+              {!parsedSummary.thinkBlocks.length && !parsedSummary.plain && !reports.length && !activeQuery ? (
                 <div className="flex h-full items-center justify-center text-sm">暂无摘要</div>
               ) : null}
             </div>
@@ -637,7 +721,7 @@ export default function ChatExecutionPanel({
           title={`${safeReportTitle}-full`}
           className="h-[72vh] w-full border-0"
           srcDoc={safeReportHtml}
-          sandbox="allow-scripts"
+          sandbox="allow-scripts allow-same-origin"
           referrerPolicy="no-referrer"
         />
       </Modal>

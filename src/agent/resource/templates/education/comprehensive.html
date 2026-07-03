@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>{{COVER_TITLE}}</title>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif; background:#f0f2f5; color:#2c3e50; line-height:1.7; }
+.container { max-width:1300px; margin:0 auto; padding:20px; }
+.cover { background:linear-gradient(135deg,#1a1a2e,#16213e 50%,#0f3460); color:white; padding:60px 40px; border-radius:16px; margin-bottom:30px; text-align:center; box-shadow:0 10px 40px rgba(0,0,0,0.2); }
+.cover h1 { font-size:42px; font-weight:700; margin-bottom:10px; letter-spacing:3px; }
+.cover .subtitle { font-size:18px; opacity:0.85; }
+.cover .meta { margin-top:25px; font-size:14px; opacity:0.6; }
+.section { background:white; border-radius:12px; padding:35px; margin-bottom:25px; box-shadow:0 2px 12px rgba(0,0,0,0.06); }
+.section h2 { font-size:26px; color:#1a1a2e; border-bottom:3px solid #3498db; padding-bottom:10px; margin-bottom:20px; display:flex; align-items:center; gap:10px; }
+.section h3 { font-size:20px; color:#2c3e50; margin:25px 0 15px; }
+.stat-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:18px; margin-bottom:25px; }
+.stat-card { background:linear-gradient(135deg,#f8f9fa,#e9ecef); border-radius:12px; padding:22px; text-align:center; border-left:4px solid #3498db; }
+.stat-card .value { font-size:32px; font-weight:700; color:#1a1a2e; }
+.stat-card .label { font-size:13px; color:#7f8c8d; margin-top:5px; }
+.stat-card.accent1 { border-left-color:#e74c3c; }
+.stat-card.accent2 { border-left-color:#2ecc71; }
+.stat-card.accent3 { border-left-color:#f39c12; }
+.chart-box { margin:25px 0; }
+.chart { width:100%; height:400px; }
+.chart.tall { height:520px; }
+.row { display:grid; grid-template-columns:1fr 1fr; gap:25px; }
+.table-wrap { overflow-x:auto; margin:20px 0; font-size:13px; }
+table { width:100%; border-collapse:collapse; }
+th { background:#1a1a2e; color:white; padding:12px 10px; text-align:left; font-weight:600; white-space:nowrap; }
+td { padding:10px; border-bottom:1px solid #ecf0f1; }
+tr:hover td { background:#f8f9fa; }
+.insight { background:#eaf2f8; border-left:4px solid #2980b9; padding:18px 22px; border-radius:8px; margin:18px 0; }
+.insight.warning { background:#fdedec; border-left-color:#e74c3c; }
+.insight.success { background:#eafaf1; border-left-color:#27ae60; }
+.insight strong { display:block; margin-bottom:6px; font-size:15px; }
+.toc { background:#f8f9fa; border-radius:10px; padding:25px 30px; margin-bottom:25px; }
+.toc h3 { margin-top:0; }
+.toc ol { columns:2; column-gap:40px; padding-left:20px; }
+.toc li { margin:6px 0; }
+.toc a { color:#2980b9; text-decoration:none; }
+.toc a:hover { text-decoration:underline; }
+.footer { text-align:center; padding:30px; color:#95a5a6; font-size:13px; }
+@media (max-width:768px) { .row { grid-template-columns:1fr; } .toc ol { columns:1; } }
+@media print { body { background:#fff; } .section { box-shadow:none; } }
+</style>
+</head>
+<body>
+<div class="container">
+
+<div class="cover">
+<h1>📊 {{COVER_TITLE}}</h1>
+<div class="subtitle">{{COVER_SUBTITLE}}</div>
+<div class="meta">{{COVER_META}} | 生成时间：{{REPORT_TIME}}</div>
+</div>
+
+<div class="toc">
+<h3>📑 报告目录</h3>
+<ol>
+<li><a href="#s1">班级整体概览</a></li>
+<li><a href="#s2">各科成绩趋势分析</a></li>
+<li><a href="#s3">总分与各科相关性</a></li>
+<li><a href="#s4">学生趋势分布与水平分布</a></li>
+<li><a href="#s5">进步最快与退步最快学生</a></li>
+<li><a href="#s6">偏科生诊断</a></li>
+<li><a href="#s7">单科进步退步之最</a></li>
+<li><a href="#s8">全体学生总分轨迹</a></li>
+<li><a href="#s9">每位学生详细档案与建议</a></li>
+</ol>
+</div>
+
+<!-- S1 班级整体概览 -->
+<div class="section" id="s1">
+<h2>📋 一、班级整体概览</h2>
+{{OVERVIEW_KPI_GRID}}
+<div class="insight">
+<strong>📌 班级诊断：</strong>
+{{OVERVIEW_INSIGHT}}
+</div>
+</div>
+
+<!-- S2 各科成绩趋势分析 -->
+<div class="section" id="s2">
+<h2>📈 二、各科成绩趋势分析</h2>
+<div class="row">
+<div class="chart-box"><div id="chart_subject_trend" class="chart"></div></div>
+<div class="chart-box"><div id="chart_subject_compare" class="chart"></div></div>
+</div>
+{{SUBJECT_KPI_GRID}}
+<div class="insight warning">
+<strong>⚠️ 关注科目：</strong>
+{{SUBJECT_WARNING_INSIGHT}}
+</div>
+<div class="insight success">
+<strong>✅ 进步科目：</strong>
+{{SUBJECT_SUCCESS_INSIGHT}}
+</div>
+</div>
+
+<!-- S3 总分与各科相关性 -->
+<div class="section" id="s3">
+<h2>🔗 三、总分与各科相关性分析</h2>
+<div class="chart-box"><div id="chart_correlation" class="chart"></div></div>
+<div class="insight">
+<strong>📌 关键发现：</strong>
+{{CORRELATION_INSIGHT}}
+</div>
+</div>
+
+<!-- S4 学生趋势分布与水平分布 -->
+<div class="section" id="s4">
+<h2>📊 四、学生趋势分布与水平分布</h2>
+<div class="row">
+<div class="chart-box"><div id="chart_trend_dist" class="chart"></div></div>
+<div class="chart-box"><div id="chart_level_dist" class="chart"></div></div>
+</div>
+{{TREND_DIST_KPI_GRID}}
+<div class="insight">
+<strong>📌 分布解读：</strong>
+{{TREND_DIST_INSIGHT}}
+</div>
+</div>
+
+<!-- S5 进步最快 & 退步最快 -->
+<div class="section" id="s5">
+<h2>🏆 五、进步最快与退步最快学生（总分）</h2>
+<div class="chart-box"><div id="chart_progress_regress" class="chart"></div></div>
+<div class="row">
+<div>
+<h3 style="color:#27ae60;">🟢 进步最快 TOP5</h3>
+{{PROGRESS_TABLE}}
+</div>
+<div>
+<h3 style="color:#e74c3c;">🔴 退步最快 TOP5</h3>
+{{REGRESS_TABLE}}
+</div>
+</div>
+<div class="insight success">
+<strong>✅ 进步之星：</strong>
+{{PROGRESS_INSIGHT}}
+</div>
+<div class="insight warning">
+<strong>⚠️ 退步预警：</strong>
+{{REGRESS_INSIGHT}}
+</div>
+</div>
+
+<!-- S6 偏科生诊断 -->
+<div class="section" id="s6">
+<h2>⚖️ 六、偏科生诊断</h2>
+<div class="chart-box"><div id="chart_imbalance" class="chart"></div></div>
+<p style="margin-bottom:15px;">偏科度 = 各科排名的标准差，数值越大表示科目间差距越大。以下是偏科度最高的学生：</p>
+<div class="table-wrap">
+{{IMBALANCE_TABLE}}
+</div>
+<div class="insight warning">
+<strong>⚠️ 严重偏科预警：</strong>
+{{IMBALANCE_INSIGHT}}
+</div>
+</div>
+
+<!-- S7 单科进步/退步之最 -->
+<div class="section" id="s7">
+<h2>🔍 七、单科进步/退步之最</h2>
+<div class="chart-box"><div id="chart_subject_extreme" class="chart"></div></div>
+<div class="row">
+<div>
+<h3 style="color:#27ae60;">🟢 单科进步 TOP5</h3>
+{{SUBJECT_PROGRESS_TABLE}}
+</div>
+<div>
+<h3 style="color:#e74c3c;">🔴 单科退步 TOP5</h3>
+{{SUBJECT_REGRESS_TABLE}}
+</div>
+</div>
+<div class="insight">
+<strong>📌 关键发现：</strong>
+{{SUBJECT_EXTREME_INSIGHT}}
+</div>
+</div>
+
+<!-- S8 全体学生总分轨迹 -->
+<div class="section" id="s8">
+<h2>📉 八、全体学生总分变化轨迹</h2>
+<div class="chart-box"><div id="chart_trajectory" class="chart tall"></div></div>
+<p style="font-size:13px;color:#7f8c8d;">{{TRAJECTORY_NOTE}}</p>
+</div>
+
+<!-- S9 每位学生详细档案与建议 -->
+<div class="section" id="s9">
+<h2>👤 九、每位学生详细档案与个性化建议</h2>
+<div class="table-wrap">
+{{STUDENT_ARCHIVE_TABLE}}
+</div>
+</div>
+
+<div class="footer">
+<p>本报告由 awesome-project 教育学情分析系统生成 | 数据来源：{{COVER_META}} | 所有结论与数据严格对应</p>
+</div>
+</div>
+
+<script type="application/json" id="data_subject_trend">{{SUBJECT_TREND_CHART}}</script>
+<script type="application/json" id="data_subject_compare">{{SUBJECT_COMPARE_CHART}}</script>
+<script type="application/json" id="data_correlation">{{CORRELATION_CHART}}</script>
+<script type="application/json" id="data_trend_dist">{{TREND_DIST_CHART}}</script>
+<script type="application/json" id="data_level_dist">{{LEVEL_DIST_CHART}}</script>
+<script type="application/json" id="data_progress_regress">{{PROGRESS_REGRESS_CHART}}</script>
+<script type="application/json" id="data_imbalance">{{IMBALANCE_CHART}}</script>
+<script type="application/json" id="data_subject_extreme">{{SUBJECT_EXTREME_CHART}}</script>
+<script type="application/json" id="data_trajectory">{{TRAJECTORY_CHART}}</script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var map = {
+    chart_subject_trend: 'data_subject_trend',
+    chart_subject_compare: 'data_subject_compare',
+    chart_correlation: 'data_correlation',
+    chart_trend_dist: 'data_trend_dist',
+    chart_level_dist: 'data_level_dist',
+    chart_progress_regress: 'data_progress_regress',
+    chart_imbalance: 'data_imbalance',
+    chart_subject_extreme: 'data_subject_extreme',
+    chart_trajectory: 'data_trajectory'
+  };
+  Object.keys(map).forEach(function (chartId) {
+    var raw = (document.getElementById(map[chartId]) || {}).textContent || '';
+    raw = raw.trim();
+    if (!raw) { return; }
+    try { echarts.init(document.getElementById(chartId)).setOption(JSON.parse(raw)); } catch (e) {}
+  });
+});
+</script>
+</body>
+</html>

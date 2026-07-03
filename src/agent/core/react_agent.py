@@ -48,7 +48,7 @@ class ReActAgent(ConversableAgent):
     ``tool_pack`` 由构造参数注入。
     """
 
-    max_react_rounds: int = 10
+    max_react_rounds: int = 15
     _TOOL_CALL_SCHEMA: dict[str, Any] = {
         "type": "object",
         "required": ["tool", "args"],

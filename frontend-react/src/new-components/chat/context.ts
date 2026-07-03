@@ -19,6 +19,8 @@ export type ChatContentContextType = {
   setMaxNewTokensValue: (v: number) => void;
   setResourceValue: (v: string) => void;
   setModelValue: (v: string) => void;
+  datasourceId: number;
+  setDatasourceId: (id: number) => void;
 };
 
 export const ChatContentContext = createContext<ChatContentContextType>({
@@ -37,5 +39,7 @@ export const ChatContentContext = createContext<ChatContentContextType>({
   setTemperatureValue: () => {},
   setMaxNewTokensValue: () => {},
   setResourceValue: () => {},
-  setModelValue: () => {}
+  setModelValue: () => {},
+  datasourceId: 1,
+  setDatasourceId: () => {}
 });

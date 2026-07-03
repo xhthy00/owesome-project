@@ -41,6 +41,8 @@ _TOOL_EXPERT_AGENT = "ToolExpert"
 _TOOL_EXPERT_HINTS = (
     "html", "report", "dashboard", "template", "web page", "webpage",
     "网页", "页面", "报告", "可视化报告", "图文报告",
+    "学情", "成绩分析", "班级报告", "个体报告", "学情报告",
+    "综合分析", "综合报告", "三次考试", "多次考试",
 )
 
 PLANNER_DESC = """[你的职责]
@@ -68,7 +70,37 @@ PLANNER_DESC = """[你的职责]
 4. 绝对不要超过 6 个子任务；拆不动就合并；
 5. 不要在子任务里写 SQL 或表名——那是 DataAnalyst 的工作，你只写"查什么"；
 6. 对“可视化报告/分析报告/图表页面/HTML 报告”类子任务，优先标 `sub_task_agent`
-   为 ToolExpert；其余场景默认 DataAnalyst，纯计算/工具操作也可标 ToolExpert。"""
+   为 ToolExpert；其余场景默认 DataAnalyst，纯计算/工具操作也可标 ToolExpert。
+
+[教育学情报告分解模板]
+当问题是“生成 XX 班 / XX 年级 / XX 科目 / XX 学生 的学情/成绩分析报告”时，按
+报告类型拆成 2~4 个子任务，**最后一步固定为 ToolExpert 且必须显式指定教育模板名**：
+- 子任务描述里**严禁**出现"Word/PDF 模板""热力图""图文并茂的完整报告"这类泛化
+  措辞——报告组装就是一次 `render_html_report` 工具调用，不是写文档；
+- 报告组装步的 task 文案统一写成：
+  "用 education/<模板名>.html 模板组装 HTML 报告（数据取上游子任务）"。
+
+- 班级总览报告（class_overview）：
+  ["查询该班各科均分、及格率、优秀率、分数段分布", "查询该班在年级中的排名位置",
+   {"task": "用 education/class_overview.html 模板组装 HTML 报告（数据取上游子任务）", "sub_task_agent": "ToolExpert"}]
+- 年级对比报告（grade_comparison）：
+  ["查询各班均分与离散度并排名", {"task": "用 education/grade_comparison.html 模板组装 HTML 报告（数据取上游子任务）", "sub_task_agent": "ToolExpert"}]
+- 科目诊断报告（subject_diagnosis）：
+  ["查询该科目分数段分布与及格率/优秀率", {"task": "用 education/subject_diagnosis.html 模板组装 HTML 报告（数据取上游子任务）", "sub_task_agent": "ToolExpert"}]
+- 个体画像/趋势/预警/群体对比同理，分别用 education/student_exam_analysis.html、
+  education/trend_tracking.html、education/tier_alert.html、education/group_feature.html。
+- **单个学生多次考试分析**（如「分析学生001这几次考试的成绩」）：
+  只拆 **2 个子任务**，且**只为问题中指定的那一个学生**生成报告：
+  ["查询该学生及全班历次考试各科分数与排名（SQL 须含全班数据以便算排名，但不得为其他学生另做报告）",
+   {"task": "用 build_student_exam_report_data_tool 组装该学生考试分析 HTML 报告（student_name 必须与问题一致，仅一份报告）", "sub_task_agent": "ToolExpert"}]
+  **严禁**为其他学生（如学生009）额外增加子任务或报告。
+- 多次考试综合分析报告（comprehensive，含 9 个维度：整体概览/各科趋势/相关性/
+  分布/进退步/偏科/单科之最/总分轨迹/学生档案）：
+  ["查询该班历次考试各科均分、标准差、及格率/优秀率",
+   "查询每位学生历次考试总分与各科分数，用于趋势/偏科/相关性分析",
+   {"task": "用 education/comprehensive.html 模板组装综合分析 HTML 报告（数据取上游子任务，含 9 个维度）", "sub_task_agent": "ToolExpert"}]
+
+简单问题（如"三班数学平均分"）不生成报告，返回 plans=[原问题] 即可。"""
 
 
 class PlanAction(Action):

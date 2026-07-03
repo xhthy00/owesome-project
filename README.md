@@ -175,15 +175,15 @@ uv sync
 # 2) 启动后端
 uv run uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 
-# 3) 新开终端启动前端
-cd frontend
+# 3) 新开终端启动前端（推荐 React 版）
+cd frontend-react
 npm install
 npm run dev
 ```
 
 打开：
 
-- 前端：`http://localhost:5173`
+- 前端：`http://localhost:3001`
 - 后端文档：`http://localhost:8000/docs`
 
 ## 启动服务
@@ -197,7 +197,19 @@ uv run uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 - 健康检查：`GET http://localhost:8000/health`
 - API 文档：`http://localhost:8000/docs`
 
-### 前端（Vue）
+### 前端（React，推荐）
+
+`frontend-react/` 为当前主力前端，承载学情分析多报告分组展示、报告受众切换、PDF 导出等新特性。
+
+```bash
+cd frontend-react
+npm install
+npm run dev
+```
+
+默认地址：`http://localhost:3001`，可在 `frontend-react/.env.local` 配置后端地址。
+
+### 前端（Vue，MVP 旧版）
 
 ```bash
 cd frontend

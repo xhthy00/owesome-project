@@ -124,3 +124,67 @@ def test_adapter_lazy_loads_default_llm(monkeypatch):
     out = _run(client.chat([{"role": "user", "content": "hi"}]))
 
     assert out == "from-default"
+
+
+# ---- 瞬态 5xx 重试 -----------------------------------------------------------
+
+
+class InternalServerError(Exception):
+    """模拟 openai.InternalServerError（仅靠类名命中 _is_transient_http_error）。"""
+
+    status_code = 500
+
+
+class _FlakyChatModel:
+    """前 N 次 ainvoke 抛异常，之后成功。"""
+
+    def __init__(self, fail_times: int, exc: Exception, reply: str = "recovered") -> None:
+        self.fail_times = fail_times
+        self.exc = exc
+        self.reply = reply
+        self.ainvoke_calls = 0
+
+    async def ainvoke(self, messages):
+        self.ainvoke_calls += 1
+        if self.ainvoke_calls <= self.fail_times:
+            raise self.exc
+        return AIMessage(content=self.reply)
+
+
+def test_adapter_retries_on_500_internal_server_error(monkeypatch):
+    monkeypatch.setattr("src.agent.adapter.llm_adapter._RETRY_BACKOFF_SECONDS", (0, 0))
+    model = _FlakyChatModel(fail_times=2, exc=InternalServerError("server_error, 520"))
+    client = LangChainLlmClient(llm=model)
+
+    out = _run(client.chat([{"role": "user", "content": "hi"}]))
+
+    assert out == "recovered"
+    assert model.ainvoke_calls == 3  # 2 次失败 + 1 次成功
+
+
+def test_adapter_gives_up_after_max_retries_with_friendly_error(monkeypatch):
+    monkeypatch.setattr("src.agent.adapter.llm_adapter._RETRY_BACKOFF_SECONDS", (0, 0))
+    model = _FlakyChatModel(fail_times=99, exc=InternalServerError("server_error, 520"))
+    client = LangChainLlmClient(llm=model)
+
+    try:
+        _run(client.chat([{"role": "user", "content": "hi"}]))
+        assert False, "应抛 RuntimeError"
+    except RuntimeError as e:
+        assert "LLM 服务暂不可用" in str(e)
+        assert "InternalServerError" in str(e)
+
+
+def test_adapter_does_not_retry_on_non_transient_error():
+    class _BadRequest(Exception):
+        pass
+
+    model = _FlakyChatModel(fail_times=1, exc=_BadRequest("bad request"))
+    client = LangChainLlmClient(llm=model)
+
+    try:
+        _run(client.chat([{"role": "user", "content": "hi"}]))
+        assert False, "应原样抛出"
+    except _BadRequest:
+        pass
+    assert model.ainvoke_calls == 1

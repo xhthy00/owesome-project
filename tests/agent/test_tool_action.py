@@ -47,9 +47,15 @@ def execute_sql(sql: str) -> str:
     return f"sql:{sql}"
 
 
+@tool()
+def render_html_report(template_name: str = "", data: dict | None = None, title: str = "Report", html: str = "") -> dict:
+    """Render an HTML report (test stub)."""
+    return {"template_name": template_name, "data": data or {}, "title": title, "html": html or "<html>ok</html>"}
+
+
 @pytest.fixture()
 def pack():
-    return ToolPack(tools=[add, find_related_datasources, describe_table, execute_sql, TerminateTool(), boom])
+    return ToolPack(tools=[add, find_related_datasources, describe_table, execute_sql, render_html_report, TerminateTool(), boom])
 
 
 @pytest.fixture()
@@ -184,6 +190,57 @@ def test_missing_tool_field_with_final_answer_fallbacks_to_terminate(pack):
     assert out.action == "terminate"
     assert out.terminate is True
     assert out.content == "任务已完成"
+
+
+def test_missing_tool_field_with_report_key_fallbacks_to_terminate(pack):
+    """模型把报告正文塞进 report 字段（未走 tool 协议）时优雅 terminate。"""
+    action = ToolAction(tool_pack=pack)
+    out = _run(action.run('{"report": "学情报告：均分 78，及格率 90%"}'))
+    assert out.is_exe_success is True
+    assert out.action == "terminate"
+    assert out.terminate is True
+    assert "均分 78" in out.content
+
+
+def test_missing_tool_field_with_render_html_report_args_rescues_to_render(pack, audit_spy):
+    """模型漏掉 tool 外壳、直接返回 render_html_report 的 args 对象时自动补调。"""
+    action = ToolAction(tool_pack=pack)
+    ai_msg = '{"template_name": "education/student_profile.html", "data": {"REPORT_TITLE": "张三学情"}, "title": "张三学情报告"}'
+    out = _run(action.run(ai_msg))
+    assert out.is_exe_success is True
+    assert out.action == "render_html_report"
+    assert out.terminate is False
+    assert out.extra["tool_args"]["template_name"] == "education/student_profile.html"
+    assert out.extra["tool_data"]["template_name"] == "education/student_profile.html"
+    assert audit_spy[0]["tool_name"] == "render_html_report"
+    assert audit_spy[0]["success"] is True
+
+
+def test_missing_tool_field_with_inline_html_rescues_to_render(pack):
+    """模型直接返回 {"html": "..."} 时也走 render_html_report 而非 terminate。"""
+    action = ToolAction(tool_pack=pack)
+    out = _run(action.run('{"html": "<html>inline</html>", "title": "R"}'))
+    assert out.is_exe_success is True
+    assert out.action == "render_html_report"
+    assert out.extra["tool_data"]["html"] == "<html>inline</html>"
+
+
+def test_scalar_string_fallbacks_to_terminate(pack):
+    """模型直接返回一段自然语言（标量字符串）时作为最终答案 terminate。"""
+    action = ToolAction(tool_pack=pack)
+    out = _run(action.run('"分析完成：班级总体表现良好"'))
+    assert out.is_exe_success is True
+    assert out.action == "terminate"
+    assert out.terminate is True
+    assert "班级总体表现良好" in out.content
+
+
+def test_array_output_still_fails_gracefully(pack):
+    """数组输出无法兜底为最终答案，仍按失败返回。"""
+    action = ToolAction(tool_pack=pack)
+    out = _run(action.run('["a", "b"]'))
+    assert out.is_exe_success is False
+    assert "JSON 对象" in out.content
 
 
 def test_unknown_tool_returns_fail_with_available_list(pack):

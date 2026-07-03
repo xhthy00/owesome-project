@@ -441,6 +441,63 @@ def test_render_html_report_template_name_without_suffix_uses_html(fake_datasour
     assert "<div>ok</div>" in result.data["html"]
 
 
+def test_render_html_report_jinja2_loop_and_conditional(fake_datasource, monkeypatch):
+    """Phase 3：Jinja2 引擎支持 {% for %}/{% if %}，正则模式无法做到。"""
+    base = Path(__file__).resolve().parents[2]
+    template_dir = base / "src" / "agent" / "resource" / "templates"
+    template_dir.mkdir(parents=True, exist_ok=True)
+    template_path = template_dir / "_jinja_test_template.html"
+    template_path.write_text(
+        "<ul>"
+        "{% for s in subjects %}"
+        "<li>{{ s.name }}: {{ s.score }}{% if s.score < 60 %} (不及格){% endif %}</li>"
+        "{% endfor %}"
+        "</ul>",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(biz, "_report_template_dir", lambda: template_dir)
+    try:
+        result = _run(
+            biz.render_html_report.execute(
+                datasource_id=1,
+                template_name="_jinja_test_template.html",
+                data={
+                    "subjects": [
+                        {"name": "张三", "score": 78},
+                        {"name": "李四", "score": 55},
+                    ]
+                },
+            )
+        )
+    finally:
+        template_path.unlink(missing_ok=True)
+    html = result.data["html"]
+    assert "<li>张三: 78</li>" in html
+    assert "<li>李四: 55 (不及格)</li>" in html
+    assert "张三: 78</li>" in html and "不及格" not in html.split("张三")[1].split("</li>")[0]
+
+
+def test_render_html_report_missing_key_falls_back_to_regex_not_crash(fake_datasource, monkeypatch):
+    """StrictUndefined 对缺失变量抛错时，应回退 regex 用空串兜底，整份报告不破。"""
+    base = Path(__file__).resolve().parents[2]
+    template_dir = base / "src" / "agent" / "resource" / "templates"
+    template_dir.mkdir(parents=True, exist_ok=True)
+    template_path = template_dir / "_missing_key_test.html"
+    template_path.write_text("<div>{{TITLE}}-{{BODY}}</div>", encoding="utf-8")
+    monkeypatch.setattr(biz, "_report_template_dir", lambda: template_dir)
+    try:
+        result = _run(
+            biz.render_html_report.execute(
+                datasource_id=1,
+                template_name="_missing_key_test.html",
+                data={"TITLE": "ok"},  # BODY 缺失
+            )
+        )
+    finally:
+        template_path.unlink(missing_ok=True)
+    assert "<div>ok-</div>" in result.data["html"]
+
+
 def test_render_html_report_template_failure_falls_back_to_inline(fake_datasource):
     result = _run(
         biz.render_html_report.execute(
@@ -566,8 +623,10 @@ def test_build_default_toolpack_binds_and_hides_params(monkeypatch):
     assert "execute_sql" in pack
     assert "calculate" in pack
     assert "terminate" in pack
-    # 6 原业务工具 + find_related_tables + calculate + render_html_report + terminate = 10
-    assert len(pack) == 10
+    assert "resolve_score_schema" in pack
+    assert "compute_score_stats_tool" in pack
+    # 9 原业务工具 + 7 教育学情工具 + terminate = 17
+    assert len(pack) == 17
 
     prompt = pack.render_prompt()
     assert "datasource_id(" not in prompt
@@ -579,8 +638,8 @@ def test_build_default_toolpack_binds_and_hides_params(monkeypatch):
 def test_build_default_toolpack_without_terminate():
     pack = biz.build_default_toolpack(datasource_id=1, include_terminate=False)
     assert "terminate" not in pack
-    # 6 原业务工具 + find_related_tables + calculate + render_html_report = 9（不含 terminate）
-    assert len(pack) == 9
+    # 9 原业务工具 + 7 教育学情工具 = 16（不含 terminate）
+    assert len(pack) == 16
 
 
 def test_build_default_toolpack_no_bindings():

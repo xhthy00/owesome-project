@@ -80,6 +80,23 @@ class LangChainLlmClient:
             return True
         return isinstance(exc, (ConnectionError, TimeoutError))
 
+    @staticmethod
+    def _is_transient_http_error(exc: Exception) -> bool:
+        """网关侧瞬态错误（5xx / 429），重试通常能恢复。
+
+        覆盖 openai.InternalServerError（含 520/502/503）、RateLimitError，
+        以及 langchain_openai 抛出的带 status_code 的 5xx/429。
+        """
+        name = type(exc).__name__
+        module = type(exc).__module__
+        if name in {"InternalServerError", "RateLimitError", "APIStatusError"}:
+            return True
+        if module.startswith("openai"):
+            status = getattr(exc, "status_code", None)
+            if isinstance(status, int) and status in (429, 500, 502, 503, 520):
+                return True
+        return False
+
     async def chat(self, messages: list[dict[str, str]]) -> str:
         model = self._ensure_chat_model()
         lc_messages = _dict_messages_to_langchain(messages)
@@ -96,15 +113,20 @@ class LangChainLlmClient:
                 break
             except Exception as exc:  # noqa: BLE001 - 统一在适配层做网络异常归一化
                 last_error = exc
-                if not self._is_network_error(exc) or attempt >= _DEFAULT_RETRY_COUNT - 1:
+                transient = self._is_network_error(exc) or self._is_transient_http_error(exc)
+                if not transient or attempt >= _DEFAULT_RETRY_COUNT - 1:
                     if self._is_network_error(exc):
                         raise RuntimeError(
                             "LLM 网络连接失败：无法连接到模型服务。请检查 llm_base_url、网络代理与目标服务可达性。"
                         ) from exc
+                    if self._is_transient_http_error(exc):
+                        raise RuntimeError(
+                            f"LLM 服务暂不可用（{type(exc).__name__}），已重试 {_DEFAULT_RETRY_COUNT} 次仍失败。请稍后重试。"
+                        ) from exc
                     raise
                 wait_s = _RETRY_BACKOFF_SECONDS[min(attempt, len(_RETRY_BACKOFF_SECONDS) - 1)]
                 logger.warning(
-                    "LLM request network error (attempt %d/%d): %s",
+                    "LLM request transient error (attempt %d/%d): %s",
                     attempt + 1,
                     _DEFAULT_RETRY_COUNT,
                     exc,

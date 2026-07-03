@@ -11,8 +11,20 @@ const initConversations = [{ id: "default", title: "Default Assistant" }];
 
 export default function ChatPage() {
   const router = useRouter();
-  const { messages, executionSteps, summary, reports, queryResults, loading, send, stop, loadConversation, clearConversation } =
-    useChat();
+  const {
+    messages,
+    executionSteps,
+    summary,
+    reports,
+    queryResults,
+    loading,
+    send,
+    stop,
+    loadConversation,
+    clearConversation,
+    datasourceId,
+    setDatasourceId
+  } = useChat();
   const [conversations] = useState(initConversations);
   const [activeId] = useState("default");
   const [temperatureValue, setTemperatureValue] = useState(0.6);
@@ -40,13 +52,15 @@ export default function ChatPage() {
     if (!router.isReady || !q) return;
     const text = Array.isArray(q) ? q[0] : q;
     const dsValue = Array.isArray(ds) ? ds[0] : ds;
-    const datasourceId = dsValue ? Number(dsValue) : undefined;
+    const dsId = dsValue ? Number(dsValue) : undefined;
     if (!text?.trim()) return;
-    void send(text.trim(), {
-      datasourceId: datasourceId && !Number.isNaN(datasourceId) ? datasourceId : undefined
-    });
+    const resolvedDsId = dsId && !Number.isNaN(dsId) ? dsId : datasourceId;
+    if (dsId && !Number.isNaN(dsId)) {
+      setDatasourceId(dsId);
+    }
+    void send(text.trim(), { datasourceId: resolvedDsId });
     void router.replace("/chat", undefined, { shallow: true });
-  }, [router, send]);
+  }, [router, send, datasourceId, setDatasourceId]);
 
   useEffect(() => {
     if (!router.isReady) return;
@@ -78,14 +92,14 @@ export default function ChatPage() {
       replyLoading: loading,
       canAbort: loading,
       handleChat: async (text: string) => {
-        await send(text);
+        await send(text, { datasourceId });
         setLocalMessages((prev) => [...prev]);
       },
       stopReply: stop,
       replayLast: () => {
         const latest = [...messages].reverse().find((item) => item.role === "user");
         if (latest?.content) {
-          void send(latest.content);
+          void send(latest.content, { datasourceId });
         }
       },
       clearHistory: () => {
@@ -100,9 +114,11 @@ export default function ChatPage() {
       setTemperatureValue,
       setMaxNewTokensValue,
       setResourceValue,
-      setModelValue
+      setModelValue,
+      datasourceId,
+      setDatasourceId
     }),
-    [loading, send, stop, appInfo, temperatureValue, maxNewTokensValue, resourceValue, modelValue, messages]
+    [loading, send, stop, appInfo, temperatureValue, maxNewTokensValue, resourceValue, modelValue, messages, datasourceId, setDatasourceId]
   );
 
   return (

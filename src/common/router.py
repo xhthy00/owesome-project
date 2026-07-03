@@ -7,6 +7,7 @@ from system.api.user import router as user_router
 from datasource.api.datasource import router as datasource_router
 from datasource.api.permission import router as ds_permission_router
 from chat.api.chat import router as chat_router
+from src.agent.education.api import router as education_router
 
 
 def get_all_routers() -> list:
@@ -19,6 +20,7 @@ def get_all_routers() -> list:
         datasource_router,
         ds_permission_router,
         chat_router,
+        education_router,
     ]
 
 

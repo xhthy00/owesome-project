@@ -143,7 +143,9 @@ _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]+")
 _FIND_RELATED_DEFAULT_LIMIT = 10
 _FIND_RELATED_HARD_CAP = 20
 _REPORT_MAX_HTML_LEN = 500_000
-_REPORT_TEMPLATE_SAFE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+#: 允许 ``/`` 以支持 ``education/class_overview.html`` 这类子目录模板；
+#: 路径穿越由 ``_resolve`` 里的 ``relative_to`` 校验兜底。
+_REPORT_TEMPLATE_SAFE_RE = re.compile(r"^[A-Za-z0-9_./-]+$")
 _REPORT_PLACEHOLDER_RE = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
 
 
@@ -243,11 +245,35 @@ def _render_template_html(template_name: str, data: dict[str, Any]) -> str:
         raise ValueError(f"模板不存在: {template_name}")
     raw = path.read_text(encoding="utf-8")
 
-    def _replace(m: re.Match[str]) -> str:
-        key = m.group(1)
-        return str(data.get(key, ""))
+    # Phase 3：优先用 Jinja2 渲染，支持 {% for %}/{% if %}/过滤器与 |safe；
+    # 模板若仅含 {{KEY}} 占位符（无 Jinja 控制结构），Jinja2 同样能正确渲染，
+    # 因此统一走 Jinja2。解析失败（极少见，如模板含非法 Jinja 语法）时回退
+    # 到原 regex 替换，保证旧模板不破。
+    try:
+        from jinja2 import Environment, StrictUndefined, TemplateSyntaxError
 
-    return _REPORT_PLACEHOLDER_RE.sub(_replace, raw)
+        env = Environment(
+            loader=None,
+            autoescape=False,  # 报告 HTML 由 _sanitize_report_html 统一消毒
+            undefined=StrictUndefined,
+            keep_trailing_newline=True,
+        )
+        return env.from_string(raw).render(**{str(k): v for k, v in data.items()})
+    except TemplateSyntaxError:
+        # 退回 Phase 1 的纯占位符替换
+        def _replace(m: re.Match[str]) -> str:
+            key = m.group(1)
+            return str(data.get(key, ""))
+
+        return _REPORT_PLACEHOLDER_RE.sub(_replace, raw)
+    except Exception:
+        # StrictUndefined 对缺失变量抛错——LLM 漏填字段时不致命，回退 regex
+        # 用空串兜底，避免整份报告渲染失败。
+        def _replace(m: re.Match[str]) -> str:
+            key = m.group(1)
+            return str(data.get(key, ""))
+
+        return _REPORT_PLACEHOLDER_RE.sub(_replace, raw)
 
 
 def _parse_report_data(data: Any) -> dict[str, Any]:
@@ -684,16 +710,24 @@ def recent_questions(datasource_id: int, user_id: int, limit: int = 10) -> ToolR
 def default_business_tools() -> list[FunctionTool | TerminateTool]:
     """返回默认业务工具的全新实例列表（不含 bindings）。
 
-    当前清单（8 件）：
+    当前清单（14 件）：
     - ``list_tables`` / ``find_related_tables`` / ``describe_table`` / ``sample_rows``
       / ``execute_sql``：对接数据源的 Schema 探查 & SQL 执行；
     - ``find_related_datasources``：多数据源场景的"选源"启发式；
     - ``recent_questions``：看自己在该数据源的历史问题，启发追问；
     - ``calculate``：**纯算术沙盒**（asteval），用于百分比/同比/均值等后处理
-      运算——LLM 心算容易错，剥离给确定性求值器。
+      运算——LLM 心算容易错，剥离给确定性求值器；
+    - ``render_html_report``：HTML 报告生成（模板/文件/内联三模式）；
+    - ``resolve_score_schema`` / ``compute_score_stats_tool`` /
+      ``compute_rankings_tool`` / ``identify_at_risk_students_tool`` /
+      ``build_chart_option_tool`` / ``select_report_template_tool``：
+      教育学情领域工具（见 ``src/agent/education/tools.py``）。
 
     每次调用返回新 list，避免在多会话场景下共享同一组引用造成状态串扰。
     """
+    # 教育学情工具延迟导入，避免 education 包在测试 mock business 时循环引用。
+    from src.agent.education.tools import EDUCATION_TOOLS
+
     return [
         list_tables,
         find_related_tables,
@@ -704,6 +738,7 @@ def default_business_tools() -> list[FunctionTool | TerminateTool]:
         recent_questions,
         calculate,
         render_html_report,
+        *EDUCATION_TOOLS,
     ]
 
 

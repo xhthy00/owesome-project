@@ -38,6 +38,7 @@ export type QueryResult = {
 
 type SendOptions = {
   datasourceId?: number;
+  reportAudience?: string;
 };
 
 const asText = (value: unknown): string => {
@@ -116,9 +117,20 @@ export function useChat() {
   const [conversationId, setConversationId] = useState<number | undefined>(undefined);
   const abortRef = useRef<AbortController | null>(null);
   const sendingRef = useRef(false);
-  const datasourceId = Number(process.env.NEXT_PUBLIC_DEFAULT_DATASOURCE_ID ?? 1);
+  const defaultDatasourceId = Number(process.env.NEXT_PUBLIC_DEFAULT_DATASOURCE_ID ?? 1);
+  const [datasourceId, setDatasourceIdState] = useState<number>(defaultDatasourceId);
   // 为了与 Vue 版本保持一致，这里固定使用 team 模式（Planner → 子任务 → 工具调用）。
   const agentMode: "team" = "team";
+  const [reportAudience, setReportAudience] = useState<string | undefined>(undefined);
+
+  const setDatasourceId = useCallback((id: number) => {
+    setDatasourceIdState((prev) => {
+      if (prev !== id) {
+        setConversationId(undefined);
+      }
+      return id;
+    });
+  }, []);
 
   const stop = useCallback(() => {
     if (abortRef.current) {
@@ -144,6 +156,7 @@ export function useChat() {
       if (sendingRef.current) return;
       sendingRef.current = true;
       const targetDatasourceId = options?.datasourceId ?? datasourceId;
+      const targetAudience = options?.reportAudience ?? reportAudience;
       stop();
       const runId = crypto.randomUUID();
       const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: asText(input), runId };
@@ -188,7 +201,8 @@ export function useChat() {
             datasource_id: targetDatasourceId,
             conversation_id: convId,
             agent_mode: agentMode,
-            enable_tool_agent: true
+            enable_tool_agent: true,
+            ...(targetAudience ? { report_audience: targetAudience } : {})
           },
           {
             onReasoning: (text) => {
@@ -491,12 +505,15 @@ export function useChat() {
         setLoading(false);
       }
     },
-    [stop, ensureConversation, datasourceId, agentMode]
+    [stop, ensureConversation, datasourceId, agentMode, reportAudience]
   );
 
   const loadConversation = useCallback(async (targetConversationId: number) => {
     const detail = await getConversationDetail(targetConversationId);
     setConversationId(detail.id);
+    if (detail.datasource_id) {
+      setDatasourceIdState(detail.datasource_id);
+    }
 
     const nextMessages: Message[] = [];
     const nextSteps: ExecutionStep[] = [];
@@ -627,6 +644,10 @@ export function useChat() {
     send,
     stop,
     loadConversation,
-    clearConversation
+    clearConversation,
+    reportAudience,
+    setReportAudience,
+    datasourceId,
+    setDatasourceId
   };
 }

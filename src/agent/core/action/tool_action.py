@@ -147,6 +147,35 @@ class ToolAction(Action):
                 )
 
         if not isinstance(parsed, dict):
+            # 兜底：模型直接返回一段报告正文/自然语言（字符串标量）时，
+            # 作为最终答案 terminate，避免连续失败循环。
+            if isinstance(parsed, str) and parsed.strip() and TERMINATE_TOOL_NAME in self.tool_pack:
+                try:
+                    result = await self.tool_pack.invoke(
+                        TERMINATE_TOOL_NAME,
+                        {"final_answer": parsed.strip()},
+                    )
+                    _audit(
+                        tool_name=TERMINATE_TOOL_NAME,
+                        success=True,
+                        args={"final_answer": parsed.strip()},
+                        result_preview=result.content,
+                    )
+                    return ActionOutput(
+                        is_exe_success=True,
+                        content=result.content,
+                        action=TERMINATE_TOOL_NAME,
+                        thoughts=None,
+                        observations=result.content,
+                        terminate=result.is_final,
+                        extra={
+                            "tool_args": {"final_answer": parsed.strip()},
+                            "tool_data": result.data,
+                            "tool_extra": result.extra,
+                        },
+                    )
+                except Exception:
+                    logger.exception("scalar fallback terminate failed")
             msg = "LLM 输出必须是 JSON 对象，不能是数组或标量。"
             _audit(tool_name=self.name, success=False, args=None, result_preview=msg)
             return ActionOutput(
@@ -160,13 +189,55 @@ class ToolAction(Action):
         args = parsed.get("args") or parsed.get("arguments") or {}
 
         if not tool_name:
-            # 兜底：部分模型会返回 {"final_answer": "..."} 这类对象但漏掉 tool，
+            # 兜底 1：模型把 render_html_report 的 args 直接当根对象输出
+            # （形如 {"template_name": "...", "data": {...}, "title": "..."} 但漏了
+            # tool 外壳）——这是教育报告组装最常见的格式错误。检测到
+            # template_name/template_path/file_path/html 任一字段时，直接当作
+            # render_html_report 的 args 调用，避免连续失败。
+            _RENDER_TOOL = "render_html_report"
+            if _RENDER_TOOL in self.tool_pack and any(
+                isinstance(parsed.get(_k), str) and parsed.get(_k).strip()
+                for _k in ("template_name", "template_path", "file_path", "html")
+            ):
+                try:
+                    result = await self.tool_pack.invoke(_RENDER_TOOL, parsed)
+                    _audit(
+                        tool_name=_RENDER_TOOL,
+                        success=True,
+                        args=parsed,
+                        result_preview=result.content,
+                    )
+                    return ActionOutput(
+                        is_exe_success=True,
+                        content=result.content,
+                        action=_RENDER_TOOL,
+                        thoughts=thoughts,
+                        observations=result.content,
+                        terminate=result.is_final,
+                        extra={
+                            "tool_args": parsed,
+                            "tool_data": result.data,
+                            "tool_extra": result.extra,
+                        },
+                    )
+                except Exception:
+                    logger.exception("missing-tool render_html_report rescue failed")
+
+            # 兜底 2：部分模型会返回 {"final_answer": "..."} 这类对象但漏掉 tool，
             # 将其视作 terminate，避免整轮 ReAct 因格式细节失败。
             final_answer = (
                 parsed.get("final_answer")
                 or parsed.get("answer")
                 or parsed.get("content")
             )
+            # 进一步兜底：模型把报告正文/结果直接塞进 report/result/summary
+            # 等字段（未走 tool 协议）时，取其字符串内容作为最终答案，避免连续失败。
+            if not (isinstance(final_answer, str) and final_answer.strip()):
+                for _k in ("report", "result", "summary", "output", "message"):
+                    v = parsed.get(_k)
+                    if isinstance(v, str) and v.strip():
+                        final_answer = v
+                        break
             if isinstance(final_answer, str) and final_answer.strip() and TERMINATE_TOOL_NAME in self.tool_pack:
                 final_text = final_answer.strip()
                 try:

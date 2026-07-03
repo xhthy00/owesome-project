@@ -59,7 +59,36 @@ DATA_ANALYST_DESC = """[可用工具]
 6. 当用户要求“可视化报告/分析报告/图表页面/HTML 报告”时，优先调用
    `render_html_report` 产出 HTML，再 `terminate` 简短说明已生成报告。
    报告类任务在调用 `render_html_report` 前不要直接 terminate。
-7. 轮数有上限——尽量每一步都向结论推进，避免重复探查同一张表。"""
+7. 轮数有上限——尽量每一步都向结论推进，避免重复探查同一张表。
+
+[教育学情分析专章]
+当问题涉及学生成绩 / 班级 / 科目 / 考试 / 学情 时，按以下流程：
+
+1. **识别报告类型**（class_overview / grade_comparison / subject_diagnosis /
+   student_profile / trend_tracking / tier_alert / group_feature），调
+   `select_report_template_tool(report_type, audience)` 拿到模板名与所需
+   data keys。无法判断时默认 `class_overview` + `audience=default`。
+2. **查数前先调** `resolve_score_schema(datasource_id, question)` 取得
+   成绩表字段映射（宽表/分表、科目列名），据此写 SQL，不要凭记忆猜列名。
+3. **统计 MUST 走工具**：均分/及格率/优秀率/分数段用
+   `compute_score_stats_tool`；百分比/同比/差值用 `calculate`。**禁止心算**
+   及格率/优秀率/分数段人数。
+4. **图表**：分数段柱图 → `build_chart_option_tool("score_distribution", {...})`；
+   各科雷达 → `"subject_radar"`；班级对比 → `"class_compare_bar"`；科目柱状
+   → `"subject_bar"`。返回的 `data.option`（JSON 字符串）直接填入模板对应
+   `{{..._CHART}}` 占位符，**不要再 JSON.parse 或改写**。
+5. **报告生成**：
+   - **全班/多次考试综合分析** → 调 `build_comprehensive_report_data_tool`，再 `terminate`；
+   - **单个学生多次考试分析** → 调 `build_student_exam_report_data_tool(student_name=..., records=...)`，
+     `student_name` 必须与用户指定学生一致，**只为该学生生成一份报告**；
+   - 其他报告类型：data keys 备齐后调 `render_html_report(template_name=..., data=...)`，再 `terminate`。
+6. **Team 模式分工**：若 Planner 已将「组装 HTML 报告」分配给 ToolExpert 子任务，
+   当前 DataAnalyst 子任务**只做查数/统计**，**禁止**调用 `render_html_report` 或
+   `build_*_report_data_tool`，查完 `terminate` 即可。
+7. **默认阈值**：及格 60 / 优秀 85；用户指定（如"60 分及格"）时用
+   `compute_score_stats_tool(pass_threshold=..., excellent_threshold=...)` 覆盖。
+8. **受众**：用户说"给家长看"→ `audience=parent`；"给校长看"→ `principal`；
+   未指定 → `default`。受众影响模板文案密度，不影响数值。"""
 
 
 class DataAnalystAgent(ReActAgent):

@@ -1,7 +1,12 @@
 import { AudioOutlined, PlusOutlined, ThunderboltOutlined } from "@ant-design/icons";
 import { Button, Tooltip } from "antd";
+import { useContext } from "react";
+import DatasourcePicker from "@/components/chat/DatasourcePicker";
+import { ChatContentContext } from "@/new-components/chat/context";
 
 export default function ToolsBar() {
+  const { datasourceId, setDatasourceId } = useContext(ChatContentContext);
+
   return (
     <div className="dbgpt-ui-font mt-1.5 flex items-center justify-between border-t border-[#f0f2f5] pt-1.5 dark:border-[rgba(255,255,255,0.08)]">
       <div className="flex items-center gap-0.5">
@@ -30,6 +35,7 @@ export default function ToolsBar() {
             icon={<AudioOutlined className="text-[11px]" />}
           />
         </Tooltip>
+        <DatasourcePicker value={datasourceId} onChange={setDatasourceId} compact />
       </div>
       <div className="text-[11px] text-[#c4c8d0] dark:text-[#667085]"> </div>
     </div>
