@@ -178,6 +178,13 @@ def test_planner_desc_has_question_placeholder():
     assert "{{question}}" in PLANNER_DESC
 
 
+def test_planner_desc_has_school_item_diagnosis_template():
+    assert "学校/班级 + 科目 + 小题" in PLANNER_DESC
+    assert "每一小题的满分、均分、得分率" in PLANNER_DESC
+    assert "范围传递" in PLANNER_DESC
+    assert "【XX学校】" in PLANNER_DESC
+
+
 def test_planner_infers_tool_expert_for_html_report_task():
     llm = _ScriptedLlm('{"plans":["输出一份 HTML 可视化报告"]}')
     agent = PlannerAgent(llm_client=llm)

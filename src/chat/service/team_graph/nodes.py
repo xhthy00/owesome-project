@@ -11,7 +11,7 @@ from langchain_core.runnables import RunnableConfig
 from src.agent.adapter.llm_adapter import LangChainLlmClient
 from src.agent.expand.chat_awel_team import build_chat_team
 from src.chat.schemas import ChatRequest
-from src.agent.education.query_parse import extract_student_target
+from src.agent.education.query_parse import extract_school_target, extract_student_target
 from src.chat.service.agent_runner import (
     _DataAnalystPhase,
     _extract_required_keywords,
@@ -99,6 +99,7 @@ async def node_sub_tasks_loop(state: TeamState, config: RunnableConfig) -> dict[
         source_sub_task_index=None,
         report_audience=request.report_audience,
         target_student=extract_student_target(request.question),
+        target_school=extract_school_target(request.question),
     )
     # 累积上游 DataAnalyst 子任务的结构化产出，供下游 ToolExpert 组装报告时复用。
     upstream_report_data: dict[str, Any] = {"sub_tasks": []}

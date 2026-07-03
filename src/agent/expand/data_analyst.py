@@ -20,6 +20,8 @@ from typing import Any
 
 from src.agent.core.profile import ProfileConfig
 from src.agent.core.react_agent import ReActAgent
+from src.agent.core.agent import AgentMessage
+from src.agent.education.query_parse import format_scope_constraints
 from src.agent.resource.manager import (
     DEFAULT_PACK_NAME,
     get_resource_manager,
@@ -28,7 +30,10 @@ from src.agent.resource.manager import (
 from src.agent.resource.tool.business import build_default_toolpack
 from src.agent.resource.tool.pack import ToolPack
 
-DATA_ANALYST_DESC = """[可用工具]
+DATA_ANALYST_DESC = """[分析范围约束]
+{{scope_constraints}}
+
+[可用工具]
 {{tools_prompt}}
 
 [输出协议 - 严格]
@@ -103,6 +108,13 @@ class DataAnalystAgent(ReActAgent):
         ],
         desc=DATA_ANALYST_DESC,
     )
+
+    def _build_prompt_variables(self, reply: AgentMessage) -> dict[str, Any]:
+        base = super()._build_prompt_variables(reply)
+        raw = dict(reply.context or {}).get("constraints")
+        constraints = raw if isinstance(raw, dict) else {}
+        base["scope_constraints"] = format_scope_constraints(constraints)
+        return base
 
 
 def build_data_analyst(

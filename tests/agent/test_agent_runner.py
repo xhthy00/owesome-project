@@ -355,3 +355,90 @@ def test_report_is_blocked_when_sql_violates_locked_tables():
     assert "error" in names
     err = next(p for e, p in events if e == "error")
     assert "报告已拦截" in err.get("error", "")
+
+
+def test_report_is_blocked_when_school_scope_mismatches():
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event: str, data: dict) -> None:
+        events.append((event, dict(data)))
+
+    state = _RunState(
+        sub_task_index=2,
+        constraints=_RunConstraints(
+            locked_tables=[],
+            required_keywords=["数学", "期末"],
+            target_school="南京市第一中学",
+            report_data={
+                "sub_tasks": [
+                    {
+                        "sub_task_agent": "DataAnalyst",
+                        "final_answer": "共 24 人",
+                        "exec_result": {
+                            "columns": ["学生", "分数"],
+                            "rows": [],
+                            "row_count": 24,
+                        },
+                    }
+                ]
+            },
+        ),
+    )
+    payload = {
+        "agent": "ToolExpert",
+        "sub_task_index": 2,
+        "data": {
+            "output_type": "html",
+            "title": "高一数学学科诊断报告",
+            "mode": "inline",
+            "html": (
+                "<html><body>"
+                "<span>高一(1)班+高一(2)班</span>"
+                "<p>参考人数 40 人</p>"
+                "</body></html>"
+            ),
+        },
+    }
+
+    _run(_maybe_emit_report(payload, emit, state))
+
+    names = [e for e, _ in events]
+    assert "report" not in names
+
+
+def test_report_passes_when_school_scope_matches_upstream():
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event: str, data: dict) -> None:
+        events.append((event, dict(data)))
+
+    state = _RunState(
+        sub_task_index=2,
+        constraints=_RunConstraints(
+            locked_tables=[],
+            required_keywords=["数学"],
+            target_school="南京市第一中学",
+            report_data={
+                "sub_tasks": [
+                    {
+                        "sub_task_agent": "DataAnalyst",
+                        "final_answer": "共 24 人",
+                    }
+                ]
+            },
+        ),
+    )
+    payload = {
+        "agent": "ToolExpert",
+        "data": {
+            "output_type": "html",
+            "title": "南京市第一中学数学诊断",
+            "mode": "inline",
+            "html": "<html><body><span>南京市第一中学</span><p>参考人数 24 人</p></body></html>",
+        },
+    }
+
+    _run(_maybe_emit_report(payload, emit, state))
+
+    names = [e for e, _ in events]
+    assert "report" in names

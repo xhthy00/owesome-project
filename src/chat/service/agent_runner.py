@@ -34,7 +34,14 @@ from src.agent.expand.planner import PlannerAgent
 from src.agent.expand.summarizer import SummarizerAgent
 from src.agent.expand.tool_agent import build_tool_agent
 from src.agent.expand.user_proxy import UserProxyAgent
-from src.agent.education.query_parse import extract_student_target, report_matches_student
+from src.agent.education.query_parse import (
+    extract_school_target,
+    extract_student_target,
+    extract_upstream_participant_count,
+    report_matches_school,
+    report_matches_student,
+    report_participant_count_conflicts,
+)
 from src.chat.schemas import ChatRequest
 from src.common.core.config import get_settings
 
@@ -61,6 +68,8 @@ class _RunConstraints:
     report_audience: str | None = None
     #: 用户问题中指定的目标学生（如「学生001」），用于过滤偏离报告。
     target_student: str | None = None
+    #: 用户问题中指定的目标学校（如「南京市第一中学」），用于 SQL 范围约束。
+    target_school: str | None = None
 
     def to_context(self) -> dict[str, Any]:
         ctx: dict[str, Any] = {
@@ -74,6 +83,8 @@ class _RunConstraints:
             ctx["report_audience"] = self.report_audience
         if self.target_student is not None:
             ctx["target_student"] = self.target_student
+        if self.target_school is not None:
+            ctx["target_school"] = self.target_school
         return ctx
 
 
@@ -254,7 +265,9 @@ async def _run_team_stream_legacy(
         required_keywords=_extract_required_keywords(request.question),
         source_sub_task_index=None,
         target_student=extract_student_target(request.question),
+        target_school=extract_school_target(request.question),
     )
+    upstream_report_data: dict[str, Any] = {"sub_tasks": []}
 
     sub_phases: list[tuple[str, _DataAnalystPhase]] = []
     last_good_phase: _DataAnalystPhase | None = None
@@ -273,6 +286,7 @@ async def _run_team_stream_legacy(
             },
         )
         if sub_task_agent == "ToolExpert":
+            shared_constraints.report_data = upstream_report_data or None
             phase = await _run_tool_expert_phase(
                 request=request,
                 current_user_id=current_user_id,
@@ -294,6 +308,15 @@ async def _run_team_stream_legacy(
                 constraints=shared_constraints,
                 workspace_oid=workspace_oid,
             )
+        upstream_report_data["sub_tasks"].append({
+            "sub_task_index": idx,
+            "sub_task": sub_task,
+            "sub_task_agent": sub_task_agent,
+            "sql": phase.state.last_sql,
+            "exec_result": phase.state.last_exec_result,
+            "reports": list(phase.state.reports),
+            "final_answer": (phase.reply.content if phase.reply else ""),
+        })
         # 把本 sub_task 的 steps 标上前缀后汇总，便于前端按子任务折叠
         for step in phase.state.steps:
             tagged = dict(step)
@@ -999,6 +1022,27 @@ async def _maybe_emit_report(
         ):
             logger.warning("报告已拦截：与目标学生 %s 不匹配（title=%s）", target, data.get("title"))
             return
+        target_school = state.constraints.target_school
+        if target_school and not report_matches_school(
+            str(data.get("title") or ""), html, target_school
+        ):
+            logger.warning(
+                "报告已拦截：与目标学校 %s 不匹配（title=%s）",
+                target_school,
+                data.get("title"),
+            )
+            return
+        upstream_count = extract_upstream_participant_count(
+            state.constraints.report_data
+        )
+        if target_school and upstream_count is not None:
+            if report_participant_count_conflicts(html, upstream_count):
+                logger.warning(
+                    "报告已拦截：参考人数与上游不一致（expected=%s, title=%s）",
+                    upstream_count,
+                    data.get("title"),
+                )
+                return
     report_payload: dict[str, Any] = {
         "title": str(data.get("title") or "Report"),
         "html": html,

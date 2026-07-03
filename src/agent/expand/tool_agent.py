@@ -6,6 +6,8 @@ from typing import Any
 
 from src.agent.core.profile import ProfileConfig
 from src.agent.core.react_agent import ReActAgent
+from src.agent.core.agent import AgentMessage
+from src.agent.education.query_parse import format_scope_constraints
 from src.agent.resource.manager import (
     DEFAULT_PACK_NAME,
     get_resource_manager,
@@ -14,7 +16,13 @@ from src.agent.resource.manager import (
 from src.agent.resource.tool.business import build_default_toolpack
 from src.agent.resource.tool.pack import ToolPack
 
-TOOL_AGENT_DESC = """[可用工具]
+TOOL_AGENT_DESC = """[分析范围约束]
+{{scope_constraints}}
+
+[上游查数结果 — 必须优先使用]
+{{upstream_report_data}}
+
+[可用工具]
 {{tools_prompt}}
 
 [输出协议 - 严格]
@@ -36,9 +44,12 @@ TOOL_AGENT_DESC = """[可用工具]
 Word/PDF 内容或自然语言报告正文**；必须按以下工具调用流程完成：
 1. 先调 `select_report_template_tool(report_type, audience)` 获取
    `template_name`（形如 `education/xxx.html`）与 `data_keys`（模板需要的字段列表）；
-2. 从 context 的 `report_data.sub_tasks`（上游 DataAnalyst 产出的 exec_result /
-   reports / 统计数据）中，按 `data_keys` 逐项组装 `data` 字典；缺字段时再用
-   `execute_sql` / `compute_score_stats_tool` / `compute_rankings_tool` 等补齐；
+2. **优先**从上方「上游查数结果」与 context 的 `report_data.sub_tasks` 中，
+   按 `data_keys` 逐项组装 `data` 字典；上游 DataAnalyst 已按学校/班级/考试过滤时，
+   **禁止**再调 `execute_sql` 查全量、其他学校或多班合并数据；
+   `EXAM_NAME` / `SCOPE` / 参考人数必须与上游一致；
+   仅当上游确实缺字段时，才用 `execute_sql` / `compute_score_stats_tool` /
+   `compute_rankings_tool` 等补齐，且 SQL 仍须遵守范围约束；
    图表字段（形如 `XXX_CHART`）用 `build_chart_option_tool` 生成 JSON 字符串填入；
 3. 调 `render_html_report(template_name=..., data=..., title=...)` 生成 HTML；
 4. 调 `terminate(final_answer="学情报告已生成")` 结束。
@@ -79,9 +90,67 @@ class ToolAgent(ReActAgent):
         constraints=[
             "输出严格遵守 JSON 协议",
             "优先走工具调用，不做空想推理",
+            "报告范围必须与用户指定的学校/班级/考试一致，禁止用其他班级或全校数据",
+            "组装报告时优先使用上游 DataAnalyst 查数结果，禁止无必要重复 execute_sql",
             "完成后必须 terminate",
         ],
         desc=TOOL_AGENT_DESC,
+    )
+
+    def _build_prompt_variables(self, reply: AgentMessage) -> dict[str, Any]:
+        base = super()._build_prompt_variables(reply)
+        raw = dict(reply.context or {}).get("constraints")
+        constraints = raw if isinstance(raw, dict) else {}
+        base["scope_constraints"] = format_scope_constraints(constraints)
+        base["upstream_report_data"] = _format_upstream_report_data(
+            constraints.get("report_data")
+        )
+        return base
+
+
+def _format_upstream_report_data(report_data: Any, *, max_rows: int = 8) -> str:
+    """把上游 DataAnalyst 子任务产出格式化为 ToolExpert 可读摘要。"""
+    if not isinstance(report_data, dict):
+        return "（无上游查数结果；若必须查数，须严格遵守范围约束）"
+    sub_tasks = report_data.get("sub_tasks") or []
+    if not sub_tasks:
+        return "（无上游子任务数据；若必须查数，须严格遵守范围约束）"
+    blocks: list[str] = []
+    for st in sub_tasks:
+        if st.get("sub_task_agent") == "ToolExpert":
+            continue
+        idx = st.get("sub_task_index")
+        task = str(st.get("sub_task") or "").strip()
+        header = f"### 上游子任务[{idx}]：{task or '(无描述)'}"
+        parts = [header]
+        er = st.get("exec_result") or {}
+        cols = list(er.get("columns") or [])
+        rows = list(er.get("rows") or [])
+        if cols:
+            parts.append(f"列：{', '.join(str(c) for c in cols)}")
+        if rows:
+            parts.append(f"行数：{er.get('row_count') or len(rows)}")
+            preview = rows[:max_rows]
+            for i, row in enumerate(preview):
+                if isinstance(row, dict):
+                    cells = [f"{c}={row.get(c, '')}" for c in cols]
+                    parts.append(f"  [{i}] " + ", ".join(cells))
+                else:
+                    parts.append(f"  [{i}] {row}")
+            if len(rows) > max_rows:
+                parts.append(f"  … 另有 {len(rows) - max_rows} 行未展示")
+        sql = str(st.get("sql") or "").strip()
+        if sql:
+            parts.append(f"SQL：{sql[:500]}")
+        fa = str(st.get("final_answer") or "").strip()
+        if fa:
+            parts.append(f"结论摘要：{fa[:800]}")
+        blocks.append("\n".join(parts))
+    if not blocks:
+        return "（上游尚无 DataAnalyst 查数结果；若必须查数，须严格遵守范围约束）"
+    return (
+        "以下为上游 DataAnalyst 已查得的过滤后数据，组装报告时必须以此为准，"
+        "EXAM_NAME/SCOPE/人数/统计指标均须与之一致：\n\n" + "\n\n".join(blocks)
     )
 
 

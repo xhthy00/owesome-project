@@ -66,11 +66,16 @@ PLANNER_DESC = """[你的职责]
 [分解原则]
 1. 若问题是单一查询（如"用户有多少"、"本月销量 TOP 5"），返回 plans=[原问题] 即可；
 2. 若问题需要对比/趋势/因果分析（如"Q2/Q3 销售差异及原因"），拆成 2~4 个子任务；
-3. 子任务之间应尽量独立——不要让后一个依赖前一个的具体数值；
+3. 子任务之间应尽量**执行顺序独立**——不要让后一个依赖前一个的具体数值；
+   但**分析范围（学校/班级/年级/学生/考试）必须在每个 DataAnalyst 子任务描述中
+   完整重复**，不得因"独立"而省略范围，更不得默认查全量学生/全校/全考试；
 4. 绝对不要超过 6 个子任务；拆不动就合并；
 5. 不要在子任务里写 SQL 或表名——那是 DataAnalyst 的工作，你只写"查什么"；
 6. 对“可视化报告/分析报告/图表页面/HTML 报告”类子任务，优先标 `sub_task_agent`
    为 ToolExpert；其余场景默认 DataAnalyst，纯计算/工具操作也可标 ToolExpert。
+7. **范围传递**：原问题若指定了学校/班级/年级/学生/某次考试，**每一个**
+   DataAnalyst 子任务描述都必须显式写出该范围（用【】括起实体名），禁止写
+   "该班/该校/该考试"等指代——下游子任务看不到原问题，指代会丢失过滤条件。
 
 [教育学情报告分解模板]
 当问题是“生成 XX 班 / XX 年级 / XX 科目 / XX 学生 的学情/成绩分析报告”时，按
@@ -87,6 +92,12 @@ PLANNER_DESC = """[你的职责]
   ["查询各班均分与离散度并排名", {"task": "用 education/grade_comparison.html 模板组装 HTML 报告（数据取上游子任务）", "sub_task_agent": "ToolExpert"}]
 - 科目诊断报告（subject_diagnosis）：
   ["查询该科目分数段分布与及格率/优秀率", {"task": "用 education/subject_diagnosis.html 模板组装 HTML 报告（数据取上游子任务）", "sub_task_agent": "ToolExpert"}]
+- **学校/班级 + 科目 + 小题（逐题）诊断**（如「分析【XX学校】在【XX考试】的数学成绩，
+  细化到每一小题」）——每个 DataAnalyst 子任务都必须重复【学校名】【考试名】：
+  ["查询【XX学校】学生在【XX考试】【XX科目】的整体成绩：均分、及格率、优秀率、分数段分布",
+   "查询【XX学校】学生在【XX考试】【XX科目】中每一小题的满分、均分、得分率、难度、区分度，按题号排序",
+   {"task": "用 education/subject_diagnosis.html 模板组装 HTML 报告（数据取上游子任务，SUMMARY 含逐题分析，ITEM_TABLE 填小题明细表）", "sub_task_agent": "ToolExpert"}]
+  **严禁**第 2 步写成"查询每一小题统计"而不带学校名——那会查全量学生。
 - 个体画像/趋势/预警/群体对比同理，分别用 education/student_exam_analysis.html、
   education/trend_tracking.html、education/tier_alert.html、education/group_feature.html。
 - **单个学生多次考试分析**（如「分析学生001这几次考试的成绩」）：

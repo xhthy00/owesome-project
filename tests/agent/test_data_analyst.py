@@ -155,7 +155,7 @@ def test_data_analyst_retries_on_sql_error_via_observation(monkeypatch):
 
 def test_build_data_analyst_binds_runtime_context():
     pack = build_default_toolpack(datasource_id=9, user_id=123)
-    assert pack.bindings == {"datasource_id": 9, "user_id": 123}
+    assert pack.bindings == {"datasource_id": 9, "user_id": 123, "workspace_oid": 1}
 
     rendered = pack.render_prompt()
     assert "datasource_id" not in rendered
@@ -166,3 +166,33 @@ def test_build_data_analyst_binds_runtime_context():
 
 def test_data_analyst_profile_has_tools_prompt_placeholder():
     assert "{{tools_prompt}}" in DataAnalystAgent.profile.desc
+    assert "{{scope_constraints}}" in DataAnalystAgent.profile.desc
+
+
+def test_data_analyst_injects_scope_constraints_in_system_prompt():
+    llm = _ScriptedLlm(['{"tool": "terminate", "args": {"final_answer": "ok"}}'])
+    agent = build_data_analyst(llm_client=llm, datasource_id=1)
+
+    _run(
+        agent.generate_reply(
+            received_message=AgentMessage(
+                content="查询小题得分率",
+                role="user",
+                context={
+                    "constraints": {
+                        "target_school": "南京市第一中学",
+                        "target_student": None,
+                        "required_keywords": ["数学", "期末"],
+                        "locked_tables": [],
+                    }
+                },
+            ),
+            sender=UserProxyAgent(),
+        )
+    )
+
+    system_msg = llm.calls[0][0]["content"]
+    assert "南京市第一中学" in system_msg
+    assert "数学" in system_msg
+    assert "范围必须与用户指定范围一致" in system_msg
+    assert "{{scope_constraints}}" not in system_msg

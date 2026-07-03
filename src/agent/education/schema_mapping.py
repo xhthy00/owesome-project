@@ -16,14 +16,19 @@
 
 映射来源
 --------
-``resolve_score_schema`` 的优先级：工作区配置 JSON > 数据源 schema 启发式推断
-> 内置宽表默认。Phase 1 只实现"启发式推断 + 默认"两路；JSON 配置留 Phase 3。
+``resolve_score_schema`` 的优先级：``config/education_schema.json``（或环境变量
+``EDU_SCHEMA_CONFIG_PATH`` 指定路径）> 数据源 schema 启发式推断 > 内置宽表默认。
 """
 
 from __future__ import annotations
 
+import json
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+_DEFAULT_SCHEMA_CONFIG_PATH = Path("config/education_schema.json")
 
 
 @dataclass
