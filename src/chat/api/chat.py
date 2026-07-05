@@ -626,6 +626,16 @@ async def chat_stream(
                     reasoning_text = text
                     push("reasoning", {"text": text})
 
+                gen_kwargs: dict = {}
+                from src.agent.education.prompt_context import (
+                    build_education_prompt_extras,
+                    is_education_question,
+                )
+                if is_education_question(request.question):
+                    term, training = build_education_prompt_extras()
+                    gen_kwargs["terminologies"] = term
+                    gen_kwargs["data_training"] = training
+
                 result = generator.generate_sql(
                     question=request.question,
                     datasource_id=request.datasource_id,
@@ -634,6 +644,7 @@ async def chat_stream(
                     step_callback=on_step,
                     reasoning_callback=on_reasoning,
                     user_id=uid,
+                    **gen_kwargs,
                 )
 
                 steps_acc = list(result.get("steps", steps_acc))

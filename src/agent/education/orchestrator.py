@@ -25,9 +25,17 @@ from typing import Any, Awaitable, Callable
 
 from src.agent.education.charts import build_chart_option
 from src.agent.education.config import EducationConfig, load_config
+from src.agent.education.query_parse import extract_school_target
 from src.agent.education.report_types import Audience, ReportSpec, ReportType
-from src.agent.education.schema_mapping import ScoreSchemaMapping
+from src.agent.education.schema_mapping import ScoreSchemaMapping, load_schema_from_config
 from src.agent.education.stats import compute_rankings, compute_score_stats, identify_at_risk_students
+from src.agent.education.subject_diagnosis import (
+    build_diagnosis_recommendations,
+    build_diagnosis_summary,
+    build_item_table_html,
+    build_knowledge_table_html,
+    enrich_knowledge_rows,
+)
 from src.agent.education.templates import select_report_template
 
 logger = logging.getLogger(__name__)
@@ -46,7 +54,7 @@ _INTENT_KEYWORDS: list[tuple[ReportType, tuple[str, ...]]] = [
     (ReportType.TIER_ALERT, ("预警", "临界生", "退步生", "偏科", "分层")),
     (ReportType.TREND_TRACKING, ("趋势", "变化", "历次", "走势", "进退步")),
     (ReportType.STUDENT_PROFILE, ("学生个体", "个人报告", "该生", "这名学生", "学情报告", "这几次考试", "考试成绩分析")),
-    (ReportType.SUBJECT_DIAGNOSIS, ("科目诊断", "科目分析", "学科诊断", "某科", "数学分析", "语文分析")),
+    (ReportType.SUBJECT_DIAGNOSIS, ("科目诊断", "科目分析", "学科诊断", "某科", "数学分析", "语文分析", "小题", "逐题", "每一小题", "每一题", "知识点", "详细分析")),
     (ReportType.GRADE_COMPARISON, ("年级对比", "各班对比", "班级对比", "年级排名", "班级排名")),
     (ReportType.CLASS_OVERVIEW, ("班级总览", "班级报告", "班级分析", "班级成绩", "期中分析", "期末分析")),
 ]
@@ -82,6 +90,9 @@ class ReportIntentResolver:
         exam_name = _extract_exam(q)
         if exam_name:
             filters["exam_name"] = exam_name
+        school_name = extract_school_target(q)
+        if school_name:
+            filters["school_name"] = school_name
         return ReportSpec(
             report_type=report_type,
             audience=audience,
@@ -104,9 +115,15 @@ class ReportIntentResolver:
 
 import re as _re
 
-_CLASS_RE = _re.compile(r"(初三|初二|初一|高三|高二|高一|九年级|八年级|七年级|六年级|五年级|四年级|三年级)[\d班]*\d?班")
+_CLASS_RE = _re.compile(
+    r"高[一二三]\(\d+\)班|"
+    r"(初三|初二|初一|高三|高二|高一|九年级|八年级|七年级|六年级|五年级|四年级|三年级)[\d班]*\d?班"
+)
 _SUBJECT_RE = _re.compile(r"(数学|语文|英语|物理|化学|生物|政治|历史|地理|科学)")
 _EXAM_RE = _re.compile(r"(期中|期末|月考|摸底|模拟|单元测验)")
+_EXAM_FULL_RE = _re.compile(
+    r"([\u4e00-\u9fff]{2,30}?(?:质量检测|模拟考试|学情检测|单元测验|期末考试|期中考试|检测试卷))"
+)
 
 
 def _extract_class_name(q: str) -> str | None:
@@ -120,6 +137,9 @@ def _extract_subject(q: str) -> str | None:
 
 
 def _extract_exam(q: str) -> str | None:
+    m = _EXAM_FULL_RE.search(q)
+    if m:
+        return m.group(1).strip("在的于对")
     m = _EXAM_RE.search(q)
     return m.group(1) if m else None
 
@@ -221,7 +241,15 @@ class ReportOrchestrator:
         """
         rows = await self._fetch_score_rows(spec, mapping)
         scores = [float(r.get("score") or 0) for r in rows if r.get("score") is not None]
-        stats = compute_score_stats(scores, self._config)
+        full_score = _resolve_full_score_from_rows(rows)
+        cfg = self._config
+        bundle = load_schema_from_config()
+        if bundle is not None:
+            cfg.pass_ratio = bundle.meta.pass_ratio
+            cfg.excellent_ratio = bundle.meta.excellent_ratio
+            if bundle.meta.score_segment_ratios:
+                cfg.score_segment_ratios = list(bundle.meta.score_segment_ratios)
+        stats = compute_score_stats(scores, cfg, full_score)
 
         charts: dict[str, str] = {}
         if spec.include_charts:
@@ -234,6 +262,8 @@ class ReportOrchestrator:
         class_name = spec.filters.get("class_name", "")
         subject = spec.filters.get("subject", "")
         exam_name = spec.filters.get("exam_name", "")
+        school_name = spec.filters.get("school_name", "")
+        scope_label = school_name or class_name or "全年级"
         # 组装通用字段；具体模板未用到的 key 由 Jinja2/regex 兜底为空。
         data: dict[str, Any] = {
             "REPORT_TITLE": self._title(spec),
@@ -243,7 +273,7 @@ class ReportOrchestrator:
             "EXAM_NAME": exam_name or "本次考试",
             "SUBJECT_NAME": subject or "全科",
             "GRADE_NAME": "",
-            "SCOPE": class_name or "全年级",
+            "SCOPE": scope_label,
             "TOTAL_COUNT": str(stats.get("count") or 0),
             "AVG_SCORE": _fmt(stats.get("avg")),
             "PASS_RATE": _fmt(stats.get("pass_rate")),
@@ -254,11 +284,47 @@ class ReportOrchestrator:
             "SUBJECT_BREAKDOWN": "",
             "RANK_INFO": "",
             "SEGMENT_TABLE": _segment_table(stats.get("segments", [])),
+            "ITEM_TABLE": "",
+            "KNOWLEDGE_TABLE": "",
+            "WEAK_KNOWLEDGE_LIST": "",
             "SUMMARY": "<p>由 ReportOrchestrator 自动生成。</p>",
             "RECOMMENDATIONS": "<p>结合 KPI 与分数段分布关注薄弱区间。</p>",
             "_stats": stats,
             "_charts": charts,
         }
+        if spec.report_type == ReportType.SUBJECT_DIAGNOSIS and mapping.source == "config_edu":
+            item_rows = await self._fetch_item_rows(spec, mapping)
+            knowledge_rows = enrich_knowledge_rows(await self._fetch_knowledge_rows(spec, mapping))
+            data["ITEM_TABLE"] = build_item_table_html(item_rows)
+            data["KNOWLEDGE_TABLE"] = build_knowledge_table_html(knowledge_rows)
+            weak = [
+                str(r.get("knowledge_name") or "")
+                for r in knowledge_rows
+                if r.get("level") == "需加强"
+            ]
+            data["WEAK_KNOWLEDGE_LIST"] = "、".join(weak[:8])
+            data["SUMMARY"] = build_diagnosis_summary(
+                school_name=school_name,
+                exam_name=exam_name or "",
+                subject_name=subject or "",
+                stats=stats,
+                item_rows=item_rows,
+                knowledge_rows=knowledge_rows,
+            )
+            data["RECOMMENDATIONS"] = build_diagnosis_recommendations(
+                knowledge_rows=knowledge_rows,
+                item_rows=item_rows,
+            )
+            if knowledge_rows:
+                charts["KNOWLEDGE_CHART"] = build_chart_option(
+                    "subject_bar",
+                    {
+                        "categories": [str(r.get("knowledge_name") or "") for r in knowledge_rows[:12]],
+                        "values": [float(r.get("score_rate") or 0) for r in knowledge_rows[:12]],
+                    },
+                    title="知识点得分率",
+                )
+                data["KNOWLEDGE_CHART"] = charts.get("KNOWLEDGE_CHART", "")
         return data
 
     async def _fetch_score_rows(
@@ -275,26 +341,117 @@ class ReportOrchestrator:
         return [dict(zip(cols, row)) for row in raw_rows]
 
     def _build_sql(self, spec: ReportSpec, mapping: ScoreSchemaMapping) -> str:
-        """按 mapping 生成只读 SELECT。Phase 3 仅覆盖宽表 + 分表的最简均分查询。"""
+        """按 mapping 生成只读 SELECT。"""
+        if mapping.source == "config_edu" and mapping.mode == "normalized":
+            return self._build_sql_config_edu(spec, mapping)
         class_name = spec.filters.get("class_name")
         subject = spec.filters.get("subject")
         if mapping.mode == "wide":
             table = mapping.table
-            # 宽表：取第一个科目列做均分演示（完整实现需遍历 subject_columns）
             subject_col = next(iter(mapping.subject_columns.values()), None)
             if not subject_col:
                 return ""
-            where = f" WHERE {mapping.fields.get('class_name') or 'class'} = '{class_name}'" if class_name else ""
+            where = f" WHERE {mapping.fields.get('class_name') or 'class'} = '{_sql_escape(class_name)}'" if class_name else ""
             return f"SELECT {subject_col} AS score FROM {table}{where} LIMIT 1000"
-        # 分表
         score_tbl = mapping.tables.get("score", "score")
         score_field = mapping.fields.get("score", "score")
         subject_field = mapping.fields.get("subject", "subject")
         where_parts: list[str] = []
         if subject:
-            where_parts.append(f"{subject_field} = '{subject}'")
+            where_parts.append(f"{subject_field} = '{_sql_escape(subject)}'")
         where = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
         return f"SELECT {score_field} AS score FROM {score_tbl}{where} LIMIT 1000"
+
+    def _build_sql_config_edu(self, spec: ReportSpec, mapping: ScoreSchemaMapping) -> str:
+        f = mapping.fields
+        score_expr = f.get("score", "sc.score")
+        full_expr = f.get("full_score", "sc.exam_score")
+        subject_expr = f.get("subject", "sc.subject_name")
+        class_expr = f.get("class_name", "sc.class")
+        school_expr = f.get("school_name", "sch.name")
+        exam_expr = f.get("exam_name", "e.exam_name")
+        sql = (
+            f"SELECT {score_expr} AS score, {full_expr} AS exam_score\n"
+            "FROM tb_score sc\n"
+            "JOIN tb_school sch ON sc.school_id = sch.id\n"
+            "JOIN tb_exam e ON sc.exam_id = e.id"
+        )
+        where = _filters_to_where(spec.filters, school_expr, class_expr, subject_expr, exam_expr)
+        if where:
+            sql += f"\nWHERE {where}"
+        return sql + "\nLIMIT 1000"
+
+    def _build_item_diagnosis_sql(self, spec: ReportSpec, mapping: ScoreSchemaMapping) -> str:
+        f = mapping.fields
+        school_expr = f.get("school_name", "sch.name")
+        class_expr = f.get("class_name", "sc.class")
+        subject_expr = f.get("subject", "sc.subject_name")
+        exam_expr = f.get("exam_name", "e.exam_name")
+        sql = (
+            "SELECT sd.question_no,\n"
+            "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+            "       eq.question_score AS full_score,\n"
+            "       ROUND(AVG(sd.score), 2) AS avg_score,\n"
+            "       ROUND(AVG(sd.score)::numeric / NULLIF(eq.question_score, 0) * 100, 2) AS score_rate\n"
+            "FROM tb_score_detail sd\n"
+            "JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
+            "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+            "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
+            "JOIN tb_school sch ON sc.school_id = sch.id\n"
+            "JOIN tb_exam e ON sc.exam_id = e.id"
+        )
+        where = _filters_to_where(spec.filters, school_expr, class_expr, subject_expr, exam_expr)
+        if where:
+            sql += f"\nWHERE {where}"
+        return (
+            sql
+            + "\nGROUP BY sd.question_no, k.knowledge_name, eq.question_score\n"
+            "ORDER BY sd.question_no\nLIMIT 1000"
+        )
+
+    def _build_knowledge_diagnosis_sql(self, spec: ReportSpec, mapping: ScoreSchemaMapping) -> str:
+        f = mapping.fields
+        school_expr = f.get("school_name", "sch.name")
+        class_expr = f.get("class_name", "sc.class")
+        subject_expr = f.get("subject", "sc.subject_name")
+        exam_expr = f.get("exam_name", "e.exam_name")
+        sql = (
+            "SELECT COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+            "       COUNT(DISTINCT sd.question_no) AS question_count,\n"
+            "       ROUND(SUM(sd.score)::numeric / NULLIF(SUM(eq.question_score), 0) * 100, 2) AS score_rate\n"
+            "FROM tb_score_detail sd\n"
+            "JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
+            "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+            "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
+            "JOIN tb_school sch ON sc.school_id = sch.id\n"
+            "JOIN tb_exam e ON sc.exam_id = e.id"
+        )
+        where = _filters_to_where(spec.filters, school_expr, class_expr, subject_expr, exam_expr)
+        if where:
+            sql += f"\nWHERE {where}"
+        return sql + "\nGROUP BY k.knowledge_name\nORDER BY score_rate ASC\nLIMIT 1000"
+
+    async def _fetch_knowledge_rows(
+        self,
+        spec: ReportSpec,
+        mapping: ScoreSchemaMapping,
+    ) -> list[dict[str, Any]]:
+        sql = self._build_knowledge_diagnosis_sql(spec, mapping)
+        result = await self._execute_sql(sql)
+        cols = result.get("columns") or []
+        raw_rows = result.get("rows") or []
+        return [dict(zip(cols, row)) for row in raw_rows]
+
+    async def _fetch_item_rows(
+        self,
+        spec: ReportSpec,
+        mapping: ScoreSchemaMapping,
+    ) -> list[dict[str, Any]]:
+        sql = self._build_item_diagnosis_sql(spec, mapping)
+        result = await self._execute_sql(sql)
+        cols = result.get("columns") or []
+        raw_rows = result.get("rows") or []
+        return [dict(zip(cols, row)) for row in raw_rows]
 
     @staticmethod
     def _title(spec: ReportSpec) -> str:
@@ -328,6 +485,44 @@ def _fmt(v: Any) -> str:
     if isinstance(v, float):
         return f"{v:.2f}"
     return str(v)
+
+
+def _sql_escape(val: str) -> str:
+    return (val or "").replace("'", "''")
+
+
+def _filters_to_where(
+    filters: dict[str, str],
+    school_expr: str,
+    class_expr: str,
+    subject_expr: str,
+    exam_expr: str,
+) -> str:
+    parts: list[str] = []
+    if filters.get("school_name"):
+        parts.append(f"{school_expr} = '{_sql_escape(filters['school_name'])}'")
+    if filters.get("class_name"):
+        parts.append(f"{class_expr} = '{_sql_escape(filters['class_name'])}'")
+    if filters.get("subject"):
+        parts.append(f"{subject_expr} = '{_sql_escape(filters['subject'])}'")
+    if filters.get("exam_name"):
+        parts.append(f"{exam_expr} LIKE '%{_sql_escape(filters['exam_name'])}%'")
+    return " AND ".join(parts)
+
+
+def _resolve_full_score_from_rows(rows: list[dict[str, Any]]) -> float | None:
+    seen: set[float] = set()
+    for row in rows:
+        raw = row.get("exam_score")
+        if raw is None or raw == "":
+            continue
+        try:
+            seen.add(float(raw))
+        except (TypeError, ValueError):
+            continue
+    if not seen:
+        return None
+    return max(seen) if len(seen) > 1 else seen.pop()
 
 
 def _now_str() -> str:

@@ -22,6 +22,8 @@ from src.agent.education.schema_mapping import (
     ScoreSchemaMapping,
     infer_normalized_mapping,
     infer_wide_mapping,
+    load_schema_from_config,
+    validate_mapping_against_schema,
 )
 from src.agent.education.stats import compute_score_stats
 from src.agent.education.templates import select_report_template
@@ -71,6 +73,41 @@ def test_compute_score_stats_custom_thresholds_override():
     stats = compute_score_stats([55, 60, 89, 95], cfg)
     assert stats["pass_rate"] == 100.0
     assert stats["excellent_rate"] == 25.0
+
+
+def test_compute_score_stats_with_dynamic_full_score_150():
+    cfg = EducationConfig(pass_ratio=0.6, excellent_ratio=0.85)
+    stats = compute_score_stats([91, 100, 120], cfg, full_score=150)
+    assert stats["pass_rate"] == 100.0
+    assert stats["full_score"] == 150
+    stats2 = compute_score_stats([85, 91, 100], cfg, full_score=150)
+    assert stats2["pass_rate"] == pytest.approx(66.67, abs=0.1)
+
+
+def test_compute_score_stats_tool_reads_exam_score_column():
+    result = _run(
+        compute_score_stats_tool.execute(
+            rows=[[91, 150], [100, 150], [120, 150]],
+            columns=["score", "exam_score"],
+            score_field="score",
+            full_score_field="exam_score",
+        )
+    )
+    assert result.data["full_score"] == 150
+    assert result.data["pass_rate"] == 100.0
+    assert not result.data.get("warnings")
+
+
+def test_compute_score_stats_tool_warns_without_exam_score():
+    result = _run(
+        compute_score_stats_tool.execute(
+            rows=[[60], [70]],
+            columns=["score"],
+            score_field="score",
+        )
+    )
+    assert result.data["full_score"] == 100
+    assert result.data.get("warnings")
 
 
 # ---- config ---------------------------------------------------------------
@@ -177,6 +214,28 @@ def test_compute_score_stats_tool_with_rows_and_columns():
     assert result.data["pass_rate"] == pytest.approx(66.67, abs=0.01)
 
 
+def test_compute_score_stats_tool_with_exec_result():
+    result = _run(
+        compute_score_stats_tool.execute(
+            exec_result={
+                "columns": ["score", "exam_score"],
+                "rows": [[91, 150], [100, 150]],
+            },
+        )
+    )
+    assert result.data["count"] == 2
+    assert result.data["full_score"] == 150
+
+
+def test_compute_score_stats_tool_auto_score_field_from_dict_rows():
+    result = _run(
+        compute_score_stats_tool.execute(
+            rows=[{"name": "a", "score": 80}, {"name": "b", "score": 70}],
+        )
+    )
+    assert result.data["count"] == 2
+
+
 def test_compute_score_stats_tool_missing_input_returns_error_not_raises():
     result = _run(compute_score_stats_tool.execute())
     assert "error" in result.data
@@ -249,6 +308,10 @@ def test_select_report_template_parent_audience_suffix():
 # ---- tools: resolve_score_schema ------------------------------------------
 
 def test_resolve_score_schema_wide_fallback(monkeypatch):
+    monkeypatch.setattr(
+        "src.agent.education.tools.load_schema_from_config",
+        lambda *_a, **_kw: None,
+    )
     schema = [
         {"name": "student_score", "comment": "学生考试成绩", "fields": [
             {"name": "id", "comment": "学号"},
@@ -273,6 +336,10 @@ def test_resolve_score_schema_wide_fallback(monkeypatch):
 
 
 def test_resolve_score_schema_normalized_preferred(monkeypatch):
+    monkeypatch.setattr(
+        "src.agent.education.tools.load_schema_from_config",
+        lambda *_a, **_kw: None,
+    )
     schema = [
         {"name": "student", "comment": "学生", "fields": [{"name": "id"}, {"name": "name"}]},
         {"name": "score", "comment": "成绩", "fields": [{"name": "subject"}, {"name": "score"}]},
@@ -297,6 +364,58 @@ def test_resolve_score_schema_datasource_failure_returns_error(monkeypatch):
     monkeypatch.setattr(biz, "_load_datasource", boom)
     result = _run(resolve_score_schema.execute(datasource_id=999))
     assert result.data["error"]
+
+
+def test_load_schema_from_config_returns_tb_mapping():
+    bundle = load_schema_from_config()
+    assert bundle is not None
+    assert bundle.mapping.source == "config_edu"
+    assert bundle.mapping.tables["score"] == "tb_score"
+    assert bundle.mapping.fields["full_score"] == "sc.exam_score"
+    assert bundle.meta.pass_ratio == 0.6
+
+
+def test_validate_mapping_against_schema_warns_missing_tables():
+    bundle = load_schema_from_config()
+    assert bundle is not None
+    warnings = validate_mapping_against_schema(
+        bundle.mapping,
+        [{"name": "student"}, {"name": "score"}],
+    )
+    assert any("tb_score" in w or "tb_school" in w for w in warnings)
+
+
+def test_resolve_score_schema_config_preferred_over_infer(monkeypatch):
+    schema = [
+        {"name": "student", "comment": "学生", "fields": [{"name": "id"}]},
+        {"name": "score", "comment": "成绩", "fields": [{"name": "score"}]},
+    ]
+
+    def fake_load(datasource_id, workspace_oid=None):
+        return "pg", {}, "ds-test"
+
+    monkeypatch.setattr(biz, "_load_datasource", fake_load)
+    monkeypatch.setattr("src.datasource.db.db.get_schema_info", lambda *_a, **_kw: schema)
+
+    result = _run(resolve_score_schema.execute(datasource_id=1))
+    assert result.data["source"] == "config_edu"
+    assert result.data["tables"]["score"] == "tb_score"
+    assert result.data["tables"]["school"] == "tb_school"
+
+
+def test_resolve_score_schema_config_warns_missing_table(monkeypatch):
+    schema = [{"name": "tb_score", "fields": []}]
+
+    def fake_load(datasource_id, workspace_oid=None):
+        return "pg", {}, "ds-test"
+
+    monkeypatch.setattr(biz, "_load_datasource", fake_load)
+    monkeypatch.setattr("src.datasource.db.db.get_schema_info", lambda *_a, **_kw: schema)
+
+    result = _run(resolve_score_schema.execute(datasource_id=1))
+    assert result.data["source"] == "config_edu"
+    assert result.data.get("warnings")
+    assert "tb_school" in result.content or any("tb_school" in w for w in result.data["warnings"])
 
 
 # ---- template render via render_html_report -------------------------------
@@ -983,3 +1102,74 @@ def test_long_table_total_column_zero_sums_subjects():
         )
     )
     assert "240" in result.data["STUDENT_ARCHIVE_TABLE"]
+
+
+# ---- build_subject_diagnosis_report_tool ----------------------------------
+
+
+def test_build_subject_diagnosis_report_tool_renders_html(monkeypatch):
+    """一键工具：mock 数据库，验证返回 HTML 载荷且知识点名取自 tb_knowledge。"""
+    from src.agent.education import tools as edu_tools
+
+    item_rows = [
+        ["1", "集合及其运算", 5, 4.5, 90.0],
+        ["16", "分段函数", 5, 2.0, 40.0],
+        ["18", "函数的奇偶性与单调性", 5, 3.0, 60.0],
+    ]
+    knowledge_rows = [
+        ["分段函数", 1, 40.0],
+        ["函数的奇偶性与单调性", 1, 60.0],
+        ["集合及其运算", 1, 90.0],
+    ]
+    score_rows = [[91, 150], [100, 150], [120, 150]]
+
+    def fake_load_datasource(_ds_id, _ws=None):
+        return ("pg", {}, "test-ds")
+
+    def fake_execute_sql(db_type, config, sql):
+        if "sd.question_no" in sql:
+            return True, "", {"columns": ["question_no", "knowledge_name", "full_score", "avg_score", "score_rate"], "rows": item_rows}
+        if "COUNT(DISTINCT sd.question_no)" in sql:
+            return True, "", {"columns": ["knowledge_name", "question_count", "score_rate"], "rows": knowledge_rows}
+        return True, "", {"columns": ["score", "exam_score"], "rows": score_rows}
+
+    monkeypatch.setattr(biz, "_load_datasource", fake_load_datasource)
+    monkeypatch.setattr("src.datasource.db.db.execute_sql", fake_execute_sql)
+
+    result = _run(
+        edu_tools.build_subject_diagnosis_report_tool.execute(
+            datasource_id=1,
+            school_name="南京市第一中学",
+            subject_name="数学",
+            exam_name="期末质量检测",
+        )
+    )
+    assert result.data["output_type"] == "html"
+    html = result.data["html"]
+    # 知识点名称来自数据库，不是臆造的
+    assert "集合及其运算" in html
+    assert "分段函数" in html
+    assert "函数的奇偶性与单调性" in html
+    # 不应出现数据库中不存在的知识点名
+    assert "立体几何" not in html
+    assert "解析几何" not in html
+
+
+def test_build_subject_diagnosis_report_tool_no_data(monkeypatch):
+    """查无数据时返回 error，不抛异常。"""
+    from src.agent.education import tools as edu_tools
+
+    monkeypatch.setattr(biz, "_load_datasource", lambda *_a, **_kw: ("pg", {}, "ds"))
+    monkeypatch.setattr(
+        "src.datasource.db.db.execute_sql",
+        lambda *_a, **_kw: (True, "", {"columns": [], "rows": []}),
+    )
+
+    result = _run(
+        edu_tools.build_subject_diagnosis_report_tool.execute(
+            datasource_id=1,
+            school_name="不存在学校",
+            subject_name="数学",
+        )
+    )
+    assert "error" in result.data

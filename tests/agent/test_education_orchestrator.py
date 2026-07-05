@@ -16,7 +16,7 @@ import pytest
 from src.agent.education.config import EducationConfig
 from src.agent.education.orchestrator import ReportIntentResolver, ReportOrchestrator
 from src.agent.education.report_types import Audience, ReportType
-from src.agent.education.schema_mapping import ScoreSchemaMapping
+from src.agent.education.schema_mapping import ScoreSchemaMapping, load_schema_from_config
 
 
 def _run(coro):
@@ -191,3 +191,71 @@ def test_orchestrator_locked_class_overrides_question_class():
     assert "初三2班" not in res.html
     assert "初三1班" in captured["sql"]
     assert "初三2班" not in captured["sql"]
+
+
+def _config_edu_mapping() -> ScoreSchemaMapping:
+    bundle = load_schema_from_config()
+    assert bundle is not None
+    return bundle.mapping
+
+
+def test_orchestrator_config_edu_sql_includes_school_and_exam_score():
+    captured = {}
+
+    async def fake_execute(sql):
+        captured["sql"] = sql
+        return {
+            "columns": ["score", "exam_score"],
+            "rows": [[120, 150], [135, 150]],
+            "row_count": 2,
+        }
+
+    async def fake_schema():
+        return _config_edu_mapping()
+
+    orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
+    res = _run(
+        orch.run("分析【南京市第一中学】【高一(1)班】数学成绩")
+    )
+    sql = captured["sql"]
+    assert "tb_school" in sql
+    assert "sch.name" in sql
+    assert "exam_score" in sql
+    assert "南京市第一中学" in sql
+    assert res.stats["full_score"] == 150
+    assert res.stats["pass_rate"] == 100.0
+
+
+def test_orchestrator_subject_diagnosis_includes_item_table():
+    calls: list[str] = []
+
+    async def fake_execute(sql):
+        calls.append(sql)
+        if "tb_knowledge" in sql and "GROUP BY k.knowledge_name" in sql:
+            return {
+                "columns": ["knowledge_name", "question_count", "score_rate"],
+                "rows": [["函数", 3, 55.0], ["集合", 2, 82.0]],
+                "row_count": 2,
+            }
+        if "tb_score_detail" in sql:
+            return {
+                "columns": ["question_no", "knowledge_name", "full_score", "avg_score", "score_rate"],
+                "rows": [[1, "集合", 5, 4.0, 80.0]],
+                "row_count": 1,
+            }
+        return {
+            "columns": ["score", "exam_score"],
+            "rows": [[120, 150]],
+            "row_count": 1,
+        }
+
+    async def fake_schema():
+        return _config_edu_mapping()
+
+    orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
+    res = _run(orch.run("南京市第一中学数学科目诊断，细化到每一小题"))
+    assert any("tb_score_detail" in s for s in calls)
+    assert any("GROUP BY k.knowledge_name" in s for s in calls)
+    assert "知识点" in res.html
+    assert "函数" in res.html
+    assert "需加强" in res.html or "薄弱" in res.html

@@ -77,7 +77,10 @@ DATA_ANALYST_DESC = """[分析范围约束]
    成绩表字段映射（宽表/分表、科目列名），据此写 SQL，不要凭记忆猜列名。
 3. **统计 MUST 走工具**：均分/及格率/优秀率/分数段用
    `compute_score_stats_tool`；百分比/同比/差值用 `calculate`。**禁止心算**
-   及格率/优秀率/分数段人数。
+   及格率/优秀率/分数段人数。查 KPI 时 SQL **须 SELECT 带出 `exam_score`**
+   （卷面满分，来自 tb_exam/tb_score），再调 `compute_score_stats_tool`——**推荐**
+   `exec_result=<上一步 execute_sql 的 data 整包>`，或 `rows`+`columns`+`score_field="score"`；
+   `score_field` 可省略（自动识别 score/avg_score 列）。**禁止写死 60/85/150**。
 4. **图表**：分数段柱图 → `build_chart_option_tool("score_distribution", {...})`；
    各科雷达 → `"subject_radar"`；班级对比 → `"class_compare_bar"`；科目柱状
    → `"subject_bar"`。返回的 `data.option`（JSON 字符串）直接填入模板对应
@@ -87,11 +90,16 @@ DATA_ANALYST_DESC = """[分析范围约束]
    - **单个学生多次考试分析** → 调 `build_student_exam_report_data_tool(student_name=..., records=...)`，
      `student_name` 必须与用户指定学生一致，**只为该学生生成一份报告**；
    - 其他报告类型：data keys 备齐后调 `render_html_report(template_name=..., data=...)`，再 `terminate`。
+   - **科目逐题/知识点诊断报告**：DataAnalyst 只需查整体 KPI（均分/及格率/分数段），
+     **知识点与小题明细由 ToolExpert 调 `build_subject_diagnosis_report_tool` 一键完成**
+     （内部固定 LEFT JOIN `tb_knowledge` 取 `knowledge_name`）。DataAnalyst **禁止**
+     自行写小题/知识点 JOIN SQL、**禁止**根据题目内容臆造知识点名
+     （如「立体几何」「解析几何」等数据库中不存在的名称）。
 6. **Team 模式分工**：若 Planner 已将「组装 HTML 报告」分配给 ToolExpert 子任务，
    当前 DataAnalyst 子任务**只做查数/统计**，**禁止**调用 `render_html_report` 或
    `build_*_report_data_tool`，查完 `terminate` 即可。
-7. **默认阈值**：及格 60 / 优秀 85；用户指定（如"60 分及格"）时用
-   `compute_score_stats_tool(pass_threshold=..., excellent_threshold=...)` 覆盖。
+7. **及格/优秀阈值**：由 ``exam_score``（卷面满分）× 0.6 / 0.85 动态计算；
+   用户指定绝对分数线时用 `compute_score_stats_tool(pass_threshold=..., excellent_threshold=...)` 覆盖。
 8. **受众**：用户说"给家长看"→ `audience=parent`；"给校长看"→ `principal`；
    未指定 → `default`。受众影响模板文案密度，不影响数值。"""
 

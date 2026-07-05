@@ -23,6 +23,7 @@ from src.agent.education.schema_mapping import (
     ScoreSchemaMapping,
     infer_normalized_mapping,
     infer_wide_mapping,
+    load_schema_from_config,
 )
 
 router = APIRouter(prefix="/education", tags=["education"])
@@ -109,6 +110,9 @@ def _build_orchestrator(datasource_id: int, workspace_oid: int | None) -> Report
         }
 
     async def resolve_schema() -> ScoreSchemaMapping:
+        bundle = load_schema_from_config()
+        if bundle is not None:
+            return bundle.mapping
         schema = get_schema_info(db_type, config)
         normalized = infer_normalized_mapping(schema)
         if normalized is not None:

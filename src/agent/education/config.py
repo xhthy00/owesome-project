@@ -32,6 +32,11 @@ class EducationConfig:
 
     pass_threshold: float = 60.0
     excellent_threshold: float = 85.0
+    #: 当提供 ``full_score`` 时，及格/优秀线 = full_score × ratio（优先于绝对阈值）。
+    pass_ratio: float = 0.6
+    excellent_ratio: float = 0.85
+    #: 当提供 ``full_score`` 时，分数段边界 = full_score × ratio 列表。
+    score_segment_ratios: list[float] = field(default_factory=lambda: [0.6, 0.7, 0.8, 0.9])
     #: 及格线上下 ``critical_margin`` 分视为临界生。
     critical_margin: float = 5.0
     #: 相邻考试退步超过该分视为大幅退步（负数表示下降）。
@@ -45,7 +50,10 @@ class EducationConfig:
         """返回排序去重、含 0 与满分的分数段边界。"""
         upper = full_score if full_score is not None else self.default_full_score
         segs = {0.0, float(upper)}
-        segs.update(float(s) for s in self.score_segments)
+        if full_score is not None and self.score_segment_ratios:
+            segs.update(float(full_score) * float(r) for r in self.score_segment_ratios)
+        else:
+            segs.update(float(s) for s in self.score_segments)
         return sorted(segs)
 
 

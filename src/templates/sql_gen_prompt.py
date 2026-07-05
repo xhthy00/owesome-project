@@ -13,69 +13,140 @@ from typing import List, Optional
 #: ``build_sql_generation_prompt`` 内强制注入，避免污染非教育场景。
 EDUCATION_SQL_EXAMPLES = """<sql-examples>
   <example>
-    <question>初三1班各科平均分和及格率</question>
-    <suggestion-answer>SELECT subject,
-       ROUND(AVG(score), 2) AS avg_score,
-       ROUND(SUM(CASE WHEN score >= 60 THEN 1 ELSE 0 END)::numeric / COUNT(*) * 100, 2) AS pass_rate
-FROM score s
-JOIN student st ON s.student_id = st.id
-WHERE st.class_name = '初三1班'
-GROUP BY subject
+    <question>南京市第一中学高一(1)班数学平均分和及格率</question>
+    <suggestion-answer>SELECT sch.name AS school,
+       sc.class,
+       sc.subject_name,
+       sc.exam_score,
+       COUNT(*) AS cnt,
+       ROUND(AVG(sc.score), 2) AS avg_score,
+       ROUND(SUM(CASE WHEN sc.score >= sc.exam_score * 0.6 THEN 1 ELSE 0 END)::numeric
+             / COUNT(*) * 100, 2) AS pass_rate,
+       ROUND(SUM(CASE WHEN sc.score >= sc.exam_score * 0.85 THEN 1 ELSE 0 END)::numeric
+             / COUNT(*) * 100, 2) AS excellent_rate
+FROM tb_score sc
+JOIN tb_school sch ON sc.school_id = sch.id
+WHERE sch.name = '南京市第一中学'
+  AND sc.class = '高一(1)班'
+  AND sc.subject_name = '数学'
+GROUP BY sch.name, sc.class, sc.subject_name, sc.exam_score
 LIMIT 1000;</suggestion-answer>
   </example>
   <example>
-    <question>年级各班级数学均分排名</question>
-    <suggestion-answer>SELECT st.class_name,
+    <question>对比三所学校数学均分排名</question>
+    <suggestion-answer>SELECT sch.name AS school,
        ROUND(AVG(sc.score), 2) AS class_avg,
        RANK() OVER (ORDER BY AVG(sc.score) DESC) AS rank
-FROM score sc
-JOIN student st ON sc.student_id = st.id
-WHERE sc.subject = '数学'
-GROUP BY st.class_name
+FROM tb_score sc
+JOIN tb_school sch ON sc.school_id = sch.id
+WHERE sc.subject_name = '数学'
+GROUP BY sch.name
+ORDER BY rank
 LIMIT 1000;</suggestion-answer>
   </example>
   <example>
-    <question>初三1班数学分数段分布（60/70/80/90 分段）</question>
+    <question>南京市第一中学数学分数段分布</question>
     <suggestion-answer>SELECT
   CASE
-    WHEN score &lt; 60 THEN '0-60'
-    WHEN score &lt; 70 THEN '60-70'
-    WHEN score &lt; 80 THEN '70-80'
-    WHEN score &lt; 90 THEN '80-90'
-    ELSE '90-100'
+    WHEN sc.score &lt; sc.exam_score * 0.6 THEN '0-60%'
+    WHEN sc.score &lt; sc.exam_score * 0.7 THEN '60-70%'
+    WHEN sc.score &lt; sc.exam_score * 0.8 THEN '70-80%'
+    WHEN sc.score &lt; sc.exam_score * 0.9 THEN '80-90%'
+    ELSE '90-100%'
   END AS segment,
   COUNT(*) AS cnt
-FROM score sc
-JOIN student st ON sc.student_id = st.id
-WHERE sc.subject = '数学' AND st.class_name = '初三1班'
+FROM tb_score sc
+JOIN tb_school sch ON sc.school_id = sch.id
+WHERE sch.name = '南京市第一中学' AND sc.subject_name = '数学'
 GROUP BY segment
 ORDER BY segment
 LIMIT 1000;</suggestion-answer>
   </example>
   <example>
-    <question>张三本次考试各科成绩与总分</question>
-    <suggestion-answer>SELECT sc.subject, sc.score
-FROM score sc
-JOIN student st ON sc.student_id = st.id
-WHERE st.name = '张三'
+    <question>STU20240001 本次数学成绩</question>
+    <suggestion-answer>SELECT sc.student_id, sc.subject_name, sc.score, sc.exam_score
+FROM tb_score sc
+WHERE sc.student_id = 'STU20240001' AND sc.subject_name = '数学'
 LIMIT 1000;</suggestion-answer>
   </example>
   <example>
-    <question>张三最近三次数学成绩变化</question>
-    <suggestion-answer>SELECT e.exam_name, sc.score
-FROM score sc
-JOIN student st ON sc.student_id = st.id
-JOIN exam e ON sc.exam_id = e.id
-WHERE st.name = '张三' AND sc.subject = '数学'
-ORDER BY e.exam_date
+    <question>南京市第一中学数学每一小题得分率及关联知识点</question>
+    <suggestion-answer>SELECT sd.question_no,
+       k.knowledge_name,
+       eq.question_score AS full_score,
+       ROUND(AVG(sd.score), 2) AS avg_score,
+       ROUND(AVG(sd.score)::numeric / NULLIF(eq.question_score, 0) * 100, 2) AS score_rate
+FROM tb_score_detail sd
+JOIN tb_exam_question eq ON sd.question_id = eq.id
+LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id
+JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id
+JOIN tb_school sch ON sc.school_id = sch.id
+WHERE sch.name = '南京市第一中学' AND sc.subject_name = '数学'
+GROUP BY sd.question_no, k.knowledge_name, eq.question_score
+ORDER BY sd.question_no
+LIMIT 1000;</suggestion-answer>
+  </example>
+  <example>
+    <question>南京市第一中学数学知识点薄弱诊断</question>
+    <suggestion-answer>SELECT k.knowledge_name,
+       ROUND(AVG(sd.score)::numeric / NULLIF(eq.question_score, 0) * 100, 2) AS score_rate,
+       COUNT(*) AS answer_cnt
+FROM tb_score_detail sd
+JOIN tb_exam_question eq ON sd.question_id = eq.id
+LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id
+JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id
+JOIN tb_school sch ON sc.school_id = sch.id
+WHERE sch.name = '南京市第一中学' AND sc.subject_name = '数学'
+GROUP BY k.knowledge_name
+ORDER BY score_rate ASC
 LIMIT 1000;</suggestion-answer>
   </example>
 </sql-examples>"""
+
+EDUCATION_TERMINOLOGIES = """<terminologies>
+  <terminology>
+    <words><word>学校</word><word>机构</word><word>校区</word></words>
+    <description>对应 tb_school.name，过滤用 JOIN tb_school sch ON sc.school_id = sch.id WHERE sch.name = '学校名'</description>
+  </terminology>
+  <terminology>
+    <words><word>班级</word><word>班</word></words>
+    <description>对应 tb_score.class 或 tb_student.class，如 '高一(1)班'</description>
+  </terminology>
+  <terminology>
+    <words><word>学生</word><word>学号</word></words>
+    <description>tb_student.id / tb_score.student_id，格式如 STU20240001；无姓名字段时用学号展示</description>
+  </terminology>
+  <terminology>
+    <words><word>小题</word><word>逐题</word><word>题目</word></words>
+    <description>查 tb_score_detail JOIN tb_exam_question，按 question_no 排序</description>
+  </terminology>
+  <terminology>
+    <words><word>知识点</word><word>考点</word><word>题型</word></words>
+    <description>知识点名称取自 tb_knowledge.knowledge_name，必须通过 tb_exam_question.knowledge_id LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id 关联获取；严禁根据题目内容自行编造/猜测知识点名（如「立体几何」「解析几何」等数据库中不存在的名称）</description>
+  </terminology>
+  <terminology>
+    <words><word>满分</word><word>卷面分</word></words>
+    <description>每套卷子满分由 tb_exam.exam_score 或 tb_score.exam_score 记录，不同考试可能不同，禁止写死 100 或 150</description>
+  </terminology>
+  <terminology>
+    <words><word>及格</word><word>优秀</word></words>
+    <description>及格线 = score >= exam_score * 0.6；优秀线 = score >= exam_score * 0.85；按卷面满分比例计算</description>
+  </terminology>
+  <terminology>
+    <words><word>得分率</word><word>难度</word></words>
+    <description>得分率 = AVG(sd.score) / question_score * 100；难度可近似为 1 - 得分率</description>
+  </terminology>
+</terminologies>"""
 
 
 def education_sql_training_block() -> str:
     """返回教育学情 SQL few-shot 块，供 ``data_training`` 参数注入。"""
     return EDUCATION_SQL_EXAMPLES
+
+
+def education_terminologies_block() -> str:
+    """返回教育学情术语块，供 ``terminologies`` 参数注入。"""
+    return EDUCATION_TERMINOLOGIES
 
 
 def build_sql_generation_prompt(

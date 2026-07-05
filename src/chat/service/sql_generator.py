@@ -46,6 +46,23 @@ def extract_reasoning(raw_response: str) -> str:
     return cleaned.strip()
 
 
+def _merge_education_table_comments(tables: list) -> list:
+    """将 education_schema.json 中的 table_comments 合并进 schema（PG 无 comment 时补全）。"""
+    from src.agent.education.schema_mapping import get_table_comments_from_config
+
+    comments = get_table_comments_from_config()
+    if not comments:
+        return tables
+    out = []
+    for t in tables:
+        t = dict(t)
+        name = str(t.get("name") or "")
+        if name in comments and not (t.get("comment") or "").strip():
+            t["comment"] = comments[name]
+        out.append(t)
+    return out
+
+
 class SQLGenerator:
     """Service for generating SQL from natural language based on SQLBot patterns."""
 
@@ -288,6 +305,7 @@ class SQLGenerator:
             tables = get_schema_info(db_type, config)
             user = get_user_by_id(session, user_id) if user_id else None
             tables = schema_tables_for_user(session, user, int(datasource.id), tables)
+            tables = _merge_education_table_comments(tables)
             return build_schema_info(tables, db_type)
         except Exception as e:
             logger.warning(f"Failed to get schema: {e}")

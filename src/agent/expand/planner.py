@@ -93,11 +93,10 @@ PLANNER_DESC = """[你的职责]
 - 科目诊断报告（subject_diagnosis）：
   ["查询该科目分数段分布与及格率/优秀率", {"task": "用 education/subject_diagnosis.html 模板组装 HTML 报告（数据取上游子任务）", "sub_task_agent": "ToolExpert"}]
 - **学校/班级 + 科目 + 小题（逐题）诊断**（如「分析【XX学校】在【XX考试】的数学成绩，
-  细化到每一小题」）——每个 DataAnalyst 子任务都必须重复【学校名】【考试名】：
-  ["查询【XX学校】学生在【XX考试】【XX科目】的整体成绩：均分、及格率、优秀率、分数段分布",
-   "查询【XX学校】学生在【XX考试】【XX科目】中每一小题的满分、均分、得分率、难度、区分度，按题号排序",
-   {"task": "用 education/subject_diagnosis.html 模板组装 HTML 报告（数据取上游子任务，SUMMARY 含逐题分析，ITEM_TABLE 填小题明细表）", "sub_task_agent": "ToolExpert"}]
-  **严禁**第 2 步写成"查询每一小题统计"而不带学校名——那会查全量学生。
+  细化到每一小题，形成详细分析报告」）——**只拆 2 个子任务**，组装步骤用一键工具：
+  ["查询【XX学校】学生在【XX考试】【XX科目】的整体成绩：均分、及格率、优秀率、分数段分布（SQL 须含 exam_score）",
+   {"task": "调 build_subject_diagnosis_report_tool(school_name=【XX学校】, subject_name=【XX科目】, exam_name=【XX考试】, class_name=【XX班级】) 一键生成科目诊断 HTML 报告——该工具内部自动查小题明细+知识点汇总（通过 tb_exam_question.knowledge_id LEFT JOIN tb_knowledge 取 knowledge_name）+成绩统计+渲染推送，调完直接 terminate，禁止再调 fetch_subject_diagnosis_data_tool / build_subject_diagnosis_sections_tool / render_html_report / 自写 JOIN SQL", "sub_task_agent": "ToolExpert"}]
+  **严禁**自行写小题/知识点 JOIN SQL；**严禁**子任务不带学校名查全量。
 - 个体画像/趋势/预警/群体对比同理，分别用 education/student_exam_analysis.html、
   education/trend_tracking.html、education/tier_alert.html、education/group_feature.html。
 - **单个学生多次考试分析**（如「分析学生001这几次考试的成绩」）：

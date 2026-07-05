@@ -180,7 +180,7 @@ def test_planner_desc_has_question_placeholder():
 
 def test_planner_desc_has_school_item_diagnosis_template():
     assert "学校/班级 + 科目 + 小题" in PLANNER_DESC
-    assert "每一小题的满分、均分、得分率" in PLANNER_DESC
+    assert "build_subject_diagnosis_report_tool" in PLANNER_DESC
     assert "范围传递" in PLANNER_DESC
     assert "【XX学校】" in PLANNER_DESC
 

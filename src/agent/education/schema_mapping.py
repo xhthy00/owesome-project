@@ -53,6 +53,105 @@ class ScoreSchemaMapping:
         return self.subject_columns.get(subject)
 
 
+@dataclass
+class EducationSchemaMeta:
+    """``education_schema.json`` 中的元数据（比例阈值、表注释、维度样例）。"""
+
+    pass_ratio: float = 0.6
+    excellent_ratio: float = 0.85
+    score_segment_ratios: list[float] = field(default_factory=lambda: [0.6, 0.7, 0.8, 0.9])
+    table_comments: dict[str, str] = field(default_factory=dict)
+    dimension_samples: dict[str, list[str]] = field(default_factory=dict)
+
+
+@dataclass
+class EducationSchemaBundle:
+    """配置加载结果：映射 + 元数据。"""
+
+    mapping: ScoreSchemaMapping
+    meta: EducationSchemaMeta = field(default_factory=EducationSchemaMeta)
+
+
+def _schema_config_path(path: Path | str | None = None) -> Path:
+    if path is not None:
+        return Path(path)
+    env_path = os.environ.get("EDU_SCHEMA_CONFIG_PATH", "").strip()
+    if env_path:
+        return Path(env_path)
+    return _DEFAULT_SCHEMA_CONFIG_PATH
+
+
+def load_schema_from_config(path: Path | str | None = None) -> EducationSchemaBundle | None:
+    """从 ``education_schema.json`` 加载固定 Schema 映射。
+
+    文件不存在或解析失败返回 None（调用方回退启发式推断）。
+    """
+    cfg_path = _schema_config_path(path)
+    if not cfg_path.is_file():
+        return None
+    try:
+        raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(raw, dict):
+        return None
+
+    mode = str(raw.get("mode") or "normalized")
+    mapping = ScoreSchemaMapping(
+        mode=mode,
+        table=str(raw.get("table") or ""),
+        tables={str(k): str(v) for k, v in (raw.get("tables") or {}).items()},
+        joins=[str(j) for j in (raw.get("joins") or [])],
+        fields={str(k): str(v) for k, v in (raw.get("fields") or {}).items()},
+        subject_columns={
+            str(k): str(v) for k, v in (raw.get("subject_columns") or {}).items()
+        },
+        source=str(raw.get("source") or "config_edu"),
+    )
+    defaults = raw.get("defaults") if isinstance(raw.get("defaults"), dict) else {}
+    meta = EducationSchemaMeta(
+        pass_ratio=float(defaults.get("pass_ratio", 0.6)),
+        excellent_ratio=float(defaults.get("excellent_ratio", 0.85)),
+        score_segment_ratios=[
+            float(x) for x in (defaults.get("score_segment_ratios") or [0.6, 0.7, 0.8, 0.9])
+        ],
+        table_comments={
+            str(k): str(v) for k, v in (raw.get("table_comments") or {}).items()
+        },
+        dimension_samples={
+            str(k): [str(x) for x in v]
+            for k, v in (raw.get("dimension_samples") or {}).items()
+            if isinstance(v, list)
+        },
+    )
+    return EducationSchemaBundle(mapping=mapping, meta=meta)
+
+
+def validate_mapping_against_schema(
+    mapping: ScoreSchemaMapping,
+    live_schema: list[dict[str, Any]],
+) -> list[str]:
+    """对比配置映射与数据源实际表名，返回缺失表 warning 列表（不阻断）。"""
+    live_names = {str(t.get("name") or "") for t in live_schema}
+    warnings: list[str] = []
+    if mapping.mode == "wide":
+        if mapping.table and mapping.table not in live_names:
+            warnings.append(f"宽表 `{mapping.table}` 在当前数据源中不存在")
+        return warnings
+    for role, table_name in mapping.tables.items():
+        if table_name and table_name not in live_names:
+            warnings.append(f"配置表 `{table_name}`（{role}）在当前数据源中不存在")
+    return warnings
+
+
+def get_table_comments_from_config(path: Path | str | None = None) -> dict[str, str]:
+    """读取配置中的 table_comments；无配置时返回空 dict。"""
+    bundle = load_schema_from_config(path)
+    if bundle is None:
+        return {}
+    return dict(bundle.meta.table_comments)
+
+
 # ---- 启发式推断 -----------------------------------------------------------
 
 #: 常见学生/班级/考试/成绩字段别名（小写匹配），用于从 schema 猜字段。
@@ -171,7 +270,12 @@ def infer_normalized_mapping(schema: list[dict[str, Any]]) -> ScoreSchemaMapping
 
 
 __all__ = [
+    "EducationSchemaBundle",
+    "EducationSchemaMeta",
     "ScoreSchemaMapping",
+    "get_table_comments_from_config",
     "infer_normalized_mapping",
     "infer_wide_mapping",
+    "load_schema_from_config",
+    "validate_mapping_against_schema",
 ]

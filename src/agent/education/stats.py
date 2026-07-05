@@ -69,7 +69,7 @@ def compute_score_stats(
     """
     valid = [float(s) for s in scores if s is not None]
     upper = full_score if full_score is not None else config.default_full_score
-    seg_bounds = config.resolved_segments(upper)
+    seg_bounds = config.resolved_segments(upper if full_score is not None else None)
 
     if not valid:
         return {
@@ -87,8 +87,12 @@ def compute_score_stats(
                          for lo, hi in _seg_pairs(seg_bounds)],
         }
 
-    pass_thr = config.pass_threshold
-    exc_thr = config.excellent_threshold
+    if full_score is not None:
+        pass_thr = float(full_score) * config.pass_ratio
+        exc_thr = float(full_score) * config.excellent_ratio
+    else:
+        pass_thr = config.pass_threshold
+        exc_thr = config.excellent_threshold
 
     seg_pairs = list(_seg_pairs(seg_bounds))
     segments = []

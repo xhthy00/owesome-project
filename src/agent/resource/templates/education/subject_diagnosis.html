@@ -83,6 +83,23 @@
     </section>
 
     <section class="edu-card">
+      <h2>知识点掌握诊断</h2>
+      <p class="edu-sub">按知识点汇总得分率，「需加强」表示该知识点整体掌握不足，应优先安排复习。</p>
+      <div id="knowledgeChart" class="edu-chart"></div>
+      <script type="application/json" id="knowledgeChartData">{{KNOWLEDGE_CHART}}</script>
+      <script>
+        (function () {
+          var raw = (document.getElementById('knowledgeChartData').textContent || '').trim();
+          if (!raw) { return; }
+          try { echarts.init(document.getElementById('knowledgeChart')).setOption(JSON.parse(raw)); } catch (e) {}
+        })();
+      </script>
+      <h3>知识点得分率明细</h3>
+      <div>{{KNOWLEDGE_TABLE}}</div>
+      <p class="edu-sub" style="margin-top:12px"><strong>需加强知识点：</strong>{{WEAK_KNOWLEDGE_LIST}}</p>
+    </section>
+
+    <section class="edu-card">
       <h2>诊断分析</h2>
       <div>{{SUMMARY}}</div>
     </section>

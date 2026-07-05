@@ -50,6 +50,15 @@ Word/PDF 内容或自然语言报告正文**；必须按以下工具调用流程
    `EXAM_NAME` / `SCOPE` / 参考人数必须与上游一致；
    仅当上游确实缺字段时，才用 `execute_sql` / `compute_score_stats_tool` /
    `compute_rankings_tool` 等补齐，且 SQL 仍须遵守范围约束；
+   **科目诊断报告快捷路径（subject_diagnosis.html）**：**直接调**
+   `build_subject_diagnosis_report_tool(school_name=..., subject_name=...,
+   exam_name=..., class_name=...)`——该工具内部一次性完成 查数（小题+知识点，
+   通过 `tb_exam_question.knowledge_id` LEFT JOIN `tb_knowledge` 取 `knowledge_name`）
+   → 统计 → 组装 → 渲染 → HTML 推送，调完只需 `terminate`。
+   **禁止**自行编造知识点名（如「立体几何」「解析几何」等数据库中不存在的名称）、
+   **禁止**自行写小题/知识点 JOIN SQL、**禁止**再调 `fetch_subject_diagnosis_data_tool` /
+   `build_subject_diagnosis_sections_tool` / `render_html_report`（回填大 data 字典
+   会因 JSON 过长被截断成数组/标量，触发"必须是 JSON 对象"错误）；
    图表字段（形如 `XXX_CHART`）用 `build_chart_option_tool` 生成 JSON 字符串填入；
 3. 调 `render_html_report(template_name=..., data=..., title=...)` 生成 HTML；
 4. 调 `terminate(final_answer="学情报告已生成")` 结束。
