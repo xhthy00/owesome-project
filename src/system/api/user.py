@@ -7,10 +7,19 @@ from sqlalchemy.orm import Session
 
 from common.core.database import get_session
 from common.core.security import get_password_hash
-from common.exceptions.base import BadRequestException, NotFoundException
+from common.exceptions.base import BadRequestException, ForbiddenException, NotFoundException
 from common.schemas.response import success_response
+from datasource.service.edu_permission import (
+    EduScope,
+    edu_scope_summary,
+    merge_edu_scope_into_variables,
+    parse_edu_scope,
+    validate_edu_scope,
+)
 from system.api.system import get_current_user
+from system.authz import can_manage_data_permissions
 from system.models.user import SysUser
+from system.schemas import EduScopePayload
 
 router = APIRouter(prefix="/user", tags=["user"])
 
@@ -26,20 +35,29 @@ def pager_users(
     q = session.query(SysUser).order_by(SysUser.id.asc())
     total = q.count()
     rows = q.offset((page_num - 1) * page_size).limit(page_size).all()
-    items = [
-        {
-            "id": item.id,
-            "account": item.account,
-            "name": item.name,
-            "email": item.email,
-            "oid": item.oid,
-            "status": item.status,
-            "language": item.language,
-            "origin": item.origin,
-            "create_time": item.create_time,
-        }
-        for item in rows
-    ]
+    items = []
+    for item in rows:
+        scope = parse_edu_scope(item)
+        summary = edu_scope_summary(item)
+        items.append(
+            {
+                "id": item.id,
+                "account": item.account,
+                "name": item.name,
+                "email": item.email,
+                "oid": item.oid,
+                "status": item.status,
+                "language": item.language,
+                "origin": item.origin,
+                "create_time": item.create_time,
+                "edu_role": scope.edu_role or None,
+                "edu_role_label": summary.get("edu_role_label"),
+                "school_id": scope.school_id or None,
+                "school_name": scope.school_name or None,
+                "class_names": scope.class_names or None,
+                "student_id": scope.student_id or None,
+            }
+        )
     return success_response(data={"total": total, "items": items})
 
 
@@ -143,3 +161,48 @@ def reset_user_pwd(
     row.password = get_password_hash(password)
     session.commit()
     return success_response(data={"id": row.id}, message="Password reset")
+
+
+@router.get("/{user_id}/edu-scope")
+def get_user_edu_scope(
+    user_id: int,
+    session: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    _ = current_user
+    row = session.query(SysUser).filter(SysUser.id == user_id).first()
+    if not row:
+        raise NotFoundException("User not found")
+    scope = parse_edu_scope(row)
+    return success_response(data={"user_id": row.id, "account": row.account, **scope.to_dict()})
+
+
+@router.put("/{user_id}/edu-scope")
+def update_user_edu_scope(
+    user_id: int,
+    payload: EduScopePayload,
+    session: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    if not can_manage_data_permissions(session, current_user):
+        raise ForbiddenException("仅系统管理员或工作空间管理员可管理教育权限")
+    row = session.query(SysUser).filter(SysUser.id == user_id).first()
+    if not row:
+        raise NotFoundException("User not found")
+    scope = EduScope(
+        edu_role=str(payload.edu_role or "").strip(),
+        school_id=str(payload.school_id or "").strip(),
+        school_name=str(payload.school_name or "").strip(),
+        class_names=list(payload.class_names or []),
+        student_id=str(payload.student_id or "").strip(),
+    )
+    errors = validate_edu_scope(scope)
+    if errors:
+        raise BadRequestException("; ".join(errors))
+    row.system_variables = merge_edu_scope_into_variables(row.system_variables, scope)
+    session.commit()
+    session.refresh(row)
+    return success_response(
+        data={"user_id": row.id, **parse_edu_scope(row).to_dict()},
+        message="教育权限范围已更新",
+    )

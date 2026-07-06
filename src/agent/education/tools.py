@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from src.agent.education.charts import build_chart_option as _build_chart_option
@@ -46,6 +47,22 @@ from src.agent.resource.tool.base import ToolResult
 from src.agent.resource.tool.function_tool import tool
 
 
+def _run_edu_sql(
+    sql: str,
+    *,
+    datasource_id: int,
+    workspace_oid: int | None,
+    user_id: int | None,
+) -> tuple[bool, str, dict[str, Any] | None, str]:
+    """教育工具查数：走行列权限 + edu 模板谓词。返回 (success, msg, result, sql_run)。"""
+    from src.datasource.service.execute_with_permission import execute_sql_with_permission_by_user_id
+
+    success, msg, result, sql_run = execute_sql_with_permission_by_user_id(
+        user_id, datasource_id, workspace_oid, sql
+    )
+    return success, msg, result, sql_run or sql
+
+
 # ---- 内部辅助 ------------------------------------------------------------
 
 def _mapping_to_dict(m: ScoreSchemaMapping) -> dict[str, Any]:
@@ -76,6 +93,11 @@ def _format_config_schema_result(bundle, warnings: list[str]) -> ToolResult:
             lines.append(f"  · {j}")
         if len(m.joins) > 3:
             lines.append(f"  · …共 {len(m.joins)} 条")
+    lines.append(
+        "- 权限/过滤列：school_id、class、student_id 均在 tb_score（别名 sc）；"
+        "tb_student 主键为 id（学号），JOIN 须写 sc.student_id = st.id，禁止 st.student_id；"
+        "查 tb_score_detail 须 JOIN tb_score sc。"
+    )
     if warnings:
         lines.append("- 校验警告（不阻断）：")
         for w in warnings:
@@ -228,12 +250,25 @@ def _coerce_exec_result(
     rows: list[Any] | None,
     columns: list[str] | None,
 ) -> tuple[list[Any] | None, list[str] | None]:
-    """从 exec_result 或 dict 行补全 rows/columns。"""
+    """从 exec_result 或 dict 行补全 rows/columns。
+
+    支持三种 ``exec_result`` 形态：
+    - execute_sql 的直接结果：``{"columns": [...], "rows": [...]}``
+    - fetch_subject_diagnosis_data_tool 的 data：``{"score_result": {"columns": ..., "rows": ...}, ...}``
+    - dict 行列表：``[{...}, {...}]``
+    """
     if exec_result and isinstance(exec_result, dict):
         if rows is None:
             rows = exec_result.get("rows")
         if columns is None:
             columns = exec_result.get("columns")
+        # fetch_subject_diagnosis_data_tool 返回的 data 顶层无 rows/columns，
+        # 但有嵌套 score_result——自动提取。
+        if rows is None and "score_result" in exec_result:
+            nested = exec_result.get("score_result")
+            if isinstance(nested, dict):
+                rows = nested.get("rows")
+                columns = nested.get("columns") if columns is None else columns
     if rows and not columns and rows and isinstance(rows[0], dict):
         columns = list(rows[0].keys())
     return rows, columns
@@ -386,6 +421,7 @@ def fetch_subject_diagnosis_data_tool(
     exam_name: str = "",
     class_name: str = "",
     workspace_oid: int | None = None,
+    user_id: int | None = None,
 ) -> ToolResult:
     """直接从数据库查询科目诊断所需的小题明细与知识点汇总（确定性 SQL，无需 LLM 写 JOIN）。
 
@@ -406,112 +442,71 @@ def fetch_subject_diagnosis_data_tool(
         class_name: 班级名，可选。
     """
     from src.agent.resource.tool.business import _load_datasource
-    from src.datasource.db.db import execute_sql as db_execute_sql
 
     try:
-        db_type, config, ds_name = _load_datasource(datasource_id, workspace_oid)
+        db_type, _config, ds_name = _load_datasource(datasource_id, workspace_oid)
     except Exception as e:
         return ToolResult(
             content=f"fetch_subject_diagnosis_data_tool 失败：{e}",
             data={"error": str(e)},
         )
 
-    where_parts: list[str] = []
-    if school_name:
-        where_parts.append(f"sch.name = '{school_name.replace(chr(39), chr(39)+chr(39))}'")
-    if class_name:
-        where_parts.append(f"sc.class = '{class_name.replace(chr(39), chr(39)+chr(39))}'")
-    if subject_name:
-        where_parts.append(f"sc.subject_name = '{subject_name.replace(chr(39), chr(39)+chr(39))}'")
-    if exam_name:
-        where_parts.append(f"e.exam_name LIKE '%{exam_name.replace(chr(39), chr(39)+chr(39))}%'")
-    where_clause = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
-
-    # 小题明细 SQL：通过 tb_exam_question.knowledge_id JOIN tb_knowledge 获取知识点名
-    item_sql = (
-        "SELECT sd.question_no,\n"
-        "       k.knowledge_name,\n"
-        "       eq.question_score AS full_score,\n"
-        "       ROUND(AVG(sd.score), 2) AS avg_score,\n"
-        "       ROUND(AVG(sd.score)::numeric / NULLIF(eq.question_score, 0) * 100, 2) AS score_rate\n"
-        "FROM tb_score_detail sd\n"
-        "JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
-        "JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
-        "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
-        "JOIN tb_school sch ON sc.school_id = sch.id\n"
-        "JOIN tb_exam e ON sc.exam_id = e.id"
-        + where_clause
-        + "\nGROUP BY sd.question_no, k.knowledge_name, eq.question_score\n"
-        "ORDER BY sd.question_no\nLIMIT 1000"
+    bundle = _fetch_subject_diagnosis_rows(
+        datasource_id=datasource_id,
+        workspace_oid=workspace_oid,
+        user_id=user_id,
+        school_name=school_name,
+        subject_name=subject_name,
+        exam_name=exam_name,
+        class_name=class_name,
+        db_type=db_type,
     )
+    item_rows = bundle["item_rows"]
+    knowledge_rows = bundle["knowledge_rows"]
+    score_values = bundle["score_values"]
+    warnings = bundle.get("warnings") or []
+    errors = bundle.get("errors") or []
+    sql_logs = bundle.get("sql_logs") or []
+    score_result = {
+        "columns": ["score", "exam_score"],
+        "rows": [[v, bundle.get("full_score")] for v in score_values],
+    }
 
-    # 知识点汇总 SQL
-    knowledge_sql = (
-        "SELECT k.knowledge_name,\n"
-        "       COUNT(DISTINCT sd.question_no) AS question_count,\n"
-        "       ROUND(SUM(sd.score)::numeric / NULLIF(SUM(eq.question_score), 0) * 100, 2) AS score_rate\n"
-        "FROM tb_score_detail sd\n"
-        "JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
-        "JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
-        "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
-        "JOIN tb_school sch ON sc.school_id = sch.id\n"
-        "JOIN tb_exam e ON sc.exam_id = e.id"
-        + where_clause
-        + "\nGROUP BY k.knowledge_name\nORDER BY score_rate ASC\nLIMIT 1000"
-    )
-
-    # 整体成绩 SQL（供 compute_score_stats_tool 用）
-    score_sql = (
-        "SELECT sc.score, sc.exam_score\n"
-        "FROM tb_score sc\n"
-        "JOIN tb_school sch ON sc.school_id = sch.id\n"
-        "JOIN tb_exam e ON sc.exam_id = e.id"
-        + where_clause
-        + "\nLIMIT 1000"
-    )
-
-    item_rows: list[dict[str, Any]] = []
-    knowledge_rows: list[dict[str, Any]] = []
-    score_result: dict[str, Any] = {"columns": [], "rows": []}
-
-    for label, sql in (("item", item_sql), ("knowledge", knowledge_sql), ("score", score_sql)):
-        success, msg, result = db_execute_sql(db_type=db_type, config=config, sql=sql)
-        if not success or not isinstance(result, dict):
-            continue
-        cols = result.get("columns") or []
-        raw_rows = result.get("rows") or []
-        dict_rows = [dict(zip(cols, row)) for row in raw_rows]
-        if label == "item":
-            item_rows = dict_rows
-        elif label == "knowledge":
-            knowledge_rows = dict_rows
-        else:
-            score_result = {"columns": cols, "rows": raw_rows}
-
-    if not item_rows and not knowledge_rows:
+    if not item_rows and not knowledge_rows and not score_values:
+        err_detail = "\n".join(errors[:5]) if errors else "无额外错误信息"
         return ToolResult(
             content=(
                 f"fetch_subject_diagnosis_data_tool 未查到数据（ds={ds_name}，"
-                f"school={school_name}，subject={subject_name}）。"
-                "请检查学校名/科目名是否正确，或先调 describe_table 确认表数据。"
+                f"school={school_name}，subject={subject_name}，exam={exam_name}，class={class_name}）。\n"
+                f"SQL 执行记录：\n{_format_diagnosis_sql_logs(sql_logs)}\n"
+                f"错误：{err_detail}"
             ),
-            data={"error": "no data", "item_rows": [], "knowledge_rows": []},
+            data={"error": "no data", "item_rows": [], "knowledge_rows": [], "sql_logs": sql_logs},
         )
 
     content = (
-        f"科目诊断数据已查询（ds={ds_name}）：\n"
-        f"- 小题明细：{len(item_rows)} 题\n"
-        f"- 知识点汇总：{len(knowledge_rows)} 个知识点\n"
-        f"- 学生成绩：{len(score_result.get('rows', []))} 条\n"
-        "下一步：将 item_rows 与 knowledge_rows 传给 build_subject_diagnosis_sections_tool，"
-        "将 score_result 传给 compute_score_stats_tool(exec_result=...)。"
+        f"【小题明细查询】fetch_subject_diagnosis_data_tool（ds={ds_name}，db={db_type}）\n"
+        f"- 小题明细（tb_score_detail）：{len(item_rows)} 题\n"
+        f"- 知识点汇总：{len(knowledge_rows)} 个\n"
+        f"- 学生成绩（tb_score）：{len(score_values)} 条\n"
+        f"SQL 执行记录：\n{_format_diagnosis_sql_logs(sql_logs)}\n"
+        "下一步（**勿重复调用本工具**）：将 item_rows / knowledge_rows 传给 "
+        "build_subject_diagnosis_sections_tool，或将 score_result 传给 "
+        "compute_score_stats_tool(exec_result=...)，然后 render_html_report → terminate。"
     )
+    if errors:
+        content += "\n部分 SQL 失败：\n" + "\n".join(errors[:5])
+    if warnings:
+        content += "\n" + "\n".join(warnings)
     return ToolResult(
         content=content,
         data={
             "item_rows": item_rows,
             "knowledge_rows": knowledge_rows,
             "score_result": score_result,
+            "warnings": warnings,
+            "errors": errors,
+            "sql_logs": sql_logs,
         },
     )
 
@@ -521,10 +516,14 @@ def build_subject_diagnosis_sections_tool(
     item_rows: list[dict[str, Any]] | None = None,
     knowledge_rows: list[dict[str, Any]] | None = None,
     stats: dict[str, Any] | None = None,
+    score_result: dict[str, Any] | None = None,
+    fetch_data: dict[str, Any] | None = None,
     school_name: str = "",
     exam_name: str = "",
     subject_name: str = "",
+    class_name: str = "",
     weak_threshold: float = 60.0,
+    render: bool = True,
 ) -> ToolResult:
     """组装科目诊断报告中的 ITEM_TABLE / KNOWLEDGE_TABLE / SUMMARY / RECOMMENDATIONS。
 
@@ -532,15 +531,67 @@ def build_subject_diagnosis_sections_tool(
     DataAnalyst 已分别查出小题明细与知识点汇总，调用本工具**确定性**生成表格与
     薄弱知识点分析文案，避免 LLM 漏写知识点建议。
 
+    默认 ``render=True``：在组装完成后**直接渲染 HTML 并推送到前端**（与
+    ``build_subject_diagnosis_report_tool`` 相同载荷），LLM 调完只需 ``terminate``，
+    **无需**再调 ``select_report_template_tool`` / ``build_chart_option_tool`` /
+    ``render_html_report``。
+
+    **入参简化**：可直接传 ``fetch_data=fetch_subject_diagnosis_data_tool 返回的 data``，
+    本工具会自动提取 item_rows / knowledge_rows / score_result 并内部计算 stats，
+    **无需**先调 ``compute_score_stats_tool``。
+
     Args:
         item_rows: 小题行，含 question_no / knowledge_name / score_rate 等。
         knowledge_rows: 知识点行，含 knowledge_name / score_rate / question_count。
-        stats: 可选整体 KPI（count/avg/pass_rate/excellent_rate）。
-        school_name / exam_name / subject_name: 用于 SUMMARY 范围描述。
+        stats: 可选整体 KPI（count/avg/pass_rate/excellent_rate/segments）。
+            未传但提供了 score_result/fetch_data 时自动计算。
+        score_result: fetch 工具返回的 ``{"columns": [...], "rows": [...]}``。
+        fetch_data: fetch 工具返回的完整 data 字典（优先级最高，自动提取上述字段）。
+        school_name / exam_name / subject_name / class_name: 用于报告标题与范围。
         weak_threshold: 得分率低于该值视为薄弱知识点（默认 60）。
+        render: True（默认）渲染 HTML；False 仅返回 data 字典（调试或手动 render）。
     """
+    # fetch_data 优先：自动提取 item_rows / knowledge_rows / score_result
+    if isinstance(fetch_data, dict):
+        if item_rows is None:
+            item_rows = fetch_data.get("item_rows")
+        if knowledge_rows is None:
+            knowledge_rows = fetch_data.get("knowledge_rows")
+        if score_result is None:
+            score_result = fetch_data.get("score_result")
     items = list(item_rows or [])
     knowledge = enrich_knowledge_rows(list(knowledge_rows or []))
+
+    # stats 未传但有 score_result/fetch_data 时，内部计算 KPI
+    if stats is None and score_result:
+        cfg = _get_effective_config()
+        bundle_cfg = load_schema_from_config()
+        if bundle_cfg is not None:
+            cfg.pass_ratio = bundle_cfg.meta.pass_ratio
+            cfg.excellent_ratio = bundle_cfg.meta.excellent_ratio
+        rows_s, cols_s = _coerce_exec_result(score_result, None, None)
+        values: list[float] = []
+        fs_val: float | None = None
+        if cols_s and rows_s:
+            sf = _guess_field(cols_s, _SCORE_FIELD_HINTS) or "score"
+            try:
+                si = cols_s.index(sf)
+            except ValueError:
+                si = 0
+            for row in rows_s:
+                try:
+                    v = row[si] if isinstance(row, (list, tuple)) else row.get(sf)
+                    if v is not None and v != "":
+                        values.append(float(v))
+                except (TypeError, ValueError, IndexError):
+                    continue
+            resolved_fs, _ = _extract_full_score_from_rows(
+                rows_s, cols_s,
+                _guess_field(cols_s, _FULL_SCORE_FIELD_HINTS) or "exam_score",
+            )
+            fs_val = resolved_fs
+        stats = _compute_stats(values, cfg, fs_val)
+
     data = {
         "ITEM_TABLE": build_item_table_html(items),
         "KNOWLEDGE_TABLE": build_knowledge_table_html(knowledge),
@@ -566,7 +617,7 @@ def build_subject_diagnosis_sections_tool(
     }
     if knowledge:
         data["KNOWLEDGE_CHART"] = _build_chart_option(
-            "subject_bar",
+            "knowledge_bar",
             {
                 "categories": [str(r.get("knowledge_name") or "") for r in knowledge[:12]],
                 "values": [float(r.get("score_rate") or 0) for r in knowledge[:12]],
@@ -576,11 +627,92 @@ def build_subject_diagnosis_sections_tool(
     else:
         data["KNOWLEDGE_CHART"] = ""
     weak_cnt = sum(1 for r in knowledge if r.get("level") == "需加强")
-    content = (
-        f"科目诊断区块已组装：小题 {len(items)} 条，知识点 {len(knowledge)} 个"
-        f"（薄弱 {weak_cnt} 个）。请将返回 data 填入 render_html_report。"
+
+    if not render:
+        content = (
+            f"科目诊断区块已组装：小题 {len(items)} 条，知识点 {len(knowledge)} 个"
+            f"（薄弱 {weak_cnt} 个）。请将返回 data 与 KPI 字段合并后填入 render_html_report。"
+        )
+        return ToolResult(content=content, data=data)
+
+    from src.agent.resource.tool.business import _render_template_html, _sanitize_report_html
+
+    st = stats or {}
+    segments = st.get("segments") or []
+    has_scores = bool(st.get("count"))
+    scope_label = class_name or school_name or "全年级"
+    report_data: dict[str, Any] = {
+        "REPORT_TITLE": f"{subject_name or '科目'}诊断报告",
+        "REPORT_SUBTITLE": f"{school_name} {class_name}".strip(),
+        "REPORT_TIME": _now_str(),
+        "SUBJECT_NAME": subject_name or "全科",
+        "EXAM_NAME": exam_name or "本次考试",
+        "SCOPE": scope_label,
+        "AVG_SCORE": _fmt_val(st.get("avg")),
+        "PASS_RATE": _fmt_val(st.get("pass_rate")),
+        "EXCELLENT_RATE": _fmt_val(st.get("excellent_rate")),
+        "STDEV": _fmt_val(st.get("stdev")),
+    }
+    report_data.update(data)
+    if not has_scores:
+        report_data["SUMMARY"] = (
+            report_data.get("SUMMARY", "")
+            + "<p class='edu-sub' style='color:#ff4d4f'>⚠️ 成绩表（tb_score）未查到匹配记录，"
+            "KPI 与分数段分布为空。</p>"
+        )
+    if segments and has_scores:
+        report_data["SCORE_DIST_CHART"] = _build_chart_option(
+            "score_distribution",
+            {
+                "segments": [
+                    {"label": s.get("label", ""), "count": s.get("count", 0)} for s in segments
+                ],
+                "pass_rate": st.get("pass_rate") or 0,
+            },
+            title="分数段分布",
+        )
+        report_data["SEGMENT_TABLE"] = _segment_table_html(segments)
+    else:
+        report_data.setdefault("SCORE_DIST_CHART", "")
+        report_data.setdefault("SEGMENT_TABLE", "")
+
+    template_name = "education/subject_diagnosis.html"
+    title = str(report_data.get("REPORT_TITLE") or "科目诊断报告")
+    try:
+        raw_html = _render_template_html(template_name, report_data)
+        safe_html = _sanitize_report_html(raw_html.strip())
+    except Exception as e:
+        return ToolResult(
+            content=f"科目诊断报告渲染失败：{e}（sections data 已组装，可改 render=False 后手动 render_html_report）",
+            data={"error": str(e), **data},
+        )
+    if not safe_html.strip():
+        return ToolResult(
+            content="科目诊断报告渲染失败：HTML 为空。",
+            data={"error": "empty html", **data},
+        )
+
+    payload: dict[str, Any] = {
+        "output_type": "html",
+        "title": title,
+        "html": safe_html,
+        "mode": "template",
+        "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
+    }
+    score_note = (
+        f"{int(st.get('count') or 0)} 条成绩"
+        if has_scores
+        else "⚠️ 成绩为空——KPI 将显示为空"
     )
-    return ToolResult(content=content, data=data)
+    return ToolResult(
+        content=(
+            f"科目诊断报告已渲染完成（小题 {len(items)} 条，知识点 {len(knowledge)} 个，"
+            f"薄弱 {weak_cnt} 个、{score_note}、HTML {len(safe_html)} 字符）。\n"
+            "报告已自动推送到前端，直接调 terminate 结束即可。\n"
+            "**禁止**再调 select_report_template / build_chart_option / render_html_report。"
+        ),
+        data=payload,
+    )
 
 
 @tool()
@@ -592,6 +724,7 @@ def build_subject_diagnosis_report_tool(
     class_name: str = "",
     audience: str = "default",
     workspace_oid: int | None = None,
+    user_id: int | None = None,
     render: bool = True,
 ) -> ToolResult:
     """一键生成「科目逐题/知识点诊断报告」HTML 并**直接推送前端**。
@@ -627,105 +760,43 @@ def build_subject_diagnosis_report_tool(
         _render_template_html,
         _sanitize_report_html,
     )
-    from src.datasource.db.db import execute_sql as db_execute_sql
 
     # ---------- 1. 查数 ----------
     try:
-        db_type, config, ds_name = _load_datasource(datasource_id, workspace_oid)
+        db_type, _config, ds_name = _load_datasource(datasource_id, workspace_oid)
     except Exception as e:
         return ToolResult(
             content=f"build_subject_diagnosis_report_tool 失败：{e}",
             data={"error": str(e)},
         )
 
-    where_parts: list[str] = []
-    if school_name:
-        where_parts.append(f"sch.name = '{_esc(school_name)}'")
-    if class_name:
-        where_parts.append(f"sc.class = '{_esc(class_name)}'")
-    if subject_name:
-        where_parts.append(f"sc.subject_name = '{_esc(subject_name)}'")
-    if exam_name:
-        where_parts.append(f"e.exam_name LIKE '%{_esc(exam_name)}%'")
-    where_clause = (" WHERE " + " AND ".join(where_parts)) if where_parts else ""
-
-    item_sql = (
-        "SELECT sd.question_no,\n"
-        "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
-        "       eq.question_score AS full_score,\n"
-        "       ROUND(AVG(sd.score), 2) AS avg_score,\n"
-        "       ROUND(AVG(sd.score)::numeric / NULLIF(eq.question_score, 0) * 100, 2) AS score_rate\n"
-        "FROM tb_score_detail sd\n"
-        "JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
-        "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
-        "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
-        "JOIN tb_school sch ON sc.school_id = sch.id\n"
-        "JOIN tb_exam e ON sc.exam_id = e.id"
-        + where_clause
-        + "\nGROUP BY sd.question_no, k.knowledge_name, eq.question_score\n"
-        "ORDER BY sd.question_no\nLIMIT 1000"
+    bundle = _fetch_subject_diagnosis_rows(
+        datasource_id=datasource_id,
+        workspace_oid=workspace_oid,
+        user_id=user_id,
+        school_name=school_name,
+        subject_name=subject_name,
+        exam_name=exam_name,
+        class_name=class_name,
+        db_type=db_type,
     )
-    knowledge_sql = (
-        "SELECT COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
-        "       COUNT(DISTINCT sd.question_no) AS question_count,\n"
-        "       ROUND(SUM(sd.score)::numeric / NULLIF(SUM(eq.question_score), 0) * 100, 2) AS score_rate\n"
-        "FROM tb_score_detail sd\n"
-        "JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
-        "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
-        "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
-        "JOIN tb_school sch ON sc.school_id = sch.id\n"
-        "JOIN tb_exam e ON sc.exam_id = e.id"
-        + where_clause
-        + "\nGROUP BY k.knowledge_name\nORDER BY score_rate ASC\nLIMIT 1000"
-    )
-    score_sql = (
-        "SELECT sc.score, sc.exam_score\n"
-        "FROM tb_score sc\n"
-        "JOIN tb_school sch ON sc.school_id = sch.id\n"
-        "JOIN tb_exam e ON sc.exam_id = e.id"
-        + where_clause
-        + "\nLIMIT 1000"
-    )
-
-    item_rows: list[dict[str, Any]] = []
-    knowledge_rows: list[dict[str, Any]] = []
-    score_values: list[float] = []
-    full_score: float | None = None
-
-    for label, sql in (("item", item_sql), ("knowledge", knowledge_sql), ("score", score_sql)):
-        success, _msg, result = db_execute_sql(db_type=db_type, config=config, sql=sql)
-        if not success or not isinstance(result, dict):
-            continue
-        cols = result.get("columns") or []
-        raw_rows = result.get("rows") or []
-        if label in ("item", "knowledge"):
-            dict_rows = [dict(zip(cols, row)) for row in raw_rows]
-            if label == "item":
-                item_rows = dict_rows
-            else:
-                knowledge_rows = dict_rows
-        else:
-            score_idx = cols.index("score") if "score" in cols else 0
-            fs_idx = cols.index("exam_score") if "exam_score" in cols else -1
-            for row in raw_rows:
-                try:
-                    score_values.append(float(row[score_idx]))
-                except (TypeError, ValueError, IndexError):
-                    continue
-                if fs_idx >= 0 and full_score is None:
-                    try:
-                        full_score = float(row[fs_idx])
-                    except (TypeError, ValueError, IndexError):
-                        pass
+    item_rows = bundle["item_rows"]
+    knowledge_rows = bundle["knowledge_rows"]
+    score_values = bundle["score_values"]
+    full_score = bundle.get("full_score")
+    diag_warnings = bundle.get("warnings") or []
+    diag_errors = bundle.get("errors") or []
+    sql_logs = bundle.get("sql_logs") or []
 
     if not item_rows and not knowledge_rows and not score_values:
         return ToolResult(
             content=(
                 f"build_subject_diagnosis_report_tool 未查到数据（ds={ds_name}，"
-                f"school={school_name}，subject={subject_name}，exam={exam_name}）。"
-                "请检查学校名/科目名/考试名是否正确。"
+                f"school={school_name}，subject={subject_name}，exam={exam_name}，class={class_name}）。\n"
+                f"SQL 执行记录：\n{_format_diagnosis_sql_logs(sql_logs)}\n"
+                + ("\n".join(diag_errors[:5]) if diag_errors else "")
             ),
-            data={"error": "no data"},
+            data={"error": "no data", "sql_logs": sql_logs},
         )
 
     # ---------- 2. 统计 ----------
@@ -735,6 +806,25 @@ def build_subject_diagnosis_report_tool(
     # ---------- 3. 组装区块 ----------
     knowledge_enriched = enrich_knowledge_rows(knowledge_rows)
     weak_threshold = 60.0
+    summary_html = build_diagnosis_summary(
+        school_name=school_name,
+        exam_name=exam_name,
+        subject_name=subject_name,
+        stats=stats,
+        item_rows=item_rows,
+        knowledge_rows=knowledge_enriched,
+        weak_threshold=weak_threshold,
+    )
+    if diag_warnings:
+        summary_html += "<p class='edu-sub'>" + "；".join(diag_warnings) + "</p>"
+    if diag_errors and not item_rows:
+        summary_html += "<p class='edu-sub'>小题 SQL 错误：" + "；".join(diag_errors[:3]) + "</p>"
+    if not score_values:
+        summary_html += (
+            "<p class='edu-sub' style='color:#ff4d4f'>⚠️ 成绩表（tb_score）未查到匹配记录，"
+            "KPI 与分数段分布为空。可能原因：tb_score.class 与传入班级名不一致、"
+            "tb_score.subject_name 与科目不一致、或成绩尚未导入。</p>"
+        )
     section_data: dict[str, Any] = {
         "ITEM_TABLE": build_item_table_html(item_rows),
         "KNOWLEDGE_TABLE": build_knowledge_table_html(knowledge_enriched),
@@ -743,15 +833,7 @@ def build_subject_diagnosis_report_tool(
             for r in knowledge_enriched
             if r.get("level") == "需加强"
         )[:500],
-        "SUMMARY": build_diagnosis_summary(
-            school_name=school_name,
-            exam_name=exam_name,
-            subject_name=subject_name,
-            stats=stats,
-            item_rows=item_rows,
-            knowledge_rows=knowledge_enriched,
-            weak_threshold=weak_threshold,
-        ),
+        "SUMMARY": summary_html,
         "RECOMMENDATIONS": build_diagnosis_recommendations(
             knowledge_rows=knowledge_enriched,
             item_rows=item_rows,
@@ -760,7 +842,7 @@ def build_subject_diagnosis_report_tool(
     }
     if knowledge_enriched:
         section_data["KNOWLEDGE_CHART"] = _build_chart_option(
-            "subject_bar",
+            "knowledge_bar",
             {
                 "categories": [str(r.get("knowledge_name") or "") for r in knowledge_enriched[:12]],
                 "values": [float(r.get("score_rate") or 0) for r in knowledge_enriched[:12]],
@@ -830,18 +912,370 @@ def build_subject_diagnosis_report_tool(
         "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
     }
     weak_cnt = sum(1 for r in knowledge_enriched if r.get("level") == "需加强")
+    sql_note = _format_diagnosis_sql_logs(sql_logs)
+    score_note = (
+        f"{len(score_values)} 条成绩"
+        if score_values
+        else "⚠️ 成绩(tb_score)为空——KPI 与分数段将显示为空，请检查 tb_score 是否有匹配记录"
+    )
     return ToolResult(
         content=(
             f"科目诊断报告已渲染完成（{len(item_rows)} 题、{len(knowledge_enriched)} 知识点、"
-            f"薄弱 {weak_cnt} 个、HTML {len(safe_html)} 字符）。报告已自动推送到前端，"
-            "直接调 terminate 结束即可。"
+            f"薄弱 {weak_cnt} 个、{score_note}、HTML {len(safe_html)} 字符）。\n"
+            f"小题查询 SQL 记录：\n{sql_note}\n"
+            "报告已自动推送到前端，直接调 terminate 结束即可。"
         ),
         data=payload,
     )
 
 
+def _format_diagnosis_sql_logs(logs: list[dict[str, Any]]) -> str:
+    if not logs:
+        return "（无 SQL 记录）"
+    lines: list[str] = []
+    for entry in logs:
+        status = "成功" if entry.get("success") else "失败"
+        lines.append(
+            f"- [{entry.get('phase')}/{entry.get('label')}] {status}，"
+            f"{entry.get('row_count', 0)} 行"
+            + (f"：{entry.get('message')}" if entry.get("message") else "")
+        )
+    return "\n".join(lines)
+
+
 def _esc(value: str) -> str:
     return value.replace("'", "''")
+
+
+def exam_name_like_candidates(exam_name: str) -> list[str]:
+    """从完整考试名生成多个 LIKE 候选（去掉省级冠名等），提高匹配率。"""
+    raw = (exam_name or "").strip()
+    if not raw:
+        return []
+
+    out: list[str] = []
+
+    def add(s: str) -> None:
+        s = (s or "").strip()
+        if s and s not in out:
+            out.append(s)
+
+    add(raw)
+    add(re.sub(r"^[\u4e00-\u9fff]{2,12}(?:省|市|自治区)", "", raw).strip())
+    m = re.search(r"((?:高|初)[一二三四五六七八九].+)$", raw)
+    if m:
+        add(m.group(1).strip())
+    if "期末" in raw:
+        add("期末质量检测")
+    return out
+
+
+def _diagnosis_where_parts(
+    *,
+    school_name: str = "",
+    class_name: str = "",
+    subject_name: str = "",
+    exam_name: str = "",
+    exam_ids: list[str] | None = None,
+    skip_exam_name: bool = False,
+    exam_id_expr: str = "sc.exam_id",
+) -> list[str]:
+    parts: list[str] = []
+    if school_name:
+        parts.append(f"sch.name = '{_esc(school_name)}'")
+    if class_name:
+        parts.append(f"sc.class = '{_esc(class_name)}'")
+    if subject_name:
+        parts.append(f"sc.subject_name = '{_esc(subject_name)}'")
+    if exam_ids:
+        lits = ", ".join(f"'{_esc(str(x))}'" for x in exam_ids if str(x).strip())
+        if lits:
+            parts.append(f"{exam_id_expr} IN ({lits})")
+    elif exam_name and not skip_exam_name:
+        cands = exam_name_like_candidates(exam_name)
+        if cands:
+            ors = " OR ".join(f"e.exam_name LIKE '%{_esc(c)}%'" for c in cands)
+            parts.append(f"({ors})")
+    return parts
+
+
+def _diagnosis_where_clause(**kwargs: Any) -> str:
+    parts = _diagnosis_where_parts(**kwargs)
+    return (" WHERE " + " AND ".join(parts)) if parts else ""
+
+
+def _diagnosis_where_clause_pair(**kwargs: Any) -> tuple[str, str]:
+    """返回 (detail_where, score_where)；小题 SQL 用 sd.exam_id，成绩 SQL 用 sc.exam_id。"""
+    detail = _diagnosis_where_clause(**kwargs, exam_id_expr="sd.exam_id")
+    score = _diagnosis_where_clause(**kwargs, exam_id_expr="sc.exam_id")
+    return detail, score
+
+
+def _score_rate_sql(avg_expr: str, denom_expr: str, db_type: str) -> str:
+    if db_type == "mysql":
+        return f"ROUND({avg_expr} * 100.0 / NULLIF({denom_expr}, 0), 2)"
+    return f"ROUND(({avg_expr})::numeric / NULLIF({denom_expr}, 0) * 100, 2)"
+
+
+def _diagnosis_sql_bundle(
+    where_clause_detail: str,
+    where_clause_score: str,
+    db_type: str = "pg",
+) -> tuple[str, str, str, str]:
+    """返回 (item_sql, knowledge_sql, score_sql, exam_id_sql)。"""
+    full_score_expr = "COALESCE(eq.question_score, sd.question_score)"
+    item_rate = _score_rate_sql(f"AVG(sd.score)", full_score_expr, db_type)
+    know_rate = _score_rate_sql(
+        "SUM(sd.score)",
+        f"SUM({full_score_expr})",
+        db_type,
+    )
+    item_sql = (
+        "SELECT sd.question_no,\n"
+        "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+        f"       {full_score_expr} AS full_score,\n"
+        "       ROUND(AVG(sd.score), 2) AS avg_score,\n"
+        f"       {item_rate} AS score_rate\n"
+        "FROM tb_score_detail sd\n"
+        "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
+        "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
+        "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+        "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
+        "JOIN tb_school sch ON sc.school_id = sch.id\n"
+        "JOIN tb_exam e ON sc.exam_id = e.id"
+        + where_clause_detail
+        + f"\nGROUP BY sd.question_no, COALESCE(k.knowledge_name, '未关联知识点'), {full_score_expr}\n"
+        "ORDER BY sd.question_no\nLIMIT 1000"
+    )
+    knowledge_sql = (
+        "SELECT COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+        "       COUNT(DISTINCT sd.question_no) AS question_count,\n"
+        f"       {know_rate} AS score_rate\n"
+        "FROM tb_score_detail sd\n"
+        "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
+        "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
+        "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+        "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
+        "JOIN tb_school sch ON sc.school_id = sch.id\n"
+        "JOIN tb_exam e ON sc.exam_id = e.id"
+        + where_clause_detail
+        + "\nGROUP BY COALESCE(k.knowledge_name, '未关联知识点')\n"
+        "ORDER BY score_rate ASC\nLIMIT 1000"
+    )
+    score_sql = (
+        "SELECT sc.score AS score, sc.exam_score AS exam_score, sc.exam_id AS exam_id\n"
+        "FROM tb_score sc\n"
+        "JOIN tb_school sch ON sc.school_id = sch.id\n"
+        "JOIN tb_exam e ON sc.exam_id = e.id"
+        + where_clause_score
+        + "\nLIMIT 1000"
+    )
+    exam_id_sql = (
+        "SELECT DISTINCT sc.exam_id AS exam_id\n"
+        "FROM tb_score sc\n"
+        "JOIN tb_school sch ON sc.school_id = sch.id\n"
+        "JOIN tb_exam e ON sc.exam_id = e.id"
+        + where_clause_score
+        + "\nLIMIT 50"
+    )
+    return item_sql, knowledge_sql, score_sql, exam_id_sql
+
+
+def _rows_to_dicts(result: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(result, dict):
+        return []
+    cols = result.get("columns") or []
+    raw_rows = result.get("rows") or []
+    return [dict(zip(cols, row)) for row in raw_rows]
+
+
+def _parse_score_result(result: dict[str, Any] | None) -> tuple[list[float], float | None, list[str]]:
+    score_values: list[float] = []
+    full_score: float | None = None
+    exam_ids: list[str] = []
+    if not isinstance(result, dict):
+        return score_values, full_score, exam_ids
+    cols = result.get("columns") or []
+    raw_rows = result.get("rows") or []
+    score_idx = cols.index("score") if "score" in cols else 0
+    fs_idx = cols.index("exam_score") if "exam_score" in cols else -1
+    exam_idx = cols.index("exam_id") if "exam_id" in cols else -1
+    seen_exams: set[str] = set()
+    for row in raw_rows:
+        try:
+            score_values.append(float(row[score_idx]))
+        except (TypeError, ValueError, IndexError):
+            continue
+        if fs_idx >= 0 and full_score is None:
+            try:
+                full_score = float(row[fs_idx])
+            except (TypeError, ValueError, IndexError):
+                pass
+        if exam_idx >= 0:
+            eid = str(row[exam_idx]).strip()
+            if eid and eid not in seen_exams:
+                seen_exams.add(eid)
+                exam_ids.append(eid)
+    return score_values, full_score, exam_ids
+
+
+def _fetch_subject_diagnosis_rows(
+    *,
+    datasource_id: int,
+    workspace_oid: int | None,
+    user_id: int | None,
+    school_name: str = "",
+    subject_name: str = "",
+    exam_name: str = "",
+    class_name: str = "",
+    db_type: str = "pg",
+) -> dict[str, Any]:
+    """查小题/知识点/成绩，带考试名放宽与 exam_id 回退。"""
+    base_kw = {
+        "school_name": school_name,
+        "class_name": class_name,
+        "subject_name": subject_name,
+        "exam_name": exam_name,
+    }
+    item_rows: list[dict[str, Any]] = []
+    knowledge_rows: list[dict[str, Any]] = []
+    score_values: list[float] = []
+    full_score: float | None = None
+    warnings: list[str] = []
+    errors: list[str] = []
+    sql_logs: list[dict[str, Any]] = []
+
+    def run_bundle(
+        where_clause_detail: str,
+        where_clause_score: str,
+        phase: str,
+    ) -> tuple[list[dict], list[dict], list[float], float | None, list[str]]:
+        item_sql, knowledge_sql, score_sql, exam_id_sql = _diagnosis_sql_bundle(
+            where_clause_detail,
+            where_clause_score,
+            db_type,
+        )
+        ir: list[dict[str, Any]] = []
+        kr: list[dict[str, Any]] = []
+        sv: list[float] = []
+        fs: float | None = None
+        eids: list[str] = []
+        for label, sql in (
+            ("item_detail", item_sql),
+            ("knowledge", knowledge_sql),
+            ("score", score_sql),
+        ):
+            success, msg, result, sql_run = _run_edu_sql(
+                sql,
+                datasource_id=datasource_id,
+                workspace_oid=workspace_oid,
+                user_id=user_id,
+            )
+            row_count = len(result.get("rows") or []) if isinstance(result, dict) else 0
+            sql_logs.append(
+                {
+                    "phase": phase,
+                    "label": label,
+                    "success": success,
+                    "row_count": row_count,
+                    "message": msg if not success else "",
+                    "sql_preview": (sql_run or sql)[:600],
+                }
+            )
+            if not success:
+                errors.append(f"[{phase}/{label}] {msg}")
+                continue
+            if not isinstance(result, dict):
+                continue
+            if label == "item_detail":
+                ir = _rows_to_dicts(result)
+            elif label == "knowledge":
+                kr = _rows_to_dicts(result)
+            else:
+                sv, fs, eids = _parse_score_result(result)
+        if not eids:
+            success, msg, result, sql_run = _run_edu_sql(
+                exam_id_sql,
+                datasource_id=datasource_id,
+                workspace_oid=workspace_oid,
+                user_id=user_id,
+            )
+            sql_logs.append(
+                {
+                    "phase": phase,
+                    "label": "exam_ids",
+                    "success": success,
+                    "row_count": len(result.get("rows") or []) if isinstance(result, dict) else 0,
+                    "message": msg if not success else "",
+                    "sql_preview": (sql_run or exam_id_sql)[:600],
+                }
+            )
+            if not success:
+                errors.append(f"[{phase}/exam_ids] {msg}")
+            elif isinstance(result, dict):
+                for row in result.get("rows") or []:
+                    if row and str(row[0]).strip():
+                        eids.append(str(row[0]).strip())
+        return ir, kr, sv, fs, eids
+
+    detail_wc, score_wc = _diagnosis_where_clause_pair(**base_kw)
+    item_rows, knowledge_rows, score_values, full_score, exam_ids = run_bundle(
+        detail_wc, score_wc, "primary"
+    )
+
+    if not item_rows and score_values and exam_ids:
+        detail_wc2, score_wc2 = _diagnosis_where_clause_pair(
+            **base_kw, exam_ids=exam_ids, skip_exam_name=True
+        )
+        item_rows, knowledge_rows, _sv2, _fs2, _ = run_bundle(
+            detail_wc2, score_wc2, "fallback_exam_id"
+        )
+        if item_rows:
+            warnings.append("小题明细已按成绩记录的 exam_id 回退查询（考试名与库中不完全一致）")
+
+    if not item_rows and exam_name:
+        detail_wc3, score_wc3 = _diagnosis_where_clause_pair(**base_kw, skip_exam_name=True)
+        item_rows, knowledge_rows, score_values, full_score, exam_ids = run_bundle(
+            detail_wc3, score_wc3, "fallback_no_exam_name"
+        )
+        if not item_rows and score_values and exam_ids:
+            detail_wc4, score_wc4 = _diagnosis_where_clause_pair(
+                **base_kw, exam_ids=exam_ids, skip_exam_name=True
+            )
+            item_rows, knowledge_rows, _, _, _ = run_bundle(
+                detail_wc4, score_wc4, "fallback_exam_id_only"
+            )
+            if item_rows:
+                warnings.append("小题明细已按班级/科目范围回退查询")
+
+    if score_values and not item_rows:
+        warnings.append(
+            "已查到总分但无小题明细：请确认 tb_score_detail 是否已导入，"
+            "且 question_id 能关联 tb_exam_question（或存在 question_score 列）"
+        )
+
+    # 有小题但成绩为空：放宽 class 过滤重试一次（tb_score.class 可能与传入值不一致）
+    if not score_values and item_rows:
+        relaxed_kw = {**base_kw, "class_name": ""}
+        detail_wc_r, score_wc_r = _diagnosis_where_clause_pair(**relaxed_kw, skip_exam_name=True)
+        _, _, sv_r, fs_r, _ = run_bundle(detail_wc_r, score_wc_r, "relaxed_score_no_class")
+        if sv_r:
+            score_values = sv_r
+            full_score = fs_r if fs_r is not None else full_score
+            warnings.append(
+                f"成绩记录按班级 `{class_name}` 未查到，已放宽班级过滤重试"
+                f"（命中 {len(sv_r)} 条）。建议核查 tb_score.class 实际值。"
+            )
+
+    return {
+        "item_rows": item_rows,
+        "knowledge_rows": knowledge_rows,
+        "score_values": score_values,
+        "full_score": full_score,
+        "warnings": warnings,
+        "errors": errors,
+        "sql_logs": sql_logs,
+    }
 
 
 def _fmt_val(v: Any) -> str:
@@ -885,26 +1319,34 @@ def build_chart_option_tool(
     - ``subject_radar``：``data={"subjects": [...], "values": [...], "full_score": 100}``
     - ``class_compare_bar``：``data={"classes": [...], "values": [...]}``
     - ``subject_bar``：``data={"subjects": [...], "metrics": [{name, values}]}``
+    - ``knowledge_bar``：``data={"categories": [...], "values": [...]}``（知识点得分率）
     - ``trend_line``：``data={"x_labels": [...], "series": [{name, values}]}``
-    - ``pie``：``data={"items": [{name, value, color?}, ...]}``
-    - ``correlation_bar``：``data={"subjects": [...], "series": [{name, values:[r,...]}]}``
-    - ``progress_regress_bar``：``data={"items": [{name, value, color?}, ...]}``
-    - ``trajectory_line``：``data={"x_labels": [...], "series": [{name, values}]}``
+    - ``pie`` / ``correlation_bar`` / ``progress_regress_bar`` / ``trajectory_line`` 等同上。
+
+    **别名（自动映射）**：``bar`` / ``column`` 按 data 结构推断具体类型；
+    ``line``→``trend_line``，``radar``→``subject_radar``。
+    例如知识点柱图可写 ``chart_type="bar"`` + ``categories``/``values``。
 
     Returns:
-        ``content`` 为可读说明，``data`` 为 ``{"option": "<JSON 字符串>"}``。
-        未知 chart_type 返回 ``data={"error": ..., "option": ""}``，Agent 应换类型或放弃图表。
+        ``content`` 为可读说明，``data`` 为 ``{"option": "<JSON 字符串>", "chart_type": "..."}``。
+        未知 chart_type 返回 ``data={"error": ..., "option": ""}``。
     """
+    from src.agent.education.charts import SUPPORTED_CHART_TYPES, resolve_chart_type
+
+    resolved = resolve_chart_type(chart_type, data or {}, title)
     option = _build_chart_option(chart_type, data or {}, title)
     if not option:
+        supported = " / ".join(SUPPORTED_CHART_TYPES)
         return ToolResult(
-            content=f"build_chart_option_tool 失败：未知 chart_type `{chart_type}`。"
-                    f" 可选：score_distribution / subject_radar / class_compare_bar / subject_bar。",
+            content=(
+                f"build_chart_option_tool 失败：未知 chart_type `{chart_type}`。"
+                f" 可选：{supported}；别名 bar/column/line/radar 亦支持。"
+            ),
             data={"error": "unknown chart_type", "chart_type": chart_type, "option": ""},
         )
     return ToolResult(
-        content=f"已生成 ECharts option（{chart_type}），可直接填入模板 CHART 字段。",
-        data={"option": option, "chart_type": chart_type},
+        content=f"已生成 ECharts option（{resolved}），可直接填入模板 CHART 字段。",
+        data={"option": option, "chart_type": resolved},
     )
 
 

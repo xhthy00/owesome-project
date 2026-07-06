@@ -32,6 +32,13 @@ export default function PermissionUsersPage() {
     { title: "名称", dataIndex: "name", width: 160 },
     { title: "邮箱", dataIndex: "email", width: 220 },
     {
+      title: "教育角色",
+      dataIndex: "edu_role",
+      width: 140,
+      render: (v: string | null | undefined) =>
+        v ? <Tag color="geekblue">{v}</Tag> : <Tag>未配置</Tag>
+    },
+    {
       title: "角色",
       dataIndex: "id",
       width: 160,

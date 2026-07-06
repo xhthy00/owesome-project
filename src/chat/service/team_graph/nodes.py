@@ -11,10 +11,9 @@ from langchain_core.runnables import RunnableConfig
 from src.agent.adapter.llm_adapter import LangChainLlmClient
 from src.agent.expand.chat_awel_team import build_chat_team
 from src.chat.schemas import ChatRequest
-from src.agent.education.query_parse import extract_school_target, extract_student_target
 from src.chat.service.agent_runner import (
     _DataAnalystPhase,
-    _extract_required_keywords,
+    _build_shared_constraints,
     _first_non_empty,
     _persist_sync,
     _run_charter,
@@ -65,10 +64,13 @@ async def node_planner(state: TeamState, config: RunnableConfig) -> dict[str, An
     emit = config["configurable"]["emit"]
     llm = _llm_from_config(config)
     request = state["request"]
+    current_user_id = state["current_user_id"]
+    shared_constraints = _build_shared_constraints(request.question, current_user_id)
     plan_items = await _run_planner_phase(
         request=request,
         llm_client=llm,
         emit=emit,
+        constraints=shared_constraints,
     )
     team_cfg = build_chat_team(
         enable_tool_agent=config["configurable"].get("enable_tool_agent", True),
@@ -80,6 +82,7 @@ async def node_planner(state: TeamState, config: RunnableConfig) -> dict[str, An
         "plan_items": plan_items,
         "plans": plans,
         "plan_agents": plan_agents,
+        "constraints_ctx": shared_constraints.to_context(),
     }
 
 
@@ -93,14 +96,10 @@ async def node_sub_tasks_loop(state: TeamState, config: RunnableConfig) -> dict[
         enable_tool_agent=config["configurable"].get("enable_tool_agent", True),
     )
 
-    shared_constraints = _RunConstraints(
-        locked_tables=[],
-        required_keywords=_extract_required_keywords(request.question),
-        source_sub_task_index=None,
-        report_audience=request.report_audience,
-        target_student=extract_student_target(request.question),
-        target_school=extract_school_target(request.question),
-    )
+    shared_constraints = _RunConstraints.from_context(state.get("constraints_ctx"))
+    if not shared_constraints.edu_scope:
+        shared_constraints = _build_shared_constraints(request.question, state["current_user_id"])
+    shared_constraints.report_audience = request.report_audience
     # 累积上游 DataAnalyst 子任务的结构化产出，供下游 ToolExpert 组装报告时复用。
     upstream_report_data: dict[str, Any] = {"sub_tasks": []}
 

@@ -19,7 +19,7 @@ from system.models.user import SysUser
 logger = logging.getLogger(__name__)
 
 _FIELD_SAFE = re.compile(r"^[A-Za-z_\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff]*$")
-_OPS = {"=", "!=", ">", "<", ">=", "<=", "like"}
+_OPS = {"=", "!=", ">", "<", ">=", "<=", "like", "in"}
 
 
 def _norm_user_id(raw: Any) -> Optional[int]:
@@ -135,12 +135,23 @@ def compile_row_expression_tree(expression_tree: dict[str, Any], table_name: str
         val = c.get("value")
         if val is None:
             val = ""
-        lit = _sql_literal(str(val), db_type)
         qual_col = f"{q}{table_name}{q}.{q}{field}{q}"
-        if op == "like":
+        if op == "in":
+            items: list[str] = []
+            if isinstance(val, list):
+                items = [str(v).strip() for v in val if str(v).strip()]
+            elif isinstance(val, str) and val.strip():
+                items = [p.strip() for p in val.replace("|", ",").split(",") if p.strip()]
+            if not items:
+                continue
+            lits = ", ".join(_sql_literal(v, db_type) for v in items)
+            parts.append(f"{qual_col} IN ({lits})")
+        elif op == "like":
+            lit = _sql_literal(str(val), db_type)
             parts.append(f"{qual_col} LIKE {lit}")
         else:
-            parts.append(f"{qual_col} {op.upper() if op != 'like' else 'LIKE'} {lit}")
+            lit = _sql_literal(str(val), db_type)
+            parts.append(f"{qual_col} {op.upper()} {lit}")
     if not parts:
         return None
     joiner = f" {relation.upper()} "
@@ -473,6 +484,116 @@ def filter_exec_result_by_column_permissions(
     return out
 
 
+_EDU_SCOPE_FIELDS = ("school_id", "class", "student_id")
+_SCORE_TABLE_NAMES = frozenset({"tb_score", "score"})
+_DETAIL_TABLE_NAMES = frozenset({"tb_score_detail", "score_detail"})
+_STUDENT_TABLE_NAMES = frozenset({"tb_student", "student"})
+
+
+def _table_alias_name(table: Any) -> str:
+    from sqlglot import exp
+
+    alias_node = table.args.get("alias")
+    if alias_node is not None:
+        inner = alias_node.this if hasattr(alias_node, "this") else alias_node
+        if isinstance(inner, exp.Identifier):
+            return inner.name
+        return str(inner)
+    return table.name or ""
+
+
+def _find_table_aliases(sql: str, table_names: frozenset[str], db_type: str) -> list[str]:
+    try:
+        from sqlglot import exp, parse_one
+    except ImportError:
+        return []
+
+    dialect = "mysql" if db_type == "mysql" else "postgres"
+    try:
+        tree = parse_one(sql, dialect=dialect)
+    except Exception:
+        return []
+
+    aliases: list[str] = []
+    for table in tree.find_all(exp.Table):
+        name = (table.name or "").strip().lower()
+        alias = _table_alias_name(table)
+        if name in table_names and alias:
+            aliases.append(alias)
+    return aliases
+
+
+def _edu_scope_column(
+    field: str,
+    *,
+    score_aliases: list[str],
+    detail_aliases: list[str],
+    student_aliases: list[str],
+    db_type: str,
+) -> Optional[str]:
+    """教育权限列映射：school_id/class 仅 tb_score；student_id 优先 sc，其次 sd，再次 st.id。"""
+    q = "`" if db_type == "mysql" else '"'
+    if field in ("school_id", "class"):
+        if score_aliases:
+            return f"{score_aliases[0]}.{q}{field}{q}"
+        return None
+    if field == "student_id":
+        if score_aliases:
+            return f"{score_aliases[0]}.{q}student_id{q}"
+        if detail_aliases:
+            return f"{detail_aliases[0]}.{q}student_id{q}"
+        if student_aliases:
+            return f"{student_aliases[0]}.{q}id{q}"
+        return None
+    return None
+
+
+def _exists_score_guard(sd_alias: str, qualified_inner: str, db_type: str) -> str:
+    """仅 FROM tb_score_detail 时，经 EXISTS 关联 tb_score 施加 school_id/class 谓词。"""
+    q = "`" if db_type == "mysql" else '"'
+    sc = "sc"
+    return (
+        f"EXISTS (SELECT 1 FROM tb_score {sc} "
+        f"WHERE {sc}.{q}exam_id{q} = {sd_alias}.{q}exam_id{q} "
+        f"AND {sc}.{q}student_id{q} = {sd_alias}.{q}student_id{q} "
+        f"AND {qualified_inner})"
+    )
+
+
+def qualify_edu_row_predicates(sql: str, predicates: list[str], db_type: str) -> list[str]:
+    """为教育权限谓词补全正确表别名，避免 sd.school_id / st.student_id 等错误引用。"""
+    if not predicates:
+        return predicates
+
+    score_aliases = _find_table_aliases(sql, _SCORE_TABLE_NAMES, db_type)
+    detail_aliases = _find_table_aliases(sql, _DETAIL_TABLE_NAMES, db_type)
+    student_aliases = _find_table_aliases(sql, _STUDENT_TABLE_NAMES, db_type)
+    q = "`" if db_type == "mysql" else '"'
+    out: list[str] = []
+
+    for pred in predicates:
+        new_pred = pred
+        for field in _EDU_SCOPE_FIELDS:
+            if field not in pred:
+                continue
+            col = _edu_scope_column(
+                field,
+                score_aliases=score_aliases,
+                detail_aliases=detail_aliases,
+                student_aliases=student_aliases,
+                db_type=db_type,
+            )
+            pattern = rf'(?<!\.){re.escape(q)}{field}{re.escape(q)}'
+            if col:
+                new_pred = re.sub(pattern, col, new_pred)
+            elif field in ("school_id", "class") and detail_aliases and not score_aliases:
+                inner = re.sub(pattern, f"sc.{q}{field}{q}", pred)
+                new_pred = _exists_score_guard(detail_aliases[0], inner, db_type)
+                break
+        out.append(new_pred)
+    return out
+
+
 def merge_row_predicates_into_sql(sql: str, db_type: str, predicates: list[str]) -> str:
     """将多个谓词以 AND 方式并入最外层 SELECT（支持简单 UNION 时整体包一层子查询）。"""
     if not predicates or not sql.strip():
@@ -553,6 +674,10 @@ def apply_permissions_for_execute(
         return sql
     names = list(tables_hint or []) or tables_referenced_in_sql(sql, db_type)
     preds = collect_row_predicate_sqls(session, user.id, ds_id, names, db_type)
+    from datasource.service.edu_permission import build_edu_row_predicates
+
+    edu_preds = qualify_edu_row_predicates(sql, build_edu_row_predicates(user, db_type), db_type)
+    preds.extend(edu_preds)
     if not preds:
         return sql
     return merge_row_predicates_into_sql(sql, db_type, preds)

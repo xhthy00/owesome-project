@@ -84,8 +84,15 @@ def login(
 
 
 @router.get("/me")
-def get_me(current_user = Depends(get_current_user)):
+def get_me(
+    current_user=Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
     """Get current user info."""
+    from datasource.service.edu_permission import edu_scope_summary
+
+    db_user = get_user_by_id(session, current_user.id)
+    edu_scope = edu_scope_summary(db_user) if db_user else {}
     return success_response(
         data={
             "id": current_user.id,
@@ -97,5 +104,6 @@ def get_me(current_user = Depends(get_current_user)):
             "language": current_user.language,
             "origin": current_user.origin,
             "create_time": current_user.create_time,
+            "edu_scope": edu_scope,
         }
     )

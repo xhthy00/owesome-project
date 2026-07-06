@@ -29,3 +29,4 @@ class TeamState(TypedDict, total=False):
 
     overall_error: NotRequired[str | None]
     record_id: NotRequired[int]
+    constraints_ctx: NotRequired[dict[str, Any]]

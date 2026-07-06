@@ -9,13 +9,99 @@
 - ``score_distribution``：分数段柱状图（含及格线参考线）；
 - ``subject_radar``：各科均分雷达图；
 - ``class_compare_bar``：班级均分横向对比柱图；
-- ``subject_bar``：各科及格率/均分柱图。
+- ``subject_bar``：各科及格率/均分柱图；
+- ``knowledge_bar``：知识点得分率横向柱图（``categories`` + ``values``）。
 """
 
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Callable
+
+_CHART_BUILDERS: dict[str, Callable[[dict[str, Any], str], dict[str, Any]]] = {}
+
+# LLM / Charter 常用别名 → 按 data 结构再解析为具体 builder
+_CHART_TYPE_ALIASES: dict[str, str] = {
+    "column": "bar",
+    "histogram": "bar",
+    "hbar": "horizontal_bar",
+    "horizontal": "horizontal_bar",
+    "line": "trend_line",
+    "radar": "subject_radar",
+}
+
+SUPPORTED_CHART_TYPES = (
+    "score_distribution",
+    "subject_radar",
+    "class_compare_bar",
+    "subject_bar",
+    "knowledge_bar",
+    "trend_line",
+    "group_compare_bar",
+    "pie",
+    "correlation_bar",
+    "progress_regress_bar",
+    "subject_extreme_bar",
+    "trajectory_line",
+)
+
+
+def _register_builder(name: str, fn: Callable[[dict[str, Any], str], dict[str, Any]]) -> None:
+    _CHART_BUILDERS[name] = fn
+
+
+def resolve_chart_type(chart_type: str, data: dict[str, Any], title: str = "") -> str:
+    """将 bar/column/line 等别名解析为具体 chart_type。"""
+    ct = (chart_type or "").strip().lower()
+    ct = _CHART_TYPE_ALIASES.get(ct, ct)
+    if ct in _CHART_BUILDERS:
+        return ct
+
+    d = data or {}
+    title_s = title or ""
+
+    if ct == "bar":
+        if d.get("segments"):
+            return "score_distribution"
+        if d.get("categories") and d.get("values"):
+            return "knowledge_bar"
+        if d.get("classes") and d.get("values"):
+            return "class_compare_bar"
+        if d.get("groups") and d.get("metrics"):
+            return "group_compare_bar"
+        if d.get("items"):
+            return "progress_regress_bar"
+        if d.get("subjects") and (d.get("metrics") or d.get("values")):
+            return "subject_bar"
+        if "知识点" in title_s:
+            return "knowledge_bar"
+        if "班级" in title_s or "对比" in title_s:
+            return "class_compare_bar"
+        if "分数段" in title_s or "分布" in title_s:
+            return "score_distribution"
+        return "subject_bar"
+
+    if ct in ("horizontal_bar", "bar_horizontal"):
+        if d.get("categories") and d.get("values"):
+            return "knowledge_bar"
+        return "class_compare_bar"
+
+    return ct
+
+
+def _normalize_chart_data(chart_type: str, data: dict[str, Any]) -> dict[str, Any]:
+    """兼容 LLM 简写 data 结构。"""
+    d = dict(data or {})
+    if chart_type == "subject_bar":
+        if d.get("subjects") and d.get("values") and not d.get("metrics"):
+            d["metrics"] = [{"name": d.get("series_name") or "数值", "values": list(d["values"])}]
+    if chart_type == "knowledge_bar":
+        if d.get("subjects") and not d.get("categories"):
+            d["categories"] = list(d["subjects"])
+    if chart_type == "class_compare_bar":
+        if d.get("categories") and not d.get("classes"):
+            d["classes"] = list(d["categories"])
+    return d
 
 
 def build_chart_option(
@@ -26,29 +112,19 @@ def build_chart_option(
     """返回 ECharts option 的 JSON 字符串。
 
     Args:
-        chart_type: 见模块 docstring 的 5 类。
+        chart_type: 见模块 docstring；支持别名 ``bar`` / ``column`` / ``line`` / ``radar``。
         data: 图表数据，结构因 chart_type 而异（见各 builder）。
-        title: 图表标题。
+        title: 图表标题（别名解析时作辅助判断）。
 
     Returns:
         JSON 字符串；未知 chart_type 返回空串（调用方按"无图表"处理）。
     """
-    builder = {
-        "score_distribution": _score_distribution,
-        "subject_radar": _subject_radar,
-        "class_compare_bar": _class_compare_bar,
-        "subject_bar": _subject_bar,
-        "trend_line": _trend_line,
-        "group_compare_bar": _group_compare_bar,
-        "pie": _pie,
-        "correlation_bar": _correlation_bar,
-        "progress_regress_bar": _progress_regress_bar,
-        "subject_extreme_bar": _subject_extreme_bar,
-        "trajectory_line": _trajectory_line,
-    }.get(chart_type)
+    resolved = resolve_chart_type(chart_type, data or {}, title)
+    normalized = _normalize_chart_data(resolved, data or {})
+    builder = _CHART_BUILDERS.get(resolved)
     if builder is None:
         return ""
-    option = builder(data, title)
+    option = builder(normalized, title)
     return json.dumps(option, ensure_ascii=False)
 
 
@@ -128,6 +204,25 @@ def _subject_bar(data: dict[str, Any], title: str) -> dict[str, Any]:
         "xAxis": {"type": "category", "data": subjects},
         "yAxis": {"type": "value"},
         "series": series,
+    }
+
+
+def _knowledge_bar(data: dict[str, Any], title: str) -> dict[str, Any]:
+    """知识点得分率横向柱图：data={"categories":[...], "values":[...]}。"""
+    categories = data.get("categories") or data.get("subjects") or []
+    values = list(data.get("values") or [])
+    return {
+        "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
+        "tooltip": {"trigger": "axis", "valueFormatter": "{c}%"},
+        "grid": {"left": "22%", "right": "10%", "bottom": "8%", "containLabel": True},
+        "xAxis": {"type": "value", "name": "得分率(%)", "max": 100},
+        "yAxis": {"type": "category", "data": categories},
+        "series": [{
+            "type": "bar",
+            "data": values,
+            "itemStyle": {"color": "#1677ff"},
+            "label": {"show": True, "position": "right", "formatter": "{c}%"},
+        }],
     }
 
 
@@ -287,4 +382,18 @@ def _trajectory_line(data: dict[str, Any], title: str) -> dict[str, Any]:
     }
 
 
-__all__ = ["build_chart_option"]
+_register_builder("score_distribution", _score_distribution)
+_register_builder("subject_radar", _subject_radar)
+_register_builder("class_compare_bar", _class_compare_bar)
+_register_builder("subject_bar", _subject_bar)
+_register_builder("knowledge_bar", _knowledge_bar)
+_register_builder("trend_line", _trend_line)
+_register_builder("group_compare_bar", _group_compare_bar)
+_register_builder("pie", _pie)
+_register_builder("correlation_bar", _correlation_bar)
+_register_builder("progress_regress_bar", _progress_regress_bar)
+_register_builder("subject_extreme_bar", _subject_extreme_bar)
+_register_builder("trajectory_line", _trajectory_line)
+
+
+__all__ = ["SUPPORTED_CHART_TYPES", "build_chart_option", "resolve_chart_type"]

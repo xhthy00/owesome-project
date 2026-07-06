@@ -35,6 +35,7 @@ from src.agent.expand.summarizer import SummarizerAgent
 from src.agent.expand.tool_agent import build_tool_agent
 from src.agent.expand.user_proxy import UserProxyAgent
 from src.agent.education.query_parse import (
+    build_edu_aware_constraints,
     extract_school_target,
     extract_student_target,
     extract_upstream_participant_count,
@@ -70,6 +71,10 @@ class _RunConstraints:
     target_student: str | None = None
     #: 用户问题中指定的目标学校（如「南京市第一中学」），用于 SQL 范围约束。
     target_school: str | None = None
+    #: 教育权限绑定的班级列表（teacher 角色）。
+    target_classes: list[str] | None = None
+    #: 用户 education 权限摘要（edu_role / school / class_names 等）。
+    edu_scope: dict[str, Any] | None = None
 
     def to_context(self) -> dict[str, Any]:
         ctx: dict[str, Any] = {
@@ -85,7 +90,59 @@ class _RunConstraints:
             ctx["target_student"] = self.target_student
         if self.target_school is not None:
             ctx["target_school"] = self.target_school
+        if self.target_classes:
+            ctx["target_classes"] = list(self.target_classes)
+        if self.edu_scope:
+            ctx["edu_scope"] = dict(self.edu_scope)
         return ctx
+
+    @classmethod
+    def from_context(cls, raw: dict[str, Any] | None) -> "_RunConstraints":
+        data = raw if isinstance(raw, dict) else {}
+        tc = data.get("target_classes")
+        return cls(
+            locked_tables=list(data.get("locked_tables") or []),
+            required_keywords=list(data.get("required_keywords") or []),
+            source_sub_task_index=data.get("source_sub_task_index"),
+            report_data=data.get("report_data"),
+            report_audience=data.get("report_audience"),
+            target_student=data.get("target_student"),
+            target_school=data.get("target_school"),
+            target_classes=list(tc) if isinstance(tc, list) else None,
+            edu_scope=dict(data["edu_scope"]) if isinstance(data.get("edu_scope"), dict) else None,
+        )
+
+
+def _load_edu_scope_summary(user_id: int) -> dict[str, Any]:
+    if not user_id:
+        return {}
+    from datasource.service.edu_permission import edu_scope_summary
+    from src.common.core.database import get_db_session
+    from src.system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        user = get_user_by_id(session, user_id)
+        if user is None:
+            return {}
+        return edu_scope_summary(user)
+
+
+def _build_shared_constraints(question: str, user_id: int) -> _RunConstraints:
+    edu = _load_edu_scope_summary(user_id)
+    merged = build_edu_aware_constraints(
+        question,
+        edu,
+        required_keywords=_extract_required_keywords(question),
+    )
+    return _RunConstraints(
+        locked_tables=[],
+        required_keywords=list(merged.get("required_keywords") or []),
+        source_sub_task_index=None,
+        target_school=merged.get("target_school"),
+        target_student=merged.get("target_student"),
+        target_classes=merged.get("target_classes"),
+        edu_scope=merged.get("edu_scope"),
+    )
 
 
 def _extract_required_keywords(question: str) -> list[str]:
@@ -151,6 +208,7 @@ async def run_agent_stream(
         current_user_id=current_user_id,
         emit=emit,
         llm_client=llm_client,
+        constraints=_build_shared_constraints(request.question, current_user_id),
         workspace_oid=workspace_oid,
     )
     if phase.fatal_error:
@@ -251,22 +309,16 @@ async def _run_team_stream_legacy(
         llm_client = LangChainLlmClient()
     team_cfg = build_chat_team(enable_tool_agent=enable_tool_agent)
 
+    shared_constraints = _build_shared_constraints(request.question, current_user_id)
     plan_items = await _run_planner_phase(
         request=request,
         llm_client=llm_client,
         emit=emit,
+        constraints=shared_constraints,
     )
     plans = [it["sub_task"] for it in plan_items]
     plan_agents = [team_cfg.resolve_sub_task_agent(it["sub_task_agent"]) for it in plan_items]
     await emit("plan", {"plans": plans, "sub_task_agents": plan_agents})
-
-    shared_constraints = _RunConstraints(
-        locked_tables=[],
-        required_keywords=_extract_required_keywords(request.question),
-        source_sub_task_index=None,
-        target_student=extract_student_target(request.question),
-        target_school=extract_school_target(request.question),
-    )
     upstream_report_data: dict[str, Any] = {"sub_tasks": []}
 
     sub_phases: list[tuple[str, _DataAnalystPhase]] = []
@@ -637,6 +689,7 @@ async def _run_planner_phase(
     request: ChatRequest,
     llm_client: Any,
     emit: EmitCallback,
+    constraints: _RunConstraints | None = None,
 ) -> list[dict[str, str]]:
     """跑 Planner 得到 sub_task 列表。失败一律回落 [原问题]，不抛。"""
     await emit("agent_speak", {"agent": "Planner", "status": "start"})
@@ -646,7 +699,10 @@ async def _run_planner_phase(
             received_message=AgentMessage(
                 content=request.question,
                 role="user",
-                context={"question": request.question},
+                context={
+                    "question": request.question,
+                    "constraints": constraints.to_context() if constraints else {},
+                },
             ),
             sender=UserProxyAgent(),
         )

@@ -43,3 +43,39 @@ def test_build_diagnosis_recommendations_for_weak_points():
     )
     assert "导数" in html
     assert "第 5 题" in html
+
+
+def test_build_item_table_html_student_row_fields():
+    from src.agent.education.subject_diagnosis import build_item_table_html
+
+    html = build_item_table_html(
+        [{"question_no": 1, "knowledge_name": "集合", "score": 4, "question_score": 5, "score_rate": 80.0}]
+    )
+    assert "<table" in html
+    assert "得分" in html
+    assert "4.00" in html
+    assert "5.00" in html
+
+
+def test_coerce_report_table_fields_from_list():
+    from src.agent.education.subject_diagnosis import coerce_report_table_fields
+
+    data = coerce_report_table_fields(
+        {
+            "ITEM_TABLE": [
+                {"question_no": 1, "knowledge_name": "集合", "score": 4, "question_score": 5, "score_rate": 80.0}
+            ]
+        }
+    )
+    assert isinstance(data["ITEM_TABLE"], str)
+    assert data["ITEM_TABLE"].startswith("<table")
+    assert "集合" in data["ITEM_TABLE"]
+
+
+def test_coerce_report_table_fields_from_python_repr_string():
+    from src.agent.education.subject_diagnosis import coerce_report_table_fields
+
+    raw = "[{'question_no': 1, 'knowledge_name': '集合', 'score': 4, 'question_score': 5, 'score_rate': 80.0}]"
+    data = coerce_report_table_fields({"ITEM_TABLE": raw})
+    assert "<table" in data["ITEM_TABLE"]
+    assert "集合" in data["ITEM_TABLE"]

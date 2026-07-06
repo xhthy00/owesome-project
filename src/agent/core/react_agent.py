@@ -27,7 +27,7 @@ import logging
 from typing import Any
 
 from src.agent.core.action.base import Action, ActionOutput
-from src.agent.core.action.tool_action import ToolAction
+from src.agent.core.action.tool_action import ToolAction, build_repeat_tool_warning
 from src.agent.core.agent import AgentMessage
 from src.agent.core.base_agent import ConversableAgent
 from src.agent.resource.tool.pack import ToolPack
@@ -114,6 +114,7 @@ class ReActAgent(ConversableAgent):
         # 会被误报"重复调用"）。
         last_tool_name: str | None = None
         tool_streak: int = 0
+        tool_call_cache: dict[str, ActionOutput] = {}
 
         for round_idx in range(self.max_react_rounds):
             reply.rounds = round_idx + 1
@@ -139,6 +140,7 @@ class ReActAgent(ConversableAgent):
                 reviewer=reviewer,
                 round_idx=reply.rounds,
                 agent_name=self.name,
+                tool_call_cache=tool_call_cache,
                 **kwargs,
             )
             elapsed_ms = int((time.time() - t0) * 1000)
@@ -176,11 +178,7 @@ class ReActAgent(ConversableAgent):
 
             streak_warning: str | None = None
             if tool_streak >= _REPEAT_TOOL_WARN_THRESHOLD and last_tool_name:
-                streak_warning = (
-                    f"⚠️ 你已连续 {tool_streak} 次调用 `{last_tool_name}` 仍未收敛。"
-                    "请**换一个工具**（例如 list_tables/describe_table 探查 → execute_sql 查询 → calculate 算数），"
-                    "或在已有信息足够时直接调用 `terminate` 给出结论。"
-                )
+                streak_warning = build_repeat_tool_warning(last_tool_name, tool_streak)
                 logger.warning(
                     "[%s] tool streak=%d for %r at round %d — injecting soft warning",
                     self.name, tool_streak, last_tool_name, reply.rounds,
@@ -261,8 +259,9 @@ class ReActAgent(ConversableAgent):
         tool_name = action_out.action
         is_known_tool = bool(action_out.is_exe_success) and tool_name and tool_name != "tool_call"
         is_terminate = bool(action_out.terminate)
+        is_deduplicated = bool((action_out.extra or {}).get("deduplicated"))
 
-        if is_known_tool and not is_terminate:
+        if is_known_tool and not is_terminate and not is_deduplicated:
             await self._emit(
                 "tool_call",
                 {
@@ -285,6 +284,7 @@ class ReActAgent(ConversableAgent):
                 "data": action_out.extra.get("tool_data"),
                 "elapsed_ms": elapsed_ms,
                 "terminate": bool(action_out.terminate),
+                "deduplicated": is_deduplicated,
             },
         )
 

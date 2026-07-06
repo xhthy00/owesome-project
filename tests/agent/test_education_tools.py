@@ -272,6 +272,18 @@ def test_build_chart_option_tool_score_distribution():
     assert parsed["series"][0]["type"] == "bar"
 
 
+def test_build_chart_option_tool_bar_alias_resolves_to_knowledge_bar():
+    result = _run(
+        build_chart_option_tool.execute(
+            chart_type="bar",
+            data={"categories": ["集合", "函数"], "values": [80.0, 55.0]},
+            title="知识点得分率",
+        )
+    )
+    assert result.data["option"]
+    assert result.data["chart_type"] == "knowledge_bar"
+
+
 def test_build_chart_option_tool_unknown_type_returns_empty_option():
     result = _run(build_chart_option_tool.execute(chart_type="nope", data={}))
     assert result.data["option"] == ""
@@ -1104,7 +1116,67 @@ def test_long_table_total_column_zero_sums_subjects():
     assert "240" in result.data["STUDENT_ARCHIVE_TABLE"]
 
 
+def test_build_subject_diagnosis_sections_tool_renders_html():
+    """sections 工具默认 render=True，应直接返回 HTML 载荷。"""
+    from src.agent.education import tools as edu_tools
+
+    result = _run(
+        edu_tools.build_subject_diagnosis_sections_tool.execute(
+            item_rows=[
+                {"question_no": 1, "knowledge_name": "集合", "score_rate": 80.0},
+            ],
+            knowledge_rows=[
+                {"knowledge_name": "集合", "score_rate": 80.0, "question_count": 1},
+            ],
+            stats={
+                "avg": 86,
+                "pass_rate": 90,
+                "excellent_rate": 20,
+                "stdev": 8,
+                "segments": [{"label": "90-100", "count": 5, "ratio": 50}],
+            },
+            school_name="南京市第一中学",
+            exam_name="期末质量检测",
+            subject_name="数学",
+            class_name="高一(2)班",
+        )
+    )
+    assert result.data["output_type"] == "html"
+    html = result.data["html"]
+    assert "集合" in html
+    assert "数学" in html
+
+
 # ---- build_subject_diagnosis_report_tool ----------------------------------
+
+
+# ---- exam_name_like_candidates / diagnosis query ----------------------------
+
+
+def test_exam_name_like_candidates_strips_province_prefix():
+    from src.agent.education.tools import exam_name_like_candidates
+
+    cands = exam_name_like_candidates("江苏省高一上学期数学期末质量检测")
+    assert "江苏省高一上学期数学期末质量检测" in cands
+    assert "高一上学期数学期末质量检测" in cands
+    assert any("期末" in c for c in cands)
+
+
+def test_diagnosis_where_clause_pair_uses_correct_exam_id_column():
+    from src.agent.education.tools import _diagnosis_sql_bundle, _diagnosis_where_clause_pair
+
+    detail_wc, score_wc = _diagnosis_where_clause_pair(
+        school_name="南京市第一中学",
+        class_name="高一(2)班",
+        subject_name="数学",
+        exam_ids=["1"],
+        skip_exam_name=True,
+    )
+    item_sql, _, score_sql, exam_id_sql = _diagnosis_sql_bundle(detail_wc, score_wc, "pg")
+    assert "sd.exam_id IN ('1')" in item_sql
+    assert "sc.exam_id IN ('1')" in score_sql
+    assert "sc.exam_id IN ('1')" in exam_id_sql
+    assert "sd.exam_id" not in score_sql
 
 
 def test_build_subject_diagnosis_report_tool_renders_html(monkeypatch):

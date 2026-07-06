@@ -218,6 +218,9 @@ def _sanitize_report_html(raw_html: str) -> str:
 
 
 def _render_template_html(template_name: str, data: dict[str, Any]) -> str:
+    from src.agent.education.subject_diagnosis import coerce_report_table_fields
+
+    data = coerce_report_table_fields(data or {})
     template_dir = _report_template_dir()
     template_dir.mkdir(parents=True, exist_ok=True)
     if not _REPORT_TEMPLATE_SAFE_RE.match(template_name):
@@ -277,16 +280,18 @@ def _render_template_html(template_name: str, data: dict[str, Any]) -> str:
 
 
 def _parse_report_data(data: Any) -> dict[str, Any]:
+    from src.agent.education.subject_diagnosis import coerce_report_table_fields
+
     if data is None:
         return {}
     if isinstance(data, dict):
-        return data
+        return coerce_report_table_fields(data)
     if isinstance(data, str):
         try:
             parsed = json.loads(data)
         except Exception:
             return {}
-        return parsed if isinstance(parsed, dict) else {}
+        return coerce_report_table_fields(parsed) if isinstance(parsed, dict) else {}
     return {}
 
 
@@ -531,15 +536,6 @@ def sample_rows(
             仅允许只读表达式；含 INSERT/UPDATE/DELETE/UNION-子 DML 等写操作一律拒绝；
             多条语句（分号）也会拒绝。
     """
-    from src.common.core.database import get_db_session
-    from src.datasource.db.db import execute_sql as db_execute_sql
-    from src.datasource.service.query_permission import (
-        apply_permissions_for_execute,
-        filter_exec_result_by_column_permissions,
-        validate_sql_column_permissions,
-    )
-    from src.system.crud.crud_user import get_user_by_id
-
     limit = max(1, min(int(limit or SAMPLE_ROWS_DEFAULT), SAMPLE_ROWS_LLM_MAX))
     db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
     quoted = _safe_identifier(table_name, db_type)
@@ -558,27 +554,37 @@ def sample_rows(
                 data=None,
             )
 
-    sql_run = sql
     if user_id is not None:
-        with get_db_session() as session:
-            u = get_user_by_id(session, user_id)
-            sql_run = apply_permissions_for_execute(
-                session, u, datasource_id, db_type, sql, [table_name.split(".")[-1]]
-            )
-            err = validate_sql_column_permissions(session, u, datasource_id, db_type, sql_run)
-            if err:
-                return ToolResult(content=f"采样失败：{err}", data=None)
+        from src.datasource.service.execute_with_permission import execute_sql_with_permission_by_user_id
+        from src.datasource.service.sql_auto_fix import format_auto_fix_note
 
-    success, message, result = db_execute_sql(db_type=db_type, config=config, sql=sql_run)
-    if not success:
-        return ToolResult(content=f"采样失败：{message}", data=None)
+        success, message, result, sql_run = execute_sql_with_permission_by_user_id(
+            user_id,
+            datasource_id,
+            workspace_oid,
+            sql,
+            tables_hint=[table_name.split(".")[-1]],
+        )
+        if not success:
+            note = ""
+            if isinstance(result, dict) and result.get("fixes_applied"):
+                note = " " + format_auto_fix_note(result["fixes_applied"], success=False)
+            return ToolResult(content=f"采样失败：{message}{note}", data=None)
+    else:
+        from src.datasource.service.sql_auto_fix import format_auto_fix_note, run_sql_with_auto_fix
 
-    if user_id is not None and isinstance(result, dict):
-        with get_db_session() as session:
-            u = get_user_by_id(session, user_id)
-            result = filter_exec_result_by_column_permissions(
-                session, u, datasource_id, db_type, sql_run, result
-            )
+        outcome = run_sql_with_auto_fix(sql, db_type=db_type, config=config)
+        if not outcome.success:
+            note = format_auto_fix_note(outcome.fixes_applied, success=False)
+            msg = f"采样失败：{outcome.message}"
+            if note:
+                msg += f" {note}"
+            return ToolResult(content=msg, data=None)
+        result = outcome.result
+        sql_run = outcome.sql_run
+
+    if not isinstance(result, dict):
+        return ToolResult(content="采样失败：无结果", data=None)
 
     columns = result.get("columns", [])
     rows = result.get("rows", [])
@@ -596,35 +602,37 @@ def execute_sql(
 ) -> ToolResult:
     """在当前数据源上执行只读 SQL 并返回结果。
 
+    执行失败时会根据数据库 error 自动尝试常见改写（如 st.student_id→st.id）并重试。
+
     Args:
         sql: 要执行的 SELECT 语句；非只读会被拒绝。
     """
-    from src.common.core.database import get_db_session
-    from src.datasource.db.db import execute_sql as db_execute_sql
-    from src.datasource.service.query_permission import (
-        apply_permissions_for_execute,
-        filter_exec_result_by_column_permissions,
-        validate_sql_column_permissions,
-    )
-    from src.system.crud.crud_user import get_user_by_id
+    from src.datasource.service.execute_with_permission import execute_sql_with_permission_by_user_id
+    from src.datasource.service.sql_auto_fix import format_auto_fix_note, run_sql_with_auto_fix
 
     db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
-    sql_run = sql
+    fixes: list[str] = []
+
     if user_id is not None:
-        with get_db_session() as session:
-            u = get_user_by_id(session, user_id)
-            sql_run = apply_permissions_for_execute(session, u, datasource_id, db_type, sql, None)
-            err = validate_sql_column_permissions(session, u, datasource_id, db_type, sql_run)
-            if err:
-                return ToolResult(
-                    content=err,
-                    data={"sql": sql_run, "error": err},
-                )
-    success, message, result = db_execute_sql(db_type=db_type, config=config, sql=sql_run)
+        success, message, result, sql_run = execute_sql_with_permission_by_user_id(
+            user_id, datasource_id, workspace_oid, sql
+        )
+        fixes = (result or {}).get("fixes_applied") if isinstance(result, dict) else []
+    else:
+        outcome = run_sql_with_auto_fix(sql, db_type=db_type, config=config)
+        success = outcome.success
+        message = outcome.message
+        result = outcome.result if isinstance(outcome.result, dict) else None
+        sql_run = outcome.sql_run
+        fixes = outcome.fixes_applied
+        note = format_auto_fix_note(fixes, success=success)
+        if note:
+            message = f"{message} {note}" if not success else f"{message}{note}"
+
     if not success:
         return ToolResult(
             content=f"SQL 执行失败：{message}",
-            data={"sql": sql_run, "error": message},
+            data={"sql": sql_run, "error": message, "fixes_applied": fixes},
         )
 
     if not isinstance(result, dict) or "rows" not in result:
@@ -633,20 +641,20 @@ def execute_sql(
             data={"sql": sql_run, **(result if isinstance(result, dict) else {})},
         )
 
-    if user_id is not None and isinstance(result, dict):
-        with get_db_session() as session:
-            u = get_user_by_id(session, user_id)
-            result = filter_exec_result_by_column_permissions(
-                session, u, datasource_id, db_type, sql_run, result
-            )
-
     columns = result.get("columns", [])
     rows = result.get("rows", [])
     preview = _format_rows_as_markdown(columns, rows, EXECUTE_SQL_PREVIEW_ROWS)
-    content = f"SQL 执行成功，返回 {len(rows)} 行：\n\n{preview}"
+    fix_hint = format_auto_fix_note(fixes, success=True) if fixes else ""
+    content = f"SQL 执行成功{fix_hint}，返回 {len(rows)} 行：\n\n{preview}"
     return ToolResult(
         content=content,
-        data={"sql": sql_run, "columns": columns, "rows": rows, "row_count": len(rows)},
+        data={
+            "sql": sql_run,
+            "columns": columns,
+            "rows": rows,
+            "row_count": len(rows),
+            "fixes_applied": fixes,
+        },
     )
 
 

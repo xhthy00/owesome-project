@@ -317,7 +317,7 @@ class ReportOrchestrator:
             )
             if knowledge_rows:
                 charts["KNOWLEDGE_CHART"] = build_chart_option(
-                    "subject_bar",
+                    "knowledge_bar",
                     {
                         "categories": [str(r.get("knowledge_name") or "") for r in knowledge_rows[:12]],
                         "values": [float(r.get("score_rate") or 0) for r in knowledge_rows[:12]],
@@ -390,11 +390,12 @@ class ReportOrchestrator:
         sql = (
             "SELECT sd.question_no,\n"
             "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
-            "       eq.question_score AS full_score,\n"
+            "       COALESCE(eq.question_score, sd.question_score) AS full_score,\n"
             "       ROUND(AVG(sd.score), 2) AS avg_score,\n"
-            "       ROUND(AVG(sd.score)::numeric / NULLIF(eq.question_score, 0) * 100, 2) AS score_rate\n"
+            "       ROUND(AVG(sd.score)::numeric / NULLIF(COALESCE(eq.question_score, sd.question_score), 0) * 100, 2) AS score_rate\n"
             "FROM tb_score_detail sd\n"
-            "JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
+            "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
+            "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
             "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
             "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
@@ -405,7 +406,8 @@ class ReportOrchestrator:
             sql += f"\nWHERE {where}"
         return (
             sql
-            + "\nGROUP BY sd.question_no, k.knowledge_name, eq.question_score\n"
+            + "\nGROUP BY sd.question_no, COALESCE(k.knowledge_name, '未关联知识点'), "
+            "COALESCE(eq.question_score, sd.question_score)\n"
             "ORDER BY sd.question_no\nLIMIT 1000"
         )
 
@@ -418,9 +420,10 @@ class ReportOrchestrator:
         sql = (
             "SELECT COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
             "       COUNT(DISTINCT sd.question_no) AS question_count,\n"
-            "       ROUND(SUM(sd.score)::numeric / NULLIF(SUM(eq.question_score), 0) * 100, 2) AS score_rate\n"
+            "       ROUND(SUM(sd.score)::numeric / NULLIF(SUM(COALESCE(eq.question_score, sd.question_score)), 0) * 100, 2) AS score_rate\n"
             "FROM tb_score_detail sd\n"
-            "JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
+            "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
+            "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
             "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
             "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
@@ -429,7 +432,7 @@ class ReportOrchestrator:
         where = _filters_to_where(spec.filters, school_expr, class_expr, subject_expr, exam_expr)
         if where:
             sql += f"\nWHERE {where}"
-        return sql + "\nGROUP BY k.knowledge_name\nORDER BY score_rate ASC\nLIMIT 1000"
+        return sql + "\nGROUP BY COALESCE(k.knowledge_name, '未关联知识点')\nORDER BY score_rate ASC\nLIMIT 1000"
 
     async def _fetch_knowledge_rows(
         self,

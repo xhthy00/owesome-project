@@ -228,6 +228,38 @@ const onSend = async (text: string) => {
     return rec
   }
 
+  const pushReportFromToolData = (data: any, sub_task_index?: number) => {
+    if (!data || typeof data !== 'object') return
+    let html = ''
+    let title = 'Report'
+    let mode: string | undefined
+    if (data.output_type === 'html' && typeof data.html === 'string' && data.html.trim()) {
+      html = data.html
+      title = typeof data.title === 'string' && data.title.trim() ? data.title : title
+      mode = typeof data.mode === 'string' ? data.mode : undefined
+    } else if (Array.isArray(data.chunks)) {
+      for (const chunk of data.chunks) {
+        if (chunk?.output_type !== 'html') continue
+        if (typeof chunk?.content !== 'string' || !chunk.content.trim()) continue
+        html = chunk.content
+        title =
+          typeof chunk?.title === 'string' && chunk.title.trim()
+            ? chunk.title
+            : typeof data.title === 'string' && data.title.trim()
+              ? data.title
+              : title
+        mode = typeof data.mode === 'string' ? data.mode : undefined
+        break
+      }
+    }
+    if (!html) return
+    const list = liveRecord.reports || (liveRecord.reports = [])
+    if (list.some((r) => r.html === html)) return
+    list.push({ title, html, mode, sub_task_index })
+    liveRecord.reports = [...list]
+    scrollToBottom()
+  }
+
   try {
     const conv = await ensureConversation(text)
     let lastError: string | null = null
@@ -278,6 +310,7 @@ const onSend = async (text: string) => {
           rec.data = p.data
           rec.elapsed_ms = p.elapsed_ms
           liveRecord.tool_calls = [...(liveRecord.tool_calls || [])]
+          pushReportFromToolData(p.data, p.sub_task_index)
           scrollToBottom()
         },
         onPlan: ({ plans, sub_task_agents }) => {

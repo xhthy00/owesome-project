@@ -189,6 +189,13 @@ export default function ChatExecutionPanel({
   useEffect(() => {
     setDataPage(1);
   }, [activeQueryIndex]);
+  useEffect(() => {
+    if (!reports.length) return;
+    setSelectedReportIndex((prev) => {
+      if (prev < 0 || prev >= reports.length) return reports.length - 1;
+      return prev;
+    });
+  }, [reports]);
   const isToolResultStep = selectedStepTitleText.startsWith("工具结果:");
   const isStepError =
     selectedStepStatusText === "error" ||
@@ -523,6 +530,7 @@ export default function ChatExecutionPanel({
                       </div>
                     </div>
                     <iframe
+                      key={`report-${activeReportIndex}-${safeReportHtml.length}`}
                       ref={reportIframeRef}
                       title={safeReportTitle}
                       className="h-[360px] w-full border-0"
@@ -718,6 +726,7 @@ export default function ChatExecutionPanel({
         styles={{ body: { padding: 0 } }}
       >
         <iframe
+          key={`report-dialog-${safeReportHtml.length}`}
           title={`${safeReportTitle}-full`}
           className="h-[72vh] w-full border-0"
           srcDoc={safeReportHtml}

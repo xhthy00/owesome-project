@@ -66,8 +66,81 @@ def flaky_lookup(name: str) -> ToolResult:
     return ToolResult(content=f"info-of-{name}", data={"name": name})
 
 
+_call_counter = {"n": 0}
+
+
+@tool()
+def counted_ping(key: str = "x") -> ToolResult:
+    """Count invocations for dedup tests."""
+    _call_counter["n"] += 1
+    return ToolResult(content=f"ping-{key}-#{_call_counter['n']}")
+
+
 def _pack_with(*tools: Any) -> ToolPack:
     return ToolPack(tools=[*tools, TerminateTool()])
+
+
+def test_react_skips_duplicate_tool_with_same_args():
+    """相同 (tool, args) 第二次起不重新执行，直接返回缓存并提示换下一步。"""
+    _call_counter["n"] = 0
+    llm = FakeLlmClient(
+        [
+            '{"tool": "counted_ping", "args": {"key": "a"}}',
+            '{"tool": "counted_ping", "args": {"key": "a"}}',
+            '{"tool": "terminate", "args": {"final_answer": "ok"}}',
+        ]
+    )
+    agent = _TrivialReActAgent(llm_client=llm, tool_pack=_pack_with(counted_ping))
+
+    captured_tool_calls: list[dict] = []
+
+    async def capture(event: str, payload: dict) -> None:
+        if event == "tool_call":
+            captured_tool_calls.append(payload)
+
+    agent.stream_callback = capture
+
+    reply = _run(
+        agent.generate_reply(
+            received_message=AgentMessage(content="q", role="user"),
+            sender=UserProxyAgent(),
+        )
+    )
+
+    assert reply.content == "ok"
+    assert _call_counter["n"] == 1
+    assert len(captured_tool_calls) == 1, "去重轮次不应再发 tool_call SSE"
+    round2_input = llm.calls[1]
+    assert any("重复调用已跳过" in m.get("content", "") for m in round2_input)
+
+
+def test_react_different_args_same_tool_still_invokes():
+    _call_counter["n"] = 0
+    llm = FakeLlmClient(
+        [
+            '{"tool": "counted_ping", "args": {"key": "a"}}',
+            '{"tool": "counted_ping", "args": {"key": "b"}}',
+            '{"tool": "terminate", "args": {"final_answer": "ok"}}',
+        ]
+    )
+    agent = _TrivialReActAgent(llm_client=llm, tool_pack=_pack_with(counted_ping))
+
+    _run(
+        agent.generate_reply(
+            received_message=AgentMessage(content="q", role="user"),
+            sender=UserProxyAgent(),
+        )
+    )
+
+    assert _call_counter["n"] == 2
+
+
+def test_tool_call_fingerprint_ignores_empty_values():
+    from src.agent.core.action.tool_action import tool_call_fingerprint
+
+    fp1 = tool_call_fingerprint("t", {"a": 1, "b": None, "c": ""})
+    fp2 = tool_call_fingerprint("t", {"a": 1})
+    assert fp1 == fp2
 
 
 def test_react_terminates_in_single_round_when_llm_calls_terminate():

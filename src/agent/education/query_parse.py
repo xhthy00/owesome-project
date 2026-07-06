@@ -53,8 +53,58 @@ def extract_school_target(question: str) -> str | None:
                 if name.startswith(prefix):
                     name = name[len(prefix):]
                     break
+            if _is_regional_exam_label(name):
+                return None
             return name or None
     return None
+
+
+def _is_regional_exam_label(name: str) -> bool:
+    """省/市/区县级行政区划且无校名后缀——多为统考冠名，非学校。"""
+    n = re.sub(r"\s+", "", str(name or ""))
+    if not n:
+        return False
+    if re.search(_SCHOOL_SUFFIX + r"$", n):
+        return False
+    return bool(re.fullmatch(r"[\u4e00-\u9fff]{1,6}(?:省|市|自治区|区|县|州|盟)", n))
+
+
+def build_edu_aware_constraints(
+    question: str,
+    edu_scope: dict[str, Any] | None = None,
+    *,
+    required_keywords: list[str] | None = None,
+) -> dict[str, Any]:
+    """合并问题抽取与用户教育权限，供 Planner / DataAnalyst 范围约束。"""
+    edu = edu_scope if isinstance(edu_scope, dict) else {}
+    role = str(edu.get("edu_role") or "").strip()
+    target_school = extract_school_target(question)
+    target_student = extract_student_target(question)
+    target_classes: list[str] | None = None
+
+    if role in ("teacher", "school_admin"):
+        bound = (str(edu.get("school_name") or "").strip()) or (
+            str(edu.get("school_id") or "").strip() or None
+        )
+        if bound:
+            target_school = bound
+    if role == "teacher":
+        raw = edu.get("class_names")
+        if isinstance(raw, list):
+            target_classes = [str(x).strip() for x in raw if str(x).strip()]
+    if role == "student" and edu.get("student_id"):
+        target_student = str(edu.get("student_id")).strip() or target_student
+
+    ctx: dict[str, Any] = {
+        "target_school": target_school,
+        "target_student": target_student,
+        "required_keywords": list(required_keywords or []),
+    }
+    if role:
+        ctx["edu_scope"] = edu
+    if target_classes:
+        ctx["target_classes"] = target_classes
+    return ctx
 
 
 def student_matches(record_name: str, target: str) -> bool:
@@ -76,10 +126,29 @@ def student_matches(record_name: str, target: str) -> bool:
 
 
 def format_scope_constraints(constraints: dict[str, Any] | None) -> str:
-    """从会话 constraints 生成 Agent 范围提示（DataAnalyst / ToolExpert 共用）。"""
+    """从会话 constraints 生成 Agent 范围提示（DataAnalyst / ToolExpert / Planner 共用）。"""
     raw = constraints if isinstance(constraints, dict) else {}
     parts: list[str] = []
-    if raw.get("target_school"):
+    edu = raw.get("edu_scope")
+    if isinstance(edu, dict) and edu.get("edu_role"):
+        role = edu.get("edu_role_label") or edu.get("edu_role")
+        parts.append(f"当前用户教育角色={role}")
+        school = edu.get("school_name") or edu.get("school_id")
+        if school:
+            parts.append(
+                f"权限绑定学校={school}（SQL/工具参数须用 sch.name 或 sc.school_id 过滤该校；"
+                "禁止把问题里的「江苏省/南京市」等省市区统考冠名当作学校名）"
+            )
+        classes = raw.get("target_classes") or edu.get("class_names")
+        if isinstance(classes, list) and classes:
+            joined = "、".join(str(c) for c in classes[:20])
+            parts.append(
+                f"权限绑定班级={joined}（可用 sc.class IN (...) 查全部绑定班；"
+                "若问题指定其中一班则再收窄到该班）"
+            )
+        if edu.get("student_id"):
+            parts.append(f"权限绑定学号={edu['student_id']}")
+    elif raw.get("target_school"):
         parts.append(f"学校/机构={raw['target_school']}")
     if raw.get("target_student"):
         parts.append(f"学生={raw['target_student']}")
@@ -90,8 +159,9 @@ def format_scope_constraints(constraints: dict[str, Any] | None) -> str:
     if not parts:
         return "（无额外范围约束，按当前子任务描述理解即可）"
     return (
-        "报告/SQL 范围必须与用户指定范围一致（WHERE 须含学校/班级/学生/考试等过滤），"
-        "禁止默认查全量学生、全校或多班合并数据。范围：" + "；".join(parts)
+        "报告/SQL 范围必须与用户数据权限及子任务描述一致（WHERE 须含学校/班级/学生/考试等过滤），"
+        "禁止默认查全量学生、全校或多校合并数据。"
+        "范围：" + "；".join(parts)
     )
 
 
@@ -183,6 +253,7 @@ def report_matches_student(title: str, html: str, target: str) -> bool:
 
 
 __all__ = [
+    "build_edu_aware_constraints",
     "extract_school_target",
     "extract_student_target",
     "format_scope_constraints",

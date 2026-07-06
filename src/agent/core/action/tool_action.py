@@ -17,6 +17,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 import time
@@ -30,9 +32,60 @@ from src.agent.resource.tool.pack import ToolNotFoundError, ToolPack
 from src.agent.util.json_parser import parse_json_tolerant
 
 logger = logging.getLogger(__name__)
+
+#: 同一会话内相同 (tool, args) 成功调用后，重复请求直接返回缓存，不再打库/重算。
+_DEDUP_EXEMPT_TOOLS = frozenset({TERMINATE_TOOL_NAME})
+
+_NEXT_TOOL_HINTS: dict[str, str] = {
+    "fetch_subject_diagnosis_data_tool": (
+        "`build_subject_diagnosis_sections_tool(fetch_data=..., render=true)` → `terminate`"
+    ),
+    "build_subject_diagnosis_sections_tool": "`terminate`（sections 默认已渲染 HTML）",
+    "build_chart_option_tool": "`render_html_report` → `terminate`（科目诊断 sections 已含图表则跳过本工具）",
+    "select_report_template_tool": "`build_subject_diagnosis_sections_tool(fetch_data=..., render=true)` → `terminate`",
+    "compute_score_stats_tool": "`build_subject_diagnosis_sections_tool(fetch_data=..., render=true)` → `terminate`",
+    "list_tables": "`describe_table` / `execute_sql`",
+    "describe_table": "`execute_sql` / `sample_rows`",
+}
+
 _THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
 _TOOL_NAME_RE = re.compile(r"""tool\s*:\s*["']?([A-Za-z_][A-Za-z0-9_]*)["']?""", re.IGNORECASE)
 _CLI_ARG_RE = re.compile(r"""--([A-Za-z_][A-Za-z0-9_]*)\s+("([^"]*)"|'([^']*)'|([^\s,}\]]+))""")
+
+
+def tool_call_fingerprint(tool_name: str, args: dict[str, Any]) -> str:
+    """稳定指纹：忽略 None / 空串，便于判定“同参重复调用”。"""
+    normalized = {k: v for k, v in args.items() if v is not None and v != ""}
+    payload = json.dumps(
+        {"tool": tool_name, "args": normalized},
+        sort_keys=True,
+        ensure_ascii=False,
+        default=str,
+    )
+    return hashlib.sha256(payload.encode()).hexdigest()[:32]
+
+
+def _dedup_skip_message(tool_name: str, cached: ActionOutput) -> str:
+    hint = _NEXT_TOOL_HINTS.get(tool_name, "换用其他工具或 `terminate`")
+    body = (cached.observations or cached.content or "").strip()
+    return (
+        f"【重复调用已跳过】`{tool_name}` 与本轮会话中已成功执行的调用参数完全相同，"
+        f"未重新执行，直接使用缓存结果。\n"
+        f"请立即进入下一步：{hint}。**禁止**再次调用 `{tool_name}`。\n\n"
+        f"{body}"
+    )
+
+
+def build_repeat_tool_warning(tool_name: str, streak: int) -> str:
+    hint = _NEXT_TOOL_HINTS.get(
+        tool_name,
+        "换一个工具（例如 list_tables → describe_table → execute_sql），"
+        "或在已有信息足够时直接调用 `terminate` 给出结论",
+    )
+    return (
+        f"⚠️ 你已连续 {streak} 次调用 `{tool_name}` 仍未收敛。"
+        f"请**立即换用下一步**：{hint}。"
+    )
 
 
 class ToolAction(Action):
@@ -285,8 +338,38 @@ class ToolAction(Action):
                 thoughts=thoughts,
             )
 
+        tool_name_str = str(tool_name)
+        cache: dict[str, ActionOutput] | None = kwargs.get("tool_call_cache")
+        if (
+            isinstance(cache, dict)
+            and tool_name_str not in _DEDUP_EXEMPT_TOOLS
+        ):
+            fp = tool_call_fingerprint(tool_name_str, args)
+            cached = cache.get(fp)
+            if cached is not None:
+                skip_msg = _dedup_skip_message(tool_name_str, cached)
+                _audit(
+                    tool_name=tool_name_str,
+                    success=True,
+                    args=args,
+                    result_preview=skip_msg,
+                )
+                return ActionOutput(
+                    is_exe_success=True,
+                    content=skip_msg,
+                    action=tool_name_str,
+                    thoughts=thoughts,
+                    observations=skip_msg,
+                    terminate=False,
+                    extra={
+                        **dict(cached.extra or {}),
+                        "tool_args": dict(args),
+                        "deduplicated": True,
+                    },
+                )
+
         try:
-            result: ToolResult = await self.tool_pack.invoke(str(tool_name), args)
+            result: ToolResult = await self.tool_pack.invoke(tool_name_str, args)
         except ToolNotFoundError:
             available = ", ".join(self.tool_pack.names()) or "（空）"
             msg = f"未知工具：{tool_name}。可用工具：{available}"
@@ -318,15 +401,15 @@ class ToolAction(Action):
             )
 
         _audit(
-            tool_name=str(tool_name),
+            tool_name=tool_name_str,
             success=True,
             args=args,
             result_preview=result.content,
         )
-        return ActionOutput(
+        action_out = ActionOutput(
             is_exe_success=True,
             content=result.content,
-            action=str(tool_name),
+            action=tool_name_str,
             thoughts=thoughts,
             observations=result.content,
             terminate=result.is_final,
@@ -336,3 +419,10 @@ class ToolAction(Action):
                 "tool_extra": result.extra,
             },
         )
+        if (
+            isinstance(cache, dict)
+            and tool_name_str not in _DEDUP_EXEMPT_TOOLS
+            and not result.is_final
+        ):
+            cache[tool_call_fingerprint(tool_name_str, args)] = action_out
+        return action_out

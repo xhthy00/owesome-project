@@ -52,6 +52,44 @@ const asText = (value: unknown): string => {
   }
 };
 
+export const extractReportFromToolData = (
+  data: Record<string, unknown> | undefined,
+  subTaskIndex?: number
+): ReportPayload | null => {
+  if (!data) return null;
+  const html = asText(data.html).trim();
+  if (data.output_type === "html" && html) {
+    return {
+      title: asText(data.title) || "Report",
+      html,
+      mode: data.mode ? asText(data.mode) : undefined,
+      subTaskIndex
+    };
+  }
+  const chunks = data.chunks;
+  if (!Array.isArray(chunks)) return null;
+  for (const chunk of chunks) {
+    if (!chunk || typeof chunk !== "object") continue;
+    const c = chunk as Record<string, unknown>;
+    if (c.output_type !== "html") continue;
+    const chunkHtml = asText(c.content).trim();
+    if (!chunkHtml) continue;
+    return {
+      title: asText(c.title) || asText(data.title) || "Report",
+      html: chunkHtml,
+      mode: data.mode ? asText(data.mode) : undefined,
+      subTaskIndex
+    };
+  }
+  return null;
+};
+
+const appendReportIfNew = (prev: ReportPayload[], report: ReportPayload): ReportPayload[] => {
+  if (!report.html.trim()) return prev;
+  if (prev.some((r) => r.html === report.html)) return prev;
+  return [...prev, report];
+};
+
 const deriveReportsFromRecord = (record: {
   reports?: Array<{ title?: string; html?: string; mode?: string; sub_task_index?: number }>;
   tool_calls?: Array<{
@@ -80,31 +118,15 @@ const deriveReportsFromRecord = (record: {
   }
   if (reports.length) return reports;
   if (!Array.isArray(record.tool_calls)) return reports;
+  let merged = reports;
   record.tool_calls.forEach((call) => {
-    const data = call?.data;
-    if (!data) return;
-    if (data.output_type === "html" && asText(data.html).trim()) {
-      reports.push({
-        title: asText(data.title) || "Report",
-        html: asText(data.html),
-        mode: data.mode ? asText(data.mode) : undefined,
-        subTaskIndex: call.sub_task_index
-      });
-      return;
-    }
-    if (!Array.isArray(data.chunks)) return;
-    data.chunks.forEach((chunk) => {
-      if (chunk?.output_type !== "html") return;
-      if (!asText(chunk.content).trim()) return;
-      reports.push({
-        title: asText(chunk.title) || "Report",
-        html: asText(chunk.content),
-        mode: data.mode ? asText(data.mode) : undefined,
-        subTaskIndex: call.sub_task_index
-      });
-    });
+    const extracted = extractReportFromToolData(
+      call?.data as Record<string, unknown> | undefined,
+      call.sub_task_index
+    );
+    if (extracted) merged = appendReportIfNew(merged, extracted);
   });
-  return reports;
+  return merged;
 };
 
 export function useChat() {
@@ -322,15 +344,13 @@ export function useChat() {
               ]);
             },
             onReport: ({ title, html, mode, sub_task_index }) => {
-              setReports((prev) => [
-                ...prev,
-                {
-                  title: asText(title) || "Report",
-                  html: asText(html),
-                  mode: mode ? asText(mode) : undefined,
-                  subTaskIndex: sub_task_index
-                }
-              ]);
+              const report: ReportPayload = {
+                title: asText(title) || "Report",
+                html: asText(html),
+                mode: mode ? asText(mode) : undefined,
+                subTaskIndex: sub_task_index
+              };
+              setReports((prev) => appendReportIfNew(prev, report));
               setExecutionSteps((prev) => [
                 ...stripBootstrap(prev),
                 {
@@ -395,6 +415,12 @@ export function useChat() {
                 }
               }
               const id = `tool-${runId}-${sub_task_index ?? -1}-${round ?? -1}-${safeTool}`;
+              if (data && typeof data === "object") {
+                const extracted = extractReportFromToolData(data as Record<string, unknown>, sub_task_index);
+                if (extracted) {
+                  setReports((prev) => appendReportIfNew(prev, extracted));
+                }
+              }
               setExecutionSteps((prev) => {
                 const base = stripBootstrap(prev);
                 const found = base.some((step) => step.id === id);
@@ -488,8 +514,30 @@ export function useChat() {
                 }
               ]);
             },
-            onDone: () => {
+            onDone: async (recordId) => {
               setLoading(false);
+              if (recordId > 0 && convId) {
+                try {
+                  const detail = await getConversationDetail(convId);
+                  const record =
+                    detail.records?.find((r) => r.id === recordId) ??
+                    detail.records?.[detail.records.length - 1];
+                  if (record) {
+                    const derived = deriveReportsFromRecord(record);
+                    if (derived.length) {
+                      setReports((prev) => {
+                        let next = [...prev];
+                        for (const r of derived) {
+                          next = appendReportIfNew(next, r);
+                        }
+                        return next;
+                      });
+                    }
+                  }
+                } catch {
+                  // 忽略同步失败，onReport / onToolResult 已尽力填充
+                }
+              }
             }
           },
           controller.signal

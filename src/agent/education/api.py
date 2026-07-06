@@ -17,6 +17,9 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
 from common.schemas.response import success_response
+from system.api.system import get_current_user
+from system.schemas import UserResponse
+from system.workspace_scope import assert_datasource_accessible, get_workspace_oid
 from src.agent.education import config_store
 from src.agent.education.orchestrator import ReportOrchestrator
 from src.agent.education.schema_mapping import (
@@ -92,21 +95,28 @@ class BatchReportRequest(BaseModel):
     workspace_oid: Optional[int] = Field(None, description="工作区 OID，鉴权用")
 
 
-def _build_orchestrator(datasource_id: int, workspace_oid: int | None) -> ReportOrchestrator:
+def _build_orchestrator(
+    datasource_id: int,
+    workspace_oid: int | None,
+    user_id: int | None = None,
+) -> ReportOrchestrator:
     """用真实数据源回调构造 ReportOrchestrator。"""
     from src.agent.resource.tool.business import _load_datasource
-    from src.datasource.db.db import execute_sql as db_execute_sql, get_schema_info
+    from src.datasource.db.db import get_schema_info
+    from src.datasource.service.execute_with_permission import execute_sql_with_permission_by_user_id
 
     db_type, config, _ds_name = _load_datasource(datasource_id, workspace_oid)
 
     async def execute_sql(sql: str) -> dict:
-        success, _msg, result = db_execute_sql(db_type=db_type, config=config, sql=sql)
+        success, _msg, result, _sql_run = execute_sql_with_permission_by_user_id(
+            user_id, datasource_id, workspace_oid, sql
+        )
         if not success or not isinstance(result, dict):
             return {"columns": [], "rows": [], "row_count": 0}
         return {
             "columns": result.get("columns") or [],
             "rows": result.get("rows") or [],
-            "row_count": result.get("row_count") or 0,
+            "row_count": result.get("row_count") or len(result.get("rows") or []),
         }
 
     async def resolve_schema() -> ScoreSchemaMapping:
@@ -130,9 +140,18 @@ def _build_orchestrator(datasource_id: int, workspace_oid: int | None) -> Report
 
 
 @router.post("/batch-report")
-async def batch_report(req: BatchReportRequest) -> dict:
+async def batch_report(
+    req: BatchReportRequest,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
     """按班级列表批量生成报告，返回每班的渲染摘要（不含全量 HTML，避免响应过大）。"""
-    orch = _build_orchestrator(req.datasource_id, req.workspace_oid)
+    from src.common.core.database import get_db_session
+
+    with get_db_session() as session:
+        assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
+    ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
+    orch = _build_orchestrator(req.datasource_id, ws_oid, user_id=int(current_user.id))
     results = []
     for cls in req.class_names:
         question = req.question.replace("{class}", cls)

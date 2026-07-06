@@ -114,7 +114,7 @@ EDUCATION_TERMINOLOGIES = """<terminologies>
   </terminology>
   <terminology>
     <words><word>学生</word><word>学号</word></words>
-    <description>tb_student.id / tb_score.student_id，格式如 STU20240001；无姓名字段时用学号展示</description>
+    <description>tb_student.id / tb_score.student_id，格式如 STU20240001；JOIN 必须写 sc.student_id = st.id，tb_student 无 student_id 列；无姓名字段时用学号展示</description>
   </terminology>
   <terminology>
     <words><word>小题</word><word>逐题</word><word>题目</word></words>

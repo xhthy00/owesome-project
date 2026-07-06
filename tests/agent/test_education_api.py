@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 
+from types import SimpleNamespace
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -80,6 +82,9 @@ def test_config_update_affects_compute_score_stats_tool():
 def test_batch_report_endpoint_generates_per_class(monkeypatch):
     """mock 数据源底层，验证批量端点按班级列表逐个生成。"""
     from src.agent.resource.tool import business as biz
+    from system.api.system import get_current_user
+    from system.schemas import UserResponse
+    from system.workspace_scope import get_workspace_oid
 
     schema = [
         {"name": "student_score", "comment": "学生考试成绩", "fields": [
@@ -91,14 +96,31 @@ def test_batch_report_endpoint_generates_per_class(monkeypatch):
     monkeypatch.setattr(biz, "_load_datasource", lambda ds_id, workspace_oid=None: ("pg", {}, "ds"))
     monkeypatch.setattr("src.datasource.db.db.get_schema_info", lambda *_a, **_kw: schema)
 
-    def fake_exec(db_type, config, sql):
-        # 不同班级返回不同行数，便于区分
+    def fake_exec_by_user_id(user_id, datasource_id, workspace_oid, sql, **kwargs):
         rows = [[80], [70]] if "初三1班" in sql else [[60]]
-        return True, "ok", {"columns": ["score"], "rows": rows, "row_count": len(rows)}
+        return True, "ok", {"columns": ["score"], "rows": rows, "row_count": len(rows)}, sql
 
-    monkeypatch.setattr("src.datasource.db.db.execute_sql", fake_exec)
+    monkeypatch.setattr(
+        "src.datasource.service.execute_with_permission.execute_sql_with_permission_by_user_id",
+        fake_exec_by_user_id,
+    )
 
-    client = _client()
+    def fake_assert(session, user, datasource_id, workspace_oid):
+        return SimpleNamespace(id=datasource_id, oid=workspace_oid)
+
+    monkeypatch.setattr(
+        "src.agent.education.api.assert_datasource_accessible",
+        fake_assert,
+    )
+
+    app = FastAPI()
+    register_routers(app)
+    app.dependency_overrides[get_current_user] = lambda: UserResponse(
+        id=1, account="admin", name="Admin", email=None, oid=1,
+        status=1, language="zh-CN", origin=0, create_time=0,
+    )
+    app.dependency_overrides[get_workspace_oid] = lambda: 1
+    client = TestClient(app)
     r = client.post(
         "/api/v1/education/batch-report",
         json={

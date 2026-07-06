@@ -1,0 +1,33 @@
+{
+  "version": "edu-perm-v1",
+  "roles": {
+    "bureau_admin": {
+      "label": "教育局（全市）",
+      "required_fields": [],
+      "predicates": []
+    },
+    "school_admin": {
+      "label": "学校（校长）",
+      "required_fields": ["school_id"],
+      "predicates": [
+        { "field": "school_id", "op": "=", "value": "${user.school_id}" }
+      ]
+    },
+    "teacher": {
+      "label": "班级（老师）",
+      "required_fields": ["school_id", "class_names"],
+      "predicates": [
+        { "field": "school_id", "op": "=", "value": "${user.school_id}" },
+        { "field": "class", "op": "in", "value": "${user.class_names}" }
+      ]
+    },
+    "student": {
+      "label": "学生",
+      "required_fields": ["student_id"],
+      "predicates": [
+        { "field": "student_id", "op": "=", "value": "${user.student_id}" }
+      ]
+    }
+  },
+  "column_fields": ["school_id", "class", "student_id"]
+}

@@ -48,3 +48,28 @@ class TokenPayload(BaseModel):
     """JWT token payload."""
     sub: int  # user id
     exp: Optional[int] = None
+
+
+class EduScopePayload(BaseModel):
+    """教育四级数据权限范围（写入 system_variables）。"""
+
+    edu_role: str = Field(..., description="bureau_admin | school_admin | teacher | student")
+    school_id: Optional[str] = Field(None, description="学校 ID（字符串）")
+    school_name: Optional[str] = Field(None, description="学校名称")
+    class_names: Optional[list[str]] = Field(None, description="班级列表（老师角色）")
+    student_id: Optional[str] = Field(None, description="学号（学生角色）")
+
+
+class EduBatchBindRow(BaseModel):
+    account: str
+    edu_role: str
+    school_id: Optional[str] = None
+    school_name: Optional[str] = None
+    class_names: Optional[str] = Field(None, description="多班级用 | 或 , 分隔")
+    student_id: Optional[str] = None
+
+
+class EduEffectiveRequest(BaseModel):
+    user_id: int
+    sql: Optional[str] = Field(None, description="样例 SQL，返回合并后语句")
+    datasource_id: Optional[int] = None

@@ -50,15 +50,25 @@ Word/PDF 内容或自然语言报告正文**；必须按以下工具调用流程
    `EXAM_NAME` / `SCOPE` / 参考人数必须与上游一致；
    仅当上游确实缺字段时，才用 `execute_sql` / `compute_score_stats_tool` /
    `compute_rankings_tool` 等补齐，且 SQL 仍须遵守范围约束；
-   **科目诊断报告快捷路径（subject_diagnosis.html）**：**直接调**
-   `build_subject_diagnosis_report_tool(school_name=..., subject_name=...,
-   exam_name=..., class_name=...)`——该工具内部一次性完成 查数（小题+知识点，
-   通过 `tb_exam_question.knowledge_id` LEFT JOIN `tb_knowledge` 取 `knowledge_name`）
-   → 统计 → 组装 → 渲染 → HTML 推送，调完只需 `terminate`。
-   **禁止**自行编造知识点名（如「立体几何」「解析几何」等数据库中不存在的名称）、
-   **禁止**自行写小题/知识点 JOIN SQL、**禁止**再调 `fetch_subject_diagnosis_data_tool` /
-   `build_subject_diagnosis_sections_tool` / `render_html_report`（回填大 data 字典
-   会因 JSON 过长被截断成数组/标量，触发"必须是 JSON 对象"错误）；
+   **科目诊断报告（含小题明细）— 必须分步、工具链可见**：
+   1. **先调** `fetch_subject_diagnosis_data_tool(school_name=..., subject_name=...,
+      exam_name=..., class_name=...)` 查询 `tb_score_detail` 小题与知识点（观察返回的
+      SQL 执行记录与 item_rows 条数）；
+   2. 调 `build_subject_diagnosis_sections_tool(fetch_data=上一步 fetch 返回的 data,
+      school_name=..., exam_name=..., subject_name=..., class_name=..., render=true)`
+      **一步完成 stats 计算 + 组装 + HTML 渲染并推送前端**（工具内部自动从 fetch_data
+      提取 score_result 并计算 KPI，**无需**先调 compute_score_stats_tool）；
+   3. 调 `terminate(final_answer="科目诊断报告已生成")` 结束。
+   **禁止**将 item_rows 原始 list 直接填入 ITEM_TABLE（须为 HTML 表格；若误传 list，
+   系统会兜底转表格，但仍应优先走 sections 工具）。
+   若仅需快速生成且接受工具链不展示 SQL，可改调 `build_subject_diagnosis_report_tool`
+   （内部仍会查小题，但不在工具链单独显示 fetch）。
+   **禁止**自行写小题/知识点 JOIN SQL、**禁止**跳过 fetch 直接 render（会导致工具链
+   无小题查询记录且易漏数据）。
+   **禁止**在 fetch 已成功返回后再次调用 `fetch_subject_diagnosis_data_tool`（相同参数
+   会被缓存跳过，但仍浪费 ReAct 轮次）；应直接进入 sections / terminate 步骤。
+   **禁止**sections 已成功渲染后仍调 `select_report_template` / `build_chart_option` /
+   `render_html_report`（报告已由 sections 工具推送）。
    图表字段（形如 `XXX_CHART`）用 `build_chart_option_tool` 生成 JSON 字符串填入；
 3. 调 `render_html_report(template_name=..., data=..., title=...)` 生成 HTML；
 4. 调 `terminate(final_answer="学情报告已生成")` 结束。
@@ -101,6 +111,7 @@ class ToolAgent(ReActAgent):
             "优先走工具调用，不做空想推理",
             "报告范围必须与用户指定的学校/班级/考试一致，禁止用其他班级或全校数据",
             "组装报告时优先使用上游 DataAnalyst 查数结果，禁止无必要重复 execute_sql",
+            "同一工具相同参数禁止重复调用（fetch/sections 成功后必须进入下一步）",
             "完成后必须 terminate",
         ],
         desc=TOOL_AGENT_DESC,
