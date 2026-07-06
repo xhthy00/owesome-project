@@ -1,5 +1,6 @@
 import {
   ClusterOutlined,
+  DeleteOutlined,
   DownloadOutlined,
   EditOutlined,
   EyeOutlined,
@@ -199,6 +200,34 @@ export default function EduPermissionPage() {
     }
   };
 
+  const confirmDeleteScope = (user: SystemUser) => {
+    Modal.confirm({
+      title: "删除教育权限",
+      content: `确定移除用户「${user.name}」（${user.account}）的教育数据范围？删除后该用户将不再受 edu_role 行级过滤约束。`,
+      okText: "删除",
+      okType: "danger",
+      cancelText: "取消",
+      onOk: async () => {
+        setLoading(true);
+        try {
+          await permissionApi.deleteUserEduScope(user.id);
+          message.success("教育权限已删除");
+          if (editingUser?.id === user.id) {
+            setFormOpen(false);
+            setEditingUser(null);
+            setSelectedUserIds([]);
+            form.resetFields();
+          }
+          void loadMeta();
+        } catch (err) {
+          message.error(err instanceof Error ? err.message : "删除失败");
+        } finally {
+          setLoading(false);
+        }
+      }
+    });
+  };
+
   const previewEffective = async (userId: number) => {
     try {
       const sampleSql =
@@ -394,6 +423,16 @@ export default function EduPermissionPage() {
                       >
                         预览生效
                       </Button>
+                      <Button
+                        type="link"
+                        size="small"
+                        danger
+                        icon={<DeleteOutlined className="text-[13px]" />}
+                        className="!px-1.5 text-[12px] font-medium"
+                        onClick={() => confirmDeleteScope(user)}
+                      >
+                        删除
+                      </Button>
                       <Tooltip title="编辑教育权限">
                         <Button
                           type="text"
@@ -463,6 +502,15 @@ export default function EduPermissionPage() {
         onCancel={() => setFormOpen(false)}
         footer={
           <Space>
+            {editingUser ? (
+              <Button
+                danger
+                icon={<DeleteOutlined />}
+                onClick={() => confirmDeleteScope(editingUser)}
+              >
+                删除权限
+              </Button>
+            ) : null}
             <Button onClick={() => setFormOpen(false)}>取消</Button>
             {selectedUserIds.length === 1 ? (
               <Button

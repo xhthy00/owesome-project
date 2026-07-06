@@ -103,3 +103,38 @@ def test_batch_bind_unknown_user(auth_client, monkeypatch):
     assert r.status_code == 200
     assert r.json()["data"]["success"] == 0
     assert r.json()["data"]["failed"]
+
+
+def test_delete_user_edu_scope(auth_client):
+    user = SimpleNamespace(
+        id=11,
+        account="del_user",
+        system_variables={
+            "edu_role": "student",
+            "student_id": "STU001",
+            "custom_flag": True,
+        },
+    )
+
+    class FakeQuery:
+        def filter(self, *_a, **_kw):
+            return self
+
+        def first(self):
+            return user
+
+    session = MagicMock()
+    session.query.return_value = FakeQuery()
+    session.commit = MagicMock()
+    session.refresh = MagicMock()
+
+    def fake_get_session():
+        yield session
+
+    auth_client.app.dependency_overrides[get_session] = fake_get_session
+
+    r = auth_client.delete("/api/v1/user/11/edu-scope")
+    assert r.status_code == 200
+    assert user.system_variables == {"custom_flag": True}
+    assert "edu_role" not in user.system_variables
+    session.commit.assert_called_once()

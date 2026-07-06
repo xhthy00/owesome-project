@@ -87,6 +87,21 @@ def test_merge_edu_scope_preserves_other_variables():
     assert merged["student_id"] == "S1"
 
 
+def test_clear_edu_scope_preserves_other_variables():
+    from datasource.service.edu_permission import clear_edu_scope_from_variables
+
+    cleared = clear_edu_scope_from_variables(
+        {
+            "custom_flag": True,
+            "edu_role": "teacher",
+            "school_id": "1",
+            "class_names": ["高一(1)班"],
+        }
+    )
+    assert cleared == {"custom_flag": True}
+    assert build_edu_row_predicates(_user(custom_flag=True), "pg") == []
+
+
 def test_apply_permissions_merges_edu_predicates(monkeypatch):
     """未配置 ds_rules 时，edu 模板谓词仍应并入 SQL。"""
     u = _user(edu_role="school_admin", school_id="5")

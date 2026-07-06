@@ -98,6 +98,10 @@ export const permissionApi = {
       method: "PUT",
       body: JSON.stringify(payload)
     }),
+  deleteUserEduScope: (userId: number) =>
+    apiRequest<{ user_id: number }>(`/user/${userId}/edu-scope`, {
+      method: "DELETE"
+    }),
   batchBindEduScope: (payload: { csv?: string; rows?: Array<Record<string, unknown>> }) =>
     apiRequest<{ success: number; failed: Array<{ row: number; account: string; reason: string }> }>(
       "/permission/edu/batch-bind",

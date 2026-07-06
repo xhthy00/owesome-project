@@ -11,6 +11,7 @@ from common.exceptions.base import BadRequestException, ForbiddenException, NotF
 from common.schemas.response import success_response
 from datasource.service.edu_permission import (
     EduScope,
+    clear_edu_scope_from_variables,
     edu_scope_summary,
     merge_edu_scope_into_variables,
     parse_edu_scope,
@@ -205,4 +206,26 @@ def update_user_edu_scope(
     return success_response(
         data={"user_id": row.id, **parse_edu_scope(row).to_dict()},
         message="教育权限范围已更新",
+    )
+
+
+@router.delete("/{user_id}/edu-scope")
+def delete_user_edu_scope(
+    user_id: int,
+    session: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    """移除用户的教育四级数据权限（保留 system_variables 中的其他字段）。"""
+    if not can_manage_data_permissions(session, current_user):
+        raise ForbiddenException("仅系统管理员或工作空间管理员可管理教育权限")
+    row = session.query(SysUser).filter(SysUser.id == user_id).first()
+    if not row:
+        raise NotFoundException("User not found")
+    had_scope = bool(parse_edu_scope(row).edu_role)
+    row.system_variables = clear_edu_scope_from_variables(row.system_variables)
+    session.commit()
+    session.refresh(row)
+    return success_response(
+        data={"user_id": row.id, **parse_edu_scope(row).to_dict()},
+        message="教育权限已删除" if had_scope else "该用户本无教育权限配置",
     )

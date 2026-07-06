@@ -96,6 +96,14 @@ def merge_edu_scope_into_variables(
     return base
 
 
+def clear_edu_scope_from_variables(existing: dict[str, Any] | None) -> dict[str, Any]:
+    """从 system_variables 移除教育权限字段，保留其他自定义变量。"""
+    base = dict(existing) if isinstance(existing, dict) else {}
+    for k in ("edu_role", "school_id", "school_name", "class_names", "student_id"):
+        base.pop(k, None)
+    return base
+
+
 def validate_edu_scope(scope: EduScope) -> list[str]:
     """校验角色与必填字段，返回错误信息列表（空=通过）。"""
     if not scope.edu_role:
@@ -239,6 +247,7 @@ def edu_scope_summary(user: SysUser | None) -> dict[str, Any]:
 __all__ = [
     "EduScope",
     "build_edu_row_predicates",
+    "clear_edu_scope_from_variables",
     "edu_scope_summary",
     "list_edu_roles",
     "load_edu_permission_config",
