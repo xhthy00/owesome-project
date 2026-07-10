@@ -296,6 +296,13 @@ export default function ScoreImportPage() {
               showIcon
               icon={<CheckCircleOutlined />}
               message={state.doneMessage}
+              action={
+                importType === "total" ? (
+                  <Button type="primary" onClick={() => setStep(2)}>
+                    下一步
+                  </Button>
+                ) : undefined
+              }
             />
           ) : null}
           {renderPreviewCard(state)}
@@ -419,11 +426,17 @@ export default function ScoreImportPage() {
               跳过总分，去导明细
             </Button>
           ) : null}
-          {step < 2 ? (
-            <Button type="primary" onClick={goNext} disabled={step === 0 && !datasourceId}>
+          {step === 0 ? (
+            <Button type="primary" onClick={goNext} disabled={!datasourceId}>
               下一步
             </Button>
-          ) : (
+          ) : null}
+          {step === 1 ? (
+            <Button type="primary" onClick={goNext} disabled={!totalState.done}>
+              下一步
+            </Button>
+          ) : null}
+          {step === 2 ? (
             <Button
               type="primary"
               disabled={!detailState.done}
@@ -431,7 +444,7 @@ export default function ScoreImportPage() {
             >
               完成
             </Button>
-          )}
+          ) : null}
         </Space>
       </div>
     </div>
