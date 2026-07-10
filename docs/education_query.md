@@ -64,6 +64,41 @@ Team 模式 Planner 会拆 3 步查数 + 1 步 ToolExpert 组装；ToolExpert �
 
 见 [`docs/education_schema_ddl.sql`](education_schema_ddl.sql)：`tb_school.district`、`tb_exam_question.question_type`、`tb_knowledge.ability_level`。
 
+## 成绩导入
+
+支持 Excel 模板批量写入外部数据源成绩表：
+
+| 类型 | 文件 | 目标表 | Sheet | 必填列 |
+|------|------|--------|-------|--------|
+| 仅总分 | `脱敏成绩_仅总分.xlsx` | `tb_score` | 成绩录入 | 学校编号、试卷编号、试卷名称、学号、班级、总分 |
+| 小题分明细 | `脱敏成绩_小题分明细.xlsx` | `tb_score_detail` | 小题分明细 | 学校编号、试卷编号、试卷名称、学号、题目编号、题号、题目满分、得分、班级 |
+
+旧版四列/五列模板（仅试卷名称、学号、班级、总分/题号）仍兼容。
+
+### API
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/v1/education/score-import/templates/{total\|detail}` | 下载官方模板 |
+| `POST` | `/api/v1/education/score-import/preview` | 上传校验（multipart：`file`, `datasource_id`, `import_type`, 可选 `school_id`） |
+| `POST` | `/api/v1/education/score-import/execute` | 校验通过后 UPSERT 写入 |
+
+### 权限与规则
+
+- 须登录且对数据源有访问权限；`student` 角色禁止导入。
+- `teacher` 仅可导入授权班级；`school_admin` 限本校 `school_id`。
+- 学号须存在于 `tb_student`；学校编号须存在于 `tb_school.id`；试卷编号须存在于 `tb_exam.id`，且与试卷名称一致。
+- 小题模板中题目编号须存在于 `tb_exam_question.id`，并与题号、试卷编号一致；得分不得超过题目满分（Excel 或库中值）。
+- 同一「试卷 + 学号」（总分）或「试卷 + 学号 + 题号」（小题）重复导入时 **覆盖更新**。
+- 学号不存在时，执行导入会自动在 `tb_student` 新增（写入 `id`，若有列则附带 `class` / `school_id`），再写入成绩表。
+- 仅总分与小题分明细分开导入：总分走 `脱敏成绩_仅总分.xlsx` → **仅写** `tb_score`，小题走 `脱敏成绩_小题分明细.xlsx` → **仅写** `tb_score_detail`。
+- 导入过程中对 `tb_exam` / `tb_school` / `tb_exam_question` **只读校验**；`tb_student` 仅在学号缺失时自动新增。
+- 目标表须具备对应唯一约束（`tb_score`: `exam_id, student_id`；`tb_score_detail`: `exam_id, student_id, question_no`）。
+
+### 前端入口
+
+**构造台 → 成绩导入**（`/construct/education/score-import`）
+
 ## 示例问法
 
 1. 南京市第一中学高一(1)班数学平均分

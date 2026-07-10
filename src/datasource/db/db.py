@@ -80,6 +80,195 @@ def test_mysql_connection(config: Dict[str, Any]) -> Tuple[bool, str, Optional[s
         return False, f"Connection failed: {str(e)}", None
 
 
+class WriteDbSession:
+    """受控写库会话：供成绩导入等内部模块使用，事务由调用方 commit/rollback。"""
+
+    def __init__(self, db_type: str, config: Dict[str, Any]):
+        self.db_type = db_type
+        self.config = config
+        self._conn: Any = None
+        self._cursor: Any = None
+
+    def connect(self) -> None:
+        if self._conn is not None:
+            return
+        if self.db_type == "pg":
+            import psycopg2
+
+            self._conn = psycopg2.connect(
+                host=self.config.get("host", "localhost"),
+                port=self.config.get("port", 5432),
+                user=self.config.get("username", "postgres"),
+                password=self.config.get("password", ""),
+                database=self.config.get("database", "postgres"),
+                connect_timeout=self.config.get("timeout", 30),
+            )
+        elif self.db_type == "mysql":
+            import pymysql
+
+            self._conn = pymysql.connect(
+                host=self.config.get("host", "localhost"),
+                port=self.config.get("port", 3306),
+                user=self.config.get("username", "root"),
+                password=self.config.get("password", ""),
+                database=self.config.get("database", ""),
+                connect_timeout=self.config.get("timeout", 30),
+            )
+        else:
+            raise ValueError(f"Unsupported database type: {self.db_type}")
+        self._cursor = self._conn.cursor()
+
+    def execute_write(
+        self,
+        sql: str,
+        params: Optional[tuple | list] = None,
+    ) -> Tuple[bool, str, Dict[str, Any]]:
+        """执行单条写 SQL（INSERT/UPDATE/DELETE），返回 rowcount。"""
+        try:
+            self.connect()
+            assert self._cursor is not None
+            self._cursor.execute(sql, params)
+            return True, "Success", {"row_count": self._cursor.rowcount}
+        except Exception as e:
+            return False, f"SQL execution failed: {str(e)}", {}
+
+    def execute_upsert_batch(
+        self,
+        table: str,
+        cols: list[str],
+        conflict_cols: list[str] | tuple[str, ...],
+        param_rows: list[tuple],
+        *,
+        page_size: int = 500,
+    ) -> Tuple[bool, str, Dict[str, Any]]:
+        """批量 UPSERT：PG 用 execute_values，MySQL 用多值 INSERT。"""
+        if not param_rows:
+            return True, "Success", {"row_count": 0}
+        try:
+            self.connect()
+            assert self._cursor is not None
+            quote = '"' if self.db_type == "pg" else "`"
+            col_list = ", ".join(f"{quote}{c}{quote}" for c in cols)
+            conflict_set = set(conflict_cols)
+            update_cols = [c for c in cols if c not in conflict_set]
+            if self.db_type == "pg":
+                from psycopg2.extras import execute_values
+
+                conflict = ", ".join(conflict_cols)
+                if update_cols:
+                    updates = ", ".join(
+                        f"{quote}{c}{quote} = EXCLUDED.{quote}{c}{quote}" for c in update_cols
+                    )
+                    conflict_clause = f"ON CONFLICT ({conflict}) DO UPDATE SET {updates}"
+                else:
+                    conflict_clause = f"ON CONFLICT ({conflict}) DO NOTHING"
+                sql = (
+                    f"INSERT INTO {quote}{table}{quote} ({col_list}) VALUES %s "
+                    f"{conflict_clause}"
+                )
+                execute_values(self._cursor, sql, param_rows, page_size=page_size)
+                return True, "Success", {"row_count": len(param_rows)}
+
+            # MySQL: multi-row INSERT ... ON DUPLICATE KEY UPDATE / INSERT IGNORE
+            total = 0
+            for i in range(0, len(param_rows), page_size):
+                chunk = param_rows[i : i + page_size]
+                placeholders = ", ".join(
+                    "(" + ", ".join(["%s"] * len(cols)) + ")" for _ in chunk
+                )
+                flat: list[Any] = []
+                for row in chunk:
+                    flat.extend(row)
+                if update_cols:
+                    updates = ", ".join(
+                        f"{quote}{c}{quote} = VALUES({quote}{c}{quote})" for c in update_cols
+                    )
+                    sql = (
+                        f"INSERT INTO {quote}{table}{quote} ({col_list}) VALUES {placeholders} "
+                        f"ON DUPLICATE KEY UPDATE {updates}"
+                    )
+                else:
+                    sql = (
+                        f"INSERT IGNORE INTO {quote}{table}{quote} ({col_list}) "
+                        f"VALUES {placeholders}"
+                    )
+                self._cursor.execute(sql, flat)
+                total += self._cursor.rowcount if self._cursor.rowcount > 0 else len(chunk)
+            return True, "Success", {"row_count": total}
+        except Exception as e:
+            return False, f"SQL execution failed: {str(e)}", {}
+
+    def execute_query(
+        self,
+        sql: str,
+        params: Optional[tuple | list] = None,
+    ) -> Tuple[bool, str, Dict[str, Any]]:
+        """在同一会话内执行 SELECT，返回 columns/rows。"""
+        try:
+            self.connect()
+            assert self._cursor is not None
+            self._cursor.execute(sql, params)
+            if not self._cursor.description:
+                return True, "Success", {"columns": [], "rows": [], "row_count": 0}
+            columns = [desc[0] for desc in self._cursor.description]
+            rows = self._cursor.fetchall()
+            converted_rows = [[convert_value(v) for v in row] for row in rows]
+            return True, "Success", {
+                "columns": columns,
+                "rows": converted_rows,
+                "row_count": len(converted_rows),
+            }
+        except Exception as e:
+            return False, f"SQL execution failed: {str(e)}", {}
+
+    def commit(self) -> None:
+        if self._conn is not None:
+            self._conn.commit()
+
+    def rollback(self) -> None:
+        if self._conn is not None:
+            self._conn.rollback()
+
+    def close(self) -> None:
+        if self._cursor is not None:
+            try:
+                self._cursor.close()
+            except Exception:
+                pass
+            self._cursor = None
+        if self._conn is not None:
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+            self._conn = None
+
+    def __enter__(self) -> "WriteDbSession":
+        self.connect()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        if exc_type is not None:
+            self.rollback()
+        self.close()
+        return False
+
+
+def execute_write_sql(
+    db_type: str,
+    config: Dict[str, Any],
+    sql: str,
+    params: Optional[tuple | list] = None,
+) -> Tuple[bool, str, Any]:
+    """执行单条写 SQL 并自动提交（仅供简单场景；批量导入请用 WriteDbSession）。"""
+    with WriteDbSession(db_type, config) as session:
+        ok, msg, result = session.execute_write(sql, params)
+        if not ok:
+            return ok, msg, result
+        session.commit()
+        return ok, msg, result
+
+
 def execute_sql(db_type: str, config: Dict[str, Any], sql: str) -> Tuple[bool, str, Any]:
     """
     Execute SQL on database.

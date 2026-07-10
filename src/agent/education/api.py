@@ -13,10 +13,12 @@ from __future__ import annotations
 
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from common.schemas.response import success_response
+from common.exceptions.base import BadRequestException
+from common.schemas.response import error_response, success_response
 from system.api.system import get_current_user
 from system.schemas import UserResponse
 from system.workspace_scope import assert_datasource_accessible, get_workspace_oid
@@ -205,3 +207,117 @@ async def list_dimensions() -> dict:
     from src.agent.education.aggregation import DIMENSIONS
 
     return success_response({"dimensions": list(DIMENSIONS)})
+
+
+# ---- 成绩导入 --------------------------------------------------------------
+
+
+def _read_upload_file(file: UploadFile) -> bytes:
+    if not file.filename or not file.filename.lower().endswith((".xlsx", ".xls")):
+        raise BadRequestException("请上传 .xlsx 格式的 Excel 文件")
+    data = file.file.read()
+    if not data:
+        raise BadRequestException("上传文件为空")
+    return data
+
+
+def _parse_import_type(import_type: str) -> str:
+    t = (import_type or "").strip().lower()
+    if t not in ("total", "detail"):
+        raise BadRequestException("import_type 须为 total 或 detail")
+    return t
+
+
+@router.get("/score-import/templates/{import_type}")
+async def download_score_import_template(
+    import_type: str,
+    current_user: UserResponse = Depends(get_current_user),
+) -> FileResponse:
+    _ = current_user
+    from src.agent.education.score_import import template_path
+
+    t = _parse_import_type(import_type)
+    path = template_path(t)  # type: ignore[arg-type]
+    if not path.is_file():
+        raise BadRequestException("模板文件不存在")
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=path.name,
+    )
+
+
+@router.post("/score-import/preview")
+async def preview_score_import(
+    datasource_id: int = Form(...),
+    import_type: str = Form(...),
+    file: UploadFile = File(...),
+    school_id: Optional[str] = Form(None),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from src.agent.resource.tool.business import _load_datasource
+    from src.common.core.database import get_db_session
+    from src.agent.education.score_import import import_result_to_dict, preview_import
+    from datasource.service.edu_permission import parse_edu_scope
+    from system.crud.crud_user import get_user_by_id
+
+    t = _parse_import_type(import_type)
+    file_bytes = _read_upload_file(file)
+
+    with get_db_session() as session:
+        assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
+        user = get_user_by_id(session, int(current_user.id))
+        scope = parse_edu_scope(user)
+
+    db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
+    result = preview_import(
+        file_bytes,
+        t,  # type: ignore[arg-type]
+        scope,
+        db_type,
+        config,
+        override_school_id=(school_id or "").strip(),
+    )
+    return success_response(import_result_to_dict(result))
+
+
+@router.post("/score-import/execute")
+async def execute_score_import(
+    datasource_id: int = Form(...),
+    import_type: str = Form(...),
+    file: UploadFile = File(...),
+    school_id: Optional[str] = Form(None),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from src.agent.resource.tool.business import _load_datasource
+    from src.common.core.database import get_db_session
+    from src.agent.education.score_import import import_result_to_dict, import_scores
+    from datasource.service.edu_permission import parse_edu_scope
+    from system.crud.crud_user import get_user_by_id
+
+    t = _parse_import_type(import_type)
+    file_bytes = _read_upload_file(file)
+
+    with get_db_session() as session:
+        assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
+        user = get_user_by_id(session, int(current_user.id))
+        scope = parse_edu_scope(user)
+
+    db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
+    result = import_scores(
+        file_bytes,
+        t,  # type: ignore[arg-type]
+        scope,
+        db_type,
+        config,
+        override_school_id=(school_id or "").strip(),
+    )
+    if result.error_rows:
+        return error_response(
+            code=400,
+            message="导入校验未通过",
+            data=import_result_to_dict(result),
+        )
+    return success_response(import_result_to_dict(result), message="成绩导入成功")
