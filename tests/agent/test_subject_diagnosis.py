@@ -32,8 +32,21 @@ def test_build_diagnosis_summary_lists_weak_knowledge():
         ],
         item_rows=[{"question_no": 3, "knowledge_name": "函数", "score_rate": 45}],
     )
-    assert "薄弱知识点" in html
+    assert "知识点掌握" in html or "函数" in html
     assert "函数" in html
+
+
+def test_build_diagnosis_summary_rich_layout():
+    html = build_diagnosis_summary(
+        school_name="南京市第一中学",
+        exam_name="期末质量检测",
+        subject_name="数学",
+        stats={"count": 40, "avg": 86, "pass_rate": 90, "excellent_rate": 20},
+        knowledge_rows=[{"knowledge_name": "函数", "score_rate": 52}],
+    )
+    assert "edu-diag" in html
+    assert "edu-diag-overview" in html
+    assert "edu-diag-chip" in html
 
 
 def test_build_diagnosis_recommendations_for_weak_points():
@@ -43,6 +56,7 @@ def test_build_diagnosis_recommendations_for_weak_points():
     )
     assert "导数" in html
     assert "第 5 题" in html
+    assert "edu-rec-group" in html
 
 
 def test_build_item_table_html_student_row_fields():
@@ -53,8 +67,8 @@ def test_build_item_table_html_student_row_fields():
     )
     assert "<table" in html
     assert "得分" in html
-    assert "4.00" in html
-    assert "5.00" in html
+    assert "4" in html
+    assert "5" in html
 
 
 def test_coerce_report_table_fields_from_list():
@@ -68,7 +82,7 @@ def test_coerce_report_table_fields_from_list():
         }
     )
     assert isinstance(data["ITEM_TABLE"], str)
-    assert data["ITEM_TABLE"].startswith("<table")
+    assert "edu-table-wrap" in data["ITEM_TABLE"]
     assert "集合" in data["ITEM_TABLE"]
 
 

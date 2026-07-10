@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 # 轻量重试：仅针对网络/连接类错误，避免瞬时抖动直接打断 Agent 链路。
 _DEFAULT_RETRY_COUNT = 3
 _RETRY_BACKOFF_SECONDS = (0.4, 1.0)
+# ReAct 回灌 LLM 的单条 observation 上限，降低上下文膨胀与厂商内容审核误报。
+_MAX_OBSERVATION_CHARS = 12000
 
 
 def _dict_messages_to_langchain(messages: list[dict[str, str]]) -> list[BaseMessage]:
@@ -35,6 +37,32 @@ def _dict_messages_to_langchain(messages: list[dict[str, str]]) -> list[BaseMess
         else:
             converted.append(HumanMessage(content=content))
     return converted
+
+
+def _truncate_observation_for_llm(text: str, *, limit: int = _MAX_OBSERVATION_CHARS) -> str:
+    """截断工具 observation，避免多轮 ReAct 上下文过大触发厂商审核或超长。"""
+    if len(text) <= limit:
+        return text
+    return (
+        text[:limit]
+        + f"\n\n…（观察内容已截断，原长 {len(text)} 字符；完整结果见 tool_result 事件）"
+    )
+
+
+def _is_content_safety_error(exc: Exception) -> bool:
+    """MiniMax 等内容安全审核（如 1026 input new_sensitive）。"""
+    blob = str(exc).lower()
+    markers = (
+        "new_sensitive",
+        "input new_sensitive",
+        "content policy",
+        "content_policy",
+        "moderation",
+        "safety",
+        "(1026)",
+        "1026",
+    )
+    return any(m in blob for m in markers)
 
 
 class LangChainLlmClient:
@@ -115,6 +143,12 @@ class LangChainLlmClient:
                 last_error = exc
                 transient = self._is_network_error(exc) or self._is_transient_http_error(exc)
                 if not transient or attempt >= _DEFAULT_RETRY_COUNT - 1:
+                    if _is_content_safety_error(exc):
+                        raise RuntimeError(
+                            "LLM 内容安全审核未通过（MiniMax 错误码 1026：input new_sensitive）。"
+                            "这通常由多轮对话中累积的 SQL/成绩明细触发，并非应用逻辑错误。"
+                            "建议：新开一轮对话重试、缩短子任务上下文，或更换模型/API。"
+                        ) from exc
                     if self._is_network_error(exc):
                         raise RuntimeError(
                             "LLM 网络连接失败：无法连接到模型服务。请检查 llm_base_url、网络代理与目标服务可达性。"

@@ -227,6 +227,47 @@ def test_compute_score_stats_tool_with_exec_result():
     assert result.data["full_score"] == 150
 
 
+def test_compute_score_stats_tool_uses_full_last_exec_result_over_preview():
+    full_rows = [[80 + i, 150] for i in range(40)]
+    preview_rows = full_rows[:20]
+    result = _run(
+        compute_score_stats_tool.execute(
+            exec_result={
+                "columns": ["score", "exam_score"],
+                "rows": preview_rows,
+                "row_count": 20,
+            },
+            tool_runtime_ctx={
+                "last_exec_result": {
+                    "columns": ["score", "exam_score"],
+                    "rows": full_rows,
+                    "row_count": 40,
+                }
+            },
+        )
+    )
+    assert result.data["count"] == 40
+    assert "共 40 人" in result.content
+
+
+def test_compute_score_stats_tool_ignores_short_scores_when_full_exec_available():
+    full_rows = [[80 + i, 150] for i in range(40)]
+    short_scores = [float(r[0]) for r in full_rows[:20]]
+    result = _run(
+        compute_score_stats_tool.execute(
+            scores=short_scores,
+            tool_runtime_ctx={
+                "last_exec_result": {
+                    "columns": ["score", "exam_score"],
+                    "rows": full_rows,
+                    "row_count": 40,
+                }
+            },
+        )
+    )
+    assert result.data["count"] == 40
+
+
 def test_compute_score_stats_tool_auto_score_field_from_dict_rows():
     result = _run(
         compute_score_stats_tool.execute(
@@ -567,6 +608,46 @@ def test_select_report_template_tool_phase2_types():
         result = _run(select_report_template_tool.execute(report_type=rt))
         assert result.data["template_name"].startswith("education/")
         assert result.data["data_keys"]
+
+
+def test_student_subject_diagnosis_template_renders():
+    data = {
+        "REPORT_TITLE": "STU20240003 数学学情分析报告",
+        "REPORT_SUBTITLE": "南京市第一中学 高一(1)班",
+        "REPORT_TIME": "2026-07-10",
+        "STUDENT_NAME": "STU20240003",
+        "SUBJECT_NAME": "数学",
+        "CLASS_NAME": "高一(1)班",
+        "EXAM_NAME": "期末质量检测",
+        "TOTAL_SCORE": "91",
+        "FULL_SCORE": "100",
+        "CLASS_RANK": "3",
+        "GRADE_RANK": "12",
+        "ABILITY_INSIGHT": "<p>「综合应用」层级需重点突破。</p>",
+        "ABILITY_TIER_CHART": '{"radar":{"indicator":[{"name":"基础知识","max":100}]},"series":[{"type":"radar","data":[{"value":[85]}]}]}',
+        "ABILITY_TIER_TABLE": "<table class='edu-table'><tr><th>层级</th></tr></table>",
+        "QUESTION_TYPE_CHART": '{"xAxis":{"type":"category","data":["选择"]},"series":[{"type":"bar","data":[80]}]}',
+        "QUESTION_TYPE_TABLE": "<table class='edu-table'><tr><th>题型</th></tr></table>",
+        "KNOWLEDGE_CHART": '{"xAxis":{"type":"category","data":["集合"]},"series":[{"type":"bar","data":[90]}]}',
+        "ITEM_TABLE": "<table class='edu-table'><tr><th>题号</th></tr></table>",
+        "KNOWLEDGE_TABLE": "<table class='edu-table'><tr><th>知识点</th></tr></table>",
+        "WEAK_KNOWLEDGE_LIST": "分段函数",
+        "SUMMARY": "<p>个人诊断</p>",
+        "RECOMMENDATIONS": "<p>加强练习</p>",
+    }
+    result = _run(
+        render_html_report.execute(
+            datasource_id=1,
+            template_name="education/student_subject_diagnosis.html",
+            data=data,
+            title="单次考试学情",
+        )
+    )
+    html = result.data["html"]
+    assert "能力画像" in html
+    assert "各科目表现" not in html
+    assert "历次成绩趋势" not in html
+    assert "STU20240003" in html
 
 
 def test_student_profile_template_renders():
@@ -1142,9 +1223,87 @@ def test_build_subject_diagnosis_sections_tool_renders_html():
         )
     )
     assert result.data["output_type"] == "html"
+    assert result.is_final is True
     html = result.data["html"]
     assert "集合" in html
     assert "数学" in html
+
+
+def test_build_subject_diagnosis_sections_auto_fetch_from_report_data():
+    from src.agent.education import tools as edu_tools
+
+    fetch_payload = {
+        "item_rows": [{"question_no": 1, "knowledge_name": "集合", "score_rate": 80.0}],
+        "knowledge_rows": [{"knowledge_name": "集合", "score_rate": 80.0, "question_count": 1}],
+        "score_rows": [{"score": 88.0, "exam_score": 100.0}] * 5,
+    }
+    report_data = {
+        "sub_tasks": [
+            {
+                "sub_task_agent": "ToolExpert",
+                "tool_calls": [
+                    {
+                        "tool": "fetch_subject_diagnosis_data_tool",
+                        "success": True,
+                        "data": fetch_payload,
+                    }
+                ],
+            }
+        ]
+    }
+    result = _run(
+        edu_tools.build_subject_diagnosis_sections_tool.execute(
+            school_name="南京市第一中学",
+            exam_name="期末质量检测",
+            subject_name="数学",
+            render=False,
+            report_data=report_data,
+        )
+    )
+    assert "小题 1 条" in result.content
+    assert "知识点 1 个" in result.content
+    assert "INTERVENTION_SECTION" in result.data
+
+
+def test_build_subject_diagnosis_sections_includes_intervention_for_school():
+    from src.agent.education import tools as edu_tools
+
+    fetch_payload = {
+        "item_rows": [
+            {"question_type": "填空题", "knowledge_name": "函数", "score_rate": 45.0},
+        ],
+        "knowledge_rows": [
+            {"knowledge_name": "函数", "score_rate": 45.0, "question_count": 2, "ability_level": "applied"},
+        ],
+        "score_rows": [
+            {"class": "高一1班", "score": 92, "exam_score": 150},
+            {"class": "高一1班", "score": 88, "exam_score": 150},
+            {"class": "高一1班", "score": 85, "exam_score": 150},
+            {"class": "高一2班", "score": 55, "exam_score": 150},
+            {"class": "高一2班", "score": 58, "exam_score": 150},
+            {"class": "高一2班", "score": 48, "exam_score": 150},
+        ],
+    }
+    result = _run(
+        edu_tools.build_subject_diagnosis_sections_tool.execute(
+            fetch_data=fetch_payload,
+            school_name="南京市第一中学",
+            exam_name="期末质量检测",
+            subject_name="数学",
+            render=False,
+        )
+    )
+    assert "INTERVENTION_SECTION" in result.data
+    assert "高一2班" in result.data["INTERVENTION_SECTION"]
+    assert "函数" in result.data["INTERVENTION_SECTION"]
+    assert "CLASS_COMPARE_TABLE" in result.data
+
+
+def test_report_scope_subtitle_filters_none():
+    from src.agent.education.tools import _report_scope_subtitle
+
+    assert _report_scope_subtitle("南京市第一中学", None) == "南京市第一中学"
+    assert _report_scope_subtitle("南京市第一中学", "") == "南京市第一中学"
 
 
 # ---- build_subject_diagnosis_report_tool ----------------------------------
@@ -1177,6 +1336,44 @@ def test_diagnosis_where_clause_pair_uses_correct_exam_id_column():
     assert "sc.exam_id IN ('1')" in score_sql
     assert "sc.exam_id IN ('1')" in exam_id_sql
     assert "sd.exam_id" not in score_sql
+
+
+def test_unsafe_school_abbreviation_blocks_exact_match():
+    from src.agent.education.tools import _is_unsafe_school_name_filter
+
+    assert _is_unsafe_school_name_filter("南京一中") is True
+    assert _is_unsafe_school_name_filter("南京市第一中学") is False
+
+
+def test_fetch_student_diagnosis_retries_without_school_abbreviation(monkeypatch):
+    from src.agent.education import tools as edu_tools
+
+    calls: list[str] = []
+
+    def fake_run(sql, **kwargs):
+        calls.append(sql)
+        if "sch.name = '南京一中'" in sql:
+            return True, "", {"columns": ["score"], "rows": []}, sql
+        if "sc.student_id = 'STU20240003'" in sql and "sch.name" not in sql:
+            return True, "", {
+                "columns": ["question_no", "knowledge_name", "question_type", "full_score", "avg_score", "score_rate"],
+                "rows": [["1", "集合", "选择", 5, 4, 80]],
+            }, sql
+        return True, "", {"columns": ["score"], "rows": [[88]]}, sql
+
+    monkeypatch.setattr(edu_tools, "_run_edu_sql", fake_run)
+    bundle = edu_tools._fetch_subject_diagnosis_rows(
+        datasource_id=1,
+        workspace_oid=1,
+        user_id=1,
+        db_type="pg",
+        student_id="STU20240003",
+        subject_name="数学",
+        exam_name="期末质量检测",
+        school_name="南京一中",
+    )
+    assert len(bundle["item_rows"]) == 1
+    assert any("fallback_student_no_school" in (lg.get("phase") or "") for lg in bundle["sql_logs"])
 
 
 def test_build_subject_diagnosis_report_tool_renders_html(monkeypatch):
@@ -1245,3 +1442,56 @@ def test_build_subject_diagnosis_report_tool_no_data(monkeypatch):
         )
     )
     assert "error" in result.data
+
+
+def test_aggregate_dimension_tool_accepts_exec_result():
+    from src.agent.education import tools as edu_tools
+
+    result = _run(
+        edu_tools.aggregate_dimension_tool.execute(
+            dimension="class",
+            exec_result={
+                "columns": ["class", "score", "exam_score"],
+                "rows": [
+                    ["高一1班", 90, 150],
+                    ["高一1班", 85, 150],
+                    ["高一2班", 70, 150],
+                    ["高一2班", 65, 150],
+                ],
+            },
+        )
+    )
+    assert "error" not in result.data
+    groups = result.data["groups"]
+    assert len(groups) == 2
+    names = {g["dimension_value"] for g in groups}
+    assert "高一1班" in names
+    assert "高一2班" in names
+
+
+def test_aggregate_dimension_tool_rejects_bare_matrix_without_columns():
+    from src.agent.education import tools as edu_tools
+
+    result = _run(
+        edu_tools.aggregate_dimension_tool.execute(
+            dimension="class",
+            rows=[[90, "高一1班"], [85, "高一1班"]],
+        )
+    )
+    assert result.data.get("error") == "no rows"
+    assert "columns" in result.content
+
+
+def test_aggregate_dimension_tool_dict_rows():
+    from src.agent.education import tools as edu_tools
+
+    result = _run(
+        edu_tools.aggregate_dimension_tool.execute(
+            dimension="school",
+            rows=[
+                {"school_name": "一中", "score": 88, "exam_score": 100},
+                {"school_name": "二中", "score": 72, "exam_score": 100},
+            ],
+        )
+    )
+    assert len(result.data["groups"]) == 2

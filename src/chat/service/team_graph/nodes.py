@@ -160,8 +160,15 @@ async def node_sub_tasks_loop(state: TeamState, config: RunnableConfig) -> dict[
             "sql": phase.state.last_sql,
             "exec_result": phase.state.last_exec_result,
             "reports": list(phase.state.reports),
+            "tool_calls": list(phase.state.tool_calls),
             "final_answer": (phase.reply.content if phase.reply else ""),
         })
+        if sub_task_agent != "ToolExpert" and phase.state.last_exec_result:
+            from src.agent.education.query_parse import extract_score_rows_from_report_data
+
+            cached_rows = extract_score_rows_from_report_data(upstream_report_data)
+            if cached_rows:
+                upstream_report_data["sub_tasks"][-1]["score_rows"] = cached_rows
 
         if phase.fatal_error:
             await emit(
@@ -199,6 +206,7 @@ async def node_sub_tasks_loop(state: TeamState, config: RunnableConfig) -> dict[
         "sub_phases": sub_phases,
         "last_good_phase": last_good_phase,
         "all_steps": all_steps,
+        "upstream_report_data": upstream_report_data,
     }
 
 
@@ -271,6 +279,7 @@ async def node_summarizer(state: TeamState, config: RunnableConfig) -> dict[str,
         llm_client=llm,
         emit=emit,
         fallback=default_summary,
+        report_data=state.get("upstream_report_data"),
     )
     await emit("summary", {"content": summary_text})
     return {"summary_text": summary_text}

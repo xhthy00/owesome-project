@@ -33,7 +33,10 @@
     "question_no": "sd.question_no",
     "question_score": "sd.question_score",
     "item_score": "sd.score",
-    "knowledge_name": "k.knowledge_name"
+    "knowledge_name": "k.knowledge_name",
+    "district": "sch.district",
+    "question_type": "eq.question_type",
+    "ability_level": "k.ability_level"
   },
   "defaults": {
     "pass_ratio": 0.6,
@@ -41,17 +44,19 @@
     "score_segment_ratios": [0.6, 0.7, 0.8, 0.9]
   },
   "table_comments": {
-    "tb_school": "学校维度表",
+    "tb_school": "学校维度表（含 district 区县字段）",
     "tb_student": "学生维度表（id 为学号，无姓名字段）",
     "tb_exam": "考试维度表，exam_score 为该科卷面满分",
     "tb_score": "学生科目成绩事实表（一行=一学生一科目一次考试）",
     "tb_score_detail": "学生小题得分明细（逐题分析用）",
-    "tb_exam_question": "试卷题目与分值",
-    "tb_knowledge": "知识点维度"
+    "tb_exam_question": "试卷题目与分值（含 question_type 题型）",
+    "tb_knowledge": "知识点维度（含 ability_level 能力层级，无树结构）"
   },
   "dimension_samples": {
     "school_name": ["南京市第一中学", "苏州市实验中学", "无锡市第一中学"],
+    "district": ["鼓楼区", "玄武区", "秦淮区"],
     "class_name": ["高一(1)班", "高一(2)班"],
-    "subject": ["数学"]
+    "subject": ["数学"],
+    "question_type": ["选择题", "填空题", "解答题"]
   }
 }

@@ -62,6 +62,18 @@ def test_intent_resolver_principal_keyword():
     assert spec.audience == Audience.PRINCIPAL
 
 
+def test_intent_resolver_diagnostic_report():
+    ir = ReportIntentResolver()
+    spec = ir.resolve("南京市第一中学数学结构化诊断报告")
+    assert spec.report_type == ReportType.DIAGNOSTIC_REPORT
+
+
+def test_intent_resolver_class_overview_not_hijacked_by_diagnostic():
+    ir = ReportIntentResolver()
+    spec = ir.resolve("生成初三1班数学班级成绩报告")
+    assert spec.report_type == ReportType.CLASS_OVERVIEW
+
+
 # ---- orchestrator ---------------------------------------------------------
 
 def _wide_mapping():
@@ -231,7 +243,7 @@ def test_orchestrator_subject_diagnosis_includes_item_table():
 
     async def fake_execute(sql):
         calls.append(sql)
-        if "tb_knowledge" in sql and "GROUP BY k.knowledge_name" in sql:
+        if "tb_knowledge" in sql and "knowledge_name" in sql and "GROUP BY" in sql:
             return {
                 "columns": ["knowledge_name", "question_count", "score_rate"],
                 "rows": [["函数", 3, 55.0], ["集合", 2, 82.0]],
@@ -255,7 +267,7 @@ def test_orchestrator_subject_diagnosis_includes_item_table():
     orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
     res = _run(orch.run("南京市第一中学数学科目诊断，细化到每一小题"))
     assert any("tb_score_detail" in s for s in calls)
-    assert any("GROUP BY k.knowledge_name" in s for s in calls)
+    assert any("knowledge_name" in s and "GROUP BY" in s for s in calls)
     assert "知识点" in res.html
     assert "函数" in res.html
     assert "需加强" in res.html or "薄弱" in res.html

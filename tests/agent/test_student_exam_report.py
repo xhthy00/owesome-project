@@ -33,6 +33,19 @@ def test_extract_student_target_from_quoted_name():
     assert extract_student_target('分析"学生001"这几次考试的成绩') == "学生001"
 
 
+def test_extract_student_id_target():
+    from src.agent.education.query_parse import extract_student_id_target, is_individual_student_analysis_query
+
+    q = (
+        "查询学生编号为：STU20240003，江苏省高一上学期数学期末质量检测成绩分析，"
+        "哪些知识点需要加强，形成分析报告"
+    )
+    assert extract_student_id_target(q) == "STU20240003"
+    assert extract_student_target(q) == "STU20240003"
+    assert is_individual_student_analysis_query(q) is True
+    assert is_individual_student_analysis_query("帮我分析全市数学成绩") is False
+
+
 def test_extract_school_target_from_full_name():
     q = "帮我分析南京市第一中学在江苏省高一上学期数学期末质量检测的成绩"
     assert extract_school_target(q) == "南京市第一中学"

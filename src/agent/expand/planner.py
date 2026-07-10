@@ -70,6 +70,9 @@ PLANNER_DESC = """[你的职责]
 
 [分解原则]
 1. 若问题是单一查询（如"用户有多少"、"本月销量 TOP 5"），返回 plans=[原问题] 即可；
+   **但以下报告类问题禁止返回 plans=[原问题]，必须拆成 2~4 个子任务**：
+   - 含「学校/班级 + 考试 + 分析报告/多维分析/学情报告」；
+   - 含「生成 HTML 报告 / 可视化报告」；
 2. 若问题需要对比/趋势/因果分析（如"Q2/Q3 销售差异及原因"），拆成 2~4 个子任务；
 3. 子任务之间应尽量**执行顺序独立**——不要让后一个依赖前一个的具体数值；
    但**分析范围（学校/班级/年级/学生/考试）必须在每个 DataAnalyst 子任务描述中
@@ -97,12 +100,23 @@ PLANNER_DESC = """[你的职责]
   ["查询各班均分与离散度并排名", {"task": "用 education/grade_comparison.html 模板组装 HTML 报告（数据取上游子任务）", "sub_task_agent": "ToolExpert"}]
 - 科目诊断报告（subject_diagnosis）：
   ["查询该科目分数段分布与及格率/优秀率", {"task": "用 education/subject_diagnosis.html 模板组装 HTML 报告（数据取上游子任务）", "sub_task_agent": "ToolExpert"}]
+- **学校 + 科目 + 考试 + 多维分析/分析报告**（如「分析【XX学校】在【XX考试】的数学成绩，多维分析形成报告」）——
+  **必须拆 3 个子任务**（与班级诊断同构，class_name 可省略表示全校该科）：
+  ["查询【XX学校】在【XX考试】【XX科目】整体成绩 KPI：均分、及格率、优秀率、分数段、各班对比（SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score）",
+   {"task": "调 fetch_subject_diagnosis_data_tool(school_name=【XX学校】, subject_name=【XX科目】, exam_name=【XX考试】) 查询小题明细与知识点——本步仅 fetch，完成后 terminate", "sub_task_agent": "ToolExpert"},
+   {"task": "调 build_subject_diagnosis_sections_tool(school_name=【XX学校】, exam_name=【XX考试】, subject_name=【XX科目】, render=true) 一步完成 stats+HTML；完成后 terminate", "sub_task_agent": "ToolExpert"}]
+  **禁止** plans=[原问题]；**禁止** DataAnalyst 在子任务 2/3 组装报告。
 - **学校/班级 + 科目 + 小题（逐题）诊断**（如「分析【XX学校】在【XX考试】的数学成绩，
   细化到每一小题，形成详细分析报告」）——**拆 3 个子任务**，小题查询须在工具链可见：
   ["查询【XX学校】【XX班级】在【XX考试】【XX科目】整体成绩 KPI：均分、及格率、优秀率、分数段（SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score）",
    {"task": "调 fetch_subject_diagnosis_data_tool(school_name=【XX学校】, subject_name=【XX科目】, exam_name=【XX考试】, class_name=【XX班级】) 查询 tb_score_detail 小题明细与知识点——**本步必须在工具链出现，禁止跳过**", "sub_task_agent": "ToolExpert"},
    {"task": "调 build_subject_diagnosis_sections_tool(fetch_data=上一步 fetch 返回的 data, school_name=【XX学校】, exam_name=【XX考试】, subject_name=【XX科目】, class_name=【XX班级】, render=true) **一步完成 stats 计算 + HTML 渲染并推送**；完成后 terminate。**禁止**再调 compute_score_stats / select_report_template / build_chart_option / render_html_report。若 fetch 返回 0 题，terminate 说明 SQL 日志与原因", "sub_task_agent": "ToolExpert"}]
   **严禁** DataAnalyst 自行写 tb_score_detail JOIN SQL；**严禁**跳过 fetch 直接 render。
+- **单个学生 + 单次考试 + 科目/知识点分析**（问题含学号/STU/学生编号/「学生001」）——
+  **只拆 2 个子任务**，**禁止**走下方「学校/班级科目诊断」的 fetch+sections 三步：
+  ["查询该学生【学号/姓名】在【考试】【科目】的整体成绩（分数、班级/年级排名、与班级/年级均分对照）",
+   {"task": "调 build_student_subject_diagnosis_tool(student_id=【学号】, subject_name=【科目】, exam_name=【考试】, render=true) 组装该学生个人知识点分析报告；完成后 terminate。**禁止** build_subject_diagnosis_sections_tool", "sub_task_agent": "ToolExpert"}]
+  **严禁**为班级/全校生成 subject_diagnosis 聚合报告。
 - 个体画像/趋势/预警/群体对比同理，分别用 education/student_exam_analysis.html、
   education/trend_tracking.html、education/tier_alert.html、education/group_feature.html。
 - **单个学生多次考试分析**（如「分析学生001这几次考试的成绩」）：
@@ -115,8 +129,126 @@ PLANNER_DESC = """[你的职责]
   ["查询该班历次考试各科均分、标准差、及格率/优秀率",
    "查询每位学生历次考试总分与各科分数，用于趋势/偏科/相关性分析",
    {"task": "用 education/comprehensive.html 模板组装综合分析 HTML 报告（数据取上游子任务，含 9 个维度）", "sub_task_agent": "ToolExpert"}]
+- 结构化诊断报告（diagnostic_report，一般性/特殊性/动态性三节）：
+  ["查询【范围】成绩明细（含 class/district/subject）用于聚合",
+   {"task": "调 build_diagnostic_report_data_tool(score_rows=上游数据, scope_label=【范围】, render=true) 生成结构化诊断 HTML", "sub_task_agent": "ToolExpert"}]
+- **全市 + 考试 + 科目成绩分析**（如「帮我分析全市的江苏省高一上学期数学期末质量检测成绩，形成详细报告」）——
+  **拆 3 个子任务**，与学校科目诊断同构（先查数、再 fetch、再组装），**禁止**一步调用 `build_citywide_exam_analysis_report_tool`：
+  ["查询全市【XX考试】【XX科目】学生成绩 KPI 与明细（SQL 须 JOIN tb_school sch ON sc.school_id=sch.id JOIN tb_exam e ON sc.exam_id=e.id，SELECT sc.score, sc.exam_score, sc.class, sch.district, sch.name AS school_name, sc.student_id, sc.subject_name；按 subject_name 与 exam_name 过滤；全市范围**不传** school_name/class_name）",
+   {"task": "调 fetch_subject_diagnosis_data_tool(subject_name=【科目】, exam_name=【考试】) 查询全市小题明细与知识点——**本步仅 fetch，禁止 render**；完成后 terminate（**禁止**调 build_diagnostic_report_data_tool）", "sub_task_agent": "ToolExpert"},
+   {"task": "调 build_diagnostic_report_data_tool(scope_label=全市, exam_name=【考试】, subject_name=【科目】, render=true) **一步完成区县对比+分数段+小题/知识点+HTML**；**禁止**再调 fetch_subject_diagnosis_data_tool（工具自动读取上游成绩与 fetch 数据）；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 
 简单问题（如"三班数学平均分"）不生成报告，返回 plans=[原问题] 即可。"""
+
+
+def build_citywide_team_plan_items(question: str) -> list[dict[str, str]]:
+    """全市考试成绩分析的标准 3 步 Team 计划（不依赖 Planner LLM）。"""
+    from src.agent.education.orchestrator import _extract_exam, _extract_subject
+
+    exam = _extract_exam(question) or "本次考试"
+    subject = _extract_subject(question) or "该科目"
+    return [
+        {
+            "sub_task": (
+                f"查询全市【{exam}】【{subject}】学生成绩 KPI 与明细"
+                "（SQL 须 JOIN tb_school sch ON sc.school_id=sch.id JOIN tb_exam e ON sc.exam_id=e.id，"
+                "SELECT sc.score, sc.exam_score, sc.class, sch.district, sch.name AS school_name, "
+                "sc.student_id, sc.subject_name；按 subject_name 与 exam_name 过滤；"
+                "全市范围**不传** school_name/class_name）"
+            ),
+            "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
+        },
+        {
+            "sub_task": (
+                f"调 fetch_subject_diagnosis_data_tool(subject_name={subject}, exam_name={exam}) "
+                "查询全市小题明细与知识点——**本步仅 fetch，禁止 render**；"
+                "完成后 terminate（**禁止**调 build_diagnostic_report_data_tool）"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        },
+        {
+            "sub_task": (
+                f"调 build_diagnostic_report_data_tool(scope_label=全市, exam_name={exam}, "
+                f"subject_name={subject}, render=true) **一步完成区县对比+分数段+小题/知识点+HTML**；"
+                "**禁止**再调 fetch_subject_diagnosis_data_tool（工具自动读取上游成绩与 fetch 数据）；"
+                "完成后 terminate"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        },
+    ]
+
+
+def build_school_subject_report_plan_items(question: str) -> list[dict[str, str]]:
+    """学校 + 考试科目分析报告的标准 3 步计划（Planner 未拆解时的修正回落）。"""
+    from src.agent.education.orchestrator import _extract_exam, _extract_subject
+    from src.agent.education.query_parse import extract_school_target
+
+    school = extract_school_target(question) or "该校"
+    exam = _extract_exam(question) or "本次考试"
+    subject = _extract_subject(question) or "该科目"
+    return [
+        {
+            "sub_task": (
+                f"查询【{school}】在【{exam}】【{subject}】整体成绩 KPI："
+                "均分、及格率、优秀率、分数段分布、各班对比"
+                "（SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score）"
+            ),
+            "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
+        },
+        {
+            "sub_task": (
+                f"调 fetch_subject_diagnosis_data_tool(school_name={school}, "
+                f"subject_name={subject}, exam_name={exam}) "
+                "查询小题明细与知识点——**本步仅 fetch，禁止 render**；完成后 terminate"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        },
+        {
+            "sub_task": (
+                f"调 build_subject_diagnosis_sections_tool(school_name={school}, "
+                f"exam_name={exam}, subject_name={subject}, render=true) "
+                "**一步完成 stats 计算 + HTML 渲染**；完成后 terminate"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        },
+    ]
+
+
+def coerce_plan_items_if_needed(
+    question: str,
+    plan_items: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """学校报告类问题若 Planner 回落为单任务，修正为标准多步计划。"""
+    from src.agent.education.query_parse import is_school_exam_report_query
+
+    q = (question or "").strip()
+    if not is_school_exam_report_query(q):
+        return plan_items
+    if len(plan_items) <= 1 and (
+        not plan_items or (plan_items[0].get("sub_task") or "").strip() == q
+    ):
+        logger.info(
+            "planner school-report coerce: expanding single plan to 3-step school subject report"
+        )
+        return build_school_subject_report_plan_items(q)
+    return plan_items
+
+
+def should_replace_with_citywide_plan(
+    question: str,
+    plan_items: list[dict[str, str]],
+) -> bool:
+    """Planner 回落为单任务时，全市分析类问题改用确定性 3 步计划。"""
+    from src.agent.education.query_parse import is_citywide_analysis_query
+
+    if not is_citywide_analysis_query(question):
+        return False
+    q = (question or "").strip()
+    if len(plan_items) <= 1:
+        return True
+    if len(plan_items) == 1 and (plan_items[0].get("sub_task") or "").strip() == q:
+        return True
+    return False
 
 
 class PlanAction(Action):
@@ -192,8 +324,21 @@ def _infer_sub_task_agent(task: str) -> str:
 
 
 def _fallback_single_plan(question: str, reason: str) -> ActionOutput:
-    """拆解失败 → 原问题作为唯一子任务。保证 team 流水线不断。"""
+    """拆解失败 → 原问题作为唯一子任务；学校报告类改用标准多步回落。"""
+    from src.agent.education.query_parse import is_school_exam_report_query
+
     q = (question or "").strip() or "（原始问题）"
+    if is_school_exam_report_query(q):
+        items = build_school_subject_report_plan_items(q)
+        plans = [it["sub_task"] for it in items]
+        plan_agents = [it["sub_task_agent"] for it in items]
+        return ActionOutput(
+            is_exe_success=True,
+            content=f"计划回落为学校报告 3 步子任务（{reason}）",
+            action="plan",
+            extra={"plans": plans, "plan_agents": plan_agents},
+            terminate=True,
+        )
     return ActionOutput(
         is_exe_success=True,
         content=f"计划回落为 1 个子任务（{reason}）",

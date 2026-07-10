@@ -318,7 +318,7 @@ export function useChat() {
             onAgentSpeak: ({ agent, status, error }) => {
               if (!agent || !status) return;
               setExecutionSteps((prev) => [
-                ...stripBootstrap(prev),
+                ...prev,
                 {
                   id: crypto.randomUUID(),
                   title: `${asText(agent)}: ${asText(status)}`,
@@ -368,7 +368,7 @@ export function useChat() {
               const safeText = asText(text);
               if (!safeText.trim()) return;
               setExecutionSteps((prev) => [
-                ...stripBootstrap(prev),
+                ...prev,
                 {
                   id: crypto.randomUUID(),
                   title: "Agent 思考",

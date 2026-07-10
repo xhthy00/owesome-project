@@ -26,6 +26,7 @@ import json
 import logging
 from typing import Any
 
+from src.agent.adapter.llm_adapter import _truncate_observation_for_llm
 from src.agent.core.action.base import Action, ActionOutput
 from src.agent.core.action.tool_action import ToolAction, build_repeat_tool_warning
 from src.agent.core.agent import AgentMessage
@@ -308,6 +309,7 @@ class ReActAgent(ConversableAgent):
         marker = "✓" if action_out.is_exe_success else "✗"
         tool_name = action_out.action or "tool"
         observation = action_out.observations or action_out.content or "(no observation)"
+        observation = _truncate_observation_for_llm(str(observation))
         observation_block = f"[{marker} observation from {tool_name}]\n{observation}"
         if streak_warning:
             observation_block = f"{streak_warning}\n\n{observation_block}"

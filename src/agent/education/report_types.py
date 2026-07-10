@@ -27,6 +27,7 @@ class ReportType(str, Enum):
     TIER_ALERT = "tier_alert"                # 分层预警
     GROUP_FEATURE = "group_feature"          # 群体特征
     COMPREHENSIVE = "comprehensive"          # 多次考试综合分析报告
+    DIAGNOSTIC_REPORT = "diagnostic_report"  # 结构化诊断报告（一般性/特殊性/动态性）
 
 
 class Audience(str, Enum):

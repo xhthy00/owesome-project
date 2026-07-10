@@ -46,9 +46,30 @@
 Team 模式 Planner 会拆 3 步查数 + 1 步 ToolExpert 组装；ToolExpert 应调用
 `build_subject_diagnosis_sections_tool` 生成上述字段。
 
+## 结构化诊断报告（diagnostic_report）
+
+三节结构：一般性（区域/年级趋势）→ 特殊性（班级/分数段差异）→ 动态性（进退步）。
+
+- 触发关键词：「结构化诊断」「区域诊断报告」
+- 工具：`build_diagnostic_report_data_tool`
+- API：`POST /api/v1/education/diagnostic-report`
+
+## 多维分析
+
+- 维度：`citywide` / `district` / `school` / `grade`（从 `class` 解析）/ `class` / `subject` 等
+- 工具：`aggregate_dimension_tool`、`cross_analyze_tool`
+- 维度列表：`GET /api/v1/education/dimensions`
+
+## 外部库 DDL
+
+见 [`docs/education_schema_ddl.sql`](education_schema_ddl.sql)：`tb_school.district`、`tb_exam_question.question_type`、`tb_knowledge.ability_level`。
+
+## 示例问法
 
 1. 南京市第一中学高一(1)班数学平均分
 2. 对比三所学校数学均分排名
-3. 分析南京市第一中学数学，细化到每一小题
-4. STU20240001 数学考了多少分
-5. 生成南京市第一中学高一(1)班数学学情报告
+3. 南京市各区县数学均分对比
+4. 分析南京市第一中学数学，细化到每一小题
+5. STU20240001 数学考了多少分
+6. 生成南京市第一中学高一(1)班数学学情报告
+7. 南京市第一中学数学结构化诊断报告

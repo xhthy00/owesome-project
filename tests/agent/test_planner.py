@@ -180,9 +180,98 @@ def test_planner_desc_has_question_placeholder():
 
 def test_planner_desc_has_school_item_diagnosis_template():
     assert "学校/班级 + 科目 + 小题" in PLANNER_DESC
-    assert "build_subject_diagnosis_report_tool" in PLANNER_DESC
+    assert "build_subject_diagnosis_sections_tool" in PLANNER_DESC
     assert "范围传递" in PLANNER_DESC
     assert "【XX学校】" in PLANNER_DESC
+
+
+def test_build_citywide_team_plan_items_three_steps():
+    from src.agent.expand.planner import build_citywide_team_plan_items
+
+    q = "帮我分析全市的江苏省高一上学期数学期末质量检测试卷的成绩分析，形成详细报告"
+    items = build_citywide_team_plan_items(q)
+    assert len(items) == 3
+    assert items[0]["sub_task_agent"] == "DataAnalyst"
+    assert items[1]["sub_task_agent"] == "ToolExpert"
+    assert items[2]["sub_task_agent"] == "ToolExpert"
+    assert "fetch_subject_diagnosis_data_tool" in items[1]["sub_task"]
+    assert "build_diagnostic_report_data_tool" in items[2]["sub_task"]
+    assert "数学" in items[0]["sub_task"]
+
+
+def test_run_planner_phase_citywide_skips_llm(monkeypatch):
+    from src.chat.schemas import ChatRequest
+    from src.chat.service.agent_runner import _run_planner_phase
+
+    emitted: list[tuple[str, dict]] = []
+
+    async def _emit(event: str, data: dict) -> None:
+        emitted.append((event, data))
+
+    class _FailLlm:
+        async def chat(self, messages):
+            raise RuntimeError("should not call llm for citywide")
+
+    request = ChatRequest(
+        question="帮我分析全市的江苏省高一上学期数学期末质量检测试卷的成绩分析，形成详细报告",
+        datasource_id=1,
+        agent_mode="team",
+    )
+    items = asyncio.run(
+        _run_planner_phase(
+            request=request,
+            llm_client=_FailLlm(),
+            emit=_emit,
+        )
+    )
+    assert len(items) == 3
+    assert any(evt == "agent_speak" and data.get("deterministic") for evt, data in emitted)
+
+
+def test_non_citywide_planner_output_not_rewritten():
+    """非全市问题：Planner 输出原样保留，不做确定性覆盖。"""
+    from src.agent.expand.planner import coerce_plan_items_if_needed, should_replace_with_citywide_plan
+
+    q = (
+        "查询学生编号为：STU20240003，江苏省高一上学期数学期末质量检测成绩分析，"
+        "哪些知识点需要加强，形成分析报告"
+    )
+    planner_output = [
+        {"sub_task": "查询学生整体成绩", "sub_task_agent": "DataAnalyst"},
+        {
+            "sub_task": "调 fetch_subject_diagnosis_data_tool(subject_name=数学)",
+            "sub_task_agent": "ToolExpert",
+        },
+        {
+            "sub_task": "调 build_subject_diagnosis_sections_tool(render=true)",
+            "sub_task_agent": "ToolExpert",
+        },
+    ]
+    assert should_replace_with_citywide_plan(q, planner_output) is False
+    assert len(coerce_plan_items_if_needed(q, planner_output)) == 3
+
+
+def test_school_report_query_coerced_to_three_steps():
+    from src.agent.education.query_parse import is_school_exam_report_query
+    from src.agent.expand.planner import (
+        build_school_subject_report_plan_items,
+        coerce_plan_items_if_needed,
+    )
+
+    q = (
+        "帮我分析南京市第一中学在江苏省高一上学期数学期末质量检测中的成绩，"
+        "进行多维分析形成分析报告"
+    )
+    assert is_school_exam_report_query(q) is True
+    single = [{"sub_task": q, "sub_task_agent": "DataAnalyst"}]
+    fixed = coerce_plan_items_if_needed(q, single)
+    assert len(fixed) == 3
+    assert fixed[0]["sub_task_agent"] == "DataAnalyst"
+    assert "fetch_subject_diagnosis_data_tool" in fixed[1]["sub_task"]
+    assert "build_subject_diagnosis_sections_tool" in fixed[2]["sub_task"]
+    direct = build_school_subject_report_plan_items(q)
+    assert "南京市第一中学" in direct[0]["sub_task"]
+    assert "数学" in direct[0]["sub_task"]
 
 
 def test_planner_infers_tool_expert_for_html_report_task():

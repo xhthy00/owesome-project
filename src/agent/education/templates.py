@@ -25,6 +25,7 @@ _TEMPLATE_PATH: dict[ReportType, str] = {
     ReportType.TIER_ALERT: "education/tier_alert.html",
     ReportType.GROUP_FEATURE: "education/group_feature.html",
     ReportType.COMPREHENSIVE: "education/comprehensive.html",
+    ReportType.DIAGNOSTIC_REPORT: "education/diagnostic_report.html",
 }
 
 #: 受众 → 模板变体后缀（Phase 2 启用；当前仅 ``parent`` 有简化版）。
@@ -110,6 +111,15 @@ _REQUIRED_KEYS: dict[ReportType, list[str]] = {
         "TRAJECTORY_CHART", "TRAJECTORY_NOTE",
         # S9 每位学生详细档案与建议
         "STUDENT_ARCHIVE_TABLE",
+    ],
+    ReportType.DIAGNOSTIC_REPORT: [
+        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME",
+        "SCOPE", "EXAM_NAME", "SUBJECT_NAME",
+        "KPI_GRID", "GENERAL_TREND_CHART", "GENERAL_INSIGHT", "DISTRICT_COMPARE_CHART",
+        "CLASS_DIFF_HEATMAP", "SEGMENT_COMPARE_TABLE", "SPECIAL_INSIGHT",
+        "TREND_LINE_CHART", "PROGRESS_REGRESS_TABLE", "DYNAMIC_INSIGHT",
+        "DISTRICT_SUMMARY", "AT_RISK_SUMMARY",
+        "SUMMARY", "RECOMMENDATIONS",
     ],
 }
 

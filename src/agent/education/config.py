@@ -45,6 +45,12 @@ class EducationConfig:
     score_segments: list[float] = field(default_factory=lambda: [60, 70, 80, 90])
     #: 满分兜底——当数据无法推断满分时用此值归一化优秀率。
     default_full_score: float = 100.0
+    #: 良好率阈值（占满分比例）。
+    good_ratio: float = 0.70
+    #: 低分率阈值（占满分比例，低于此视为低分）。
+    low_score_ratio: float = 0.40
+    #: 知识点薄弱得分率阈值（百分数）。
+    weak_knowledge_threshold: float = 60.0
 
     def resolved_segments(self, full_score: float | None = None) -> list[float]:
         """返回排序去重、含 0 与满分的分数段边界。"""

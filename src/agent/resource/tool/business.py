@@ -756,6 +756,9 @@ def build_default_toolpack(
     user_id: int | None = None,
     workspace_oid: int | None = 1,
     include_terminate: bool = True,
+    report_data: dict[str, Any] | None = None,
+    sub_task: str = "",
+    tool_runtime_ctx: dict[str, Any] | None = None,
 ) -> ToolPack:
     """构造默认业务 ToolPack，并按需绑定运行时参数。
 
@@ -777,4 +780,10 @@ def build_default_toolpack(
         bindings["user_id"] = user_id
     if workspace_oid is not None:
         bindings["workspace_oid"] = workspace_oid
+    if report_data is not None:
+        bindings["report_data"] = report_data
+    if sub_task:
+        bindings["sub_task"] = sub_task
+    if tool_runtime_ctx is not None:
+        bindings["tool_runtime_ctx"] = tool_runtime_ctx
     return pack.bind(**bindings) if bindings else pack

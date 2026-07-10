@@ -27,6 +27,8 @@ class TeamState(TypedDict, total=False):
     chart_config: dict[str, Any]
     summary_text: NotRequired[str | None]
 
+    upstream_report_data: NotRequired[dict[str, Any] | None]
+
     overall_error: NotRequired[str | None]
     record_id: NotRequired[int]
     constraints_ctx: NotRequired[dict[str, Any]]

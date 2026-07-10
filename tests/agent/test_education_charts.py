@@ -35,3 +35,13 @@ def test_subject_bar_ignores_categories_shorthand():
     opt = json.loads(raw)
     assert opt["xAxis"]["data"] == []
     assert opt["series"] == []
+
+
+def test_heatmap_chart():
+    raw = build_chart_option(
+        "heatmap",
+        {"rows": ["一班", "二班"], "cols": ["60-70", "70-80"], "matrix": [[65.0, 75.0], [70.0, 80.0]]},
+        "班级分数段",
+    )
+    opt = json.loads(raw)
+    assert opt["series"][0]["type"] == "heatmap"

@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{REPORT_TITLE}}</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    :root {
+      --edu-primary: #1677ff; --edu-primary-bg: #e6f4ff;
+      --edu-text-lv1: rgba(0,0,0,0.88); --edu-text-lv2: rgba(0,0,0,0.65); --edu-text-lv3: rgba(0,0,0,0.45);
+      --edu-border: #f0f0f0; --edu-success: #52c41a; --edu-warning: #faad14; --edu-error: #ff4d4f;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #f0f2f5; color: var(--edu-text-lv1); line-height: 1.6; }
+    .edu-container { max-width: 1080px; margin: 24px auto; padding: 0 16px 32px; }
+    .edu-card { background: #fff; border: 1px solid var(--edu-border); border-radius: 10px; padding: 22px 26px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+    h1 { margin: 0 0 8px; font-size: 22px; font-weight: 600; line-height: 1.4; }
+    h2 { margin: 0 0 14px; font-size: 17px; font-weight: 600; padding-bottom: 8px; border-bottom: 1px solid var(--edu-border); }
+    h3 { margin: 16px 0 10px; font-size: 15px; font-weight: 600; color: var(--edu-text-lv2); }
+    p { margin: 6px 0; line-height: 1.7; }
+    .edu-sub { color: var(--edu-text-lv3); font-size: 13px; margin-bottom: 12px; }
+    .edu-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; }
+    .edu-kpi { border: 1px solid var(--edu-border); border-radius: 8px; padding: 12px 14px; background: linear-gradient(180deg, #fafafa 0%, #fff 100%); }
+    .edu-kpi .label { font-size: 12px; color: var(--edu-text-lv3); }
+    .edu-kpi .value { margin-top: 6px; font-size: 20px; font-weight: 600; color: var(--edu-primary); font-variant-numeric: tabular-nums; }
+    .edu-chart { width: 100%; height: 340px; margin: 8px 0 4px; }
+    .edu-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; background: var(--edu-primary-bg); color: var(--edu-primary); margin-right: 6px; }
+    .edu-footer { color: var(--edu-text-lv3); font-size: 12px; text-align: right; margin-top: 8px; }
+
+    /* 表格 */
+    .edu-table-wrap { overflow-x: auto; margin: 12px 0; border: 1px solid var(--edu-border); border-radius: 8px; background: #fff; }
+    .edu-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 480px; }
+    .edu-table th, .edu-table td { border-bottom: 1px solid var(--edu-border); padding: 10px 14px; text-align: left; vertical-align: middle; }
+    .edu-table thead th { background: var(--edu-primary-bg); color: var(--edu-text-lv2); font-weight: 600; white-space: nowrap; position: sticky; top: 0; z-index: 1; }
+    .edu-table tbody tr:last-child td { border-bottom: none; }
+    .edu-table tbody tr:nth-child(even) td { background: #fafafa; }
+    .edu-table tbody tr:hover td { background: #f0f7ff; }
+    .edu-table th.num, .edu-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .edu-table td.edu-cell-text { max-width: 280px; word-break: break-word; }
+    .edu-table--item { min-width: 720px; }
+
+    /* 双栏布局 */
+    .edu-split { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; margin-top: 8px; }
+    .edu-split--chart-table .edu-chart { height: 300px; }
+    .edu-insight-line { padding: 8px 12px; margin: 8px 0; background: #fafafa; border-left: 3px solid var(--edu-primary); border-radius: 0 6px 6px 0; }
+    .edu-list, .edu-card ul { margin: 10px 0; padding-left: 22px; }
+    .edu-list li, .edu-card ul li { margin: 8px 0; line-height: 1.65; }
+    .edu-risk { display: inline-block; padding: 8px 12px; background: #fff7e6; border: 1px solid #ffe7ba; border-radius: 6px; font-size: 13px; color: #ad6800; }
+
+    @media (max-width: 860px) {
+      .edu-split { grid-template-columns: 1fr; }
+      .edu-container { padding: 0 12px 24px; }
+      .edu-card { padding: 16px 14px; }
+    }
+    @media print {
+      body { background: #fff; }
+      .edu-card { box-shadow: none; break-inside: avoid; }
+      .edu-table thead th { position: static; }
+    }
+  </style>
+</head>
+<body>
+  <div class="edu-container">
+    <section class="edu-card">
+      <h1>{{REPORT_TITLE}}</h1>
+      <p class="edu-sub">{{REPORT_SUBTITLE}}</p>
+      <p class="edu-sub">
+        <span class="edu-badge">{{SCOPE}}</span>
+        <span class="edu-badge">{{SUBJECT_NAME}}</span>
+        <span class="edu-badge">{{EXAM_NAME}}</span>
+        {{REPORT_TIME}}
+      </p>
+    </section>
+
+    <section class="edu-card">
+      <h2>核心指标</h2>
+      {{KPI_GRID}}
+    </section>
+
+    <section class="edu-card">
+      <h2>S1 一般性分析</h2>
+      <p class="edu-sub">区域与年级整体趋势、共性问题</p>
+      <div class="edu-insight">{{GENERAL_INSIGHT}}</div>
+      <div id="districtCompare" class="edu-chart"></div>
+      <script type="application/json" id="districtCompareData">{{DISTRICT_COMPARE_CHART}}</script>
+      <script>
+        (function () {
+          var el = document.getElementById('districtCompare');
+          var raw = (document.getElementById('districtCompareData').textContent || '').trim();
+          if (!raw) { if (el) el.style.display = 'none'; return; }
+          try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) { if (el) el.style.display = 'none'; }
+        })();
+      </script>
+      <h3>区县对比明细</h3>
+      <div>{{DISTRICT_SUMMARY}}</div>
+    </section>
+
+    <section class="edu-card">
+      <h2>S2 特殊性分析</h2>
+      <p class="edu-sub">班级、分数段、学生群体差异</p>
+      <div class="edu-insight">{{SPECIAL_INSIGHT}}</div>
+      <p class="edu-risk">{{AT_RISK_SUMMARY}}</p>
+      <div class="edu-split edu-split--chart-table">
+        <div>
+          <h3>班级 × 分数段热力图</h3>
+          <div id="classHeatmap" class="edu-chart"></div>
+          <script type="application/json" id="classHeatmapData">{{CLASS_DIFF_HEATMAP}}</script>
+          <script>
+            (function () {
+              var el = document.getElementById('classHeatmap');
+              var raw = (document.getElementById('classHeatmapData').textContent || '').trim();
+              if (!raw) { if (el) el.parentElement.style.display = 'none'; return; }
+              try {
+                var opt = JSON.parse(raw);
+                opt.tooltip = opt.tooltip || {};
+                opt.tooltip.formatter = function (p) {
+                  if (!p || !p.data) return '';
+                  var x = (opt.xAxis && opt.xAxis.data) ? opt.xAxis.data[p.data[0]] : p.data[0];
+                  var y = (opt.yAxis && opt.yAxis.data) ? opt.yAxis.data[p.data[1]] : p.data[1];
+                  return y + ' · ' + x + '<br/>均分: ' + p.data[2];
+                };
+                echarts.init(el).setOption(opt);
+              } catch (e) { if (el) el.style.display = 'none'; }
+            })();
+          </script>
+        </div>
+        <div>
+          <h3>分数段分布</h3>
+          <div>{{SEGMENT_COMPARE_TABLE}}</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="edu-card">
+      <h2>S3 动态性分析</h2>
+      <p class="edu-sub">发展趋势与进退步</p>
+      <div class="edu-insight">{{DYNAMIC_INSIGHT}}</div>
+      <div id="trendLine" class="edu-chart"></div>
+      <script type="application/json" id="trendLineData">{{TREND_LINE_CHART}}</script>
+      <script>
+        (function () {
+          var el = document.getElementById('trendLine');
+          var raw = (document.getElementById('trendLineData').textContent || '').trim();
+          if (!raw) { if (el) el.style.display = 'none'; return; }
+          try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) {}
+        })();
+      </script>
+      <div>{{PROGRESS_REGRESS_TABLE}}</div>
+    </section>
+
+    <section class="edu-card" id="detailSegmentSection">
+      <h2>分数段分布</h2>
+      <div class="edu-split edu-split--chart-table">
+        <div id="scoreDist" class="edu-chart"></div>
+        <div>{{SEGMENT_TABLE}}</div>
+      </div>
+      <script type="application/json" id="scoreDistData">{{SCORE_DIST_CHART}}</script>
+      <script>
+        (function () {
+          var el = document.getElementById('scoreDist');
+          var sec = document.getElementById('detailSegmentSection');
+          var raw = (document.getElementById('scoreDistData').textContent || '').trim();
+          if (!raw) {
+            if (el) el.style.display = 'none';
+            return;
+          }
+          try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) { if (el) el.style.display = 'none'; }
+        })();
+      </script>
+    </section>
+
+    <section class="edu-card" id="detailItemSection">
+      <h2>小题明细</h2>
+      <div>{{ITEM_TABLE}}</div>
+      <script>
+        (function () {
+          var sec = document.getElementById('detailItemSection');
+          var html = (sec && sec.querySelector('div') && sec.querySelector('div').innerHTML || '').trim();
+          if (!html || html.indexOf('<table') < 0) { if (sec) sec.style.display = 'none'; }
+        })();
+      </script>
+    </section>
+
+    <section class="edu-card" id="detailKnowledgeSection">
+      <h2>知识点掌握诊断</h2>
+      <div>{{KNOWLEDGE_TABLE}}</div>
+      <script>
+        (function () {
+          var sec = document.getElementById('detailKnowledgeSection');
+          var html = (sec && sec.querySelector('div') && sec.querySelector('div').innerHTML || '').trim();
+          if (!html || html.indexOf('<table') < 0) { if (sec) sec.style.display = 'none'; }
+        })();
+      </script>
+    </section>
+
+    <section class="edu-card">
+      <h2>综合结论</h2>
+      <div class="edu-insight">{{SUMMARY}}</div>
+    </section>
+
+    <section class="edu-card">
+      <h2>教学建议</h2>
+      <div>{{RECOMMENDATIONS}}</div>
+    </section>
+
+    <div class="edu-footer">Generated by awesome-project · 结构化诊断报告</div>
+  </div>
+</body>
+</html>

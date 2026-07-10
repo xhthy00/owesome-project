@@ -25,10 +25,20 @@ from typing import Any, Awaitable, Callable
 
 from src.agent.education.charts import build_chart_option
 from src.agent.education.config import EducationConfig, load_config
-from src.agent.education.query_parse import extract_school_target
+from src.agent.education.query_parse import (
+    extract_district_target,
+    extract_school_target,
+    is_citywide_analysis_query,
+)
 from src.agent.education.report_types import Audience, ReportSpec, ReportType
 from src.agent.education.schema_mapping import ScoreSchemaMapping, load_schema_from_config
-from src.agent.education.stats import compute_rankings, compute_score_stats, identify_at_risk_students
+from src.agent.education.diagnostic_report import build_diagnostic_data
+from src.agent.education.knowledge_tier import (
+    build_ability_tier_summary,
+    build_ability_tier_table_html,
+    build_question_type_table_html,
+)
+from src.agent.education.stats import compute_item_metrics, compute_rankings, compute_score_stats, identify_at_risk_students
 from src.agent.education.subject_diagnosis import (
     build_diagnosis_recommendations,
     build_diagnosis_summary,
@@ -50,6 +60,7 @@ ResolveSchemaFn = Callable[[], Awaitable[ScoreSchemaMapping]]
 
 # 关键词 → ReportType。顺序敏感：越具体越靠前。
 _INTENT_KEYWORDS: list[tuple[ReportType, tuple[str, ...]]] = [
+    (ReportType.DIAGNOSTIC_REPORT, ("结构化诊断", "区域诊断报告", "诊断报告三节", "全市区县诊断")),
     (ReportType.COMPREHENSIVE, ("综合分析报告", "综合报告", "综合分析", "多次考试", "三次考试", "两次考试", "纵向分析", "学业诊断报告")),
     (ReportType.TIER_ALERT, ("预警", "临界生", "退步生", "偏科", "分层")),
     (ReportType.TREND_TRACKING, ("趋势", "变化", "历次", "走势", "进退步")),
@@ -72,11 +83,20 @@ class ReportIntentResolver:
 
     def resolve(self, question: str, audience_hint: str | None = None) -> ReportSpec:
         q = (question or "").strip()
-        report_type = ReportType.CLASS_OVERVIEW  # 兜底
-        for rt, keywords in _INTENT_KEYWORDS:
-            if any(k in q for k in keywords):
-                report_type = rt
-                break
+        from src.agent.education.query_parse import extract_student_target, is_citywide_analysis_query
+
+        if is_citywide_analysis_query(q):
+            report_type = ReportType.DIAGNOSTIC_REPORT
+        elif extract_student_target(q) and any(
+            h in q for h in ("知识点", "成绩分析", "学情", "薄弱", "加强", "分析报告")
+        ):
+            report_type = ReportType.STUDENT_PROFILE
+        else:
+            report_type = ReportType.CLASS_OVERVIEW  # 兜底
+            for rt, keywords in _INTENT_KEYWORDS:
+                if any(k in q for k in keywords):
+                    report_type = rt
+                    break
 
         audience = self._resolve_audience(q, audience_hint)
         # 简单的过滤条件抽取：班级名（初三/初二/高一...N班）、科目、考试名。
@@ -93,6 +113,11 @@ class ReportIntentResolver:
         school_name = extract_school_target(q)
         if school_name:
             filters["school_name"] = school_name
+        district_name = extract_district_target(q)
+        if district_name:
+            filters["district"] = district_name
+        if is_citywide_analysis_query(q):
+            filters["scope"] = "全市"
         return ReportSpec(
             report_type=report_type,
             audience=audience,
@@ -263,7 +288,7 @@ class ReportOrchestrator:
         subject = spec.filters.get("subject", "")
         exam_name = spec.filters.get("exam_name", "")
         school_name = spec.filters.get("school_name", "")
-        scope_label = school_name or class_name or "全年级"
+        scope_label = school_name or class_name or spec.filters.get("scope") or "全年级"
         # 组装通用字段；具体模板未用到的 key 由 Jinja2/regex 兜底为空。
         data: dict[str, Any] = {
             "REPORT_TITLE": self._title(spec),
@@ -278,12 +303,16 @@ class ReportOrchestrator:
             "AVG_SCORE": _fmt(stats.get("avg")),
             "PASS_RATE": _fmt(stats.get("pass_rate")),
             "EXCELLENT_RATE": _fmt(stats.get("excellent_rate")),
+            "GOOD_RATE": _fmt(stats.get("good_rate")),
+            "LOW_SCORE_RATE": _fmt(stats.get("low_score_rate")),
+            "MAX_SCORE": _fmt(stats.get("max")),
+            "MIN_SCORE": _fmt(stats.get("min")),
             "STDEV": _fmt(stats.get("stdev")),
             "SCORE_DIST_CHART": charts.get("SCORE_DIST_CHART", ""),
             "SUBJECT_RADAR_CHART": "",
             "SUBJECT_BREAKDOWN": "",
             "RANK_INFO": "",
-            "SEGMENT_TABLE": _segment_table(stats.get("segments", [])),
+            "SEGMENT_TABLE": _segment_table(stats.get("segments", []), full_score=stats.get("full_score")),
             "ITEM_TABLE": "",
             "KNOWLEDGE_TABLE": "",
             "WEAK_KNOWLEDGE_LIST": "",
@@ -292,8 +321,32 @@ class ReportOrchestrator:
             "_stats": stats,
             "_charts": charts,
         }
+        if spec.report_type == ReportType.DIAGNOSTIC_REPORT:
+            score_rows = [
+                {
+                    "score": r.get("score"),
+                    "exam_score": r.get("exam_score"),
+                    "class": r.get("class") or class_name,
+                    "class_name": r.get("class") or class_name,
+                    "school_name": r.get("school_name") or school_name,
+                    "district": r.get("district"),
+                    "subject": r.get("subject") or subject,
+                    "student_id": r.get("student_id"),
+                }
+                for r in rows
+            ]
+            diag = build_diagnostic_data(
+                score_rows,
+                config=cfg,
+                scope_label=scope_label,
+                exam_name=exam_name or "",
+                subject_name=subject or "",
+            )
+            diag["REPORT_TIME"] = _now_str()
+            data.update(diag)
+            return data
         if spec.report_type == ReportType.SUBJECT_DIAGNOSIS and mapping.source == "config_edu":
-            item_rows = await self._fetch_item_rows(spec, mapping)
+            item_rows = compute_item_metrics(await self._fetch_item_rows(spec, mapping))
             knowledge_rows = enrich_knowledge_rows(await self._fetch_knowledge_rows(spec, mapping))
             data["ITEM_TABLE"] = build_item_table_html(item_rows)
             data["KNOWLEDGE_TABLE"] = build_knowledge_table_html(knowledge_rows)
@@ -325,6 +378,34 @@ class ReportOrchestrator:
                     title="知识点得分率",
                 )
                 data["KNOWLEDGE_CHART"] = charts.get("KNOWLEDGE_CHART", "")
+            tier = build_ability_tier_summary(knowledge_rows)
+            tier_table = build_ability_tier_table_html(knowledge_rows)
+            if tier_table:
+                data["ABILITY_TIER_TABLE"] = tier_table
+                levels = [s.get("ability_level") for s in tier.get("by_ability_level") or []]
+                values = [float(s.get("avg_score_rate") or 0) for s in tier.get("by_ability_level") or []]
+                from src.agent.education.knowledge_tier import ABILITY_LABELS
+                data["ABILITY_TIER_CHART"] = build_chart_option(
+                    "ability_radar",
+                    {"levels": [ABILITY_LABELS.get(str(l), str(l)) for l in levels], "values": values},
+                    title="能力层级得分率",
+                )
+            qtype_table = build_question_type_table_html(item_rows)
+            if qtype_table:
+                data["QUESTION_TYPE_TABLE"] = qtype_table
+                from collections import defaultdict
+                buckets: dict[str, list[float]] = defaultdict(list)
+                for ir in item_rows:
+                    if ir.get("question_type") and ir.get("score_rate") is not None:
+                        buckets[str(ir["question_type"])].append(float(ir["score_rate"]))
+                if buckets:
+                    cats = sorted(buckets.keys())
+                    vals = [round(sum(buckets[c]) / len(buckets[c]), 2) for c in cats]
+                    data["QUESTION_TYPE_CHART"] = build_chart_option(
+                        "question_type_bar",
+                        {"categories": cats, "values": vals},
+                        title="题型得分率",
+                    )
         return data
 
     async def _fetch_score_rows(
@@ -371,7 +452,10 @@ class ReportOrchestrator:
         school_expr = f.get("school_name", "sch.name")
         exam_expr = f.get("exam_name", "e.exam_name")
         sql = (
-            f"SELECT {score_expr} AS score, {full_expr} AS exam_score\n"
+            f"SELECT {score_expr} AS score, {full_expr} AS exam_score,\n"
+            f"       {class_expr} AS class, {school_expr} AS school_name,\n"
+            f"       sch.district AS district, {subject_expr} AS subject,\n"
+            f"       sc.student_id AS student_id\n"
             "FROM tb_score sc\n"
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
             "JOIN tb_exam e ON sc.exam_id = e.id"
@@ -390,6 +474,7 @@ class ReportOrchestrator:
         sql = (
             "SELECT sd.question_no,\n"
             "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+            "       eq.question_type AS question_type,\n"
             "       COALESCE(eq.question_score, sd.question_score) AS full_score,\n"
             "       ROUND(AVG(sd.score), 2) AS avg_score,\n"
             "       ROUND(AVG(sd.score)::numeric / NULLIF(COALESCE(eq.question_score, sd.question_score), 0) * 100, 2) AS score_rate\n"
@@ -407,7 +492,7 @@ class ReportOrchestrator:
         return (
             sql
             + "\nGROUP BY sd.question_no, COALESCE(k.knowledge_name, '未关联知识点'), "
-            "COALESCE(eq.question_score, sd.question_score)\n"
+            "eq.question_type, COALESCE(eq.question_score, sd.question_score)\n"
             "ORDER BY sd.question_no\nLIMIT 1000"
         )
 
@@ -419,6 +504,7 @@ class ReportOrchestrator:
         exam_expr = f.get("exam_name", "e.exam_name")
         sql = (
             "SELECT COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+            "       k.ability_level AS ability_level,\n"
             "       COUNT(DISTINCT sd.question_no) AS question_count,\n"
             "       ROUND(SUM(sd.score)::numeric / NULLIF(SUM(COALESCE(eq.question_score, sd.question_score)), 0) * 100, 2) AS score_rate\n"
             "FROM tb_score_detail sd\n"
@@ -432,7 +518,7 @@ class ReportOrchestrator:
         where = _filters_to_where(spec.filters, school_expr, class_expr, subject_expr, exam_expr)
         if where:
             sql += f"\nWHERE {where}"
-        return sql + "\nGROUP BY COALESCE(k.knowledge_name, '未关联知识点')\nORDER BY score_rate ASC\nLIMIT 1000"
+        return sql + "\nGROUP BY COALESCE(k.knowledge_name, '未关联知识点'), k.ability_level\nORDER BY score_rate ASC\nLIMIT 1000"
 
     async def _fetch_knowledge_rows(
         self,
@@ -467,6 +553,7 @@ class ReportOrchestrator:
             ReportType.TIER_ALERT: "分层预警报告",
             ReportType.GROUP_FEATURE: "群体特征报告",
             ReportType.COMPREHENSIVE: "综合分析报告",
+            ReportType.DIAGNOSTIC_REPORT: "结构化诊断报告",
         }
         prefix = spec.filters.get("class_name") or spec.filters.get("subject") or ""
         return f"{prefix}{labels.get(spec.report_type, '学情报告')}".strip()
@@ -510,6 +597,8 @@ def _filters_to_where(
         parts.append(f"{subject_expr} = '{_sql_escape(filters['subject'])}'")
     if filters.get("exam_name"):
         parts.append(f"{exam_expr} LIKE '%{_sql_escape(filters['exam_name'])}%'")
+    if filters.get("district"):
+        parts.append(f"sch.district = '{_sql_escape(filters['district'])}'")
     return " AND ".join(parts)
 
 
@@ -534,17 +623,10 @@ def _now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
-def _segment_table(segments: list[dict[str, Any]]) -> str:
-    if not segments:
-        return "<p class='edu-sub'>暂无分数段数据</p>"
-    rows = "".join(
-        f"<tr><td>{s.get('label', '')}</td><td>{s.get('count', 0)}</td><td>{_fmt(s.get('ratio'))}%</td></tr>"
-        for s in segments
-    )
-    return (
-        "<table class='edu-table'><thead><tr><th>分数段</th><th>人数</th><th>占比</th></tr></thead>"
-        f"<tbody>{rows}</tbody></table>"
-    )
+def _segment_table(segments: list[dict[str, Any]], *, full_score: float | None = None) -> str:
+    from src.agent.education.subject_diagnosis import build_segment_table_html
+
+    return build_segment_table_html(segments, full_score=full_score)
 
 
 __all__ = ["ReportIntentResolver", "ReportOrchestrator", "ReportResult"]

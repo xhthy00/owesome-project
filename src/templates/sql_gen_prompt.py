@@ -101,6 +101,37 @@ GROUP BY k.knowledge_name
 ORDER BY score_rate ASC
 LIMIT 1000;</suggestion-answer>
   </example>
+  <example>
+    <question>南京市各区县数学均分对比</question>
+    <suggestion-answer>SELECT sch.district,
+       COUNT(*) AS cnt,
+       ROUND(AVG(sc.score), 2) AS avg_score
+FROM tb_score sc
+JOIN tb_school sch ON sc.school_id = sch.id
+WHERE sc.subject_name = '数学'
+GROUP BY sch.district
+ORDER BY avg_score DESC
+LIMIT 1000;</suggestion-answer>
+  </example>
+  <example>
+    <question>按年级汇总数学均分（年级从班级名解析）</question>
+    <suggestion-answer>SELECT
+  CASE
+    WHEN sc.class LIKE '高一%' THEN '高一'
+    WHEN sc.class LIKE '高二%' THEN '高二'
+    WHEN sc.class LIKE '高三%' THEN '高三'
+    WHEN sc.class LIKE '初一%' THEN '初一'
+    WHEN sc.class LIKE '初二%' THEN '初二'
+    WHEN sc.class LIKE '初三%' THEN '初三'
+    ELSE '其他'
+  END AS grade,
+  ROUND(AVG(sc.score), 2) AS avg_score
+FROM tb_score sc
+WHERE sc.subject_name = '数学'
+GROUP BY grade
+ORDER BY grade
+LIMIT 1000;</suggestion-answer>
+  </example>
 </sql-examples>"""
 
 EDUCATION_TERMINOLOGIES = """<terminologies>

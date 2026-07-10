@@ -16,6 +16,8 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 from src.agent.adapter.llm_adapter import (
     LangChainLlmClient,
     _dict_messages_to_langchain,
+    _is_content_safety_error,
+    _truncate_observation_for_llm,
 )
 
 
@@ -188,3 +190,37 @@ def test_adapter_does_not_retry_on_non_transient_error():
     except _BadRequest:
         pass
     assert model.ainvoke_calls == 1
+
+
+def test_is_content_safety_error_detects_minimax_1026():
+    exc = Exception(
+        "Error code: 422 - {'type': 'error', 'error': {'message': 'input new_sensitive (1026)'}}"
+    )
+    assert _is_content_safety_error(exc) is True
+    assert _is_content_safety_error(InternalServerError("server_error")) is False
+
+
+def test_adapter_maps_content_safety_to_friendly_runtime_error():
+    class _ContentSafetyError(Exception):
+        pass
+
+    model = _FlakyChatModel(fail_times=1, exc=_ContentSafetyError("input new_sensitive (1026)"))
+    client = LangChainLlmClient(llm=model)
+
+    try:
+        _run(client.chat([{"role": "user", "content": "hi"}]))
+        assert False, "应抛 RuntimeError"
+    except RuntimeError as e:
+        assert "内容安全审核未通过" in str(e)
+        assert "1026" in str(e)
+    assert model.ainvoke_calls == 1
+
+
+def test_truncate_observation_for_llm():
+    short = "ok"
+    assert _truncate_observation_for_llm(short) == short
+    long = "x" * 15000
+    out = _truncate_observation_for_llm(long, limit=100)
+    assert out.startswith("x" * 100)
+    assert "已截断" in out
+    assert "15000" in out

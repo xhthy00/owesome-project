@@ -166,3 +166,42 @@ async def batch_report(
             }
         )
     return success_response({"items": results}, message=f"已批量生成 {len(results)} 份报告")
+
+
+class DiagnosticReportRequest(BaseModel):
+    datasource_id: int
+    question: str = Field(..., min_length=1)
+    audience: Optional[str] = None
+    workspace_oid: Optional[int] = None
+
+
+@router.post("/diagnostic-report")
+async def diagnostic_report(
+    req: DiagnosticReportRequest,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    """确定性生成结构化诊断报告。"""
+    from src.common.core.database import get_db_session
+
+    with get_db_session() as session:
+        assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
+    ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
+    orch = _build_orchestrator(req.datasource_id, ws_oid, user_id=int(current_user.id))
+    res = await orch.run(req.question, audience_hint=req.audience)
+    return success_response(
+        {
+            "template_name": res.template_name,
+            "report_type": res.spec.report_type.value,
+            "html_length": len(res.html),
+            "error": res.error,
+        }
+    )
+
+
+@router.get("/dimensions")
+async def list_dimensions() -> dict:
+    """返回可用分析维度列表。"""
+    from src.agent.education.aggregation import DIMENSIONS
+
+    return success_response({"dimensions": list(DIMENSIONS)})

@@ -367,8 +367,15 @@ async def _run_team_stream_legacy(
             "sql": phase.state.last_sql,
             "exec_result": phase.state.last_exec_result,
             "reports": list(phase.state.reports),
+            "tool_calls": list(phase.state.tool_calls),
             "final_answer": (phase.reply.content if phase.reply else ""),
         })
+        if sub_task_agent != "ToolExpert" and phase.state.last_exec_result:
+            from src.agent.education.query_parse import extract_score_rows_from_report_data
+
+            cached_rows = extract_score_rows_from_report_data(upstream_report_data)
+            if cached_rows:
+                upstream_report_data["sub_tasks"][-1]["score_rows"] = cached_rows
         # 把本 sub_task 的 steps 标上前缀后汇总，便于前端按子任务折叠
         for step in phase.state.steps:
             tagged = dict(step)
@@ -473,6 +480,7 @@ async def _run_team_stream_legacy(
         llm_client=llm_client,
         emit=emit,
         fallback=default_summary,
+        report_data=upstream_report_data,
     )
     await emit("summary", {"content": summary_text})
 
@@ -558,6 +566,7 @@ async def _run_data_analyst_phase(
         datasource_id=request.datasource_id,
         user_id=current_user_id,
         workspace_oid=workspace_oid,
+        tool_runtime_ctx=state.tool_runtime_ctx,
     )
     agent.stream_callback = _make_forwarder(state, emit)
 
@@ -626,15 +635,18 @@ async def _run_tool_expert_phase(
     if llm_client is None:
         llm_client = LangChainLlmClient()
 
+    question = question_override if question_override is not None else request.question
     agent = build_tool_agent(
         llm_client=llm_client,
         datasource_id=request.datasource_id,
         user_id=current_user_id,
         workspace_oid=workspace_oid,
+        report_data=constraints.report_data if constraints else None,
+        sub_task=question,
+        tool_runtime_ctx=state.tool_runtime_ctx,
     )
     agent.stream_callback = _make_forwarder(state, emit)
 
-    question = question_override if question_override is not None else request.question
     try:
         reply = await agent.generate_reply(
             received_message=AgentMessage(
@@ -692,7 +704,29 @@ async def _run_planner_phase(
     constraints: _RunConstraints | None = None,
 ) -> list[dict[str, str]]:
     """跑 Planner 得到 sub_task 列表。失败一律回落 [原问题]，不抛。"""
+    from src.agent.education.query_parse import is_citywide_analysis_query
+    from src.agent.expand.planner import (
+        build_citywide_team_plan_items,
+        coerce_plan_items_if_needed,
+        should_replace_with_citywide_plan,
+    )
+
     await emit("agent_speak", {"agent": "Planner", "status": "start"})
+
+    # 全市学情报告：确定性 3 步计划，跳过 Planner LLM（避免超时/回落单任务）
+    if is_citywide_analysis_query(request.question):
+        plan_items = build_citywide_team_plan_items(request.question)
+        await emit(
+            "agent_speak",
+            {
+                "agent": "Planner",
+                "status": "end",
+                "plan_count": len(plan_items),
+                "deterministic": True,
+            },
+        )
+        return plan_items
+
     try:
         planner = PlannerAgent(llm_client=llm_client)
         reply = await planner.generate_reply(
@@ -709,7 +743,12 @@ async def _run_planner_phase(
     except Exception as e:  # noqa: BLE001 - Planner 失败不能拖垮 team
         logger.warning("planner failed: %s", e)
         await emit("agent_speak", {"agent": "Planner", "status": "error", "error": str(e)})
-        return [{"sub_task": request.question, "sub_task_agent": "DataAnalyst"}]
+        plan_items = [{"sub_task": request.question, "sub_task_agent": "DataAnalyst"}]
+        if should_replace_with_citywide_plan(request.question, plan_items):
+            plan_items = build_citywide_team_plan_items(request.question)
+        else:
+            plan_items = coerce_plan_items_if_needed(request.question, plan_items)
+        return plan_items
 
     ar = reply.action_report
     extra = dict(ar.extra) if ar and ar.extra else {}
@@ -725,6 +764,12 @@ async def _run_planner_phase(
         raw_agent = str(plan_agents[idx]) if idx < len(plan_agents) else "DataAnalyst"
         sub_task_agent = "ToolExpert" if raw_agent == "ToolExpert" else "DataAnalyst"
         plan_items.append({"sub_task": p, "sub_task_agent": sub_task_agent})
+
+    if should_replace_with_citywide_plan(request.question, plan_items):
+        logger.info("planner citywide fallback: replacing %d plan(s) with deterministic 3-step plan", len(plan_items))
+        plan_items = build_citywide_team_plan_items(request.question)
+    else:
+        plan_items = coerce_plan_items_if_needed(request.question, plan_items)
 
     await emit(
         "agent_speak",
@@ -780,9 +825,10 @@ async def _run_summarizer_multi(
     llm_client: Any,
     emit: EmitCallback,
     fallback: str,
+    report_data: dict[str, Any] | None = None,
 ) -> str:
     """把 N 个 sub_task 的结果综合成一段中文结论。失败回落 ``fallback``。"""
-    sub_tasks_block = _format_sub_tasks_block(sub_phases)
+    sub_tasks_block = _format_sub_tasks_block(sub_phases, report_data=report_data)
     context = {
         "question": question,
         "sub_tasks_block": sub_tasks_block,
@@ -823,14 +869,32 @@ def _build_single_task_context(question: str, state: "_RunState") -> dict[str, A
     }
 
 
+def _phase_has_education_tools(phase: "_DataAnalystPhase") -> bool:
+    """子任务是否通过教育报告工具链产出（ToolExpert）。"""
+    edu_fetch = "fetch_subject_diagnosis_data_tool"
+    for tc in phase.state.tool_calls or []:
+        tool = str(tc.get("tool") or "")
+        if tool == edu_fetch or tool.startswith("build_"):
+            return True
+    return bool(phase.state.reports)
+
+
 def _format_sub_tasks_block(
     sub_phases: list[tuple[str, "_DataAnalystPhase"]],
+    *,
+    report_data: dict[str, Any] | None = None,
 ) -> str:
     """把 N 个 sub_task 执行详情拼成 Summarizer 的 {{sub_tasks_block}} 变量。
 
     每个 sub_task 是一小段 markdown：标题 + SQL（成功才有）+ 结果样例。失败
     的 sub_task 也列出来并附上失败原因，让 Summarizer 知道哪些维度没拿到数据。
+    ToolExpert 子任务额外注入小题/知识点/报告产出摘要。
     """
+    from src.agent.education.summary_context import (
+        format_education_pipeline_footer,
+        format_tool_expert_sub_task_block,
+    )
+
     if not sub_phases:
         return "（无子任务结果）"
     blocks: list[str] = []
@@ -839,6 +903,17 @@ def _format_sub_tasks_block(
         if not phase.is_success:
             blocks.append(f"{header}\n状态：失败\n原因：{phase.fail_reason or '未知'}")
             continue
+
+        tool_block = format_tool_expert_sub_task_block(
+            tool_calls=phase.state.tool_calls,
+            reports=phase.state.reports,
+            final_answer=(phase.reply.content if phase.reply else ""),
+        )
+        is_tool_expert = _phase_has_education_tools(phase)
+        if is_tool_expert and not phase.state.last_sql:
+            blocks.append(f"{header}\n{tool_block}")
+            continue
+
         exec_result = phase.state.last_exec_result or {}
         columns = list(exec_result.get("columns") or [])
         rows = list(exec_result.get("rows") or [])
@@ -849,8 +924,15 @@ def _format_sub_tasks_block(
             f"共 {row_count} 行，列：{', '.join(columns) if columns else '(无)'}\n"
             f"样例：\n{_format_sample_rows(columns, rows[:_SAMPLE_ROWS_LIMIT])}"
         )
+        if is_tool_expert:
+            block += f"\n\n{tool_block}"
         blocks.append(block)
-    return "\n\n".join(blocks)
+
+    footer = format_education_pipeline_footer(report_data)
+    body = "\n\n".join(blocks)
+    if footer:
+        return f"{body}\n\n{footer}"
+    return body
 
 
 def _format_sample_rows(columns: list[str], rows: list[Any]) -> str:
@@ -895,6 +977,11 @@ class _RunState:
         self.sub_task_index: int | None = sub_task_index
         self.reports: list[dict[str, Any]] = []
         self.constraints = constraints
+        # 可变运行时上下文：供教育工具读取完整 last_exec_result（避免 LLM 只抄 preview 行）
+        self.tool_runtime_ctx: dict[str, Any] = {
+            "last_exec_result": None,
+            "report_data": constraints.report_data if constraints else None,
+        }
 
 
 #: "sub_task 内部产生"的事件——在 team 模式下给它们统一贴 sub_task_index。
@@ -1026,6 +1113,7 @@ def _on_tool_result(state: _RunState, payload: dict[str, Any]) -> None:
                 "rows": list(rows),
                 "row_count": int(data.get("row_count") or len(rows)),
             }
+            state.tool_runtime_ctx["last_exec_result"] = state.last_exec_result
 
 
 async def _maybe_emit_legacy_sql_result(
@@ -1091,14 +1179,13 @@ async def _maybe_emit_report(
         upstream_count = extract_upstream_participant_count(
             state.constraints.report_data
         )
-        if target_school and upstream_count is not None:
-            if report_participant_count_conflicts(html, upstream_count):
-                logger.warning(
-                    "报告已拦截：参考人数与上游不一致（expected=%s, title=%s）",
-                    upstream_count,
-                    data.get("title"),
-                )
-                return
+        if upstream_count is not None and report_participant_count_conflicts(html, upstream_count):
+            logger.warning(
+                "报告已拦截：参考人数与上游不一致（expected=%s, title=%s）",
+                upstream_count,
+                data.get("title"),
+            )
+            return
     report_payload: dict[str, Any] = {
         "title": str(data.get("title") or "Report"),
         "html": html,

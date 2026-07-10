@@ -43,6 +43,9 @@ SUPPORTED_CHART_TYPES = (
     "progress_regress_bar",
     "subject_extreme_bar",
     "trajectory_line",
+    "heatmap",
+    "ability_radar",
+    "question_type_bar",
 )
 
 
@@ -382,6 +385,70 @@ def _trajectory_line(data: dict[str, Any], title: str) -> dict[str, Any]:
     }
 
 
+def _heatmap(data: dict[str, Any], title: str) -> dict[str, Any]:
+    """交叉分析热力图：data 含 rows/cols/matrix。"""
+    rows = data.get("rows") or []
+    cols = data.get("cols") or []
+    matrix = data.get("matrix") or []
+    heat_data = []
+    for i, row_vals in enumerate(matrix):
+        for j, val in enumerate(row_vals):
+            if val is not None:
+                heat_data.append([j, i, val])
+    return {
+        "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
+        "tooltip": {"position": "top", "trigger": "item"},
+        "grid": {"left": "12%", "right": "8%", "bottom": "15%", "containLabel": True},
+        "xAxis": {"type": "category", "data": cols, "splitArea": {"show": True}},
+        "yAxis": {"type": "category", "data": rows, "splitArea": {"show": True}},
+        "visualMap": {
+            "min": 0,
+            "max": 100,
+            "calculable": True,
+            "orient": "horizontal",
+            "left": "center",
+            "bottom": "0%",
+        },
+        "series": [{
+            "name": "均分",
+            "type": "heatmap",
+            "data": heat_data,
+            "label": {"show": True, "fontSize": 11},
+        }],
+    }
+
+
+def _ability_radar(data: dict[str, Any], title: str) -> dict[str, Any]:
+    """能力层级雷达：data={"levels":[...], "values":[...]}。"""
+    levels = data.get("levels") or []
+    values = data.get("values") or []
+    return {
+        "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
+        "tooltip": {},
+        "radar": {
+            "indicator": [{"name": lv, "max": 100} for lv in levels],
+        },
+        "series": [{
+            "type": "radar",
+            "data": [{"value": values, "name": "得分率"}],
+        }],
+    }
+
+
+def _question_type_bar(data: dict[str, Any], title: str) -> dict[str, Any]:
+    """题型得分率柱图：data={"categories":[...], "values":[...]}。"""
+    categories = data.get("categories") or []
+    values = data.get("values") or []
+    return {
+        "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
+        "tooltip": {"trigger": "axis", "valueSuffix": "%"},
+        "grid": {"left": "8%", "right": "8%", "bottom": "12%", "containLabel": True},
+        "xAxis": {"type": "category", "data": categories},
+        "yAxis": {"type": "value", "name": "得分率(%)", "max": 100},
+        "series": [{"type": "bar", "data": values, "label": {"show": True, "position": "top"}}],
+    }
+
+
 _register_builder("score_distribution", _score_distribution)
 _register_builder("subject_radar", _subject_radar)
 _register_builder("class_compare_bar", _class_compare_bar)
@@ -394,6 +461,9 @@ _register_builder("correlation_bar", _correlation_bar)
 _register_builder("progress_regress_bar", _progress_regress_bar)
 _register_builder("subject_extreme_bar", _subject_extreme_bar)
 _register_builder("trajectory_line", _trajectory_line)
+_register_builder("heatmap", _heatmap)
+_register_builder("ability_radar", _ability_radar)
+_register_builder("question_type_bar", _question_type_bar)
 
 
 __all__ = ["SUPPORTED_CHART_TYPES", "build_chart_option", "resolve_chart_type"]

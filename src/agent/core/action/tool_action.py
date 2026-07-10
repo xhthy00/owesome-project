@@ -38,9 +38,12 @@ _DEDUP_EXEMPT_TOOLS = frozenset({TERMINATE_TOOL_NAME})
 
 _NEXT_TOOL_HINTS: dict[str, str] = {
     "fetch_subject_diagnosis_data_tool": (
-        "`build_subject_diagnosis_sections_tool(fetch_data=..., render=true)` → `terminate`"
+        "fetch 子任务：`terminate`。**禁止** `build_diagnostic_report_data_tool(render=true)`；"
+        "组装子任务：改调 `build_diagnostic_report_data_tool(render=true)`，**禁止**再 fetch"
     ),
+    "build_diagnostic_report_data_tool": "`terminate`（报告已渲染）",
     "build_subject_diagnosis_sections_tool": "`terminate`（sections 默认已渲染 HTML）",
+    "build_student_subject_diagnosis_tool": "`terminate`（报告已渲染）",
     "build_chart_option_tool": "`render_html_report` → `terminate`（科目诊断 sections 已含图表则跳过本工具）",
     "select_report_template_tool": "`build_subject_diagnosis_sections_tool(fetch_data=..., render=true)` → `terminate`",
     "compute_score_stats_tool": "`build_subject_diagnosis_sections_tool(fetch_data=..., render=true)` → `terminate`",

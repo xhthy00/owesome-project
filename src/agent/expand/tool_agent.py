@@ -50,7 +50,8 @@ Word/PDF 内容或自然语言报告正文**；必须按以下工具调用流程
    `EXAM_NAME` / `SCOPE` / 参考人数必须与上游一致；
    仅当上游确实缺字段时，才用 `execute_sql` / `compute_score_stats_tool` /
    `compute_rankings_tool` 等补齐，且 SQL 仍须遵守范围约束；
-   **科目诊断报告（含小题明细）— 必须分步、工具链可见**：
+   - **单个学生 + 单次考试 + 科目/知识点分析** → 调 `build_student_subject_diagnosis_tool(student_id=..., subject_name=..., exam_name=..., render=true)`，**禁止** `build_subject_diagnosis_sections_tool`（班级聚合报告）；
+   **科目诊断报告（班级/学校聚合，含小题明细）— 必须分步、工具链可见**：
    1. **先调** `fetch_subject_diagnosis_data_tool(school_name=..., subject_name=...,
       exam_name=..., class_name=...)` 查询 `tb_score_detail` 小题与知识点（观察返回的
       SQL 执行记录与 item_rows 条数）；
@@ -69,6 +70,11 @@ Word/PDF 内容或自然语言报告正文**；必须按以下工具调用流程
    会被缓存跳过，但仍浪费 ReAct 轮次）；应直接进入 sections / terminate 步骤。
    **禁止**sections 已成功渲染后仍调 `select_report_template` / `build_chart_option` /
    `render_html_report`（报告已由 sections 工具推送）。
+   **全市 + 考试 + 科目结构化诊断报告**（含区县对比、详细小题/知识点）— 3 步分工：
+   - **子任务 2（fetch）**：仅 `fetch_subject_diagnosis_data_tool` → `terminate`；
+   - **子任务 3（组装）**：**仅** `build_diagnostic_report_data_tool(scope_label=全市, exam_name=..., subject_name=..., render=true)` → `terminate`；
+     **禁止**在子任务 3 再调 `fetch_subject_diagnosis_data_tool`（工具层会拦截；fetch_data/score_rows 自动从上游 report_data 读取）。
+   **禁止**在 fetch 子任务中调 `build_diagnostic_report_data_tool(render=true)`（工具层会拦截）。
    图表字段（形如 `XXX_CHART`）用 `build_chart_option_tool` 生成 JSON 字符串填入；
 3. 调 `render_html_report(template_name=..., data=..., title=...)` 生成 HTML；
 4. 调 `terminate(final_answer="学情报告已生成")` 结束。
@@ -149,7 +155,8 @@ def _format_upstream_report_data(report_data: Any, *, max_rows: int = 8) -> str:
         if cols:
             parts.append(f"列：{', '.join(str(c) for c in cols)}")
         if rows:
-            parts.append(f"行数：{er.get('row_count') or len(rows)}")
+            row_count = er.get("row_count") or len(rows)
+            parts.append(f"行数：{row_count}（完整数据由工具自动读取，勿仅复制 preview 行）")
             preview = rows[:max_rows]
             for i, row in enumerate(preview):
                 if isinstance(row, dict):
@@ -183,6 +190,9 @@ def build_tool_agent(
     tool_pack: ToolPack | None = None,
     pack_name: str = DEFAULT_PACK_NAME,
     max_react_rounds: int | None = None,
+    report_data: dict[str, Any] | None = None,
+    sub_task: str = "",
+    tool_runtime_ctx: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> ToolAgent:
     if tool_pack is None:
@@ -199,12 +209,21 @@ def build_tool_agent(
                 bindings["user_id"] = user_id
             if workspace_oid is not None:
                 bindings["workspace_oid"] = workspace_oid
+            if report_data is not None:
+                bindings["report_data"] = report_data
+            if sub_task:
+                bindings["sub_task"] = sub_task
+            if tool_runtime_ctx is not None:
+                bindings["tool_runtime_ctx"] = tool_runtime_ctx
             tool_pack = template.bind(**bindings) if bindings else template
         else:
             tool_pack = build_default_toolpack(
                 datasource_id=datasource_id,
                 user_id=user_id,
                 workspace_oid=workspace_oid,
+                report_data=report_data,
+                sub_task=sub_task,
+                tool_runtime_ctx=tool_runtime_ctx,
             )
 
     return ToolAgent(

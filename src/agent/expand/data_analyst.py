@@ -90,6 +90,11 @@ DATA_ANALYST_DESC = """[分析范围约束]
    **禁止**使用裸 `chart_type` 以外的未支持名称；`bar`/`column`/`line` 已支持别名自动映射。
 5. **报告生成**：
    - **全班/多次考试综合分析** → 调 `build_comprehensive_report_data_tool`，再 `terminate`；
+   - **全市 + 单次考试 + 科目详细分析** → **DataAnalyst 先查成绩 KPI 与明细（含 district）**；
+     ToolExpert 再 `fetch_subject_diagnosis_data_tool` → `build_diagnostic_report_data_tool(score_rows=上游, fetch_data=..., scope_label=全市, render=true)`；
+     **禁止** DataAnalyst 直接调 `build_citywide_exam_analysis_report_tool` 或 `build_diagnostic_report_data_tool`；
+   - **结构化诊断报告** → 调 `build_diagnostic_report_data_tool`（一般性/特殊性/动态性），再 `terminate`；
+   - **多维聚合/交叉分析** → `aggregate_dimension_tool` / `cross_analyze_tool`；
    - **单个学生多次考试分析** → 调 `build_student_exam_report_data_tool(student_name=..., records=...)`，
      `student_name` 必须与用户指定学生一致，**只为该学生生成一份报告**；
    - 其他报告类型：data keys 备齐后调 `render_html_report(template_name=..., data=...)`，再 `terminate`。
@@ -138,6 +143,7 @@ def build_data_analyst(
     tool_pack: ToolPack | None = None,
     pack_name: str = DEFAULT_PACK_NAME,
     max_react_rounds: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
     **kwargs: Any,
 ) -> DataAnalystAgent:
     """快捷工厂：组装 DataAnalyst + 默认 ToolPack + 运行时 bindings。
@@ -170,6 +176,8 @@ def build_data_analyst(
                 bindings["user_id"] = user_id
             if workspace_oid is not None:
                 bindings["workspace_oid"] = workspace_oid
+            if tool_runtime_ctx is not None:
+                bindings["tool_runtime_ctx"] = tool_runtime_ctx
             tool_pack = template.bind(**bindings) if bindings else template
         else:
             # 非默认 pack 名且未注册——走即时构造兜底（现阶段也只有 default 一个实现）
@@ -177,6 +185,7 @@ def build_data_analyst(
                 datasource_id=datasource_id,
                 user_id=user_id,
                 workspace_oid=workspace_oid,
+                tool_runtime_ctx=tool_runtime_ctx,
             )
     return DataAnalystAgent(
         llm_client=llm_client,

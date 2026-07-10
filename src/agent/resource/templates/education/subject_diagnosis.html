@@ -35,6 +35,74 @@
     .edu-table tr:nth-child(even) td { background: #fafafa; }
     .edu-chart { width: 100%; height: 320px; }
     .edu-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: var(--edu-primary-bg); color: var(--edu-primary); }
+    .edu-intervention h3 { color: var(--edu-error); }
+    .edu-intervention ul { margin: 8px 0 12px 20px; padding: 0; }
+    .edu-intervention li { margin: 6px 0; line-height: 1.6; }
+    /* 诊断分析 */
+    .edu-diag { display: flex; flex-direction: column; gap: 16px; }
+    .edu-diag-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+    .edu-diag-scope { font-size: 15px; font-weight: 600; color: var(--edu-text-lv1); }
+    .edu-diag-tag { font-size: 12px; padding: 2px 10px; border-radius: 12px; background: var(--edu-primary-bg); color: var(--edu-primary); }
+    .edu-diag-overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+    .edu-diag-stat { border: 1px solid var(--edu-border); border-radius: 8px; padding: 10px 12px; background: #fafafa; text-align: center; }
+    .edu-diag-stat-val { font-size: 20px; font-weight: 700; color: var(--edu-primary); }
+    .edu-diag-stat-warn .edu-diag-stat-val { color: var(--edu-warning); }
+    .edu-diag-stat-ok .edu-diag-stat-val { color: var(--edu-success); }
+    .edu-diag-stat-label { font-size: 12px; color: var(--edu-text-lv3); margin-top: 2px; }
+    .edu-diag-section { border: 1px solid var(--edu-border); border-radius: 8px; padding: 14px 16px; background: #fafafa; }
+    .edu-diag-section-title { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; margin-bottom: 10px; color: var(--edu-text-lv2); }
+    .edu-diag-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .edu-diag-dot.warn { background: var(--edu-warning); }
+    .edu-diag-dot.error { background: var(--edu-error); }
+    .edu-diag-count { margin-left: auto; font-size: 12px; font-weight: 400; color: var(--edu-text-lv3); }
+    .edu-diag-chips { display: flex; flex-direction: column; gap: 8px; }
+    .edu-diag-chip { display: grid; grid-template-columns: 1fr 100px 52px; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 6px; background: #fff; border: 1px solid var(--edu-border); }
+    .edu-diag-chip-name { font-size: 13px; font-weight: 500; }
+    .edu-rate-track { height: 6px; border-radius: 3px; background: #f0f0f0; overflow: hidden; }
+    .edu-rate-fill { height: 100%; border-radius: 3px; }
+    .edu-rate-error .edu-rate-fill { background: var(--edu-error); }
+    .edu-rate-warn .edu-rate-fill { background: var(--edu-warning); }
+    .edu-rate-ok .edu-rate-fill { background: var(--edu-success); }
+    .edu-rate-val { font-size: 12px; font-weight: 600; text-align: right; }
+    .edu-rate-val.edu-rate-error { color: var(--edu-error); }
+    .edu-rate-val.edu-rate-warn { color: var(--edu-warning); }
+    .edu-rate-val.edu-rate-ok { color: var(--edu-success); }
+    .edu-diag-items { display: flex; flex-wrap: wrap; gap: 8px; }
+    .edu-diag-item { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 6px; background: #fff; border: 1px solid var(--edu-border); font-size: 13px; }
+    .edu-diag-item-qno { font-weight: 600; color: var(--edu-primary); }
+    .edu-diag-item-kn { color: var(--edu-text-lv3); font-size: 12px; }
+    .edu-diag-item-rate { font-weight: 600; }
+    .edu-diag-item-error .edu-diag-item-rate { color: var(--edu-error); }
+    .edu-diag-item-warn .edu-diag-item-rate { color: var(--edu-warning); }
+    .edu-diag-alert { border: 1px solid #ffccc7; border-radius: 8px; padding: 12px 14px; background: #fff2f0; }
+    .edu-diag-alert-title { font-size: 13px; font-weight: 600; color: var(--edu-error); margin-bottom: 8px; }
+    .edu-diag-alert-items { display: flex; flex-wrap: wrap; gap: 8px; }
+    .edu-diag-alert-item { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 14px; background: #fff; border: 1px solid #ffccc7; font-size: 12px; }
+    .edu-diag-alert-label { color: var(--edu-error); font-weight: 600; }
+    .edu-diag-muted { color: var(--edu-text-lv3); font-size: 13px; margin: 0; }
+    /* 教学建议 */
+    .edu-rec { display: flex; flex-direction: column; gap: 14px; }
+    .edu-rec-group { border: 1px solid var(--edu-border); border-radius: 8px; overflow: hidden; }
+    .edu-rec-cat-class { border-left: 4px solid var(--edu-error); }
+    .edu-rec-cat-segment { border-left: 4px solid var(--edu-warning); }
+    .edu-rec-cat-knowledge { border-left: 4px solid var(--edu-primary); }
+    .edu-rec-cat-question { border-left: 4px solid #722ed1; }
+    .edu-rec-cat-ability { border-left: 4px solid #13c2c2; }
+    .edu-rec-cat-qtype { border-left: 4px solid #eb2f96; }
+    .edu-rec-group-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #fafafa; border-bottom: 1px solid var(--edu-border); }
+    .edu-rec-group-title { font-size: 14px; font-weight: 600; color: var(--edu-text-lv2); }
+    .edu-rec-badge { margin-left: auto; font-size: 12px; padding: 1px 8px; border-radius: 10px; background: var(--edu-primary-bg); color: var(--edu-primary); }
+    .edu-rec-list { display: flex; flex-direction: column; }
+    .edu-rec-card { display: flex; gap: 12px; padding: 12px 14px; border-bottom: 1px solid var(--edu-border); background: #fff; }
+    .edu-rec-card:last-child { border-bottom: none; }
+    .edu-rec-priority { flex-shrink: 0; width: 28px; height: 28px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; }
+    .edu-rec-priority-1 .edu-rec-priority { background: #fff2f0; color: var(--edu-error); border: 1px solid #ffccc7; }
+    .edu-rec-priority-2 .edu-rec-priority { background: #fffbe6; color: var(--edu-warning); border: 1px solid #ffe58f; }
+    .edu-rec-priority-3 .edu-rec-priority { background: #f6ffed; color: var(--edu-success); border: 1px solid #b7eb8f; }
+    .edu-rec-body { flex: 1; min-width: 0; }
+    .edu-rec-title { font-size: 14px; font-weight: 600; color: var(--edu-text-lv1); }
+    .edu-rec-desc { font-size: 13px; color: var(--edu-text-lv2); margin-top: 2px; line-height: 1.5; }
+    .edu-rec-metric { display: inline-block; margin-top: 6px; font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #f5f5f5; color: var(--edu-text-lv3); }
     .edu-footer { color: var(--edu-text-lv3); font-size: 12px; text-align: right; }
     @media print { body { background: #fff; } .edu-card { border: none; } }
   </style>
@@ -60,6 +128,25 @@
         <div class="edu-kpi"><div class="label">优秀率</div><div class="value">{{EXCELLENT_RATE}}%</div></div>
         <div class="edu-kpi"><div class="label">标准差</div><div class="value">{{STDEV}}</div></div>
       </div>
+    </section>
+
+    <section class="edu-card edu-intervention" id="interventionSection">
+      <h2>重点干预提示</h2>
+      <p class="edu-sub">以下班级、分数段、知识点与学科薄弱项建议优先安排教学干预与分层辅导。</p>
+      <div data-intervention-body>{{INTERVENTION_SECTION}}</div>
+      <h3>班级对比</h3>
+      <div data-class-compare>{{CLASS_COMPARE_TABLE}}</div>
+      <script>
+        (function () {
+          var section = document.getElementById('interventionSection');
+          if (!section) { return; }
+          var body = section.querySelector('[data-intervention-body]');
+          var table = section.querySelector('[data-class-compare]');
+          var hasBody = body && body.textContent.trim();
+          var hasTable = table && table.textContent.trim();
+          if (!hasBody && !hasTable) { section.style.display = 'none'; }
+        })();
+      </script>
     </section>
 
     <section class="edu-card">
@@ -99,13 +186,43 @@
       <p class="edu-sub" style="margin-top:12px"><strong>需加强知识点：</strong>{{WEAK_KNOWLEDGE_LIST}}</p>
     </section>
 
-    <section class="edu-card">
+    <section class="edu-card" id="abilityTierSection">
+      <h2>能力层级分析</h2>
+      <div id="abilityChart" class="edu-chart"></div>
+      <script type="application/json" id="abilityChartData">{{ABILITY_TIER_CHART}}</script>
+      <script>
+        (function () {
+          var raw = (document.getElementById('abilityChartData').textContent || '').trim();
+          if (!raw) { document.getElementById('abilityTierSection').style.display = 'none'; return; }
+          try { echarts.init(document.getElementById('abilityChart')).setOption(JSON.parse(raw)); } catch (e) {}
+        })();
+      </script>
+      <div>{{ABILITY_TIER_TABLE}}</div>
+    </section>
+
+    <section class="edu-card" id="questionTypeSection">
+      <h2>题型分布</h2>
+      <div id="questionTypeChart" class="edu-chart"></div>
+      <script type="application/json" id="questionTypeChartData">{{QUESTION_TYPE_CHART}}</script>
+      <script>
+        (function () {
+          var raw = (document.getElementById('questionTypeChartData').textContent || '').trim();
+          if (!raw) { document.getElementById('questionTypeSection').style.display = 'none'; return; }
+          try { echarts.init(document.getElementById('questionTypeChart')).setOption(JSON.parse(raw)); } catch (e) {}
+        })();
+      </script>
+      <div>{{QUESTION_TYPE_TABLE}}</div>
+    </section>
+
+    <section class="edu-card" id="diagnosisSection">
       <h2>诊断分析</h2>
+      <p class="edu-sub">基于考试数据自动生成的学情洞察，红色/橙色标识为需重点关注项。</p>
       <div>{{SUMMARY}}</div>
     </section>
 
-    <section class="edu-card">
+    <section class="edu-card" id="recommendationsSection">
       <h2>教学建议</h2>
+      <p class="edu-sub">按优先级（P1 最高）与类别分组，便于教研组分工落实。</p>
       <div>{{RECOMMENDATIONS}}</div>
     </section>
 

@@ -81,6 +81,8 @@ def compute_score_stats(
             "max": None,
             "pass_rate": None,
             "excellent_rate": None,
+            "good_rate": None,
+            "low_score_rate": None,
             "fail_rate": None,
             "full_score": upper,
             "segments": [{"label": _seg_label(lo, hi), "count": 0, "ratio": 0.0}
@@ -90,9 +92,13 @@ def compute_score_stats(
     if full_score is not None:
         pass_thr = float(full_score) * config.pass_ratio
         exc_thr = float(full_score) * config.excellent_ratio
+        good_thr = float(full_score) * config.good_ratio
+        low_thr = float(full_score) * config.low_score_ratio
     else:
         pass_thr = config.pass_threshold
         exc_thr = config.excellent_threshold
+        good_thr = config.excellent_threshold * (config.good_ratio / config.excellent_ratio)
+        low_thr = config.pass_threshold * (config.low_score_ratio / config.pass_ratio)
 
     seg_pairs = list(_seg_pairs(seg_bounds))
     segments = []
@@ -117,6 +123,8 @@ def compute_score_stats(
         "max": max(valid),
         "pass_rate": _rate(valid, lambda v: v >= pass_thr),
         "excellent_rate": _rate(valid, lambda v: v >= exc_thr),
+        "good_rate": _rate(valid, lambda v: v >= good_thr),
+        "low_score_rate": _rate(valid, lambda v: v < low_thr),
         "fail_rate": _rate(valid, lambda v: v < pass_thr),
         "full_score": upper,
         "segments": segments,
@@ -131,6 +139,74 @@ def _seg_label(lo: float, hi: float) -> str:
     lo_i = int(lo) if lo == int(lo) else lo
     hi_i = int(hi) if hi == int(hi) else hi
     return f"{lo_i}-{hi_i}"
+
+
+def score_segment_label(
+    score: float,
+    *,
+    full_score: float | None = None,
+    config: EducationConfig | None = None,
+) -> str:
+    """将单科分数映射到分数段标签（供交叉分析/热力图使用）。"""
+    if config is None:
+        config = EducationConfig()
+    bounds = config.resolved_segments(full_score)
+    pairs = _seg_pairs(bounds)
+    for lo, hi in pairs:
+        if lo <= score <= hi:
+            return _seg_label(lo, hi)
+    if pairs:
+        return _seg_label(pairs[-1][0], pairs[-1][1])
+    return "其他"
+
+
+def normalize_segments(
+    segments: list[dict[str, Any]],
+    *,
+    config: EducationConfig | None = None,
+    full_score: float | None = None,
+) -> list[dict[str, Any]]:
+    """补齐分数段 ``label`` / ``ratio``，避免 LLM 仅传 count 导致表格空白。
+
+    当 ``label`` 缺失时，按 ``config`` 分数段边界推断；``ratio`` 缺失时按
+    各段 ``count`` 占合计人数重算百分比。
+    """
+    if not segments:
+        return []
+    if config is None:
+        config = EducationConfig()
+    upper = full_score if full_score is not None else config.default_full_score
+    bounds = config.resolved_segments(upper if full_score is not None else None)
+    pairs = list(_seg_pairs(bounds))
+    default_labels = [_seg_label(lo, hi) for lo, hi in pairs]
+
+    total = sum(int(s.get("count") or 0) for s in segments)
+    out: list[dict[str, Any]] = []
+    for idx, seg in enumerate(segments):
+        row = dict(seg)
+        label = str(row.get("label") or "").strip()
+        if not label:
+            if idx < len(default_labels):
+                label = default_labels[idx]
+            elif len(segments) == len(default_labels):
+                label = default_labels[idx]
+            else:
+                label = f"段{idx + 1}"
+            row["label"] = label
+        count = int(row.get("count") or 0)
+        ratio = row.get("ratio")
+        if ratio is None and total > 0:
+            row["ratio"] = round(count / total * 100, 2)
+        elif ratio is not None:
+            try:
+                row["ratio"] = round(float(ratio), 2)
+            except (TypeError, ValueError):
+                row["ratio"] = round(count / total * 100, 2) if total > 0 else 0.0
+        else:
+            row["ratio"] = 0.0
+        row["count"] = count
+        out.append(row)
+    return out
 
 
 # ---- 排名 ----------------------------------------------------------------
@@ -487,9 +563,96 @@ def compute_subject_extremes(
     return {"progress": progress, "regress": regress, "chart_items": chart_items}
 
 
+# ---- 题目指标 / 知识点掌握度 --------------------------------------------
+
+
+def _num(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def compute_item_metrics(
+    item_rows: list[dict[str, Any]],
+    *,
+    student_item_scores: list[dict[str, Any]] | None = None,
+    question_key: str = "question_no",
+    score_rate_key: str = "score_rate",
+) -> list[dict[str, Any]]:
+    """为每题计算得分率、难度、区分度（有学生逐题数据时）。"""
+    out: list[dict[str, Any]] = []
+    for row in item_rows:
+        r = dict(row)
+        rate = _num(r.get(score_rate_key))
+        if rate is not None:
+            r["difficulty"] = round(1 - rate / 100, 3)
+        discrimination = None
+        if student_item_scores and r.get(question_key) is not None:
+            qno = r[question_key]
+            pairs = [
+                (_num(s.get("total_score")), _num(s.get("item_score")))
+                for s in student_item_scores
+                if s.get(question_key) == qno
+                and _num(s.get("total_score")) is not None
+                and _num(s.get("item_score")) is not None
+            ]
+            if len(pairs) >= 4:
+                pairs.sort(key=lambda x: x[0], reverse=True)
+                n = len(pairs)
+                hi_n = max(1, int(n * 0.27))
+                lo_n = max(1, int(n * 0.27))
+                hi_rates = [b / a for a, b in pairs[:hi_n] if a]
+                lo_rates = [b / a for a, b in pairs[-lo_n:] if a]
+                if hi_rates and lo_rates:
+                    discrimination = round(
+                        (sum(hi_rates) / len(hi_rates) - sum(lo_rates) / len(lo_rates)) * 100,
+                        2,
+                    )
+        r["discrimination"] = discrimination
+        out.append(r)
+    return out
+
+
+def compute_knowledge_mastery(
+    knowledge_rows: list[dict[str, Any]],
+    *,
+    ability_level_key: str = "ability_level",
+    score_rate_key: str = "score_rate",
+    weak_threshold: float = 60.0,
+) -> dict[str, Any]:
+    """知识点掌握度汇总 + 按能力层级聚合。"""
+    by_level: dict[str, list[float]] = {}
+    items: list[dict[str, Any]] = []
+    for row in knowledge_rows:
+        rate = _num(row.get(score_rate_key))
+        level = str(row.get(ability_level_key) or "unknown")
+        if rate is not None:
+            by_level.setdefault(level, []).append(rate)
+            items.append({
+                **dict(row),
+                "mastery_rate": rate,
+                "weak": rate < weak_threshold,
+            })
+    level_summary = []
+    for level, rates in sorted(by_level.items()):
+        avg = round(sum(rates) / len(rates), 2) if rates else None
+        level_summary.append({
+            "ability_level": level,
+            "count": len(rates),
+            "avg_score_rate": avg,
+            "weak": avg is not None and avg < weak_threshold,
+        })
+    return {"items": items, "by_ability_level": level_summary}
+
+
 __all__ = [
     "compute_correlations",
     "compute_imbalance_degree",
+    "compute_item_metrics",
+    "compute_knowledge_mastery",
     "compute_level_distribution",
     "compute_rankings",
     "compute_score_stats",
@@ -497,5 +660,6 @@ __all__ = [
     "compute_top_progress_regress",
     "compute_trend_distribution",
     "identify_at_risk_students",
+    "normalize_segments",
     "pearson_r",
 ]
