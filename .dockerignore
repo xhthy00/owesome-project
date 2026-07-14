@@ -1,0 +1,41 @@
+# 版本控制与 IDE
+.git
+.gitignore
+.idea
+.vscode
+.cursor
+.trae
+
+# Python 虚拟环境与缓存
+.venv
+**/__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+
+# Node
+frontend-react/node_modules
+frontend/.next
+frontend-react/.next
+frontend/node_modules
+
+# 构建/产物
+dist
+build
+*.egg-info
+
+# 运行时/本地密钥（绝不进镜像）
+.env
+.env.local
+frontend-react/.env.local
+
+# 临时与本地大文件
+temp
+reports
+*.docx
+report.html
+docs
+MVP_PLAN.md

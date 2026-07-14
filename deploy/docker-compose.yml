@@ -1,0 +1,36 @@
+# 部署用 compose：与 Dockerfile 解耦，只引用已构建好的镜像，不在 compose 里 build。
+# 构建镜像请单独执行（在项目根目录）：
+#   docker build -t awesome-data:latest -f deploy/Dockerfile .
+# 然后在此目录运行：
+#   docker compose up -d
+#
+# .env 与本文件同目录（deploy/），由 env_file 注入容器。
+#   - DATABASE_URL / JWT_* / LLM_* 等运行时配置都在 .env 里
+#   - .env 不进镜像（.dockerignore 已排除），仅运行时注入
+
+services:
+  app:
+    image: awesome-data:latest
+    container_name: awesome-data
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      # 让前后端都通过同一个 env 取配置；后端只监听容器内 127.0.0.1
+      TZ: Asia/Shanghai
+    ports:
+      # 仅暴露前端端口。外部 Nginx 反代到 :3001，/api 由 Next 内部转给后端。
+      - "3001:3001"
+    # healthcheck 直接打后端根路由 /health（main.py 中定义，不经 /api/v1 前缀，
+    # 也无需经 Next 转发），能最快确认后端与外部 PG 链路已就绪。
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

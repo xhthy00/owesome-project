@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState } from "react";
 import { createConversation, getConversationDetail, sendMessageStream } from "@/api/adapter/chatAdapter";
+import { genUUID } from "@/utils/uuid";
 
 export type Message = {
   id: string;
@@ -180,9 +181,9 @@ export function useChat() {
       const targetDatasourceId = options?.datasourceId ?? datasourceId;
       const targetAudience = options?.reportAudience ?? reportAudience;
       stop();
-      const runId = crypto.randomUUID();
-      const userMsg: Message = { id: crypto.randomUUID(), role: "user", content: asText(input), runId };
-      const assistantId = crypto.randomUUID();
+      const runId = genUUID();
+      const userMsg: Message = { id: genUUID(), role: "user", content: asText(input), runId };
+      const assistantId = genUUID();
       setMessages((prev) => [...prev, userMsg, { id: assistantId, role: "assistant", content: "", runId }]);
       setLoading(true);
 
@@ -306,7 +307,7 @@ export function useChat() {
               setExecutionSteps((prev) => [
                 ...stripBootstrap(prev),
                 {
-                  id: crypto.randomUUID(),
+                  id: genUUID(),
                   title: asText(step.label),
                   detail: asText(step.detail),
                   status: step.status === "error" ? "error" : "done",
@@ -320,7 +321,7 @@ export function useChat() {
               setExecutionSteps((prev) => [
                 ...prev,
                 {
-                  id: crypto.randomUUID(),
+                  id: genUUID(),
                   title: `${asText(agent)}: ${asText(status)}`,
                   detail: asText(error),
                   status: status === "error" ? "error" : status === "start" ? "running" : "done",
@@ -334,7 +335,7 @@ export function useChat() {
               setExecutionSteps((prev) => [
                 ...stripBootstrap(prev),
                 {
-                  id: crypto.randomUUID(),
+                  id: genUUID(),
                   title: "图表推荐",
                   detail: `推荐图表类型: ${chart_type}`,
                   status: "done",
@@ -354,7 +355,7 @@ export function useChat() {
               setExecutionSteps((prev) => [
                 ...stripBootstrap(prev),
                 {
-                  id: crypto.randomUUID(),
+                  id: genUUID(),
                   title: "生成报告",
                   detail: `${asText(title) || "Report"}${mode ? ` (${asText(mode)})` : ""}`,
                   status: "done",
@@ -370,7 +371,7 @@ export function useChat() {
               setExecutionSteps((prev) => [
                 ...prev,
                 {
-                  id: crypto.randomUUID(),
+                  id: genUUID(),
                   title: "Agent 思考",
                   detail: safeText,
                   status: "running",
@@ -405,7 +406,7 @@ export function useChat() {
                   setQueryResults((prev) => [
                     ...prev,
                     {
-                      key: crypto.randomUUID(),
+                      key: genUUID(),
                       sql: asText(data.sql) || latestSql,
                       columns: safeColumns,
                       rows: rawRows,
@@ -459,7 +460,7 @@ export function useChat() {
               if (safeSql.trim()) appendAssistant(`SQL（${asText(chartType)}）：\n${safeSql}`);
               setExecutionSteps((prev) => [
                 ...stripBootstrap(prev),
-                { id: crypto.randomUUID(), title: "生成 SQL", detail: safeSql, status: "done", runId, section: "result" }
+                { id: genUUID(), title: "生成 SQL", detail: safeSql, status: "done", runId, section: "result" }
               ]);
             },
             onResult: (result) => {
@@ -470,7 +471,7 @@ export function useChat() {
                 setQueryResults((prev) => [
                   ...prev,
                   {
-                    key: crypto.randomUUID(),
+                    key: genUUID(),
                     sql: latestSql,
                     columns: safeColumns,
                     rows: safeRows,
@@ -481,7 +482,7 @@ export function useChat() {
               appendAssistant(`执行完成，返回 ${rowCount} 行结果。`);
               setExecutionSteps((prev) => [
                 ...stripBootstrap(prev),
-                { id: crypto.randomUUID(), title: "执行 SQL", detail: `返回 ${rowCount} 行`, status: "done", runId, section: "result" }
+                { id: genUUID(), title: "执行 SQL", detail: `返回 ${rowCount} 行`, status: "done", runId, section: "result" }
               ]);
             },
             onFinalAnswer: (content) => {
@@ -505,7 +506,7 @@ export function useChat() {
                     : step
                 ),
                 {
-                  id: `tool-error-${crypto.randomUUID()}`,
+                  id: `tool-error-${genUUID()}`,
                   title: "工具调用失败",
                   detail: safeMsg,
                   status: "error",
