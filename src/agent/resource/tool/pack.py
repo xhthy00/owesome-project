@@ -65,7 +65,9 @@ class ToolPack:
 
     async def invoke(self, name: str, args: dict[str, Any] | None = None) -> ToolResult:
         t = self.get(name)
-        merged = {**self._bindings, **(args or {})}
+        # bindings（datasource_id / report_data / tool_runtime_ctx 等）必须盖过 LLM args，
+        # 否则模型手填 null/空对象会冲掉上游全量数据。
+        merged = {**(args or {}), **self._bindings}
         return await t.execute(**merged)
 
     def render_prompt(self) -> str:

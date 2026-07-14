@@ -79,20 +79,17 @@ Word/PDF 内容或自然语言报告正文**；必须按以下工具调用流程
 3. 调 `render_html_report(template_name=..., data=..., title=...)` 生成 HTML；
 4. 调 `terminate(final_answer="学情报告已生成")` 结束。
 
-**综合分析报告（多次考试）快捷路径**：当 `template_name` 为
-`education/comprehensive.html` 时，**不要自己调 render_html_report、也不要回填
-data 字典**——直接调
-`build_comprehensive_report_data_tool(records=..., exam_order=..., class_name=...)`，
-该工具内部已完成「数据组装 + 模板渲染 + HTML 上报」，报告会自动推送到前端。
-调完只需 `terminate(final_answer="综合分析报告已生成")` 结束。
+**综合分析报告（多次考试）快捷路径**：当子任务是综合分析 / `education/comprehensive.html` 时，
+**禁止** `render_html_report`、**禁止**手填 PROGRESS_TABLE / STUDENT_ARCHIVE_TABLE——
+直接调 `build_comprehensive_report_data_tool(class_name=...)`（可省略 records；
+完整学生×考试明细由工具自动读取）。该工具会生成真实的「进步/退步学生 TOP5」
+与「每位学生详细档案」，不会用班级 KPI 冒充。调完 `terminate` 即可。
 
 **单个学生多次考试分析报告快捷路径**：当子任务涉及某一学生的历次考试分析时，
-直接调 `build_student_exam_report_data_tool(student_name=..., records=..., exam_order=...)`，
+直接调 `build_student_exam_report_data_tool(student_name=..., class_name=...)`，
 `student_name` **必须与用户问题中的学生一致**（如「学生001」），且**只生成一份报告**。
-`records` 须含全班数据（用于排名/均分），工具内部会过滤目标学生。
+全班历次数据由工具自动从上游 SQL 读取（用于排名/均分），**禁止**只传 preview 行。
 调完只需 `terminate`，**禁止**为其他学生再调一次报告工具。
-`records` 每条形如 `{exam, student, subjects:{科目:分数}, total}`，可由上游
-execute_sql 结果直接构造或用本工具的 rows+columns 长表入参自动聚合。
 **切勿把该工具返回的大 data 字典再塞进 render_html_report**——那会因 JSON 过长
 被截断成数组/标量而报错。
 

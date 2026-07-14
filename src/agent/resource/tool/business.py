@@ -339,9 +339,24 @@ def render_html_report(
     2. file_path：读取工作区内已有 HTML 文件；
     3. html：直接使用传入 HTML 字符串。
     """
+    template = (template_name or "").strip() or (template_path or "").strip()
+    # 综合报告禁止手填 data / inline HTML——LLM 塞不下 50+ 人档案，会留下空表或班级汇总冒充 TOP5
+    tpl_norm = template.replace("\\", "/").lower()
+    if "comprehensive" in tpl_norm or (
+        html and "每位学生详细档案" in html and "进步最快" in html
+    ):
+        return ToolResult(
+            content=(
+                "综合分析报告请改调 `build_comprehensive_report_data_tool(class_name=...)`："
+                "工具会自动读取完整 SQL 学生明细并生成进步/退步 TOP5 与每位学生档案。"
+                "**禁止**用 render_html_report 手填 comprehensive 模板或自写 HTML"
+                "（易导致第五节变成班级汇总、第九节学生档案为空）。"
+            ),
+            data={"error": "use_build_comprehensive_report_data_tool"},
+        )
+
     mode = "inline"
     try:
-        template = (template_name or "").strip() or (template_path or "").strip()
         report_data = _parse_report_data(data)
 
         if template:

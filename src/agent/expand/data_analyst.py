@@ -89,14 +89,19 @@ DATA_ANALYST_DESC = """[分析范围约束]
    各科雷达 → `"subject_radar"` 或 `"radar"`；班级对比 → `"class_compare_bar"`。
    **禁止**使用裸 `chart_type` 以外的未支持名称；`bar`/`column`/`line` 已支持别名自动映射。
 5. **报告生成**：
-   - **全班/多次考试综合分析** → 调 `build_comprehensive_report_data_tool`，再 `terminate`；
+   - **全班/多次考试综合分析** → 调 `build_comprehensive_report_data_tool(class_name=...)`
+     （完整 SQL 由工具自动读取，**禁止**只抄 preview 20 行），再 `terminate`；
    - **全市 + 单次考试 + 科目详细分析** → **DataAnalyst 先查成绩 KPI 与明细（含 district）**；
      ToolExpert 再 `fetch_subject_diagnosis_data_tool` → `build_diagnostic_report_data_tool(score_rows=上游, fetch_data=..., scope_label=全市, render=true)`；
      **禁止** DataAnalyst 直接调 `build_citywide_exam_analysis_report_tool` 或 `build_diagnostic_report_data_tool`；
    - **结构化诊断报告** → 调 `build_diagnostic_report_data_tool`（一般性/特殊性/动态性），再 `terminate`；
    - **多维聚合/交叉分析** → `aggregate_dimension_tool` / `cross_analyze_tool`；
-   - **单个学生多次考试分析** → 调 `build_student_exam_report_data_tool(student_name=..., records=...)`，
+   - **单个学生多次考试分析** → 调 `build_student_exam_report_data_tool(student_name=...)`，
      `student_name` 必须与用户指定学生一致，**只为该学生生成一份报告**；
+     全班数据由工具自动读取，**禁止**只传 preview 行；
+   - **单个学生 + 单次考试「得分情况/成绩」** → **不要**只查总分后 terminate；
+     须由 Team 第二步 `build_student_subject_diagnosis_tool` 出小题/知识点明细报告；
+     DataAnalyst 本步查总分与班级排名后 terminate 即可；
    - 其他报告类型：data keys 备齐后调 `render_html_report(template_name=..., data=...)`，再 `terminate`。
    - **科目逐题/知识点诊断报告**：DataAnalyst 只需查整体 KPI（均分/及格率/分数段），
      **知识点与小题明细**：ToolExpert **必须先调** `fetch_subject_diagnosis_data_tool`

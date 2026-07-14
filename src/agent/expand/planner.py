@@ -126,9 +126,8 @@ PLANNER_DESC = """[你的职责]
   **严禁**为其他学生（如学生009）额外增加子任务或报告。
 - 多次考试综合分析报告（comprehensive，含 9 个维度：整体概览/各科趋势/相关性/
   分布/进退步/偏科/单科之最/总分轨迹/学生档案）：
-  ["查询该班历次考试各科均分、标准差、及格率/优秀率",
-   "查询每位学生历次考试总分与各科分数，用于趋势/偏科/相关性分析",
-   {"task": "用 education/comprehensive.html 模板组装综合分析 HTML 报告（数据取上游子任务，含 9 个维度）", "sub_task_agent": "ToolExpert"}]
+  ["查询该班历次考试每位学生分数（SQL 须含 exam_name、student_id/姓名、score；禁止只查班级 KPI 聚合）",
+   {"task": "调 build_comprehensive_report_data_tool(class_name=【班级】) 一步生成综合分析 HTML（进步/退步 TOP5 与每位学生档案由工具自动计算）；**禁止** render_html_report / 手填模板；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 - 结构化诊断报告（diagnostic_report，一般性/特殊性/动态性三节）：
   ["查询【范围】成绩明细（含 class/district/subject）用于聚合",
    {"task": "调 build_diagnostic_report_data_tool(score_rows=上游数据, scope_label=【范围】, render=true) 生成结构化诊断 HTML", "sub_task_agent": "ToolExpert"}]
@@ -138,7 +137,10 @@ PLANNER_DESC = """[你的职责]
    {"task": "调 fetch_subject_diagnosis_data_tool(subject_name=【科目】, exam_name=【考试】) 查询全市小题明细与知识点——**本步仅 fetch，禁止 render**；完成后 terminate（**禁止**调 build_diagnostic_report_data_tool）", "sub_task_agent": "ToolExpert"},
    {"task": "调 build_diagnostic_report_data_tool(scope_label=全市, exam_name=【考试】, subject_name=【科目】, render=true) **一步完成区县对比+分数段+小题/知识点+HTML**；**禁止**再调 fetch_subject_diagnosis_data_tool（工具自动读取上游成绩与 fetch 数据）；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 
-简单问题（如"三班数学平均分"）不生成报告，返回 plans=[原问题] 即可。"""
+简单问题（如"三班数学平均分"）不生成报告，返回 plans=[原问题] 即可。
+**例外**：问题含学号/「学生xxx」且询问「得分情况/成绩/知识点」——**不算简单问题**，
+须走上方「单个学生 + 单次考试」2 步计划（含 build_student_subject_diagnosis_tool），
+禁止只查总分后 terminate。"""
 
 
 def build_citywide_team_plan_items(question: str) -> list[dict[str, str]]:
@@ -214,14 +216,78 @@ def build_school_subject_report_plan_items(question: str) -> list[dict[str, str]
     ]
 
 
+def build_individual_student_exam_plan_items(question: str) -> list[dict[str, str]]:
+    """单个学生 + 单次考试：总分对照 + 个人知识点诊断报告（确定性 2 步）。"""
+    from src.agent.education.orchestrator import _extract_subject
+    from src.agent.education.query_parse import (
+        extract_exam_name_hint,
+        extract_student_target,
+    )
+
+    sid = extract_student_target(question) or "该学生"
+    exam = extract_exam_name_hint(question) or "本次考试"
+    subject = _extract_subject(question) or ""
+    subject_arg = f", subject_name={subject}" if subject else ""
+    return [
+        {
+            "sub_task": (
+                f"查询学生【{sid}】在【{exam}】"
+                f"{f'【{subject}】' if subject else ''}的总分、卷面满分、班级排名、"
+                "班级均分对照（SQL 须含全班同学分以便算排名；可 JOIN tb_exam/tb_school）"
+            ),
+            "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
+        },
+        {
+            "sub_task": (
+                f"调 build_student_subject_diagnosis_tool(student_id={sid}, "
+                f"exam_name={exam}{subject_arg}, render=true) "
+                "组装该生个人小题/知识点得分明细与提升建议 HTML 报告；完成后 terminate。"
+                "**禁止** build_subject_diagnosis_sections_tool；**禁止**只总结总分"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        },
+    ]
+
+
+def should_replace_with_individual_student_plan(
+    question: str,
+    plan_items: list[dict[str, str]],
+) -> bool:
+    """Planner 回落为单任务/未点名诊断工具时，改用个人知识点 2 步计划。"""
+    from src.agent.education.query_parse import is_individual_student_analysis_query
+
+    if not is_individual_student_analysis_query(question):
+        return False
+    q = (question or "").strip()
+    if len(plan_items) <= 1:
+        return True
+    if len(plan_items) == 1 and (plan_items[0].get("sub_task") or "").strip() == q:
+        return True
+    # 已规划但漏掉个人诊断工具
+    blob = " ".join(str(it.get("sub_task") or "") for it in plan_items)
+    if "build_student_subject_diagnosis_tool" in blob:
+        return False
+    if "build_student_exam_report_data_tool" in blob:
+        return False
+    return True
+
+
 def coerce_plan_items_if_needed(
     question: str,
     plan_items: list[dict[str, str]],
 ) -> list[dict[str, str]]:
-    """学校报告类问题若 Planner 回落为单任务，修正为标准多步计划。"""
-    from src.agent.education.query_parse import is_school_exam_report_query
+    """学校报告 / 个人得分类问题若 Planner 回落为单任务，修正为标准多步计划。"""
+    from src.agent.education.query_parse import (
+        is_individual_student_analysis_query,
+        is_school_exam_report_query,
+    )
 
     q = (question or "").strip()
+    if should_replace_with_individual_student_plan(q, plan_items):
+        logger.info(
+            "planner individual-student coerce: expanding to 2-step student subject diagnosis"
+        )
+        return build_individual_student_exam_plan_items(q)
     if not is_school_exam_report_query(q):
         return plan_items
     if len(plan_items) <= 1 and (
@@ -324,10 +390,24 @@ def _infer_sub_task_agent(task: str) -> str:
 
 
 def _fallback_single_plan(question: str, reason: str) -> ActionOutput:
-    """拆解失败 → 原问题作为唯一子任务；学校报告类改用标准多步回落。"""
-    from src.agent.education.query_parse import is_school_exam_report_query
+    """拆解失败 → 原问题作为唯一子任务；报告类改用标准多步回落。"""
+    from src.agent.education.query_parse import (
+        is_individual_student_analysis_query,
+        is_school_exam_report_query,
+    )
 
     q = (question or "").strip() or "（原始问题）"
+    if is_individual_student_analysis_query(q):
+        items = build_individual_student_exam_plan_items(q)
+        plans = [it["sub_task"] for it in items]
+        plan_agents = [it["sub_task_agent"] for it in items]
+        return ActionOutput(
+            is_exe_success=True,
+            content=f"计划回落为个人知识点诊断 2 步子任务（{reason}）",
+            action="plan",
+            extra={"plans": plans, "plan_agents": plan_agents},
+            terminate=True,
+        )
     if is_school_exam_report_query(q):
         items = build_school_subject_report_plan_items(q)
         plans = [it["sub_task"] for it in items]

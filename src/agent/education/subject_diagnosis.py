@@ -391,101 +391,187 @@ def build_diagnosis_summary(
     return "\n".join(parts)
 
 
+def _personal_knowledge_advice(name: str, rate: float | None) -> str:
+    """按得分率给出差异化的个人复习建议。"""
+    n = name or "该知识点"
+    if rate is None:
+        return f"针对「{n}」梳理概念与典型例题，完成错题订正后再做一组变式。"
+    if rate < 30:
+        return (
+            f"「{n}」得分率仅 {_fmt(rate)}%，属于严重薄弱项："
+            f"先回归课本定义与基础例题，每天 15–20 分钟专项，再过渡到中档题。"
+        )
+    if rate < 50:
+        return (
+            f"「{n}」掌握不稳（{_fmt(rate)}%）："
+            f"整理该点错题本，按题型限时做 8–10 道针对性练习，隔日复测一次。"
+        )
+    return (
+        f"「{n}」接近及格线（{_fmt(rate)}%）："
+        f"查漏补缺后做一套限时模拟，重点盯易错步骤与审题。"
+    )
+
+
+def _personal_item_advice(qno: Any, kn: Any, rate: float | None) -> str:
+    base = f"第 {qno} 题"
+    kn_s = f"（关联：{kn}）" if kn else ""
+    if rate is not None and rate < 30:
+        return f"{base}失分较重{kn_s}：对照标准答案定位概念缺口，先做同类基础题 5 道再回看原题。"
+    if rate is not None and rate < 50:
+        return f"{base}需重点订正{kn_s}：标注错因后完成 2–3 道同知识点变式，并限时重做原题。"
+    return f"{base}查漏补缺{kn_s}：精讲典型错因后做 1–2 道变式巩固。"
+
+
 def build_diagnosis_recommendations(
     knowledge_rows: list[dict[str, Any]] | None = None,
     item_rows: list[dict[str, Any]] | None = None,
     *,
     weak_threshold: float = 60.0,
     intervention_insights: dict[str, Any] | None = None,
+    audience: str = "class",
 ) -> str:
     knowledge_rows = knowledge_rows or []
     item_rows = item_rows or []
     weak_k = identify_weak_knowledge(knowledge_rows, weak_threshold=weak_threshold)
     weak_i = identify_weak_items(item_rows, weak_threshold=weak_threshold)
     insights = intervention_insights or {}
+    personal = (audience or "").lower() in {"student", "personal", "individual"}
 
-    groups: list[tuple[str, str, list[dict[str, Any]]]] = []
+    groups: list[tuple[str, list[dict[str, Any]], str]] = []
 
-    class_items: list[dict[str, Any]] = []
-    for i, c in enumerate(insights.get("weak_classes") or []):
-        class_items.append({
-            "priority": 1 if i == 0 else 2,
-            "title": str(c.get("class_name") or "该班"),
-            "desc": "开展专项帮扶：巩固基础题、盯紧及格率与课堂过关",
-            "metric": f"均分 {_fmt(c.get('avg'))} · 及格率 {_fmt(c.get('pass_rate'))}%",
-        })
-    if class_items:
-        groups.append(("班级干预", class_items, "class"))
+    if not personal:
+        class_items: list[dict[str, Any]] = []
+        for i, c in enumerate(insights.get("weak_classes") or []):
+            class_items.append({
+                "priority": 1 if i == 0 else 2,
+                "title": str(c.get("class_name") or "该班"),
+                "desc": "开展专项帮扶：巩固基础题、盯紧及格率与课堂过关",
+                "metric": f"均分 {_fmt(c.get('avg'))} · 及格率 {_fmt(c.get('pass_rate'))}%",
+            })
+        if class_items:
+            groups.append(("班级干预", class_items, "class"))
 
-    seg_items: list[dict[str, Any]] = []
-    for s in insights.get("concern_segments") or []:
-        seg_items.append({
-            "priority": 1,
-            "title": str(s.get("label") or "低分段"),
-            "desc": "组织分层练习与错题清零，推动临界生转化",
-            "metric": f"占比 {_fmt(s.get('ratio'))}% · {s.get('count', 0)} 人",
-        })
-    if seg_items:
-        groups.append(("分数段辅导", seg_items, "segment"))
+        seg_items: list[dict[str, Any]] = []
+        for s in insights.get("concern_segments") or []:
+            seg_items.append({
+                "priority": 1,
+                "title": str(s.get("label") or "低分段"),
+                "desc": "组织分层练习与错题清零，推动临界生转化",
+                "metric": f"占比 {_fmt(s.get('ratio'))}% · {s.get('count', 0)} 人",
+            })
+        if seg_items:
+            groups.append(("分数段辅导", seg_items, "segment"))
 
     know_items: list[dict[str, Any]] = []
     for i, r in enumerate(weak_k):
+        rate = _num(r.get("score_rate"))
+        title = str(r.get("knowledge_name") or "未知知识点")
+        if personal:
+            desc = _personal_knowledge_advice(title, rate)
+        else:
+            desc = "安排专项练习、错题回顾与专题课"
         know_items.append({
-            "priority": 1 if i < 2 else 2,
-            "title": str(r.get("knowledge_name") or "未知知识点"),
-            "desc": "安排专项练习、错题回顾与专题课",
+            "priority": 1 if (rate is not None and rate < 40) or i < 2 else 2,
+            "title": title,
+            "desc": desc,
             "metric": f"得分率 {_fmt(r.get('score_rate'))}%",
         })
     if know_items:
-        groups.append(("知识点强化", know_items, "knowledge"))
+        groups.append(("知识点强化" if not personal else "薄弱知识点专项", know_items, "knowledge"))
 
     q_items: list[dict[str, Any]] = []
     for r in weak_i:
         kn = r.get("knowledge_name")
+        rate = _num(r.get("score_rate"))
+        qno = r.get("question_no")
+        if personal:
+            desc = _personal_item_advice(qno, kn, rate)
+        else:
+            desc = f"精讲典型错因并变式训练" + (f"（关联：{kn}）" if kn else "")
         q_items.append({
-            "priority": 2,
-            "title": f"第 {r.get('question_no')} 题",
-            "desc": f"精讲典型错因并变式训练" + (f"（关联：{kn}）" if kn else ""),
+            "priority": 1 if rate is not None and rate < 40 else 2,
+            "title": f"第 {qno} 题",
+            "desc": desc,
             "metric": f"得分率 {_fmt(r.get('score_rate'))}%",
         })
     if q_items:
-        groups.append(("小题精讲", q_items, "question"))
+        groups.append(("小题精讲" if not personal else "薄弱小题精练", q_items, "question"))
 
-    ability_items: list[dict[str, Any]] = []
-    for l in insights.get("weak_ability_levels") or []:
-        label = ABILITY_LABELS.get(str(l.get("ability_level") or ""), l.get("ability_level") or "能力项")
-        ability_items.append({
-            "priority": 2,
-            "title": label,
-            "desc": "加强该能力层级训练，提升综合与应用题得分率",
-            "metric": f"均分率 {_fmt(l.get('avg_score_rate'))}%",
-        })
-    if ability_items:
-        groups.append(("能力层级", ability_items, "ability"))
+    if not personal:
+        ability_items: list[dict[str, Any]] = []
+        for l in insights.get("weak_ability_levels") or []:
+            label = ABILITY_LABELS.get(str(l.get("ability_level") or ""), l.get("ability_level") or "能力项")
+            ability_items.append({
+                "priority": 2,
+                "title": label,
+                "desc": "加强该能力层级训练，提升综合与应用题得分率",
+                "metric": f"均分率 {_fmt(l.get('avg_score_rate'))}%",
+            })
+        if ability_items:
+            groups.append(("能力层级", ability_items, "ability"))
 
-    qtype_items: list[dict[str, Any]] = []
-    for q in insights.get("weak_question_types") or []:
-        qtype_items.append({
-            "priority": 2,
-            "title": str(q.get("question_type") or "题型"),
-            "desc": "精讲典型错因并配套限时训练",
-            "metric": f"均分率 {_fmt(q.get('avg_score_rate'))}%",
-        })
-    if qtype_items:
-        groups.append(("题型突破", qtype_items, "qtype"))
+        qtype_items: list[dict[str, Any]] = []
+        for q in insights.get("weak_question_types") or []:
+            qtype_items.append({
+                "priority": 2,
+                "title": str(q.get("question_type") or "题型"),
+                "desc": "精讲典型错因并配套限时训练",
+                "metric": f"均分率 {_fmt(q.get('avg_score_rate'))}%",
+            })
+        if qtype_items:
+            groups.append(("题型突破", qtype_items, "qtype"))
+    else:
+        # 个人报告：按题型汇总薄弱表现，给出可执行节奏
+        from collections import defaultdict
+
+        buckets: dict[str, list[float]] = defaultdict(list)
+        for r in item_rows:
+            qt = str(r.get("question_type") or "").strip()
+            rate = _num(r.get("score_rate"))
+            if qt and rate is not None:
+                buckets[qt].append(rate)
+        qtype_items = []
+        for qt, rates in sorted(buckets.items(), key=lambda x: sum(x[1]) / len(x[1])):
+            avg = sum(rates) / len(rates)
+            if avg >= weak_threshold:
+                continue
+            if avg < 40:
+                desc = f"「{qt}」整体偏弱，本周安排 2 次限时题型专练（每次 20 分钟），先保基础再冲中档。"
+            else:
+                desc = f"「{qt}」略低于及格线，错题归类后每天练 3–5 道，周末做一套综合巩固。"
+            qtype_items.append({
+                "priority": 1 if avg < 40 else 2,
+                "title": qt,
+                "desc": desc,
+                "metric": f"均分率 {_fmt(avg)}% · {len(rates)} 题",
+            })
+        if qtype_items:
+            groups.append(("题型突破计划", qtype_items[:4], "qtype"))
 
     if not groups:
+        keep = (
+            "各知识点掌握较稳，建议每周保留 1 套综合卷维持题感，并定期回看错题本。"
+            if personal
+            else "整体掌握较好，建议以综合卷维持题感，并关注个别临界生的巩固。"
+        )
         return (
             '<div class="edu-rec edu-rec-empty">'
             '<div class="edu-rec-card edu-rec-priority-3">'
             '<div class="edu-rec-body">'
             '<div class="edu-rec-title">保持现有节奏</div>'
-            '<div class="edu-rec-desc">整体掌握较好，建议以综合卷维持题感，并关注个别临界生的巩固。</div>'
+            f'<div class="edu-rec-desc">{keep}</div>'
             "</div></div></div>"
         )
 
+    intro = ""
+    if personal:
+        intro = (
+            '<div class="edu-rec-intro">'
+            "以下建议按薄弱程度排序，优先完成 P1 项；每项建议尽量在本周内落地并复测。"
+            "</div>"
+        )
     body = "".join(_rec_group(title, items, cat=cat) for title, items, cat in groups)
-    return f'<div class="edu-rec">{body}</div>'
+    return f'<div class="edu-rec">{intro}{body}</div>'
 
 
 def build_segment_table_html(

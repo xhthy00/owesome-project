@@ -67,10 +67,11 @@ def test_bind_returns_new_instance_and_preserves_original():
     assert "use_session" in bound
 
 
-def test_args_override_bindings():
+def test_bindings_override_args():
+    """运行时 bindings 必须盖过 LLM args，避免 null/错误上下文冲掉注入值。"""
     pack = ToolPack(tools=[use_session]).bind(session="bound")
     result = _run(pack.invoke("use_session", {"session": "explicit", "key": "k"}))
-    assert result.data == "explicit:k"
+    assert result.data == "bound:k"
 
 
 def test_render_prompt_contains_tools_and_params():

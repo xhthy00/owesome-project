@@ -42,14 +42,114 @@ _NEXT_TOOL_HINTS: dict[str, str] = {
         "组装子任务：改调 `build_diagnostic_report_data_tool(render=true)`，**禁止**再 fetch"
     ),
     "build_diagnostic_report_data_tool": "`terminate`（报告已渲染）",
+    "build_comprehensive_report_data_tool": "`terminate`（综合报告已渲染，含进步/退步 TOP 与学生档案）",
+    "build_student_exam_report_data_tool": "`terminate`（学生考试报告已渲染）",
     "build_subject_diagnosis_sections_tool": "`terminate`（sections 默认已渲染 HTML）",
     "build_student_subject_diagnosis_tool": "`terminate`（报告已渲染）",
     "build_chart_option_tool": "`render_html_report` → `terminate`（科目诊断 sections 已含图表则跳过本工具）",
-    "select_report_template_tool": "`build_subject_diagnosis_sections_tool(fetch_data=..., render=true)` → `terminate`",
+    "select_report_template_tool": (
+        "若 comprehensive → `build_comprehensive_report_data_tool(class_name=...)` → `terminate`；"
+        "科目诊断 → `build_subject_diagnosis_sections_tool(fetch_data=..., render=true)` → `terminate`"
+    ),
     "compute_score_stats_tool": "`build_subject_diagnosis_sections_tool(fetch_data=..., render=true)` → `terminate`",
     "list_tables": "`describe_table` / `execute_sql`",
     "describe_table": "`execute_sql` / `sample_rows`",
 }
+
+#: 这些工具禁止 LLM 手填超长表格入参（易截断 JSON）；改由 bindings / 上游 SQL 注入。
+_STRIP_TABLE_ARGS_TOOLS = frozenset(
+    {
+        "build_comprehensive_report_data_tool",
+        "build_student_exam_report_data_tool",
+    }
+)
+# records 等由上游注入；report_data / tool_runtime_ctx 必须保留 bindings，禁止 LLM 覆盖。
+_STRIP_TABLE_ARG_KEYS = frozenset(
+    {
+        "records",
+        "rows",
+        "columns",
+        "exec_result",
+        "score_rows",
+        "report_data",
+        "tool_runtime_ctx",
+    }
+)
+
+
+def _sanitize_report_tool_args(
+    tool_name: str,
+    args: dict[str, Any],
+    *,
+    constraints: dict[str, Any] | None = None,
+    sub_task: str = "",
+) -> dict[str, Any]:
+    """综合/学生报告工具：丢掉 LLM 手抄的 records/rows，补全 class_name / student_name。"""
+    out = dict(args)
+    if tool_name in _STRIP_TABLE_ARGS_TOOLS:
+        for k in _STRIP_TABLE_ARG_KEYS:
+            out.pop(k, None)
+    ctx = constraints if isinstance(constraints, dict) else {}
+    if tool_name == "build_comprehensive_report_data_tool" and not str(out.get("class_name") or "").strip():
+        classes = ctx.get("target_classes") or []
+        if isinstance(classes, list) and classes:
+            out["class_name"] = str(classes[0])
+        else:
+            m = re.search(r"((?:高|初)[一二三123]?\s*[（(]?\d+[）)]?\s*班)", sub_task or "")
+            if m:
+                out["class_name"] = m.group(1).replace(" ", "")
+    if tool_name == "build_student_exam_report_data_tool" and not str(out.get("student_name") or "").strip():
+        if str(out.get("student_id") or "").strip():
+            out["student_name"] = str(out.get("student_id")).strip()
+        else:
+            stu = ctx.get("target_student")
+            if stu:
+                out["student_name"] = str(stu)
+            else:
+                m = re.search(
+                    r"(学生\s*\d+|STU[\w-]+|2024_STU[\w-]+|student_name\s*[=：:]\s*([^\s,，)）]+)|student_id\s*[=：:]\s*([^\s,，)）]+))",
+                    sub_task or "",
+                    re.IGNORECASE,
+                )
+                if m:
+                    out["student_name"] = (
+                        (m.group(3) or m.group(2) or m.group(1) or "").replace(" ", "").strip()
+                    )
+    if tool_name == "build_student_exam_report_data_tool" and not str(out.get("class_name") or "").strip():
+        classes = ctx.get("target_classes") or []
+        if isinstance(classes, list) and classes:
+            out["class_name"] = str(classes[0])
+        else:
+            m = re.search(r"((?:高|初)[一二三123]?\s*[（(]?\d+[）)]?\s*班)", sub_task or "")
+            if m:
+                out["class_name"] = m.group(1).replace(" ", "")
+    return out
+
+
+def _should_rescue_report_tool(sub_task: str, ai_message: str) -> str | None:
+    """若应自动救援报告工具，返回工具名；否则 None。"""
+    blob = f"{sub_task}\n{ai_message}".lower()
+    student_keys = (
+        "build_student_exam_report_data_tool",
+        "student_exam_analysis",
+        "学生考试分析",
+        "该学生考试",
+    )
+    if any(k.lower() in blob for k in student_keys):
+        return "build_student_exam_report_data_tool"
+    comp_keys = (
+        "build_comprehensive_report_data_tool",
+        "comprehensive.html",
+        "综合分析",
+        "comprehensive",
+    )
+    if any(k.lower() in blob for k in comp_keys):
+        return "build_comprehensive_report_data_tool"
+    return None
+
+
+def _should_rescue_comprehensive(sub_task: str, ai_message: str) -> bool:
+    return _should_rescue_report_tool(sub_task, ai_message) == "build_comprehensive_report_data_tool"
 
 _THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
 _TOOL_NAME_RE = re.compile(r"""tool\s*:\s*["']?([A-Za-z_][A-Za-z0-9_]*)["']?""", re.IGNORECASE)
@@ -158,6 +258,53 @@ class ToolAction(Action):
 
             return {"tool": tool_name, "args": args}
 
+        constraints = kwargs.get("constraints") if isinstance(kwargs.get("constraints"), dict) else {}
+        sub_task = str(kwargs.get("sub_task") or "")
+
+        async def _invoke_report_rescue(
+            tool_name: str, *, thoughts: str | None = None
+        ) -> ActionOutput | None:
+            """JSON 截断 / 手填 records 失败时：空参调报告工具（数据来自上游/自查库）。"""
+            if tool_name not in self.tool_pack:
+                return None
+            safe_args = _sanitize_report_tool_args(
+                tool_name, {}, constraints=constraints, sub_task=sub_task
+            )
+            if tool_name == "build_student_exam_report_data_tool" and not str(
+                safe_args.get("student_name") or ""
+            ).strip():
+                return None
+            try:
+                result = await self.tool_pack.invoke(tool_name, safe_args)
+            except Exception:
+                logger.exception("%s rescue invoke failed", tool_name)
+                return None
+            if isinstance(result.data, dict) and result.data.get("error") in {
+                "missing input",
+                "missing student_name",
+            }:
+                return None
+            _audit(
+                tool_name=tool_name,
+                success=True,
+                args=safe_args,
+                result_preview=result.content,
+            )
+            return ActionOutput(
+                is_exe_success=True,
+                content=result.content,
+                action=tool_name,
+                thoughts=thoughts,
+                observations=result.content,
+                terminate=result.is_final,
+                extra={
+                    "tool_args": safe_args,
+                    "tool_data": result.data,
+                    "tool_extra": result.extra,
+                    "rescued_report": True,
+                },
+            )
+
         try:
             parsed = parse_json_tolerant(ai_message)
         except ValueError as e:
@@ -165,6 +312,14 @@ class ToolAction(Action):
             if fallback_tool_call is not None:
                 parsed = fallback_tool_call
             else:
+                rescue_tool = _should_rescue_report_tool(sub_task, ai_message)
+                if rescue_tool:
+                    rescued = await _invoke_report_rescue(
+                        rescue_tool,
+                        thoughts=f"JSON 截断，自动改调 {rescue_tool}（不手填 records）",
+                    )
+                    if rescued is not None:
+                        return rescued
                 fallback_answer = _extract_non_json_final_answer(ai_message)
                 if fallback_answer and TERMINATE_TOOL_NAME in self.tool_pack:
                     try:
@@ -193,7 +348,11 @@ class ToolAction(Action):
                         )
                     except Exception:
                         logger.exception("fallback terminate failed")
-                msg = f"无法从 LLM 输出解析 JSON：{e}. 请严格返回 {{\"tool\": ..., \"args\": ...}} 结构。"
+                msg = (
+                    f"无法从 LLM 输出解析 JSON：{e}. "
+                    "综合/学生报告请只调对应 build_*_report_data_tool（轻量 args），"
+                    "**禁止**手填 records（会截断）。"
+                )
                 _audit(tool_name=self.name, success=False, args=None, result_preview=msg)
                 return ActionOutput(
                     is_exe_success=False,
@@ -342,6 +501,12 @@ class ToolAction(Action):
             )
 
         tool_name_str = str(tool_name)
+        # 综合/学生报告：丢掉手填 records（易截断），只保留 class_name 等轻量参数
+        if tool_name_str in _STRIP_TABLE_ARGS_TOOLS:
+            args = _sanitize_report_tool_args(
+                tool_name_str, args, constraints=constraints, sub_task=sub_task
+            )
+
         cache: dict[str, ActionOutput] | None = kwargs.get("tool_call_cache")
         if (
             isinstance(cache, dict)

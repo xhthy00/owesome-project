@@ -308,6 +308,113 @@ def test_resolve_stats_input_prefers_last_exec_result():
     assert er["row_count"] == 40
 
 
+def test_resolve_comprehensive_table_input_prefers_full_sql():
+    from src.agent.education.query_parse import resolve_comprehensive_table_input
+
+    full_rows = [[f"考{e}", f"s{s}", 90] for e in range(4) for s in range(52)]
+    records, rows, columns, used = resolve_comprehensive_table_input(
+        records=[{"exam": "考0", "student": f"s{i}", "subjects": {"数学": 90}, "total": 90} for i in range(20)],
+        last_exec_result={
+            "columns": ["exam_name", "student_name", "score"],
+            "rows": full_rows,
+            "row_count": 208,
+        },
+    )
+    assert used is True
+    assert records is None
+    assert len(rows) == 208
+    assert columns == ["exam_name", "student_name", "score"]
+
+
+def test_extract_best_exec_prefers_student_detail_over_kpi():
+    from src.agent.education.query_parse import extract_best_exec_result_from_report_data
+
+    report_data = {
+        "sub_tasks": [
+            {
+                "sub_task_agent": "DataAnalyst",
+                "exec_result": {
+                    "columns": ["exam_name", "avg_score", "pass_rate"],
+                    "rows": [["摸底", 108.5, 0.75], ["一模", 110.8, 0.77]],
+                    "row_count": 2,
+                },
+            },
+            {
+                "sub_task_agent": "DataAnalyst",
+                "exec_result": {
+                    "columns": ["exam_name", "student_id", "score"],
+                    "rows": [[f"考{e}", f"STU{s}", 90] for e in range(4) for s in range(52)],
+                    "row_count": 208,
+                },
+            },
+        ]
+    }
+    best = extract_best_exec_result_from_report_data(report_data)
+    assert best is not None
+    assert best["row_count"] == 208
+    assert "student_id" in best["columns"]
+
+
+def test_extract_best_exec_from_tool_calls_when_exec_result_missing():
+    from src.agent.education.query_parse import extract_best_exec_result_from_report_data
+
+    rows = [[f"考{e}", f"STU{s}", 90] for e in range(2) for s in range(10)]
+    report_data = {
+        "sub_tasks": [
+            {
+                "sub_task_agent": "DataAnalyst",
+                "exec_result": None,
+                "tool_calls": [
+                    {
+                        "tool": "execute_sql",
+                        "success": True,
+                        "data": {
+                            "columns": ["exam_name", "student_id", "score"],
+                            "rows": rows,
+                            "row_count": len(rows),
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+    best = extract_best_exec_result_from_report_data(report_data)
+    assert best is not None
+    assert best["row_count"] == 20
+
+
+def test_build_student_exam_report_uses_upstream_report_data():
+    from src.agent.education.tools import build_student_exam_report_data_tool
+
+    report_data = {
+        "sub_tasks": [
+            {
+                "sub_task_agent": "DataAnalyst",
+                "exec_result": {
+                    "columns": ["exam_name", "student_id", "subject_name", "score"],
+                    "rows": [
+                        ["摸底", "学生001", "数学", 90],
+                        ["摸底", "学生002", "数学", 80],
+                        ["一模", "学生001", "数学", 95],
+                        ["一模", "学生002", "数学", 85],
+                    ],
+                    "row_count": 4,
+                },
+            }
+        ]
+    }
+    result = build_student_exam_report_data_tool._fn(
+        student_name="学生001",
+        class_name="高三（10）班",
+        render=False,
+        report_data=report_data,
+        tool_runtime_ctx={"report_data": report_data},
+    )
+    assert result.data is not None
+    assert result.data.get("error") != "missing input"
+    assert "学生001" in (result.data.get("REPORT_TITLE") or result.content or "")
+
+
 def test_build_diagnostic_report_kpi_uses_full_upstream_rows():
     from src.agent.education.tools import build_diagnostic_report_data_tool
 

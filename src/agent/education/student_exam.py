@@ -6,13 +6,16 @@ from typing import Any
 
 from src.agent.education.charts import build_chart_option
 from src.agent.education.comprehensive import (
+    _advice,
     _exam_has_valid_data,
     _find_student_row,
     _normalize_records,
     _record_effective_total,
     _resolve_exams,
+    _short_exam_label,
 )
 from src.agent.education.query_parse import student_matches
+from src.agent.education.subject_diagnosis import build_knowledge_table_html, enrich_knowledge_rows
 
 
 def _fmt(v: Any) -> str:
@@ -55,14 +58,144 @@ def _resolve_student_name(records: list[dict[str, Any]], student_name: str) -> s
     return target
 
 
+def _pick_item_insight(
+    item_insight: dict[str, Any] | None,
+    student_item_insights: dict[str, dict[str, Any]] | None,
+    student_name: str,
+) -> dict[str, Any]:
+    if isinstance(item_insight, dict) and (
+        item_insight.get("weak_knowledge")
+        or item_insight.get("strong_knowledge")
+        or item_insight.get("weak_items")
+        or item_insight.get("knowledge_rows")
+    ):
+        return item_insight
+    insights = student_item_insights or {}
+    for key, val in insights.items():
+        if student_matches(str(key), student_name) and isinstance(val, dict):
+            return val
+    return {}
+
+
+def _knowledge_rows_from_insight(insight: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = list(insight.get("knowledge_rows") or [])
+    if rows:
+        return enrich_knowledge_rows(rows)
+    all_k = list(insight.get("all_knowledge") or [])
+    if all_k:
+        return enrich_knowledge_rows(all_k)
+    merged: dict[str, dict[str, Any]] = {}
+    for bucket, default_level in (
+        (insight.get("weak_knowledge") or [], "需加强"),
+        (insight.get("strong_knowledge") or [], "掌握较好"),
+    ):
+        for k in bucket:
+            if isinstance(k, dict):
+                name = str(k.get("knowledge_name") or "").strip()
+                if not name or name == "未关联知识点":
+                    continue
+                merged[name] = {
+                    "knowledge_name": name,
+                    "score_rate": k.get("score_rate"),
+                    "question_count": k.get("question_count") or k.get("question_nos") or 1,
+                    "level": default_level,
+                }
+            else:
+                name = str(k).strip()
+                if name and name != "未关联知识点":
+                    merged[name] = {
+                        "knowledge_name": name,
+                        "score_rate": None,
+                        "question_count": 1,
+                        "level": default_level,
+                    }
+    return enrich_knowledge_rows(list(merged.values()))
+
+
+def _build_weak_item_table(insight: dict[str, Any]) -> str:
+    items = list(insight.get("weak_items") or [])
+    if not items:
+        return ""
+    rows: list[list[str]] = []
+    for it in items[:20]:
+        rows.append([
+            _short_exam_label(str(it.get("exam_name") or "")),
+            str(it.get("question_no") or "-"),
+            str(it.get("knowledge_name") or "-"),
+            f"{_fmt(it.get('score_rate'))}%",
+        ])
+    return _table(["考试", "题号", "知识点", "得分率"], rows)
+
+
+def _build_knowledge_section(
+    *,
+    student_name: str,
+    insight: dict[str, Any],
+) -> tuple[str, str, str, str]:
+    """返回 (insight_html, knowledge_table, weak_item_table, chart_json)。"""
+    knowledge = _knowledge_rows_from_insight(insight)
+    weak_know = [
+        str(k.get("knowledge_name") or k)
+        for k in (insight.get("weak_knowledge") or [])[:5]
+    ]
+    weak_know = [n for n in weak_know if n and n != "未关联知识点"]
+    strong_know = [
+        str(k.get("knowledge_name") or k)
+        for k in (insight.get("strong_knowledge") or [])[:3]
+    ]
+    strong_know = [n for n in strong_know if n and n != "未关联知识点"]
+
+    if not knowledge and not insight.get("weak_items"):
+        empty = (
+            f"<p class='edu-sub'>暂未加载到 {student_name} 的小题/知识点明细；"
+            "导入 tb_score_detail 并关联知识点后可自动生成得分明细与提升建议。</p>"
+        )
+        return empty, "", "", ""
+
+    bits: list[str] = []
+    if weak_know:
+        bits.append(f"薄弱知识点：{'、'.join(weak_know)}。")
+    if strong_know:
+        bits.append(f"掌握较好：{'、'.join(strong_know)}。")
+    if insight.get("weak_items"):
+        bits.append(
+            f"低得分小题 {len(insight.get('weak_items') or [])} 道，建议按考试逐项补漏。"
+        )
+    insight_html = (
+        f"<div class='insight'>"
+        f"{''.join(bits) if bits else f'{student_name} 知识点掌握情况已汇总如下。'}"
+        f"</div>"
+    )
+    table = build_knowledge_table_html(knowledge) if knowledge else ""
+    weak_table = _build_weak_item_table(insight)
+    chart = ""
+    if knowledge:
+        top = sorted(knowledge, key=lambda r: float(r.get("score_rate") or 0))[:12]
+        chart = build_chart_option(
+            "knowledge_bar",
+            {
+                "categories": [str(r.get("knowledge_name") or "") for r in top],
+                "values": [float(r.get("score_rate") or 0) for r in top],
+            },
+            f"{student_name} 知识点得分率（由低到高）",
+        )
+    return insight_html, table, weak_table, chart
+
+
 def build_student_exam_data(
     records: list[dict[str, Any]],
     student_name: str,
     exam_order: list[str] | None = None,
     class_name: str = "",
     class_size: int | None = None,
+    item_insight: dict[str, Any] | None = None,
+    student_item_insights: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """组装单个学生多次考试分析报告的全量 data 字典。"""
+    """组装单个学生多次考试分析报告的全量 data 字典。
+
+    ``item_insight`` / ``student_item_insights``：小题与知识点掌握情况，
+    用于「知识点得分明细」与备考建议（与综合报告第九节同源）。
+    """
     _normalize_records(records)
     resolved_name = _resolve_student_name(records, student_name)
 
@@ -153,7 +286,10 @@ def build_student_exam_data(
             sub_ranks = _ranks(e, lambda r, s=sub: (r.get("subjects") or {}).get(s))
             cells.append(_rank_label(sub_ranks.get(resolved_name), n_class or 0))
         total = stu_totals.get(e)
-        cells.extend([_fmt(total) if total is not None else "-", _rank_label(total_ranks.get(resolved_name), n_class or 0)])
+        cells.extend([
+            _fmt(total) if total is not None else "-",
+            _rank_label(total_ranks.get(resolved_name), n_class or 0),
+        ])
         summary_rows.append(cells)
     score_summary_table = _table(summary_header, summary_rows)
 
@@ -166,7 +302,11 @@ def build_student_exam_data(
                 vals = [stu_sub_scores[label].get(e) for e in exams]
             if not any(v is not None for v in vals):
                 continue
-            delta = (vals[-1] or 0) - (vals[0] or 0) if vals[0] is not None and vals[-1] is not None else 0
+            delta = (
+                (vals[-1] or 0) - (vals[0] or 0)
+                if vals[0] is not None and vals[-1] is not None
+                else 0
+            )
             key_rows.append([label, *[_fmt(v) for v in vals], _trend_tag(delta)])
     key_metrics_table = _table(["指标", *exams, "趋势判断"], key_rows) if key_rows else ""
 
@@ -192,17 +332,25 @@ def build_student_exam_data(
                 if metric == "分数":
                     cells.append(_fmt(stu_sub_scores[sub].get(e)))
                 elif metric == "班级排名":
-                    rk = _ranks(e, lambda r, s=sub: (r.get("subjects") or {}).get(s)).get(resolved_name)
+                    rk = _ranks(
+                        e, lambda r, s=sub: (r.get("subjects") or {}).get(s)
+                    ).get(resolved_name)
                     cells.append(_rank_label(rk, n_class or 0))
                 elif metric == "班级均分":
                     cells.append(_fmt(_class_avg(e, sub)))
                 else:
                     sc = stu_sub_scores[sub].get(e)
                     ca = _class_avg(e, sub)
-                    cells.append(_fmt(sc - ca) if sc is not None and ca is not None else "-")
-            cells.append(_fmt(delta) if metric == "分数" and len(valid) >= 2 else "—")
+                    cells.append(
+                        _fmt(sc - ca) if sc is not None and ca is not None else "-"
+                    )
+            cells.append(
+                _fmt(delta) if metric == "分数" and len(valid) >= 2 else "—"
+            )
             detail_rows.append(cells)
-        detail_table = _table(["指标", *exams, f"变化（{exams[0]}→{exams[-1]}）"], detail_rows)
+        detail_table = _table(
+            ["指标", *exams, f"变化（{exams[0]}→{exams[-1]}）"], detail_rows
+        )
 
         avg_diffs = []
         for e in exams:
@@ -213,12 +361,17 @@ def build_student_exam_data(
         lead = sum(1 for d in avg_diffs if d > 5)
         lag = sum(1 for d in avg_diffs if d < -5)
         if lead >= lag and lead > 0:
-            tag, analysis = "优势学科", f"{sub}是{resolved_name}的优势科目，多次考试领先班级均分。"
+            tag, analysis = (
+                "优势学科",
+                f"{sub}是{resolved_name}的优势科目，多次考试领先班级均分。",
+            )
             conclusion = f"建议保持现有学习方法，巩固{sub}优势地位。"
         elif lag > 0:
             tag = "短板学科"
             analysis = f"{sub}是{resolved_name}的薄弱科目，与班级均分差距明显。"
-            conclusion = f"建议将{sub}作为重点攻坚科目，回归基础、整理错题、针对性强化。"
+            conclusion = (
+                f"建议将{sub}作为重点攻坚科目，回归基础、整理错题、针对性强化。"
+            )
         else:
             tag, analysis = "稳定学科", f"{sub}表现相对稳定。"
             conclusion = f"维持当前{sub}学习节奏，关注细节失分点。"
@@ -239,24 +392,44 @@ def build_student_exam_data(
         tv = stu_totals.get(e)
         ca, cm = _class_avg(e), _class_max(e)
         gap = (cm - tv) if cm is not None and tv is not None else None
-        total_rows.append([e, _fmt(tv), _rank_label(tr, n_class or 0), _fmt(ca), _fmt(cm), _fmt(-gap) if gap is not None else "-"])
+        total_rows.append([
+            e,
+            _fmt(tv),
+            _rank_label(tr, n_class or 0),
+            _fmt(ca),
+            _fmt(cm),
+            _fmt(-gap) if gap is not None else "-",
+        ])
     total_analysis_table = _table(
-        ["考试", "总分", "总分排名", "班级均分", "班级最高分", "与第1名差距"], total_rows
+        ["考试", "总分", "总分排名", "班级均分", "班级最高分", "与第1名差距"],
+        total_rows,
     )
 
     first_total = stu_totals.get(exams[0]) if exams else None
     last_total = stu_totals.get(exams[-1]) if exams else None
-    total_delta = (last_total - first_total) if first_total is not None and last_total is not None else 0
+    total_delta = (
+        (last_total - first_total)
+        if first_total is not None and last_total is not None
+        else 0
+    )
     first_rank = total_ranks_map.get(exams[0]) if exams else None
     last_rank = total_ranks_map.get(exams[-1]) if exams else None
     rank_delta = (first_rank - last_rank) if first_rank and last_rank else 0
 
     if total_delta > 10 and rank_delta > 0:
-        trend_narrative = f"总体呈明显进步：总分从 {_fmt(first_total)} 升至 {_fmt(last_total)}（+{_fmt(total_delta)}），排名提升约 {rank_delta} 位。"
+        trend_narrative = (
+            f"总体呈明显进步：总分从 {_fmt(first_total)} 升至 {_fmt(last_total)}"
+            f"（+{_fmt(total_delta)}），排名提升约 {rank_delta} 位。"
+        )
     elif total_delta < -10:
-        trend_narrative = f"总体呈下滑：总分从 {_fmt(first_total)} 降至 {_fmt(last_total)}（{_fmt(total_delta)}），需警惕并调整学习策略。"
+        trend_narrative = (
+            f"总体呈下滑：总分从 {_fmt(first_total)} 降至 {_fmt(last_total)}"
+            f"（{_fmt(total_delta)}），需警惕并调整学习策略。"
+        )
     else:
-        trend_narrative = f"总分在 {_fmt(first_total)}–{_fmt(last_total)} 区间波动，整体相对稳定。"
+        trend_narrative = (
+            f"总分在 {_fmt(first_total)}–{_fmt(last_total)} 区间波动，整体相对稳定。"
+        )
 
     contrib_parts: list[str] = []
     for sub in subjects:
@@ -276,26 +449,62 @@ def build_student_exam_data(
         diffs = []
         for e in exams:
             sc, ca = stu_sub_scores[sub].get(e), _class_avg(e, sub)
-            diffs.append(_fmt(sc - ca) if sc is not None and ca is not None else "-")
+            diffs.append(
+                _fmt(sc - ca) if sc is not None and ca is not None else "-"
+            )
         if all(d == "-" for d in diffs):
             continue
-        trend = "领先扩大" if len(diffs) >= 2 and diffs[-1] != "-" and diffs[0] != "-" and float(diffs[-1]) > float(diffs[0]) + 3 else "基本持平"
+        trend = (
+            "领先扩大"
+            if len(diffs) >= 2
+            and diffs[-1] != "-"
+            and diffs[0] != "-"
+            and float(diffs[-1]) > float(diffs[0]) + 3
+            else "基本持平"
+        )
         diff_rows.append([sub, *diffs, trend])
     class_diff_table = _table(["科目", *[f"{e}差值" for e in exams], "趋势"], diff_rows)
 
     radar_vals = [
-        round(sum(stu_sub_scores[s].get(e, 0) for e in exams) / max(len([e for e in exams if e in stu_sub_scores[s]]), 1), 1)
+        round(
+            sum(stu_sub_scores[s].get(e, 0) for e in exams)
+            / max(len([e for e in exams if e in stu_sub_scores[s]]), 1),
+            1,
+        )
         for s in subjects
     ]
-    subject_radar = build_chart_option("subject_radar", {"subjects": subjects, "values": radar_vals}, f"{resolved_name} 各科均分雷达图")
+    subject_radar = build_chart_option(
+        "subject_radar",
+        {"subjects": subjects, "values": radar_vals},
+        f"{resolved_name} 各科均分雷达图",
+    )
     trend_series = [{"name": "总分", "values": [stu_totals.get(e, 0) for e in exams]}]
     for sub in subjects:
-        trend_series.append({"name": sub, "values": [stu_sub_scores[sub].get(e, 0) for e in exams]})
-    trend_line = build_chart_option("trend_line", {"x_labels": exams, "series": trend_series}, f"{resolved_name} 成绩趋势")
+        trend_series.append(
+            {"name": sub, "values": [stu_sub_scores[sub].get(e, 0) for e in exams]}
+        )
+    trend_line = build_chart_option(
+        "trend_line",
+        {"x_labels": exams, "series": trend_series},
+        f"{resolved_name} 成绩趋势",
+    )
     total_trend = build_chart_option(
         "trend_line",
-        {"x_labels": exams, "series": [{"name": "总分", "values": [stu_totals.get(e, 0) for e in exams]}]},
+        {
+            "x_labels": exams,
+            "series": [{"name": "总分", "values": [stu_totals.get(e, 0) for e in exams]}],
+        },
         f"{resolved_name} 总分走势",
+    )
+
+    insight = _pick_item_insight(item_insight, student_item_insights, resolved_name)
+    if not insight:
+        insight = _pick_item_insight(item_insight, student_item_insights, student_name)
+    if insight and not insight.get("all_knowledge") and insight.get("knowledge_rows"):
+        insight = {**insight, "all_knowledge": insight["knowledge_rows"]}
+
+    kn_insight, kn_table, kn_weak_table, kn_chart = _build_knowledge_section(
+        student_name=resolved_name, insight=insight
     )
 
     overview = (
@@ -304,14 +513,45 @@ def build_student_exam_data(
         f"{'需重点提升' + weak_sub + '。' if weak_sub else ''}"
         f"{trend_narrative}"
     )
-    assessment = f"该生呈现{'明显的偏科特征' if strong_sub and weak_sub else '相对均衡的学科结构'}。{contribution_insight}"
-    strategy_items = []
-    if weak_sub:
-        strategy_items.append(f"【{weak_sub}攻坚】作为最高优先级，回归基础、错题本、中档题训练。")
-    if strong_sub:
-        strategy_items.append(f"【{strong_sub}保持】维持现有方法，适当拓展，避免优势回落。")
-    strategy_items.append("【总分策略】合理分配时间，短板提升优先于优势拓展。")
-    recommendations = "<ul>" + "".join(f"<li>{s}</li>" for s in strategy_items) + "</ul>"
+    weak_know_names = [
+        str(k.get("knowledge_name") or k)
+        for k in (insight.get("weak_knowledge") or [])[:3]
+        if str(k.get("knowledge_name") or k) != "未关联知识点"
+    ]
+    assessment = (
+        f"该生呈现"
+        f"{'明显的偏科特征' if strong_sub and weak_sub else '相对均衡的学科结构'}。"
+        f"{contribution_insight}"
+    )
+    if weak_know_names:
+        assessment += f" 知识点层面需优先补强：{'、'.join(weak_know_names)}。"
+
+    if insight.get("weak_knowledge") or insight.get("weak_items") or insight.get(
+        "strong_knowledge"
+    ):
+        weak_avg = None
+        if weak_sub and weak_sub in stu_sub_scores:
+            vals = [v for v in stu_sub_scores[weak_sub].values() if v is not None]
+            weak_avg = round(sum(vals) / len(vals), 1) if vals else None
+        recommendations = _advice(
+            strong_sub,
+            weak_sub,
+            total_delta,
+            weak_avg,
+            item_insight=insight,
+        )
+    else:
+        strategy_items = []
+        if weak_sub:
+            strategy_items.append(
+                f"【{weak_sub}攻坚】作为最高优先级，回归基础、错题本、中档题训练。"
+            )
+        if strong_sub:
+            strategy_items.append(
+                f"【{strong_sub}保持】维持现有方法，适当拓展，避免优势回落。"
+            )
+        strategy_items.append("【总分策略】合理分配时间，短板提升优先于优势拓展。")
+        recommendations = "<ul>" + "".join(f"<li>{s}</li>" for s in strategy_items) + "</ul>"
 
     return {
         "REPORT_TITLE": f"{resolved_name} 模拟考试成绩分析报告",
@@ -333,6 +573,10 @@ def build_student_exam_data(
         "TOTAL_TREND_INSIGHT": trend_narrative,
         "CONTRIBUTION_INSIGHT": contribution_insight,
         "CLASS_DIFF_TABLE": class_diff_table,
+        "KNOWLEDGE_INSIGHT": kn_insight,
+        "KNOWLEDGE_TABLE": kn_table,
+        "WEAK_ITEM_TABLE": kn_weak_table,
+        "KNOWLEDGE_CHART": kn_chart,
         "ASSESSMENT": assessment,
         "RECOMMENDATIONS": recommendations,
         "SUBJECT_RADAR_CHART": subject_radar,

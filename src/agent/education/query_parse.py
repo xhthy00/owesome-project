@@ -18,14 +18,18 @@ _SCHOOL_PATTERNS = (
 
 _STUDENT_PATTERNS = (
     re.compile(r"[「\"'](学生\s*\d+)[」\"']"),
-    re.compile(r"(学生\s*\d+)"),
+    re.compile(r"(?<![A-Za-z0-9_])(学生\s*\d+)(?![A-Za-z0-9_])"),
     re.compile(r"[「\"']([\u4e00-\u9fff]{2,4})[」\"']"),
 )
 
+# 兼容 STU20240003、2024_STU20260052_YZZX_3884、学生2024_STU... 等
 _STUDENT_ID_PATTERNS = (
-    re.compile(r"学生编号[为：:\s]*([A-Za-z0-9]{4,24})", re.I),
-    re.compile(r"学号[为：:\s]*([A-Za-z0-9]{4,24})", re.I),
-    re.compile(r"\b(STU\d{4,})\b", re.I),
+    re.compile(r"学生编号[为：:\s]*([A-Za-z0-9_]{4,64})", re.I),
+    re.compile(r"学号[为：:\s]*([A-Za-z0-9_]{4,64})", re.I),
+    re.compile(r"(?:学生|学员)[为：:\s]*([0-9]{4}_STU[A-Za-z0-9_]+)", re.I),
+    re.compile(r"(?:学生|学员)([0-9]{4}_STU[A-Za-z0-9_]+)", re.I),
+    re.compile(r"\b([0-9]{4}_STU[A-Za-z0-9_]+)\b", re.I),
+    re.compile(r"\b(STU[A-Za-z0-9_]{4,})\b", re.I),
 )
 
 
@@ -34,14 +38,14 @@ def normalize_student_key(name: str) -> str:
 
 
 def extract_student_id_target(question: str) -> str | None:
-    """从问题中抽取学号（如 STU20240003）。"""
+    """从问题中抽取学号（如 STU20240003 / 2024_STU..._YZZX_3884）。"""
     q = (question or "").strip()
     if not q:
         return None
     for pat in _STUDENT_ID_PATTERNS:
         m = pat.search(q)
         if m:
-            return str(m.group(1)).strip().upper()
+            return str(m.group(1)).strip()
     return None
 
 
@@ -60,8 +64,36 @@ def extract_student_target(question: str) -> str | None:
     return None
 
 
+def extract_exam_name_hint(question: str) -> str | None:
+    """从问题中抽取考试名线索（含「连淮扬镇考试」这类简称）。"""
+    q = (question or "").strip()
+    if not q:
+        return None
+    # 完整/半正式考试名
+    m = re.search(
+        r"([\u4e00-\u9fff]{2,30}?(?:质量检测|模拟考试|学情检测|单元测验|期末考试|期中考试|检测试卷|调研测试))",
+        q,
+    )
+    if m:
+        return m.group(1).strip("在的于对")
+    for token in ("期中", "期末", "月考", "摸底", "模拟", "单元测验"):
+        if token in q:
+            return token
+    for pat in (
+        re.compile(r"在([\u4e00-\u9fffA-Za-z0-9]{2,40}?)(?:考试|测试|检测|调研)"),
+        re.compile(r"([\u4e00-\u9fff]{2,20}(?:联考|统考|调研|模拟))(?:考试|测试)?"),
+        re.compile(r"([\u4e00-\u9fff]{2,16})考试"),
+    ):
+        m = pat.search(q)
+        if m:
+            name = m.group(1).strip("的于对在")
+            if name and name not in ("本次", "该次", "此次", "一次", "哪次"):
+                return name
+    return None
+
+
 def is_individual_student_analysis_query(question: str) -> bool:
-    """问题是否针对单个学生（含学号/学生名 + 分析/报告意图）。"""
+    """问题是否针对单个学生（含学号/学生名 + 分析/得分/报告意图）。"""
     q = (question or "").strip()
     if not q or is_citywide_analysis_query(q):
         return False
@@ -77,8 +109,18 @@ def is_individual_student_analysis_query(question: str) -> bool:
         "诊断",
         "报告",
         "分析",
+        "得分情况",
+        "得分",
+        "成绩",
+        "小题",
+        "明细",
+        "排名",
+        "查询",
     )
-    return any(h in q for h in hints)
+    if any(h in q for h in hints):
+        return True
+    # 学生 + 考试 → 默认走个人详细得分/知识点路径
+    return "考试" in q
 
 
 _DISTRICT_RE = re.compile(r"([\u4e00-\u9fff]{2,8}(?:区|县))")
@@ -444,6 +486,271 @@ def _exec_result_score_count(exec_result: dict[str, Any] | None) -> int:
     return max(int(exec_result.get("row_count") or 0), len(rows))
 
 
+def _raw_exec_row_count(exec_result: dict[str, Any] | None) -> int:
+    if not isinstance(exec_result, dict):
+        return 0
+    rows = exec_result.get("rows") or []
+    return max(int(exec_result.get("row_count") or 0), len(rows))
+
+
+def _exec_looks_like_student_scores(exec_result: dict[str, Any]) -> bool:
+    """判断 SQL 结果是否含「学生 × 考试 × 分数」明细（而非班级 KPI 聚合）。"""
+    cols = [str(c).lower() for c in (exec_result.get("columns") or [])]
+    if not cols:
+        return False
+    blob = " ".join(cols)
+    has_student = any(
+        k in blob for k in ("student", "学生", "姓名", "学号", "stu_id", "sid")
+    )
+    has_score = any(k in blob for k in ("score", "分数", "成绩", "总分", "得分"))
+    # 纯 KPI 聚合常只有 avg/pass_rate 而无学生列
+    has_only_kpi = any(
+        k in blob for k in ("avg", "pass_rate", "excellent", "stdev", "均分", "及格率")
+    ) and not has_student
+    return bool(has_student and has_score and not has_only_kpi)
+
+
+def _exec_looks_like_item_details(exec_result: dict[str, Any]) -> bool:
+    """判断是否含小题/知识点明细（knowledge_name / question_no / score_rate）。"""
+    cols = [str(c).lower() for c in (exec_result.get("columns") or [])]
+    if not cols:
+        return False
+    blob = " ".join(cols)
+    has_kn = any(k in blob for k in ("knowledge", "知识点"))
+    has_q = any(k in blob for k in ("question", "题号", "question_no"))
+    has_rate = any(k in blob for k in ("score_rate", "得分率", "rate"))
+    return bool((has_kn or has_q) and (has_rate or "score" in blob))
+
+
+def extract_item_detail_rows_from_report_data(
+    report_data: dict[str, Any] | None,
+    *,
+    student_id: str = "",
+) -> list[dict[str, Any]]:
+    """从上游 execute_sql / tool_calls 回收小题·知识点行（Agent 常已手查 80+ 行）。"""
+    if not report_data:
+        return []
+
+    best_rows: list[dict[str, Any]] = []
+    best_n = 0
+
+    def _er_to_dicts(er: dict[str, Any]) -> list[dict[str, Any]]:
+        cols = [str(c) for c in (er.get("columns") or [])]
+        raw = list(er.get("rows") or [])
+        if not cols or not raw:
+            return []
+        out: list[dict[str, Any]] = []
+        for row in raw:
+            if isinstance(row, dict):
+                out.append(dict(row))
+            else:
+                out.append(dict(zip(cols, row)))
+        return out
+
+    def _consider(er: dict[str, Any] | None) -> None:
+        nonlocal best_rows, best_n
+        if not isinstance(er, dict) or not _exec_looks_like_item_details(er):
+            return
+        rows = _er_to_dicts(er)
+        if len(rows) > best_n:
+            best_rows = rows
+            best_n = len(rows)
+
+    for st in report_data.get("sub_tasks") or []:
+        if not isinstance(st, dict):
+            continue
+        for key in ("exec_result", "last_exec_result"):
+            er = st.get(key)
+            if isinstance(er, dict):
+                _consider(er)
+        for tc in st.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            if str(tc.get("tool") or "") != "execute_sql":
+                continue
+            data = tc.get("data")
+            if isinstance(data, dict):
+                _consider(data)
+
+    if not best_rows:
+        return []
+
+    # 列名归一，便于 aggregate_student_item_insights
+    normalized: list[dict[str, Any]] = []
+    for r in best_rows:
+        lower_map = {str(k).lower(): k for k in r.keys()}
+
+        def _get(*names: str) -> Any:
+            for n in names:
+                if n in r:
+                    return r[n]
+                lk = lower_map.get(n.lower())
+                if lk is not None:
+                    return r[lk]
+            return None
+
+        item = {
+            "student_id": _get("student_id", "student", "学号", "姓名") or "",
+            "exam_name": _get("exam_name", "exam", "考试名称", "考试") or "",
+            "question_no": _get("question_no", "题号"),
+            "knowledge_name": _get("knowledge_name", "knowledge", "知识点") or "未关联知识点",
+            "full_score": _get("full_score", "question_score", "满分"),
+            "score": _get("score", "avg_score", "得分"),
+            "score_rate": _get("score_rate", "得分率"),
+        }
+        # 若无 score_rate 但有 score/full_score，现场估算
+        if item["score_rate"] is None and item["score"] is not None and item["full_score"]:
+            try:
+                fs = float(item["full_score"])
+                if fs > 0:
+                    item["score_rate"] = round(float(item["score"]) * 100.0 / fs, 2)
+            except (TypeError, ValueError):
+                pass
+        normalized.append(item)
+
+    if student_id:
+        filtered = [
+            r
+            for r in normalized
+            if student_matches(str(r.get("student_id") or ""), student_id)
+        ]
+        # 上游 SQL 可能已按该生过滤、未带 student_id 列
+        if filtered:
+            return filtered
+        if all(not str(r.get("student_id") or "").strip() for r in normalized):
+            return normalized
+        return filtered
+    return normalized
+
+
+def extract_best_exec_result_from_report_data(
+    report_data: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """从上游 DataAnalyst 子任务选取最适合综合报告的完整 exec_result。
+
+    优先选含学生明细的结果；同行数时取更大者。避免误用「班级 KPI 聚合」结果
+    导致进步 TOP / 学生档案为空或变成班级汇总。
+
+    除 ``exec_result`` 外，也会从 ``score_rows`` / ``tool_calls`` 里的
+    ``execute_sql`` data 回收，避免上游只缓存了其中一种形态。
+    """
+    if not report_data:
+        return None
+    best: dict[str, Any] | None = None
+    best_key: tuple[int, int] = (-1, -1)  # (is_student_detail, row_count)
+
+    def _consider(er: dict[str, Any] | None) -> None:
+        nonlocal best, best_key
+        if not isinstance(er, dict):
+            return
+        cols = er.get("columns") or []
+        rows = er.get("rows") or []
+        if not cols or not rows:
+            return
+        n = _raw_exec_row_count(er)
+        key = (1 if _exec_looks_like_student_scores(er) else 0, n)
+        if key > best_key:
+            best = {
+                "columns": list(cols),
+                "rows": list(rows),
+                "row_count": n,
+            }
+            best_key = key
+
+    def _score_rows_as_exec(score_rows: list[Any]) -> dict[str, Any] | None:
+        dicts = [dict(x) for x in score_rows if isinstance(x, dict)]
+        if not dicts:
+            return None
+        cols = list(dicts[0].keys())
+        rows = [[d.get(c) for c in cols] for d in dicts]
+        return {"columns": cols, "rows": rows, "row_count": len(rows)}
+
+    for st in report_data.get("sub_tasks") or []:
+        if st.get("sub_task_agent") == "ToolExpert":
+            continue
+        # 兼容个别路径误存为 last_exec_result
+        _consider(st.get("exec_result") if isinstance(st.get("exec_result"), dict) else None)
+        _consider(st.get("last_exec_result") if isinstance(st.get("last_exec_result"), dict) else None)
+        cached = st.get("score_rows")
+        if isinstance(cached, list) and cached:
+            _consider(_score_rows_as_exec(cached))
+        for tc in st.get("tool_calls") or []:
+            if not isinstance(tc, dict):
+                continue
+            if str(tc.get("tool") or "") != "execute_sql":
+                continue
+            data = tc.get("data")
+            if isinstance(data, dict):
+                _consider(data)
+    return best
+
+
+def resolve_comprehensive_table_input(
+    *,
+    records: list[dict[str, Any]] | None = None,
+    rows: list[list[Any]] | None = None,
+    columns: list[str] | None = None,
+    last_exec_result: dict[str, Any] | None = None,
+    report_data: dict[str, Any] | None = None,
+) -> tuple[
+    list[dict[str, Any]] | None,
+    list[list[Any]] | None,
+    list[str] | None,
+    bool,
+]:
+    """为综合/学生考试报告选取最完整的表格输入。
+
+    LLM 常从 ``execute_sql`` observation 的 preview（默认 20 行）手抄 ``records`` /
+    ``rows``，导致全班 50+ 人、多次考试只剩 20 条。本函数优先使用运行时保留的
+    完整 ``last_exec_result`` 与上游 ``report_data.exec_result``。
+
+    Returns:
+        ``(records, rows, columns, used_upstream)``。若选用上游全量，则
+        ``records=None`` 且 ``rows/columns`` 为完整 SQL 结果。
+    """
+    llm_n = 0
+    if records:
+        llm_n = max(llm_n, len(records))
+    if rows:
+        llm_n = max(llm_n, len(rows))
+
+    candidates: list[dict[str, Any]] = []
+    for er in (
+        last_exec_result if isinstance(last_exec_result, dict) else None,
+        extract_best_exec_result_from_report_data(report_data),
+    ):
+        if not er:
+            continue
+        cols = er.get("columns") or []
+        raw = er.get("rows") or []
+        if cols and raw:
+            candidates.append(
+                {
+                    "columns": list(cols),
+                    "rows": list(raw),
+                    "row_count": _raw_exec_row_count(er),
+                }
+            )
+
+    best: dict[str, Any] | None = None
+    best_key: tuple[int, int] = (-1, -1)
+    for er in candidates:
+        n = int(er.get("row_count") or 0)
+        key = (1 if _exec_looks_like_student_scores(er) else 0, n)
+        if key > best_key:
+            best = er
+            best_key = key
+
+    # 上游是学生明细且明显更全，或 LLM 未传数据 → 改用上游
+    if best and best_key[0] == 1 and (best_key[1] > llm_n or llm_n == 0):
+        return None, list(best["rows"]), [str(c) for c in best["columns"]], True
+    if best and best_key[1] > llm_n:
+        return None, list(best["rows"]), [str(c) for c in best["columns"]], True
+    if llm_n == 0 and best:
+        return None, list(best["rows"]), [str(c) for c in best["columns"]], True
+    return records, rows, columns, False
+
+
 def resolve_stats_input(
     *,
     scores: list[float] | None = None,
@@ -614,14 +921,21 @@ def report_matches_student(title: str, html: str, target: str) -> bool:
 __all__ = [
     "build_edu_aware_constraints",
     "extract_district_target",
+    "extract_exam_name_hint",
     "extract_school_target",
+    "extract_student_id_target",
+    "extract_student_target",
+    "is_individual_student_analysis_query",
     "extract_student_target",
     "format_scope_constraints",
     "is_citywide_analysis_query",
     "normalize_student_key",
     "extract_upstream_participant_count",
+    "extract_best_exec_result_from_report_data",
+    "extract_item_detail_rows_from_report_data",
     "extract_score_rows_from_report_data",
     "find_upstream_fetch_data",
+    "resolve_comprehensive_table_input",
     "resolve_stats_input",
     "report_matches_school",
     "report_matches_student",

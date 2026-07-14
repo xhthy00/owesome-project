@@ -277,3 +277,152 @@ def test_action_reads_alternative_field_names(pack):
 def test_tool_pack_cannot_be_none():
     with pytest.raises(ValueError):
         ToolAction(tool_pack=None)
+
+
+def test_sanitize_strips_hand_filled_records():
+    from src.agent.core.action.tool_action import _sanitize_report_tool_args
+
+    out = _sanitize_report_tool_args(
+        "build_comprehensive_report_data_tool",
+        {
+            "class_name": "高三（10）班",
+            "records": [{"exam": "摸底", "student": "s1", "total": 90}] * 50,
+            "report_data": None,
+            "tool_runtime_ctx": {},
+        },
+        constraints={"target_classes": ["高三（10）班"]},
+        sub_task="用 education/comprehensive.html 组装报告",
+    )
+    assert out == {"class_name": "高三（10）班"}
+    assert "records" not in out
+    assert "report_data" not in out
+
+
+def test_sanitize_fills_class_name_from_sub_task():
+    from src.agent.core.action.tool_action import _sanitize_report_tool_args
+
+    out = _sanitize_report_tool_args(
+        "build_comprehensive_report_data_tool",
+        {},
+        sub_task="调 build_comprehensive_report_data_tool 为高三（10）班生成综合分析 HTML",
+    )
+    assert out.get("class_name") == "高三（10）班"
+    assert "records" not in out
+
+
+def test_json_truncate_rescues_comprehensive_report(monkeypatch, audit_spy):
+    """LLM 手填 208 条 records 导致 JSON 截断时，自动空参调综合报告工具。"""
+
+    calls: list[dict] = []
+
+    @tool()
+    def build_comprehensive_report_data_tool(
+        class_name: str = "",
+        records: list | None = None,
+        report_data: dict | None = None,
+        tool_runtime_ctx: dict | None = None,
+    ) -> dict:
+        """Build comprehensive report."""
+        calls.append(
+            {
+                "class_name": class_name,
+                "records": records,
+                "has_report_data": bool(report_data),
+                "has_ctx": bool(tool_runtime_ctx),
+            }
+        )
+        assert records is None  # 救援路径不得再接手填表
+        assert report_data and tool_runtime_ctx
+        return {"ok": True, "html": "<html>report</html>"}
+
+    report_data = {
+        "sub_tasks": [
+            {
+                "sub_task_agent": "DataAnalyst",
+                "exec_result": {
+                    "columns": ["exam_name", "student_id", "score"],
+                    "rows": [[f"考{e}", f"S{s}", 90] for e in range(2) for s in range(3)],
+                    "row_count": 6,
+                },
+            }
+        ]
+    }
+    ctx = {"last_exec_result": report_data["sub_tasks"][0]["exec_result"], "report_data": report_data}
+    pack = ToolPack(
+        tools=[build_comprehensive_report_data_tool, TerminateTool()],
+        bindings={"report_data": report_data, "tool_runtime_ctx": ctx},
+    )
+    action = ToolAction(tool_pack=pack)
+    # 模拟截断：以未闭合引号开头，parse 失败
+    ai_msg = (
+        '<think>I have the data. Now call build_comprehensive_report_data_tool with records...</think>\n'
+        '{"tool": "build_comprehensive_report_data_tool", "args": {"records": [{"exam": "摸底"'
+    )
+    out = _run(
+        action.run(
+            ai_msg,
+            sub_task="用 education/comprehensive.html 模板组装 HTML 报告",
+            constraints={"target_classes": ["高三（10）班"]},
+        )
+    )
+    assert out.is_exe_success is True
+    assert out.action == "build_comprehensive_report_data_tool"
+    assert out.extra.get("rescued_report") is True
+    assert len(calls) == 1
+    assert calls[0]["class_name"] == "高三（10）班"
+
+
+def test_comprehensive_strips_records_before_invoke():
+    """正常解析成功时也剥离 records，改走 bindings 全量数据。"""
+
+    seen: dict = {}
+
+    @tool()
+    def build_comprehensive_report_data_tool(
+        class_name: str = "",
+        records: list | None = None,
+        report_data: dict | None = None,
+        tool_runtime_ctx: dict | None = None,
+    ) -> dict:
+        """Build comprehensive report."""
+        seen["class_name"] = class_name
+        seen["records"] = records
+        seen["report_data"] = report_data
+        return {"ok": True}
+
+    report_data = {"sub_tasks": [{"sub_task_agent": "DataAnalyst", "exec_result": {
+        "columns": ["exam_name", "student_id", "score"],
+        "rows": [["摸底", "S1", 90]],
+        "row_count": 1,
+    }}]}
+    pack = ToolPack(
+        tools=[build_comprehensive_report_data_tool, TerminateTool()],
+        bindings={
+            "report_data": report_data,
+            "tool_runtime_ctx": {"report_data": report_data, "last_exec_result": report_data["sub_tasks"][0]["exec_result"]},
+        },
+    )
+    action = ToolAction(tool_pack=pack)
+    ai_msg = (
+        '{"tool": "build_comprehensive_report_data_tool", '
+        '"args": {"class_name": "高三（10）班", "records": [{"exam": "摸底", "student": "x", "total": 1}]}}'
+    )
+    out = _run(action.run(ai_msg, sub_task="综合分析报告"))
+    assert out.is_exe_success is True
+    assert seen["records"] is None
+    assert seen["class_name"] == "高三（10）班"
+    assert seen["report_data"] is report_data
+
+
+def test_bindings_win_over_llm_args():
+    from src.agent.resource.tool.pack import ToolPack
+
+    @tool()
+    def echo_ctx(report_data: dict | None = None, x: int = 0) -> dict:
+        """Echo."""
+        return {"report_data": report_data, "x": x}
+
+    pack = ToolPack(tools=[echo_ctx], bindings={"report_data": {"sub_tasks": [1]}})
+    result = _run(pack.invoke("echo_ctx", {"report_data": None, "x": 7}))
+    assert result.data["x"] == 7
+    assert result.data["report_data"] == {"sub_tasks": [1]}

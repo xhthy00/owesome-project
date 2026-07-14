@@ -631,6 +631,16 @@ async def _run_tool_expert_phase(
     workspace_oid: int = 1,
 ) -> _DataAnalystPhase:
     state = _RunState(sub_task_index=sub_task_index, constraints=constraints)
+    # ToolExpert 本阶段通常不再 execute_sql；把上游 DataAnalyst 的完整明细
+    # 写入 tool_runtime_ctx，供综合/学生报告工具空参读取（禁止 LLM 手抄 200+ 行）。
+    if constraints and isinstance(constraints.report_data, dict):
+        from src.agent.education.query_parse import extract_best_exec_result_from_report_data
+
+        state.tool_runtime_ctx["report_data"] = constraints.report_data
+        best_er = extract_best_exec_result_from_report_data(constraints.report_data)
+        if best_er:
+            state.last_exec_result = best_er
+            state.tool_runtime_ctx["last_exec_result"] = best_er
 
     if llm_client is None:
         llm_client = LangChainLlmClient()
@@ -704,11 +714,16 @@ async def _run_planner_phase(
     constraints: _RunConstraints | None = None,
 ) -> list[dict[str, str]]:
     """跑 Planner 得到 sub_task 列表。失败一律回落 [原问题]，不抛。"""
-    from src.agent.education.query_parse import is_citywide_analysis_query
+    from src.agent.education.query_parse import (
+        is_citywide_analysis_query,
+        is_individual_student_analysis_query,
+    )
     from src.agent.expand.planner import (
         build_citywide_team_plan_items,
+        build_individual_student_exam_plan_items,
         coerce_plan_items_if_needed,
         should_replace_with_citywide_plan,
+        should_replace_with_individual_student_plan,
     )
 
     await emit("agent_speak", {"agent": "Planner", "status": "start"})
@@ -716,6 +731,20 @@ async def _run_planner_phase(
     # 全市学情报告：确定性 3 步计划，跳过 Planner LLM（避免超时/回落单任务）
     if is_citywide_analysis_query(request.question):
         plan_items = build_citywide_team_plan_items(request.question)
+        await emit(
+            "agent_speak",
+            {
+                "agent": "Planner",
+                "status": "end",
+                "plan_count": len(plan_items),
+                "deterministic": True,
+            },
+        )
+        return plan_items
+
+    # 单个学生得分/知识点：确定性 2 步，避免被当成「简单查询」只出总分
+    if is_individual_student_analysis_query(request.question):
+        plan_items = build_individual_student_exam_plan_items(request.question)
         await emit(
             "agent_speak",
             {
@@ -746,6 +775,8 @@ async def _run_planner_phase(
         plan_items = [{"sub_task": request.question, "sub_task_agent": "DataAnalyst"}]
         if should_replace_with_citywide_plan(request.question, plan_items):
             plan_items = build_citywide_team_plan_items(request.question)
+        elif should_replace_with_individual_student_plan(request.question, plan_items):
+            plan_items = build_individual_student_exam_plan_items(request.question)
         else:
             plan_items = coerce_plan_items_if_needed(request.question, plan_items)
         return plan_items
@@ -768,6 +799,12 @@ async def _run_planner_phase(
     if should_replace_with_citywide_plan(request.question, plan_items):
         logger.info("planner citywide fallback: replacing %d plan(s) with deterministic 3-step plan", len(plan_items))
         plan_items = build_citywide_team_plan_items(request.question)
+    elif should_replace_with_individual_student_plan(request.question, plan_items):
+        logger.info(
+            "planner individual-student fallback: replacing %d plan(s) with 2-step diagnosis",
+            len(plan_items),
+        )
+        plan_items = build_individual_student_exam_plan_items(request.question)
     else:
         plan_items = coerce_plan_items_if_needed(request.question, plan_items)
 

@@ -648,6 +648,8 @@ def test_student_subject_diagnosis_template_renders():
     assert "各科目表现" not in html
     assert "历次成绩趋势" not in html
     assert "STU20240003" in html
+    assert ".edu-rec-card" in html
+    assert ".edu-rec-priority" in html
 
 
 def test_student_profile_template_renders():
@@ -1009,23 +1011,55 @@ def test_build_comprehensive_report_data_tool_renders_html_payload():
     assert "<strong>s1</strong>" in html
 
 
+def test_build_comprehensive_report_uses_full_last_exec_over_preview():
+    """LLM 只抄 preview 20 行时，应改用 last_exec_result 全量（52 人 × 4 考 = 208）。"""
+    exams = ["摸底", "调研", "联考", "一模"]
+    full_rows = [
+        [exams[e], f"学生{s:03d}", "数学", 80 + (s + e) % 40]
+        for e in range(4)
+        for s in range(1, 53)
+    ]
+    preview_records = [
+        {"exam": "摸底", "student": f"学生{s:03d}", "subjects": {"数学": 80.0}, "total": 80.0}
+        for s in range(1, 21)
+    ]
+    result = _run(
+        build_comprehensive_report_data_tool.execute(
+            records=preview_records,
+            exam_order=exams,
+            class_name="高三(10)班",
+            full_score=150,
+            render=False,
+            tool_runtime_ctx={
+                "last_exec_result": {
+                    "columns": ["exam_name", "student_name", "subject", "score"],
+                    "rows": full_rows,
+                    "row_count": 208,
+                }
+            },
+        )
+    )
+    assert "208 条记录" in result.content or "已自动改用完整 SQL" in result.content
+    assert "4 次考试" in result.content
+    html_data = result.data
+    assert "摸底" in html_data["COVER_SUBTITLE"]
+    assert "调研" in html_data["COVER_SUBTITLE"]
+    assert "联考" in html_data["COVER_SUBTITLE"]
+    assert "一模" in html_data["COVER_SUBTITLE"]
+    # 档案表应含第 52 位学生，而非仅 preview 的 20 人
+    assert "<strong>学生052</strong>" in html_data["STUDENT_ARCHIVE_TABLE"]
+    assert "<strong>学生021</strong>" in html_data["STUDENT_ARCHIVE_TABLE"]
+
+
 def test_comprehensive_template_renders_all_sections():
-    """单独验证 render_html_report + comprehensive 模板能渲染全部 9 章节。"""
-    data = _run(
+    """综合报告须经 build_comprehensive_report_data_tool 渲染（禁止 render 手填）。"""
+    result = _run(
         build_comprehensive_report_data_tool.execute(
             records=_sample_records(),
             exam_order=["第一次", "第二次", "第三次"],
             class_name="初三1班",
             full_score=100,
-            render=False,
-        )
-    ).data
-    result = _run(
-        render_html_report.execute(
-            datasource_id=1,
-            template_name="education/comprehensive.html",
-            data=data,
-            title="综合报告",
+            render=True,
         )
     )
     html = result.data["html"]
@@ -1041,6 +1075,109 @@ def test_comprehensive_template_renders_all_sections():
     assert "九、每位学生详细档案" in html
     assert "echarts" in html  # CDN
     assert "<strong>s1</strong>" in html  # 学生档案
+    # 第五节须是学生 TOP，不是班级学段汇总
+    assert "学生" in html
+    assert "学段" not in html or "首次考试" in html
+
+
+def test_render_html_report_blocks_comprehensive_handfill():
+    """禁止用 render_html_report 手填 comprehensive（会导致档案空/TOP 变班级汇总）。"""
+    result = _run(
+        render_html_report.execute(
+            datasource_id=1,
+            template_name="education/comprehensive.html",
+            data={"COVER_TITLE": "x", "STUDENT_ARCHIVE_TABLE": ""},
+            title="综合报告",
+        )
+    )
+    assert result.data is None or result.data.get("error") == "use_build_comprehensive_report_data_tool"
+    assert "build_comprehensive_report_data_tool" in result.content
+
+
+def test_comprehensive_progress_and_archive_are_student_level():
+    """第五节 TOP 与第九节档案必须是逐人数据。"""
+    records = []
+    for exam in ("摸底", "一模"):
+        for i in range(1, 11):
+            score = 80 + i + (10 if exam == "一模" and i <= 3 else 0) - (15 if exam == "一模" and i >= 8 else 0)
+            records.append({
+                "exam": exam,
+                "student": f"学生{i:03d}",
+                "subjects": {"数学": float(score)},
+                "total": float(score),
+            })
+    data = _run(
+        build_comprehensive_report_data_tool.execute(
+            records=records,
+            exam_order=["摸底", "一模"],
+            class_name="高三(10)班",
+            full_score=150,
+            render=False,
+        )
+    ).data
+    assert "学生001" in data["PROGRESS_TABLE"] or "学生002" in data["PROGRESS_TABLE"]
+    assert "学段" not in data["PROGRESS_TABLE"]
+    assert "第一阶段" not in data["PROGRESS_TABLE"]
+    assert "<strong>学生010</strong>" in data["STUDENT_ARCHIVE_TABLE"]
+    assert "archive-card" in data["STUDENT_ARCHIVE_TABLE"]
+    assert data["STUDENT_ARCHIVE_TABLE"].count("archive-card") >= 10
+
+
+def test_archive_advice_uses_item_insights():
+    """有小题得分率时，个性化建议须点名薄弱题/知识点，并覆盖多场考试。"""
+    from src.agent.education.comprehensive import build_comprehensive_data
+
+    records = [
+        {"exam": "摸底", "student": "STU01", "subjects": {"数学": 100}, "total": 100},
+        {"exam": "一模", "student": "STU01", "subjects": {"数学": 90}, "total": 90},
+        {"exam": "摸底", "student": "STU02", "subjects": {"数学": 80}, "total": 80},
+        {"exam": "一模", "student": "STU02", "subjects": {"数学": 95}, "total": 95},
+    ]
+    insights = {
+        "STU01": {
+            "exam_names": ["摸底", "一模"],
+            "weak_items": [
+                {"question_no": 8, "knowledge_name": "三角函数", "score_rate": 25, "exam_name": "摸底"},
+                {"question_no": 12, "knowledge_name": "导数", "score_rate": 20, "exam_name": "一模"},
+                {"question_no": 15, "knowledge_name": "立体几何", "score_rate": 35, "exam_name": "一模"},
+            ],
+            "weak_knowledge": [{"knowledge_name": "导数", "score_rate": 40}],
+            "strong_knowledge": [{"knowledge_name": "集合", "score_rate": 95}],
+        }
+    }
+    data = build_comprehensive_data(
+        records,
+        ["摸底", "一模"],
+        class_name="高三(10)班",
+        full_score=150,
+        student_item_insights=insights,
+    )
+    arch = data["STUDENT_ARCHIVE_TABLE"]
+    assert "archive-card" in arch
+    assert "第12题" in arch
+    assert "导数" in arch
+    assert "小题补漏" in arch
+    assert "摸底" in arch
+    assert "一模" in arch
+    assert "成绩是相对薄弱" not in arch
+
+
+def test_aggregate_student_item_insights():
+    from src.agent.education.comprehensive import aggregate_student_item_insights
+
+    rows = [
+        {"student_id": "A", "exam_name": "摸底", "question_no": 1, "knowledge_name": "函数", "score_rate": 40},
+        {"student_id": "A", "exam_name": "摸底", "question_no": 2, "knowledge_name": "函数", "score_rate": 90},
+        {"student_id": "A", "exam_name": "一模", "question_no": 3, "knowledge_name": "概率", "score_rate": 30},
+        {"student_id": "B", "exam_name": "一模", "question_no": 1, "knowledge_name": "函数", "score_rate": 100},
+    ]
+    out = aggregate_student_item_insights(rows, weak_threshold=60)
+    assert "A" in out
+    assert len(out["A"]["weak_items"]) == 2
+    exams = {str(it.get("exam_name")) for it in out["A"]["weak_items"]}
+    assert exams == {"摸底", "一模"}
+    assert out["A"]["exam_names"] == ["摸底", "一模"]
+    assert out["B"]["weak_items"] == []
 
 
 # ---- 意图识别：综合报告 ----------------------------------------------------
@@ -1115,7 +1252,7 @@ def test_comprehensive_level_labels_not_all_D():
     for fs in (150, 450, None):
         data = build_comprehensive_data(records, ["一", "二"], class_name="c",
                                         full_score=fs, config=load_config())
-        levels = re.findall(r"border-radius:12px[^>]*>([^<]+)</span>",
+        levels = re.findall(r'class="level-pill"[^>]*>([^<]+)</span>',
                             data["STUDENT_ARCHIVE_TABLE"])
         assert len(levels) == 3
         assert set(levels) != {"D (待提升)"}, f"full_score={fs} 时不应全员 D，实际 {levels}"
@@ -1136,7 +1273,7 @@ def test_comprehensive_level_full_score_misread_as_total_falls_back():
     # full_score=450（实际是总分满分），candidate=450*3=1350 > 375*1.3 → 回退 max_total
     data = build_comprehensive_data(records, ["一"], class_name="c",
                                     full_score=450, config=load_config())
-    levels = re.findall(r"border-radius:12px[^>]*>([^<]+)</span>",
+    levels = re.findall(r'class="level-pill"[^>]*>([^<]+)</span>',
                         data["STUDENT_ARCHIVE_TABLE"])
     assert set(levels) != {"D (待提升)"}
 

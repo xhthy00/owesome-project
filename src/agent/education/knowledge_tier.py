@@ -114,16 +114,173 @@ def build_question_type_table_html(item_rows: list[dict[str, Any]] | None = None
     )
 
 
-def build_ability_tier_insight(summary: dict[str, Any]) -> str:
-    weak = summary.get("weak_levels") or []
-    if not weak:
-        return "<p>各能力层级掌握情况整体平稳。</p>"
-    parts = []
-    for s in weak[:3]:
-        label = _label(str(s.get("ability_level") or ""))
-        rate = _fmt(s.get("avg_score_rate"))
-        parts.append(f"「{label}」层级平均得分率 {rate}%，需重点突破")
-    return f"<p>{'；'.join(parts)}。</p>"
+def _qtype_averages(item_rows: list[dict[str, Any]]) -> list[tuple[str, float, int]]:
+    from collections import defaultdict
+
+    buckets: dict[str, list[float]] = defaultdict(list)
+    for r in item_rows:
+        qt = str(r.get("question_type") or "").strip()
+        if not qt:
+            continue
+        try:
+            rate = float(r["score_rate"]) if r.get("score_rate") is not None else None
+        except (TypeError, ValueError):
+            rate = None
+        if rate is None:
+            continue
+        buckets[qt].append(rate)
+    return [
+        (qt, sum(rates) / len(rates), len(rates))
+        for qt, rates in buckets.items()
+        if rates
+    ]
+
+
+def _knowledge_sorted(knowledge_rows: list[dict[str, Any]]) -> list[tuple[str, float]]:
+    out: list[tuple[str, float]] = []
+    for r in knowledge_rows:
+        name = str(r.get("knowledge_name") or "").strip()
+        if not name:
+            continue
+        try:
+            rate = float(r["score_rate"]) if r.get("score_rate") is not None else None
+        except (TypeError, ValueError):
+            rate = None
+        if rate is None:
+            continue
+        out.append((name, rate))
+    out.sort(key=lambda x: x[1])
+    return out
+
+
+def build_ability_tier_insight(
+    summary: dict[str, Any] | None = None,
+    *,
+    knowledge_rows: list[dict[str, Any]] | None = None,
+    item_rows: list[dict[str, Any]] | None = None,
+    weak_threshold: float = 60.0,
+) -> str:
+    """生成能力画像文字：必须点出优点与问题，禁止空泛「整体平稳」。"""
+    summary = summary or {}
+    knowledge_rows = list(knowledge_rows or [])
+    item_rows = list(item_rows or [])
+    parts: list[str] = []
+
+    # 1) 能力层级（有真实分级时才写；忽略 unknown 空壳）
+    level_rows = [
+        s for s in (summary.get("by_ability_level") or [])
+        if str(s.get("ability_level") or "") not in ("", "unknown", "None")
+        and s.get("avg_score_rate") is not None
+    ]
+    if level_rows:
+        weak_lv = sorted(
+            [s for s in level_rows if float(s["avg_score_rate"]) < weak_threshold],
+            key=lambda s: float(s["avg_score_rate"]),
+        )
+        strong_lv = sorted(
+            [s for s in level_rows if float(s["avg_score_rate"]) >= weak_threshold],
+            key=lambda s: float(s["avg_score_rate"]),
+            reverse=True,
+        )
+        if strong_lv:
+            top = strong_lv[0]
+            parts.append(
+                f"能力层级上，「{_label(str(top.get('ability_level')))}」相对扎实"
+                f"（均分率 {_fmt(top.get('avg_score_rate'))}%）"
+            )
+        if weak_lv:
+            bits = [
+                f"「{_label(str(s.get('ability_level')))}」仅 {_fmt(s.get('avg_score_rate'))}%"
+                for s in weak_lv[:3]
+            ]
+            parts.append(
+                "短板清晰：" + "、".join(bits) + "，必须优先突破，不能再按「均衡」自我安慰"
+            )
+        elif len(level_rows) >= 2:
+            rates = [float(s["avg_score_rate"]) for s in level_rows]
+            gap = max(rates) - min(rates)
+            if gap >= 12:
+                lo = min(level_rows, key=lambda s: float(s["avg_score_rate"]))
+                hi = max(level_rows, key=lambda s: float(s["avg_score_rate"]))
+                parts.append(
+                    f"层级间落差达 {_fmt(gap)} 个百分点："
+                    f"「{_label(str(hi.get('ability_level')))}」{_fmt(hi.get('avg_score_rate'))}% "
+                    f"明显强于「{_label(str(lo.get('ability_level')))}」"
+                    f"{_fmt(lo.get('avg_score_rate'))}%，优势不均衡"
+                )
+
+    # 2) 题型表现——截图场景的主信号
+    qtypes = _qtype_averages(item_rows)
+    if qtypes:
+        qtypes_sorted = sorted(qtypes, key=lambda x: x[1])
+        weak_qt = [x for x in qtypes_sorted if x[1] < weak_threshold]
+        strong_qt = [x for x in sorted(qtypes, key=lambda x: -x[1]) if x[1] >= weak_threshold]
+        if len(qtypes_sorted) >= 2:
+            lo_name, lo_rate, _ = qtypes_sorted[0]
+            hi_name, hi_rate, _ = qtypes_sorted[-1]
+            gap = hi_rate - lo_rate
+            if gap >= 8:
+                parts.append(
+                    f"题型分化明显：强项「{hi_name}」{_fmt(hi_rate)}%，"
+                    f"弱项「{lo_name}」仅 {_fmt(lo_rate)}%，落差 {_fmt(gap)} 个百分点——"
+                    f"说明并非「全面平稳」，而是局部能力拖后腿"
+                )
+        if strong_qt and not any("强项" in p or "相对扎实" in p for p in parts):
+            s_bits = [f"「{n}」{_fmt(r)}%" for n, r, _ in strong_qt[:2]]
+            parts.append("优势题型：" + "、".join(s_bits) + "，可作保分盘")
+        if weak_qt:
+            w_bits = [f"「{n}」{_fmt(r)}%（{c}题）" for n, r, c in weak_qt[:3]]
+            parts.append(
+                "问题题型：" + "、".join(w_bits)
+                + "——客观题/基础题失分往往比大题更伤总分，必须专项纠错"
+            )
+        elif qtypes_sorted and qtypes_sorted[0][1] < weak_threshold + 5:
+            n, r, c = qtypes_sorted[0]
+            parts.append(
+                f"相对最弱仍是「{n}」（{_fmt(r)}%，{c}题），虽未全面崩盘，但已接近警戒线，不宜掉以轻心"
+            )
+
+    # 3) 知识点——点名最差与最好
+    kn = _knowledge_sorted(knowledge_rows)
+    if kn:
+        weak_kn = [x for x in kn if x[1] < weak_threshold]
+        strong_kn = [x for x in reversed(kn) if x[1] >= max(weak_threshold, 80)][:2]
+        if strong_kn:
+            parts.append(
+                "知识点亮点："
+                + "、".join(f"「{n}」{_fmt(r)}%" for n, r in strong_kn)
+                + "，说明并非基础全面塌方"
+            )
+        if weak_kn:
+            worst = weak_kn[:3]
+            names = "、".join(f"「{n}」仅 {_fmt(r)}%" for n, r in worst)
+            verdict = (
+                "属于严重失分点，必须本周清零"
+                if worst[0][1] < 40
+                else "已跌破及格线，拖累整卷表现"
+            )
+            parts.append(f"知识点硬伤：{names}，{verdict}")
+        elif kn and kn[0][1] < 75:
+            n, r = kn[0]
+            parts.append(f"相对薄弱知识点是「{n}」（{_fmt(r)}%），建议作为下一轮专练入口")
+
+    if not parts:
+        # 真无数据时才保守表述；仍避免假「平稳」
+        return (
+            "<p>暂无足够的能力层级/题型/知识点明细，无法给出精准画像；"
+            "请核对小题与知识点数据后再诊断。</p>"
+        )
+
+    # 组装为可读段落
+    lead = parts[0]
+    rest = parts[1:]
+    html = [f"<p><strong>诊断结论：</strong>{lead}。</p>"]
+    if rest:
+        html.append("<ul class='edu-insight-list'>")
+        for p in rest:
+            html.append(f"<li>{p}。</li>")
+        html.append("</ul>")
+    return "".join(html)
 
 
 __all__ = [

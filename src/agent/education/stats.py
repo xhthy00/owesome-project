@@ -456,18 +456,35 @@ def compute_top_progress_regress(
 ) -> dict[str, Any]:
     """进步/退步最快 TOP N。
 
+    仅将 ``delta > 0`` 计入进步、``delta < 0`` 计入退步；持平不混入 TOP 表，
+    避免「进步最快」表里出现班级阶段/零变化行。
+
     Returns:
         ``{"progress": [...], "regress": [...], "chart_items": [{"name","value","color"}]}``。
-        chart_items 已按 delta 降序，进步绿、退步红，可直接喂给
+        chart_items 已按 |delta| 取两侧极值，进步绿、退步红，可直接喂给
         ``build_chart_option("progress_regress_bar", ...)``。
     """
-    sorted_desc = sorted(deltas, key=lambda x: float(x.get(value_key) or 0), reverse=True)
-    progress = sorted_desc[:top_n]
-    regress = list(reversed(sorted_desc[-top_n:]))  # 退步最严重在前
+    scored = [
+        d for d in deltas
+        if d.get(name_key) is not None and d.get(value_key) is not None
+    ]
+    progress = sorted(
+        [d for d in scored if float(d.get(value_key) or 0) > 0],
+        key=lambda x: float(x.get(value_key) or 0),
+        reverse=True,
+    )[:top_n]
+    regress = sorted(
+        [d for d in scored if float(d.get(value_key) or 0) < 0],
+        key=lambda x: float(x.get(value_key) or 0),
+    )[:top_n]
+    chart_src = list(progress) + list(regress)
     chart_items = [
-        {"name": str(d.get(name_key) or ""), "value": float(d.get(value_key) or 0),
-         "color": "#2ecc71" if float(d.get(value_key) or 0) >= 0 else "#e74c3c"}
-        for d in sorted_desc[: top_n * 2]
+        {
+            "name": str(d.get(name_key) or ""),
+            "value": float(d.get(value_key) or 0),
+            "color": "#2ecc71" if float(d.get(value_key) or 0) >= 0 else "#e74c3c",
+        }
+        for d in chart_src
     ]
     return {"progress": progress, "regress": regress, "chart_items": chart_items}
 

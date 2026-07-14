@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
@@ -28,6 +29,8 @@ from src.agent.education.schema_mapping import (
     load_schema_from_config,
     validate_mapping_against_schema,
 )
+
+logger = logging.getLogger(__name__)
 from src.agent.education.aggregation import DIMENSIONS, aggregate_by as _aggregate_by
 from src.agent.education.capability import detect_available_dimensions
 from src.agent.education.cross_analysis import cross_analyze as _cross_analyze
@@ -262,6 +265,113 @@ _SCORE_FIELD_HINTS = (
     "成绩",
 )
 _FULL_SCORE_FIELD_HINTS = ("exam_score", "full_score", "paper_score", "满分")
+_EXAM_FIELD_HINTS = ("exam_name", "exam", "考试名称", "考试")
+_STUDENT_FIELD_HINTS = (
+    "student_name",
+    "student_id",
+    "student",
+    "姓名",
+    "学生姓名",
+    "学号",
+    "学生",
+)
+_SUBJECT_FIELD_HINTS = ("subject_name", "subject", "科目")
+_TOTAL_FIELD_HINTS = ("total_score", "total", "总分")
+
+
+def _guess_long_table_fields(
+    columns: list[str],
+    *,
+    exam_field: str,
+    student_field: str,
+    subject_field: str,
+    score_field: str,
+    total_field: str,
+) -> tuple[str, str, str, str, str]:
+    """按列名猜测长表字段；缺省名不在 columns 时自动替换。"""
+    col_set = {str(c) for c in columns}
+    if exam_field not in col_set:
+        exam_field = _guess_field(columns, _EXAM_FIELD_HINTS) or exam_field
+    if student_field not in col_set:
+        student_field = _guess_field(columns, _STUDENT_FIELD_HINTS) or student_field
+    if subject_field not in col_set:
+        subject_field = _guess_field(columns, _SUBJECT_FIELD_HINTS) or subject_field
+    if score_field not in col_set:
+        score_field = _guess_field(columns, _SCORE_FIELD_HINTS) or score_field
+    if total_field not in col_set:
+        total_field = _guess_field(columns, _TOTAL_FIELD_HINTS) or total_field
+    return exam_field, student_field, subject_field, score_field, total_field
+
+
+def _aggregate_long_table_records(
+    rows: list[list[Any]],
+    columns: list[str],
+    *,
+    exam_field: str,
+    student_field: str,
+    subject_field: str,
+    score_field: str,
+    total_field: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """长表 (exam×student×subject) → records；返回 (records, exam_order)。"""
+    idx = {c: i for i, c in enumerate(columns)}
+
+    def _cell(row: list[Any], key: str, default: Any = None) -> Any:
+        i = idx.get(key)
+        if i is None or i >= len(row):
+            return default
+        return row[i]
+
+    agg: dict[tuple[str, str], dict[str, Any]] = {}
+    exam_seen: list[str] = []
+    exam_set: set[str] = set()
+    for row in rows:
+        exam = str(_cell(row, exam_field, "") or "")
+        student = str(_cell(row, student_field, "") or "")
+        subject = str(_cell(row, subject_field, "") or "")
+        if not exam or not student:
+            continue
+        if exam not in exam_set:
+            exam_set.add(exam)
+            exam_seen.append(exam)
+        key = (exam, student)
+        slot = agg.setdefault(key, {"exam": exam, "student": student, "subjects": {}, "total": 0})
+        score_raw = _cell(row, score_field)
+        if subject:
+            try:
+                slot["subjects"][subject] = float(score_raw)
+            except (TypeError, ValueError):
+                pass
+        total_val = _cell(row, total_field) if total_field in idx else None
+        if total_val is not None:
+            try:
+                tv = float(total_val)
+                # total 列存在但为 0 时仍应累加各科（常见：长表每行 total 列填 0）
+                if tv > 0:
+                    slot["total"] = tv
+            except (TypeError, ValueError):
+                pass
+        elif subject and subject not in (slot.get("_summed") or set()):
+            slot.setdefault("_summed", set()).add(subject)
+            try:
+                slot["total"] = slot.get("total", 0) + float(score_raw or 0)
+            except (TypeError, ValueError):
+                pass
+        elif not subject and score_raw is not None:
+            # 单科宽表：无 subject 列时用 score 作为总分
+            try:
+                sv = float(score_raw)
+                if sv > 0:
+                    slot["total"] = sv
+                    slot["subjects"].setdefault("成绩", sv)
+            except (TypeError, ValueError):
+                pass
+    for slot in agg.values():
+        subs = slot.get("subjects") or {}
+        if subs:
+            slot["total"] = sum(float(v) for v in subs.values())
+        slot.pop("_summed", None)
+    return list(agg.values()), exam_seen
 
 
 def _coerce_exec_result(
@@ -1243,7 +1353,9 @@ def _diagnosis_where_parts(
 ) -> list[str]:
     parts: list[str] = []
     if student_id:
-        parts.append(f"sc.student_id = '{_esc(student_id)}'")
+        sid = _esc(student_id.strip())
+        # 精确 + 模糊：兼容完整学号与短号
+        parts.append(f"(sc.student_id = '{sid}' OR sc.student_id LIKE '%{sid}%')")
     if school_name:
         parts.append(f"sch.name = '{_esc(school_name)}'")
     if class_name:
@@ -1597,6 +1709,69 @@ def _fmt_val(v: Any) -> str:
     return str(v)
 
 
+def _coerce_numeric_score(v: Any) -> float | None:
+    """将得分字段转为数值；拒绝学号等非分数字符串。"""
+    if v is None or isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    text = str(v).strip()
+    if not text or text in {"-", "—", "None", "null"}:
+        return None
+    # 学号形如 2024_STU... / 含字母下划线的长串，绝不当得分
+    if re.search(r"[A-Za-z_]", text) and not re.fullmatch(r"[+-]?\d+(\.\d+)?", text):
+        return None
+    try:
+        return float(text.replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _score_column_index(col_l: list[str]) -> int | None:
+    """定位成绩列：优先 score/得分，绝不回退到第 0 列（常为学号）。"""
+    preferred = ("score", "得分", "总分", "分数", "成绩", "total_score", "exam_total")
+    for name in preferred:
+        for i, c in enumerate(col_l):
+            if c == name:
+                return i
+    avoid = {"exam_score", "满分", "full_score", "student_id", "id", "学号"}
+    for i, c in enumerate(col_l):
+        if c in avoid or "rank" in c or "率" in c:
+            continue
+        if "score" in c or (c.endswith("分") and "排" not in c and "满" not in c):
+            return i
+    return None
+
+
+def _pick_score_from_score_rows(
+    score_rows: list[dict[str, Any]],
+    student_id: str,
+) -> tuple[float | None, Any]:
+    """从 score_rows 取该生数值得分，并在可能时给出班级内名次。"""
+    from src.agent.education.query_parse import student_matches
+
+    sid = (student_id or "").strip()
+    scored: list[tuple[float, bool]] = []
+    own: float | None = None
+    for r in score_rows:
+        if not isinstance(r, dict):
+            continue
+        val = _coerce_numeric_score(r.get("score"))
+        if val is None:
+            continue
+        is_self = student_matches(str(r.get("student_id") or r.get("id") or ""), sid)
+        scored.append((val, is_self))
+        if is_self and own is None:
+            own = val
+    if own is None and len(scored) == 1:
+        own = scored[0][0]
+    if own is None:
+        return None, None
+    # 同分并列：高于本人的人数 + 1
+    class_rank = 1 + sum(1 for s, _ in scored if s > own)
+    return own, class_rank
+
+
 def _report_scope_subtitle(school_name: str = "", class_name: str = "") -> str:
     """报告副标题，过滤 None/空班级。"""
     parts: list[str] = []
@@ -1850,6 +2025,12 @@ def build_comprehensive_report_data_tool(
     total_field: str = "total",
     full_score: float | None = None,
     render: bool = True,
+    report_data: dict[str, Any] | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+    datasource_id: int | None = None,
+    school_name: str = "",
+    subject_name: str = "",
+    workspace_oid: int | None = None,
 ) -> ToolResult:
     """一次性组装「多次考试综合分析报告」并**直接渲染 HTML**（9 个维度）。
 
@@ -1867,6 +2048,13 @@ def build_comprehensive_report_data_tool(
       一名学生一个科目一条分数），本工具自动按 (exam, student) 聚合 ``subjects``
       与 ``total``。``total_field`` 列若不存在则按学生各科求和。
 
+    **全量兜底**：运行时会注入 ``tool_runtime_ctx.last_exec_result`` /
+    ``report_data``；若 LLM 只抄了 execute_sql preview（默认 20 行），工具自动
+    改用完整 SQL 结果，避免报告只含部分学生/单次考试。
+
+    有 ``datasource_id`` 时，会按班级拉取<strong>全部考试</strong>的
+    ``tb_score_detail`` 小题，融入第九节个性化建议（按考试分别列出薄弱小题/知识点）。
+
     Args:
         exam_order: 考试顺序（最早→最近）；为空时按出现顺序去重。
         class_name: 班级名，用于封面标题。
@@ -1877,9 +2065,38 @@ def build_comprehensive_report_data_tool(
         render=True 时 ``data`` 为 HTML 报告载荷（``output_type=html``），可直接
         推送前端；render=False 时 ``data`` 为模板字段字典。
     """
+    from src.agent.education.comprehensive import aggregate_student_item_insights
+    from src.agent.education.query_parse import resolve_comprehensive_table_input
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    records, rows, columns, used_upstream = resolve_comprehensive_table_input(
+        records=records,
+        rows=rows,
+        columns=columns,
+        last_exec_result=ctx.get("last_exec_result"),
+        report_data=report_data or ctx.get("report_data"),
+    )
+
+    if not records and not (rows and columns) and datasource_id and class_name:
+        fetched = _fetch_class_score_long_table(
+            datasource_id=int(datasource_id),
+            class_name=class_name,
+            school_name=school_name,
+            subject_name=subject_name,
+            workspace_oid=workspace_oid,
+        )
+        if fetched:
+            rows = list(fetched["rows"])
+            columns = [str(c) for c in fetched["columns"]]
+            used_upstream = True
+
     if not records and not (rows and columns):
         return ToolResult(
-            content="build_comprehensive_report_data_tool 失败：需提供 records 或 (rows + columns)。",
+            content=(
+                "build_comprehensive_report_data_tool 失败：未找到上游学生×考试明细。"
+                "请只传 `class_name`（**禁止**手填 records，会截断）；"
+                "确保上游 DataAnalyst 已 execute_sql 查出学生明细。"
+            ),
             data={"error": "missing input"},
         )
 
@@ -1890,59 +2107,100 @@ def build_comprehensive_report_data_tool(
                 content="build_comprehensive_report_data_tool 失败：columns 为空。",
                 data={"error": "empty columns"},
             )
-        idx = {c: i for i, c in enumerate(columns)}
-        def _cell(row, key, default=None):
-            i = idx.get(key)
-            if i is None or i >= len(row):
-                return default
-            return row[i]
-        agg: dict[tuple[str, str], dict[str, Any]] = {}
-        exam_seen: list[str] = []
-        exam_set: set[str] = set()
-        for row in rows or []:
-            exam = str(_cell(row, exam_field, "") or "")
-            student = str(_cell(row, student_field, "") or "")
-            subject = str(_cell(row, subject_field, "") or "")
-            if not exam or not student:
-                continue
-            if exam not in exam_set:
-                exam_set.add(exam)
-                exam_seen.append(exam)
-            key = (exam, student)
-            slot = agg.setdefault(key, {"exam": exam, "student": student, "subjects": {}, "total": 0})
-            if subject:
-                try:
-                    slot["subjects"][subject] = float(_cell(row, score_field))
-                except (TypeError, ValueError):
-                    pass
-            total_val = _cell(row, total_field)
-            if total_val is not None:
-                try:
-                    tv = float(total_val)
-                    # total 列存在但为 0 时仍应累加各科（常见：长表每行 total 列填 0）
-                    if tv > 0:
-                        slot["total"] = tv
-                except (TypeError, ValueError):
-                    pass
-            elif subject and subject not in (slot.get("_summed") or set()):
-                slot.setdefault("_summed", set()).add(subject)
-                try:
-                    slot["total"] = slot.get("total", 0) + float(_cell(row, score_field) or 0)
-                except (TypeError, ValueError):
-                    pass
-        for slot in agg.values():
-            subs = slot.get("subjects") or {}
-            if subs:
-                slot["total"] = sum(float(v) for v in subs.values())
-            slot.pop("_summed", None)
-        records = [v for v in agg.values()]
+        exam_field, student_field, subject_field, score_field, total_field = (
+            _guess_long_table_fields(
+                columns,
+                exam_field=exam_field,
+                student_field=student_field,
+                subject_field=subject_field,
+                score_field=score_field,
+                total_field=total_field,
+            )
+        )
+        records, exam_seen = _aggregate_long_table_records(
+            rows or [],
+            columns,
+            exam_field=exam_field,
+            student_field=student_field,
+            subject_field=subject_field,
+            score_field=score_field,
+            total_field=total_field,
+        )
         exam_order = exam_order or exam_seen
 
-    data = _build_comprehensive_data(records, exam_order or [], class_name=class_name, full_score=full_score)
+    # 推断全部考试 / 科目，用于拉取小题明细（覆盖历次考试，非仅最近一次）
+    exams_in_data: list[str] = []
+    seen_e: set[str] = set()
+    for r in records:
+        e = str(r.get("exam") or "")
+        if e and e not in seen_e:
+            seen_e.add(e)
+            exams_in_data.append(e)
+    if exam_order:
+        ordered: list[str] = []
+        for e in exam_order:
+            if e in seen_e and e not in ordered:
+                ordered.append(e)
+        for e in exams_in_data:
+            if e not in ordered:
+                ordered.append(e)
+        exams_in_data = ordered or exams_in_data
+    if not subject_name:
+        sub_counts: dict[str, int] = {}
+        for r in records:
+            for s in (r.get("subjects") or {}):
+                if s and s not in ("成绩", "总分"):
+                    sub_counts[s] = sub_counts.get(s, 0) + 1
+        subject_name = max(sub_counts, key=sub_counts.get) if sub_counts else ""
+
+    item_note = ""
+    student_item_insights: dict[str, Any] = {}
+    constraints = ctx.get("constraints") if isinstance(ctx.get("constraints"), dict) else {}
+    if not school_name:
+        school_name = str(constraints.get("target_school") or "")
+    if datasource_id and class_name and exams_in_data:
+        try:
+            detail_rows = _fetch_class_student_item_rows(
+                datasource_id=int(datasource_id),
+                class_name=class_name,
+                exam_names=exams_in_data,
+                subject_name=subject_name,
+                school_name=school_name,
+                workspace_oid=workspace_oid,
+            )
+            student_item_insights = aggregate_student_item_insights(detail_rows)
+            if student_item_insights:
+                n_exams_items = len({
+                    str(it.get("exam_name") or "")
+                    for ins in student_item_insights.values()
+                    for it in (ins.get("weak_items") or [])
+                    if it.get("exam_name")
+                }) or len(exams_in_data)
+                item_note = (
+                    f"，已融合 {len(student_item_insights)} 人、"
+                    f"{n_exams_items} 场考试小题诊断"
+                )
+            else:
+                item_note = "（未查到小题明细，建议基于总分趋势）"
+        except Exception as e:  # noqa: BLE001
+            item_note = f"（小题拉取跳过：{e}）"
+
+    data = _build_comprehensive_data(
+        records,
+        exam_order or exams_in_data,
+        class_name=class_name,
+        full_score=full_score,
+        student_item_insights=student_item_insights or None,
+    )
+    n_exams = len({str(r.get("exam") or "") for r in records if r.get("exam")})
+    upstream_note = "（已自动改用完整 SQL 结果，避免 preview 截断）" if used_upstream else ""
 
     if not render:
         return ToolResult(
-            content=f"综合报告 data 已组装（{len(records)} 条记录、{len(exam_order or [])} 次考试）。render=False，未渲染。",
+            content=(
+                f"综合报告 data 已组装（{len(records)} 条记录、{n_exams} 次考试"
+                f"{item_note}）{upstream_note}。render=False，未渲染。"
+            ),
             data=data,
         )
 
@@ -1973,16 +2231,241 @@ def build_comprehensive_report_data_tool(
     }
     return ToolResult(
         content=(
-            f"综合分析报告已渲染完成（{len(records)} 条记录、{len(exam_order or [])} 次考试、"
-            f"HTML {len(safe_html)} 字符）。报告已自动推送到前端，直接调 terminate 结束即可。"
+            f"综合分析报告已渲染完成（{len(records)} 条记录、{n_exams} 次考试、"
+            f"HTML {len(safe_html)} 字符{item_note}）{upstream_note}。"
+            "报告已自动推送到前端，直接调 terminate 结束即可。"
         ),
         data=payload,
     )
 
 
+def _fetch_class_student_item_rows(
+    *,
+    datasource_id: int,
+    class_name: str = "",
+    exam_names: list[str] | None = None,
+    exam_name: str = "",
+    subject_name: str = "",
+    school_name: str = "",
+    student_id: str = "",
+    workspace_oid: int | None = None,
+) -> list[dict[str, Any]]:
+    """一次查出班级（或指定学生）在指定考试中每位学生的小题得分率。"""
+    from src.agent.resource.tool.business import _load_datasource
+    from src.datasource.service.sql_auto_fix import run_sql_with_auto_fix
+
+    names = [str(n).strip() for n in (exam_names or []) if str(n).strip()]
+    if not names and exam_name:
+        names = [exam_name.strip()]
+
+    db_type, config, _ds_name = _load_datasource(datasource_id, workspace_oid)
+    parts = _diagnosis_where_parts(
+        school_name=school_name if school_name and not _is_unsafe_school_name_filter(school_name) else "",
+        class_name=class_name,
+        subject_name=subject_name,
+        student_id=student_id.strip() if student_id else "",
+        exam_name="",  # 多场考试用下方 OR 条件
+        exam_id_expr="sd.exam_id",
+        skip_exam_name=True,
+    )
+    if names:
+        exam_ors: list[str] = []
+        for n in names:
+            for c in exam_name_like_candidates(n):
+                exam_ors.append(f"e.exam_name LIKE '%{_esc(c)}%'")
+        # 去重保持顺序
+        seen_or: set[str] = set()
+        uniq_ors: list[str] = []
+        for o in exam_ors:
+            if o not in seen_or:
+                seen_or.add(o)
+                uniq_ors.append(o)
+        if uniq_ors:
+            parts.append("(" + " OR ".join(uniq_ors) + ")")
+    where = (" WHERE " + " AND ".join(parts)) if parts else ""
+
+    full_score_expr = "COALESCE(eq.question_score, sd.question_score)"
+    rate = _score_rate_sql("sd.score", full_score_expr, db_type)
+    sql = (
+        "SELECT sd.student_id AS student_id,\n"
+        "       e.exam_name AS exam_name,\n"
+        "       sd.question_no AS question_no,\n"
+        "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+        f"       {full_score_expr} AS full_score,\n"
+        "       sd.score AS score,\n"
+        f"       {rate} AS score_rate\n"
+        "FROM tb_score_detail sd\n"
+        "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
+        "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
+        "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+        "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
+        "JOIN tb_school sch ON sc.school_id = sch.id\n"
+        "JOIN tb_exam e ON sc.exam_id = e.id"
+        + where
+        + "\nORDER BY sd.student_id, e.exam_name, sd.question_no\nLIMIT 50000"
+    )
+    outcome = run_sql_with_auto_fix(sql, db_type=db_type, config=config)
+    if not outcome.success:
+        return []
+    return _rows_to_dicts(outcome.result if isinstance(outcome.result, dict) else None)
+
+
+def _fetch_student_item_rows_direct(
+    *,
+    datasource_id: int,
+    student_id: str,
+    subject_name: str = "",
+    workspace_oid: int | None = None,
+) -> list[dict[str, Any]]:
+    """按学号直接查小题明细：不强制班级/考试名，避免过滤过严导致空结果。
+
+    以 ``sd.student_id`` 为主条件，``tb_score`` 改为 LEFT JOIN（无总分行仍能出小题）。
+    """
+    from src.agent.resource.tool.business import _load_datasource
+    from src.datasource.service.sql_auto_fix import run_sql_with_auto_fix
+
+    sid = (student_id or "").strip()
+    if not sid:
+        return []
+    db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
+    parts = [
+        f"(sd.student_id = '{_esc(sid)}' OR sd.student_id LIKE '%{_esc(sid)}%')"
+    ]
+    if subject_name:
+        parts.append(
+            f"(sc.subject_name = '{_esc(subject_name)}' OR sc.subject_name IS NULL)"
+        )
+    where = " WHERE " + " AND ".join(parts)
+    full_score_expr = "COALESCE(eq.question_score, sd.question_score)"
+    rate = _score_rate_sql("sd.score", full_score_expr, db_type)
+    sql = (
+        "SELECT sd.student_id AS student_id,\n"
+        "       COALESCE(e.exam_name, '未知考试') AS exam_name,\n"
+        "       sd.question_no AS question_no,\n"
+        "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+        f"       {full_score_expr} AS full_score,\n"
+        "       sd.score AS score,\n"
+        f"       {rate} AS score_rate\n"
+        "FROM tb_score_detail sd\n"
+        "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
+        "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
+        "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+        "LEFT JOIN tb_exam e ON sd.exam_id = e.id\n"
+        "LEFT JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id"
+        + where
+        + "\nORDER BY exam_name, sd.question_no\nLIMIT 20000"
+    )
+    outcome = run_sql_with_auto_fix(sql, db_type=db_type, config=config)
+    if not outcome.success:
+        logger.warning(
+            "direct student item fetch failed student=%s msg=%s",
+            sid,
+            getattr(outcome, "message", ""),
+        )
+        return []
+    return _rows_to_dicts(outcome.result if isinstance(outcome.result, dict) else None)
+
+
+def _resolve_class_name_for_student(
+    *,
+    datasource_id: int,
+    student_name: str,
+    school_name: str = "",
+    workspace_oid: int | None = None,
+) -> str:
+    """用学号/姓名反查班级，供学生报告在缺 class_name 时自查全班。"""
+    from src.agent.resource.tool.business import _load_datasource
+    from src.datasource.service.sql_auto_fix import run_sql_with_auto_fix
+
+    sid = (student_name or "").strip()
+    if not sid:
+        return ""
+    db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
+    parts = [f"(sc.student_id = '{_esc(sid)}' OR sc.student_id LIKE '%{_esc(sid)}%')"]
+    if school_name and not _is_unsafe_school_name_filter(school_name):
+        parts.append(f"sch.name = '{_esc(school_name)}'")
+    sql = (
+        "SELECT sc.class AS class_name\n"
+        "FROM tb_score sc\n"
+        "JOIN tb_school sch ON sc.school_id = sch.id\n"
+        "WHERE " + " AND ".join(parts) + "\n"
+        "LIMIT 1"
+    )
+    outcome = run_sql_with_auto_fix(sql, db_type=db_type, config=config)
+    if not outcome.success or not isinstance(outcome.result, dict):
+        return ""
+    rows = outcome.result.get("rows") or []
+    if not rows:
+        return ""
+    cell = rows[0][0] if not isinstance(rows[0], dict) else rows[0].get("class_name")
+    return str(cell or "").strip()
+
+
+def _fetch_class_score_long_table(
+    *,
+    datasource_id: int,
+    class_name: str = "",
+    student_name: str = "",
+    school_name: str = "",
+    subject_name: str = "",
+    workspace_oid: int | None = None,
+) -> dict[str, Any] | None:
+    """上游明细缺失时，直接查 tb_score 拉全班×历次考试长表（供综合/学生报告）。"""
+    from src.agent.resource.tool.business import _load_datasource
+    from src.datasource.service.sql_auto_fix import run_sql_with_auto_fix
+
+    cls = (class_name or "").strip()
+    if not cls and student_name:
+        cls = _resolve_class_name_for_student(
+            datasource_id=datasource_id,
+            student_name=student_name,
+            school_name=school_name,
+            workspace_oid=workspace_oid,
+        )
+    if not cls:
+        return None
+
+    db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
+    parts = _diagnosis_where_parts(
+        school_name=school_name if school_name and not _is_unsafe_school_name_filter(school_name) else "",
+        class_name=cls,
+        subject_name=subject_name,
+        exam_name="",
+        skip_exam_name=True,
+    )
+    where = (" WHERE " + " AND ".join(parts)) if parts else ""
+    sql = (
+        "SELECT e.exam_name AS exam_name,\n"
+        "       sc.student_id AS student_id,\n"
+        "       sc.subject_name AS subject_name,\n"
+        "       sc.score AS score,\n"
+        "       sc.class AS class,\n"
+        "       e.exam_time AS exam_time\n"
+        "FROM tb_score sc\n"
+        "JOIN tb_school sch ON sc.school_id = sch.id\n"
+        "JOIN tb_exam e ON sc.exam_id = e.id"
+        + where
+        + "\nORDER BY e.exam_time, sc.student_id, sc.subject_name\nLIMIT 20000"
+    )
+    outcome = run_sql_with_auto_fix(sql, db_type=db_type, config=config)
+    if not outcome.success or not isinstance(outcome.result, dict):
+        return None
+    cols = list(outcome.result.get("columns") or [])
+    rows = list(outcome.result.get("rows") or [])
+    if not cols or not rows:
+        return None
+    return {
+        "columns": cols,
+        "rows": rows,
+        "row_count": len(rows),
+        "class_name": cls,
+    }
+
+
 @tool()
 def build_student_exam_report_data_tool(
-    student_name: str,
+    student_name: str = "",
+    student_id: str = "",
     records: list[dict[str, Any]] | None = None,
     exam_order: list[str] | None = None,
     class_name: str = "",
@@ -1995,6 +2478,12 @@ def build_student_exam_report_data_tool(
     score_field: str = "score",
     total_field: str = "total",
     render: bool = True,
+    report_data: dict[str, Any] | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+    datasource_id: int | None = None,
+    school_name: str = "",
+    subject_name: str = "",
+    workspace_oid: int | None = None,
 ) -> ToolResult:
     """组装**单个学生**多次考试深度分析报告并直接渲染 HTML（对齐 Word 样例结构）。
 
@@ -2002,24 +2491,60 @@ def build_student_exam_report_data_tool(
     HTML 上报。LLM 调完只需 ``terminate``，无需再调 ``render_html_report``。
 
     ``records`` 应包含**全班**历次考试数据（用于排名/班级均分），工具会按
-    ``student_name`` 过滤出目标学生并生成**一份**报告。
+    ``student_name`` / ``student_id`` 过滤出目标学生并生成**一份**报告。
+    有 ``datasource_id`` 时自动拉取该生小题/知识点明细，写入报告第四节与备考建议。
 
     Args:
-        student_name: 目标学生（如「学生001」），必填。
+        student_name: 目标学生姓名/学号别名（如「学生001」）。
+        student_id: 学号（与 student_name 二选一，优先 student_name）。
         records / rows+columns: 与 ``build_comprehensive_report_data_tool`` 相同。
         exam_order: 考试顺序（最早→最近）。
         class_name: 班级名。
         class_size: 班级人数；缺省时从数据推断。
         render: True（默认）直接渲染 HTML；False 仅返回 data 字典。
     """
-    if not student_name or not str(student_name).strip():
+    from src.agent.education.comprehensive import aggregate_student_item_insights
+    from src.agent.education.query_parse import resolve_comprehensive_table_input, student_matches
+
+    target = (student_name or student_id or "").strip()
+    if not target:
         return ToolResult(
-            content="build_student_exam_report_data_tool 失败：student_name 为空。",
+            content="build_student_exam_report_data_tool 失败：student_name / student_id 为空。",
             data={"error": "missing student_name"},
         )
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    records, rows, columns, _used_upstream = resolve_comprehensive_table_input(
+        records=records,
+        rows=rows,
+        columns=columns,
+        last_exec_result=ctx.get("last_exec_result"),
+        report_data=report_data or ctx.get("report_data"),
+    )
+
+    # 上游缺失时：按班级（或学号反查班级）直接拉 tb_score 全班历次明细
+    if not records and not (rows and columns) and datasource_id:
+        fetched = _fetch_class_score_long_table(
+            datasource_id=int(datasource_id),
+            class_name=class_name,
+            student_name=target,
+            school_name=school_name,
+            subject_name=subject_name,
+            workspace_oid=workspace_oid,
+        )
+        if fetched:
+            rows = list(fetched["rows"])
+            columns = [str(c) for c in fetched["columns"]]
+            if not class_name and fetched.get("class_name"):
+                class_name = str(fetched["class_name"])
+
     if not records and not (rows and columns):
         return ToolResult(
-            content="build_student_exam_report_data_tool 失败：需提供 records 或 (rows + columns)。",
+            content=(
+                "build_student_exam_report_data_tool 失败：未找到上游学生×考试明细。"
+                "请只传 `student_name`（**禁止**手填 records）；"
+                "确保上游 DataAnalyst 已查出该班历次成绩，或检查数据源中是否有该生成绩。"
+            ),
             data={"error": "missing input"},
         )
 
@@ -2029,66 +2554,142 @@ def build_student_exam_report_data_tool(
                 content="build_student_exam_report_data_tool 失败：columns 为空。",
                 data={"error": "empty columns"},
             )
-        idx = {c: i for i, c in enumerate(columns)}
-
-        def _cell(row, key, default=None):
-            i = idx.get(key)
-            if i is None or i >= len(row):
-                return default
-            return row[i]
-
-        agg: dict[tuple[str, str], dict[str, Any]] = {}
-        exam_seen: list[str] = []
-        exam_set: set[str] = set()
-        for row in rows or []:
-            exam = str(_cell(row, exam_field, "") or "")
-            student = str(_cell(row, student_field, "") or "")
-            subject = str(_cell(row, subject_field, "") or "")
-            if not exam or not student:
-                continue
-            if exam not in exam_set:
-                exam_set.add(exam)
-                exam_seen.append(exam)
-            key = (exam, student)
-            slot = agg.setdefault(key, {"exam": exam, "student": student, "subjects": {}, "total": 0})
-            if subject:
-                try:
-                    slot["subjects"][subject] = float(_cell(row, score_field))
-                except (TypeError, ValueError):
-                    pass
-            total_val = _cell(row, total_field)
-            if total_val is not None:
-                try:
-                    tv = float(total_val)
-                    if tv > 0:
-                        slot["total"] = tv
-                except (TypeError, ValueError):
-                    pass
-        for slot in agg.values():
-            subs = slot.get("subjects") or {}
-            if subs:
-                slot["total"] = sum(float(v) for v in subs.values())
-        records = list(agg.values())
+        exam_field, student_field, subject_field, score_field, total_field = (
+            _guess_long_table_fields(
+                columns,
+                exam_field=exam_field,
+                student_field=student_field,
+                subject_field=subject_field,
+                score_field=score_field,
+                total_field=total_field,
+            )
+        )
+        records, exam_seen = _aggregate_long_table_records(
+            rows or [],
+            columns,
+            exam_field=exam_field,
+            student_field=student_field,
+            subject_field=subject_field,
+            score_field=score_field,
+            total_field=total_field,
+        )
         exam_order = exam_order or exam_seen
+
+    # 拉取该生全部考试小题/知识点（用于第四节明细与第六节建议）
+    item_note = ""
+    student_item_insights: dict[str, dict[str, Any]] = {}
+    exams_in_data: list[str] = []
+    seen_e: set[str] = set()
+    for r in records or []:
+        e = str(r.get("exam") or "")
+        if e and e not in seen_e:
+            seen_e.add(e)
+            exams_in_data.append(e)
+    if exam_order:
+        ordered = [e for e in exam_order if e in seen_e]
+        for e in exams_in_data:
+            if e not in ordered:
+                ordered.append(e)
+        exams_in_data = ordered or exams_in_data
+
+    from src.agent.education.query_parse import extract_item_detail_rows_from_report_data
+
+    detail_rows: list[dict[str, Any]] = []
+    # 1) 优先复用上游 Agent 已查到的小题/知识点 SQL（常见 80+ 行）
+    detail_rows = extract_item_detail_rows_from_report_data(
+        report_data or ctx.get("report_data"),
+        student_id=target,
+    )
+    if not detail_rows and isinstance(ctx.get("last_exec_result"), dict):
+        detail_rows = extract_item_detail_rows_from_report_data(
+            {"sub_tasks": [{"exec_result": ctx.get("last_exec_result")}]},
+            student_id=target,
+        )
+    # 2) 再查库：先学号直查（不过滤考试名/班级），再班级路径兜底
+    if not detail_rows and datasource_id:
+        try:
+            detail_rows = _fetch_student_item_rows_direct(
+                datasource_id=int(datasource_id),
+                student_id=target,
+                subject_name=subject_name,
+                workspace_oid=workspace_oid,
+            )
+            if not detail_rows and subject_name:
+                # subject 过滤可能导致空，再放宽
+                detail_rows = _fetch_student_item_rows_direct(
+                    datasource_id=int(datasource_id),
+                    student_id=target,
+                    subject_name="",
+                    workspace_oid=workspace_oid,
+                )
+            if not detail_rows:
+                if not class_name:
+                    class_name = _resolve_class_name_for_student(
+                        datasource_id=int(datasource_id),
+                        student_name=target,
+                        school_name=school_name,
+                        workspace_oid=workspace_oid,
+                    ) or class_name
+                # 不带考试名过滤（考试全称常与 LIKE 候选对不上）
+                detail_rows = _fetch_class_student_item_rows(
+                    datasource_id=int(datasource_id),
+                    class_name=class_name,
+                    exam_names=None,
+                    subject_name=subject_name,
+                    school_name=school_name,
+                    student_id=target,
+                    workspace_oid=workspace_oid,
+                )
+            if not detail_rows and class_name:
+                detail_rows = _fetch_class_student_item_rows(
+                    datasource_id=int(datasource_id),
+                    class_name=class_name,
+                    exam_names=None,
+                    subject_name="",
+                    school_name="",
+                    workspace_oid=workspace_oid,
+                )
+                detail_rows = [
+                    r
+                    for r in detail_rows
+                    if student_matches(str(r.get("student_id") or ""), target)
+                ]
+        except Exception:  # noqa: BLE001
+            logger.exception("student exam item/knowledge fetch failed")
+            item_note = "；小题明细拉取失败，建议仍基于总分趋势"
+
+    if detail_rows:
+        student_item_insights = aggregate_student_item_insights(detail_rows)
+        n_kn = sum(
+            len(ins.get("knowledge_rows") or ins.get("weak_knowledge") or [])
+            for ins in student_item_insights.values()
+        )
+        item_note = f"；已融合小题/知识点 {len(detail_rows)} 条、知识点点位约 {n_kn}"
+    elif not item_note:
+        item_note = "；未查到小题明细（建议检查 tb_score_detail 与知识点关联）"
 
     data = _build_student_exam_data(
         records,
-        student_name=str(student_name).strip(),
+        student_name=target,
         exam_order=exam_order or [],
         class_name=class_name,
         class_size=class_size,
+        student_item_insights=student_item_insights or None,
     )
 
     if not render:
         return ToolResult(
-            content=f"学生考试分析报告 data 已组装（学生={student_name}，{len(exam_order or [])} 次考试）。",
+            content=(
+                f"学生考试分析报告 data 已组装（学生={target}，"
+                f"{len(exam_order or exams_in_data or [])} 次考试{item_note}）。"
+            ),
             data=data,
         )
 
     from src.agent.resource.tool.business import _render_template_html, _sanitize_report_html
 
     template_name = "education/student_exam_analysis.html"
-    title = data.get("REPORT_TITLE") or f"{student_name} 考试分析报告"
+    title = data.get("REPORT_TITLE") or f"{target} 考试分析报告"
     try:
         raw_html = _render_template_html(template_name, data)
         safe_html = _sanitize_report_html(raw_html.strip())
@@ -2105,7 +2706,7 @@ def build_student_exam_report_data_tool(
     }
     return ToolResult(
         content=(
-            f"{student_name} 考试分析报告已渲染完成（HTML {len(safe_html)} 字符）。"
+            f"{target} 考试分析报告已渲染完成（HTML {len(safe_html)} 字符{item_note}）。"
             "报告已自动推送到前端，直接调 terminate 结束即可。"
         ),
         data=payload,
@@ -2459,15 +3060,17 @@ def _pick_student_overview_from_report(
     subject_name: str = "",
 ) -> dict[str, Any]:
     """从上游 DataAnalyst 子任务 SQL 结果提取该生成绩概览。"""
+    from src.agent.education.query_parse import student_matches
+
     out: dict[str, Any] = {}
     if not report_data:
         return out
-    sid = (student_id or "").strip().upper()
+    sid = (student_id or "").strip()
     subj_key = (subject_name or "").strip().lower()
     for st in reversed(report_data.get("sub_tasks") or []):
         if st.get("sub_task_agent") not in (None, "", "DataAnalyst"):
             continue
-        er = st.get("last_exec_result") or {}
+        er = st.get("exec_result") or st.get("last_exec_result") or {}
         cols = [str(c) for c in (er.get("columns") or [])]
         rows = er.get("rows") or []
         if not cols or not rows:
@@ -2477,17 +3080,13 @@ def _pick_student_overview_from_report(
             (i for i, c in enumerate(col_l) if c in ("student_id", "id", "学号")),
             None,
         )
-        score_i = next(
-            (i for i, c in enumerate(col_l) if c in ("score", "exam_score", "总分", "分数", "成绩")),
-            None,
-        )
+        score_i = _score_column_index(col_l)
         if subj_key:
             for i, c in enumerate(col_l):
-                if subj_key in c and any(k in c for k in ("分", "score", "成绩")):
+                if subj_key in c and any(k in c for k in ("分", "score", "成绩")) and "率" not in c:
+                    # 科目名列优先，但仍须能解析为数值才采用
                     score_i = i
                     break
-        if score_i is None:
-            score_i = 0
         class_rank_i = next(
             (i for i, c in enumerate(col_l) if "class_rank" in c or c in ("班级排名", "班排", "班级名次")),
             None,
@@ -2512,10 +3111,19 @@ def _pick_student_overview_from_report(
 
         for row in rows:
             if sid_i is not None:
-                rv = str(_cell(row, sid_i) or "").strip().upper()
-                if rv and rv != sid:
+                rv = str(_cell(row, sid_i) or "").strip()
+                if rv and not student_matches(rv, sid):
                     continue
-            out["total_score"] = _cell(row, score_i)
+            raw_score = _cell(row, score_i) if score_i is not None else None
+            numeric = _coerce_numeric_score(raw_score)
+            # 科目列误命中学号时丢弃，避免 KPI 显示学号
+            if numeric is None and score_i is not None and raw_score is not None:
+                # 再试一次标准 score 列
+                fallback_i = _score_column_index(col_l)
+                if fallback_i is not None and fallback_i != score_i:
+                    numeric = _coerce_numeric_score(_cell(row, fallback_i))
+            if numeric is not None:
+                out["total_score"] = numeric
             out["class_rank"] = _cell(row, class_rank_i)
             out["grade_rank"] = _cell(row, grade_rank_i)
             out["class_name"] = _cell(row, class_i)
@@ -2586,7 +3194,7 @@ def build_student_subject_diagnosis_tool(
     内部按 ``student_id`` 查询小题/知识点明细，渲染 ``education/student_subject_diagnosis.html``。
     LLM 调完只需 ``terminate``。
     """
-    sid = (student_id or "").strip().upper()
+    sid = (student_id or "").strip()
     if not sid:
         return ToolResult(
             content="build_student_subject_diagnosis_tool 失败：student_id 为空。",
@@ -2627,8 +3235,18 @@ def build_student_subject_diagnosis_tool(
         overview["class_name"] = score_rows[0].get("class") or score_rows[0].get("class_name")
     if not overview.get("school_name") and score_rows:
         overview["school_name"] = score_rows[0].get("school_name")
-    if overview.get("total_score") is None and score_rows:
-        overview["total_score"] = score_rows[0].get("score")
+
+    # 得分必须以数值为准；上游误把学号填入 score 列时，用 score_rows 覆盖
+    overview_score = _coerce_numeric_score(overview.get("total_score"))
+    row_score, row_class_rank = _pick_score_from_score_rows(score_rows, sid)
+    if row_score is not None:
+        overview["total_score"] = row_score
+    elif overview_score is not None:
+        overview["total_score"] = overview_score
+    else:
+        overview["total_score"] = None
+    if overview.get("class_rank") is None and row_class_rank is not None:
+        overview["class_rank"] = row_class_rank
 
     class_label = str(overview.get("class_name") or fetch_class or class_name or "").strip()
     school_label = str(
@@ -2685,6 +3303,7 @@ def build_student_subject_diagnosis_tool(
             knowledge_rows=knowledge_rows,
             item_rows=item_rows,
             weak_threshold=weak_threshold,
+            audience="student",
         ),
     }
     if knowledge_rows:
@@ -2697,7 +3316,13 @@ def build_student_subject_diagnosis_tool(
             title="知识点得分率",
         )
     tier = build_ability_tier_summary(knowledge_rows, weak_threshold=weak_threshold)
-    data["ABILITY_INSIGHT"] = build_ability_tier_insight(tier)
+    item_metrics = _compute_item_metrics(item_rows)
+    data["ABILITY_INSIGHT"] = build_ability_tier_insight(
+        tier,
+        knowledge_rows=knowledge_rows,
+        item_rows=item_metrics,
+        weak_threshold=weak_threshold,
+    )
     tier_table = _build_ability_tier_table_html(knowledge_rows)
     if tier_table:
         data["ABILITY_TIER_TABLE"] = tier_table
@@ -2712,7 +3337,6 @@ def build_student_subject_diagnosis_tool(
                 },
                 title="能力画像",
             )
-    item_metrics = _compute_item_metrics(item_rows)
     qtype_table = _build_question_type_table_html(item_metrics)
     if qtype_table:
         data["QUESTION_TYPE_TABLE"] = qtype_table

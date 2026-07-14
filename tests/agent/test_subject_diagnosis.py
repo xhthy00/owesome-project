@@ -59,6 +59,120 @@ def test_build_diagnosis_recommendations_for_weak_points():
     assert "edu-rec-group" in html
 
 
+def test_build_diagnosis_recommendations_personal_differentiated():
+    html = build_diagnosis_recommendations(
+        knowledge_rows=[
+            {"knowledge_name": "对数函数", "score_rate": 20},
+            {"knowledge_name": "条件概率", "score_rate": 45},
+        ],
+        item_rows=[
+            {"question_no": 8, "knowledge_name": "对数函数", "score_rate": 20, "question_type": "解答"},
+            {"question_no": 3, "knowledge_name": "条件概率", "score_rate": 40, "question_type": "选择"},
+        ],
+        audience="student",
+    )
+    assert "edu-rec-intro" in html
+    assert "严重薄弱" in html or "每天 15" in html
+    assert "掌握不稳" in html or "错题本" in html
+    assert "安排专项练习、错题回顾与专题课" not in html
+    assert "薄弱知识点专项" in html
+    assert "题型突破计划" in html
+
+
+def test_ability_portrait_insight_points_out_strengths_and_weaknesses():
+    from src.agent.education.knowledge_tier import (
+        build_ability_tier_insight,
+        build_ability_tier_summary,
+    )
+
+    knowledge = [
+        {"knowledge_name": "命题及其关系", "score_rate": 100},
+        {"knowledge_name": "对数函数", "score_rate": 20},
+        {"knowledge_name": "条件概率与全概率公式", "score_rate": 40},
+    ]
+    items = [
+        {"question_type": "填空", "score_rate": 60},
+        {"question_type": "选择", "score_rate": 60},
+        {"question_type": "多选", "score_rate": 73.33},
+        {"question_type": "解答", "score_rate": 75.28},
+    ]
+    html = build_ability_tier_insight(
+        build_ability_tier_summary(knowledge),
+        knowledge_rows=knowledge,
+        item_rows=items,
+    )
+    assert "整体平稳" not in html
+    assert "诊断结论" in html
+    assert "题型分化" in html or "问题题型" in html
+    assert "选择" in html or "填空" in html
+    assert "对数函数" in html
+    assert "命题及其关系" in html or "亮点" in html
+
+
+def test_ability_portrait_insight_no_bland_when_empty_levels_only():
+    from src.agent.education.knowledge_tier import build_ability_tier_insight
+
+    html = build_ability_tier_insight({"weak_levels": [], "by_ability_level": []})
+    assert "整体平稳" not in html
+    assert "暂无足够" in html
+
+
+def test_pick_student_overview_rejects_student_id_as_score():
+    from src.agent.education.tools import (
+        _coerce_numeric_score,
+        _pick_score_from_score_rows,
+        _pick_student_overview_from_report,
+    )
+
+    sid = "2024_STU20260052_YZZX_3884"
+    report_data = {
+        "sub_tasks": [
+            {
+                "sub_task_agent": "DataAnalyst",
+                "exec_result": {
+                    "columns": ["student_id", "class_rank", "exam_score"],
+                    "rows": [[sid, 30, 150]],
+                },
+            }
+        ]
+    }
+    overview = _pick_student_overview_from_report(report_data, sid)
+    assert overview.get("total_score") is None
+    assert overview.get("class_rank") == 30
+    assert _coerce_numeric_score(sid) is None
+
+    score, rank = _pick_score_from_score_rows(
+        [
+            {"student_id": "other", "score": 120},
+            {"student_id": sid, "score": 103},
+            {"student_id": "x", "score": 90},
+        ],
+        sid,
+    )
+    assert score == 103
+    assert rank == 2
+
+
+def test_pick_student_overview_prefers_score_column():
+    from src.agent.education.tools import _pick_student_overview_from_report
+
+    sid = "STU001"
+    report_data = {
+        "sub_tasks": [
+            {
+                "sub_task_agent": "DataAnalyst",
+                "exec_result": {
+                    "columns": ["student_id", "得分", "班级排名"],
+                    "rows": [[sid, 91.5, 3]],
+                },
+            }
+        ]
+    }
+    overview = _pick_student_overview_from_report(report_data, sid)
+    assert overview.get("total_score") == 91.5
+    assert overview.get("class_rank") == 3
+
+
 def test_build_item_table_html_student_row_fields():
     from src.agent.education.subject_diagnosis import build_item_table_html
 
