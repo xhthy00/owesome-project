@@ -8,10 +8,12 @@ from src.agent.education.aggregation import aggregate_by
 from src.agent.education.charts import build_chart_option
 from src.agent.education.config import EducationConfig
 from src.agent.education.cross_analysis import compare_groups, cross_analyze
+from src.agent.education.report_types import ReportType, report_type_label
 from src.agent.education.stats import (
     compute_score_stats,
     compute_top_progress_regress,
     compute_trend_distribution,
+    describe_score_dispersion,
     identify_at_risk_students,
     normalize_segments,
 )
@@ -25,10 +27,11 @@ def _fmt(v: Any) -> str:
     return str(v)
 
 
-def _kpi_card(label: str, value: str) -> str:
+def _kpi_card(label: str, value: str, hint: str = "") -> str:
+    hint_html = f'<div class="hint" style="margin-top:6px;font-size:11.5px;line-height:1.45;color:rgba(0,0,0,0.45)">{hint}</div>' if hint else ""
     return (
         f'<div class="edu-kpi"><div class="label">{label}</div>'
-        f'<div class="value">{value}</div></div>'
+        f'<div class="value">{value}</div>{hint_html}</div>'
     )
 
 
@@ -175,6 +178,11 @@ def build_diagnostic_data(
                 title="进退步分布",
             )
 
+    disp = describe_score_dispersion(
+        overall.get("stdev"),
+        full_score=overall.get("full_score"),
+        variance=overall.get("variance"),
+    )
     kpi_html = "".join([
         _kpi_card("参考人数", str(overall.get("count") or 0)),
         _kpi_card("平均分", _fmt(overall.get("avg"))),
@@ -183,18 +191,28 @@ def build_diagnostic_data(
         _kpi_card("及格率", f"{_fmt(overall.get('pass_rate'))}%"),
         _kpi_card("良好率", f"{_fmt(overall.get('good_rate'))}%"),
         _kpi_card("低分率", f"{_fmt(overall.get('low_score_rate'))}%"),
-        _kpi_card("标准差", _fmt(overall.get("stdev"))),
+        _kpi_card("标准差", _fmt(overall.get("stdev")), hint=str(disp.get("stdev_hint") or "")),
+        _kpi_card("方差", _fmt(disp.get("variance")), hint=str(disp.get("variance_hint") or "")),
     ])
+    tip = str(disp.get("tip") or "")
+    kpi_grid = f'<div class="edu-grid">{kpi_html}</div>'
+    if tip:
+        kpi_grid += (
+            f'<p class="dispersion-tip" style="margin-top:12px;padding:10px 12px;'
+            f'font-size:12.5px;line-height:1.65;color:rgba(0,0,0,0.65);'
+            f'background:#fafafa;border:1px dashed #f0f0f0;border-radius:8px">{tip}</p>'
+        )
 
     title_parts = [p for p in (scope_label, subject_name, exam_name) if p]
     return {
         "REPORT_TITLE": f"{' · '.join(title_parts)}结构化诊断报告".strip(" ·"),
+        "REPORT_TYPE": report_type_label(ReportType.DIAGNOSTIC_REPORT),
         "REPORT_SUBTITLE": "一般性 → 特殊性 → 动态性",
         "REPORT_TIME": "",
         "SCOPE": scope_label or "全年级",
         "EXAM_NAME": exam_name or "本次考试",
         "SUBJECT_NAME": subject_name or "全科",
-        "KPI_GRID": f'<div class="edu-grid">{kpi_html}</div>',
+        "KPI_GRID": kpi_grid,
         "GENERAL_TREND_CHART": general_trend_chart,
         "GENERAL_INSIGHT": general_insight,
         "DISTRICT_COMPARE_CHART": district_compare_chart,

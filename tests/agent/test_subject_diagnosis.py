@@ -112,6 +112,29 @@ def test_build_diagnosis_recommendations_class_when_all_above_threshold():
     assert "限时" in html or "面批" in html or "专练" in html
 
 
+def test_build_diagnosis_summary_dedupes_multi_exam_participants():
+    """多场考试混算时参考人数按去重学生，不展示 52×3=156。"""
+    score_rows = []
+    for exam in ("一模", "二模", "三模"):
+        for i in range(52):
+            score_rows.append({
+                "student_id": f"S{i:03d}",
+                "exam_name": exam,
+                "score": 100.0,
+                "exam_score": 150.0,
+            })
+    html = build_diagnosis_summary(
+        school_name="扬州中学",
+        subject_name="数学",
+        stats={"count": 156, "avg": 100, "pass_rate": 61.54, "excellent_rate": 21.15},
+        score_rows=score_rows,
+    )
+    assert "参考人数" in html
+    assert ">52<" in html or ">52</div>" in html or "52" in html
+    assert "156" in html  # 仍提示共 156 条成绩
+    assert "去重" in html or "跨 3 场" in html
+
+
 def test_ability_portrait_insight_points_out_strengths_and_weaknesses():
     from src.agent.education.knowledge_tier import (
         build_ability_tier_insight,

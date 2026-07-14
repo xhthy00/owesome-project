@@ -723,13 +723,22 @@ async def _run_planner_phase(
     from src.agent.education.query_parse import (
         is_citywide_analysis_query,
         is_individual_student_analysis_query,
+        is_multi_exam_class_analysis_query,
+        is_school_class_comparison_query,
+        is_school_exam_report_query,
     )
     from src.agent.expand.planner import (
         build_citywide_team_plan_items,
+        build_comprehensive_class_plan_items,
         build_individual_student_exam_plan_items,
+        build_school_class_comparison_plan_items,
+        build_school_subject_report_plan_items,
         coerce_plan_items_if_needed,
         should_replace_with_citywide_plan,
+        should_replace_with_comprehensive_plan,
         should_replace_with_individual_student_plan,
+        should_replace_with_school_class_comparison_plan,
+        should_replace_with_school_exam_plan,
     )
 
     await emit("agent_speak", {"agent": "Planner", "status": "start"})
@@ -762,6 +771,48 @@ async def _run_planner_phase(
         )
         return plan_items
 
+    # 班级多场考试：确定性走 comprehensive，避免误入单科诊断导致人次累加、无对比
+    if is_multi_exam_class_analysis_query(request.question):
+        plan_items = build_comprehensive_class_plan_items(request.question)
+        await emit(
+            "agent_speak",
+            {
+                "agent": "Planner",
+                "status": "end",
+                "plan_count": len(plan_items),
+                "deterministic": True,
+            },
+        )
+        return plan_items
+
+    # 学校各班横向对比：确定性全校 3 步，禁止缩成单班诊断
+    if is_school_class_comparison_query(request.question):
+        plan_items = build_school_class_comparison_plan_items(request.question)
+        await emit(
+            "agent_speak",
+            {
+                "agent": "Planner",
+                "status": "end",
+                "plan_count": len(plan_items),
+                "deterministic": True,
+            },
+        )
+        return plan_items
+
+    # 学校科目/多维报告：确定性 3 步，避免 LLM 漏拆或缩成单班
+    if is_school_exam_report_query(request.question):
+        plan_items = build_school_subject_report_plan_items(request.question)
+        await emit(
+            "agent_speak",
+            {
+                "agent": "Planner",
+                "status": "end",
+                "plan_count": len(plan_items),
+                "deterministic": True,
+            },
+        )
+        return plan_items
+
     try:
         planner = PlannerAgent(llm_client=llm_client)
         reply = await planner.generate_reply(
@@ -783,6 +834,12 @@ async def _run_planner_phase(
             plan_items = build_citywide_team_plan_items(request.question)
         elif should_replace_with_individual_student_plan(request.question, plan_items):
             plan_items = build_individual_student_exam_plan_items(request.question)
+        elif should_replace_with_comprehensive_plan(request.question, plan_items):
+            plan_items = build_comprehensive_class_plan_items(request.question)
+        elif should_replace_with_school_class_comparison_plan(request.question, plan_items):
+            plan_items = build_school_class_comparison_plan_items(request.question)
+        elif should_replace_with_school_exam_plan(request.question, plan_items):
+            plan_items = build_school_subject_report_plan_items(request.question)
         else:
             plan_items = coerce_plan_items_if_needed(request.question, plan_items)
         return plan_items
@@ -811,6 +868,24 @@ async def _run_planner_phase(
             len(plan_items),
         )
         plan_items = build_individual_student_exam_plan_items(request.question)
+    elif should_replace_with_comprehensive_plan(request.question, plan_items):
+        logger.info(
+            "planner multi-exam fallback: replacing %d plan(s) with comprehensive 2-step",
+            len(plan_items),
+        )
+        plan_items = build_comprehensive_class_plan_items(request.question)
+    elif should_replace_with_school_class_comparison_plan(request.question, plan_items):
+        logger.info(
+            "planner class-comparison fallback: replacing %d plan(s) with school-wide 3-step",
+            len(plan_items),
+        )
+        plan_items = build_school_class_comparison_plan_items(request.question)
+    elif should_replace_with_school_exam_plan(request.question, plan_items):
+        logger.info(
+            "planner school-exam fallback: replacing %d plan(s) with school subject 3-step",
+            len(plan_items),
+        )
+        plan_items = build_school_subject_report_plan_items(request.question)
     else:
         plan_items = coerce_plan_items_if_needed(request.question, plan_items)
 
@@ -1196,14 +1271,65 @@ async def _maybe_emit_report(
     emit: EmitCallback,
     state: "_RunState | None" = None,
 ) -> None:
+    # 指纹去重跳过的工具结果：禁止再次推送同一份 HTML（否则下拉框成倍刷报告）
+    if payload.get("deduplicated"):
+        return
     data = payload.get("data")
     if not isinstance(data, dict):
         return
     if data.get("output_type") != "html":
         return
+    if data.get("error"):
+        return
     html = str(data.get("html") or "")
     if not html.strip():
         return
+    if _report_html_is_sparse(html):
+        logger.info(
+            "报告已跳过：内容为空或 KPI 未填充（title=%s, html_len=%s）",
+            data.get("title"),
+            len(html),
+        )
+        return
+    title = str(data.get("title") or "Report")
+    type_label = str(data.get("report_type_label") or "").strip()
+    report_type = str(data.get("report_type") or "").strip()
+    try:
+        from src.agent.education.report_types import format_report_display_title
+
+        title = format_report_display_title(
+            title,
+            report_type or None,
+            type_label=type_label or None,
+        )
+    except Exception:
+        pass
+    if not type_label and report_type:
+        type_label = report_type
+    html_fp = _report_fingerprint(html)
+
+    if state is not None:
+        for existing in state.reports:
+            if _report_fingerprint(str(existing.get("html") or "")) == html_fp:
+                logger.info("报告已跳过：与已推送报告 HTML 完全相同（title=%s）", title)
+                return
+            # 同类型：只保留更充实的一份，后续弱报告不再推送
+            ex_label = str(
+                existing.get("report_type_label") or existing.get("report_type") or ""
+            ).strip()
+            ex_title = str(existing.get("title") or "")
+            same_type = bool(type_label and ex_label and type_label == ex_label)
+            same_title = bool(title and ex_title and _normalize_report_title(title) == _normalize_report_title(ex_title))
+            if same_type or same_title:
+                ex_len = len(str(existing.get("html") or ""))
+                if len(html) <= ex_len:
+                    logger.info(
+                        "报告已跳过：同类型/同标题已有更充实版本（title=%s, type=%s）",
+                        title,
+                        type_label or ex_label,
+                    )
+                    return
+
     if state is not None and state.constraints is not None:
         locked = list(state.constraints.locked_tables or [])
         if locked and not _sql_hits_locked_tables(state.last_sql or "", locked):
@@ -1241,16 +1367,68 @@ async def _maybe_emit_report(
             )
             return
     report_payload: dict[str, Any] = {
-        "title": str(data.get("title") or "Report"),
+        "title": title,
         "html": html,
         "mode": str(data.get("mode") or "inline"),
         "agent": payload.get("agent"),
     }
+    if data.get("report_type"):
+        report_payload["report_type"] = str(data.get("report_type"))
+    if data.get("report_type_label"):
+        report_payload["report_type_label"] = str(data.get("report_type_label"))
     if payload.get("sub_task_index") is not None:
         report_payload["sub_task_index"] = payload.get("sub_task_index")
     if state is not None:
         state.reports.append(dict(report_payload))
     await emit("report", report_payload)
+
+
+def _normalize_report_title(title: str) -> str:
+    """去掉类型角标与空白，便于同名报告去重。"""
+    try:
+        from src.agent.education.report_types import strip_report_type_markers
+
+        t = strip_report_type_markers(title)
+    except Exception:
+        t = re.sub(r"^【[^】]+】", "", str(title or "")).strip()
+    return re.sub(r"\s+", "", t)
+
+
+def _report_fingerprint(html: str) -> str:
+    import hashlib
+
+    return hashlib.sha256((html or "").encode("utf-8")).hexdigest()[:24]
+
+
+def _report_html_is_sparse(html: str) -> bool:
+    """空壳 / KPI 未填充的报告：不推送到前端下拉框。"""
+    text = (html or "").strip()
+    if not text:
+        return True
+    empty_signals = (
+        "tb_score）未查到匹配记录",
+        "成绩表（tb_score）未查到",
+        "KPI 将显示为空",
+        "KPI 与分数段分布为空",
+        "成绩为空——KPI",
+        "HTML 为空",
+    )
+    if any(s in text for s in empty_signals):
+        # 仍含充实小题/档案表时放行
+        has_body = (
+            text.count("<tr") >= 8
+            or "archive-card" in text
+            or "edu-diag-chip" in text
+            or "advice-list" in text
+        )
+        if not has_body:
+            return True
+    # KPI 卡片大量为「-」且无明显数据表
+    dash_kpi = len(re.findall(r'class="value">\s*-\s*</div>', text))
+    dash_kpi += len(re.findall(r"class='value'>\s*-\s*</div>", text))
+    if dash_kpi >= 3 and text.count("<tr") < 5:
+        return True
+    return False
 
 
 # --------------------------------------------------------------------------- #

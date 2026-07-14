@@ -146,7 +146,7 @@ def test_orchestrator_normalized_mode_builds_join_sql():
 
 
 def test_orchestrator_all_report_types_have_templates():
-    """Phase 4：7 类 ReportType 全部已实现模板，编排器不再有'未实现'空缺。"""
+    """9 类 ReportType 全部已实现模板，编排器不再有'未实现'空缺。"""
     from src.agent.education.report_types import ReportSpec
     from src.agent.education.templates import select_report_template
 

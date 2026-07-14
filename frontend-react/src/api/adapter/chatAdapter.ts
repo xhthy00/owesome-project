@@ -106,7 +106,14 @@ type StreamHandlers = {
   onStep?: (step: { name?: string; label?: string; status?: string; elapsed_ms?: number; detail?: string }) => void;
   onAgentSpeak?: (payload: { agent?: string; status?: string; error?: string }) => void;
   onChart?: (payload: { chart_type?: string; chart_config?: Record<string, unknown> }) => void;
-  onReport?: (payload: { title?: string; html?: string; mode?: string; sub_task_index?: number }) => void;
+  onReport?: (payload: {
+    title?: string;
+    html?: string;
+    mode?: string;
+    sub_task_index?: number;
+    report_type?: string;
+    report_type_label?: string;
+  }) => void;
   onPlan?: (payload: { plans: string[]; sub_task_agents?: string[] }) => void;
   onPlanUpdate?: (payload: {
     index: number;
@@ -241,7 +248,9 @@ export async function sendMessageStream(
             title: (data.title as string) ?? undefined,
             html: (data.html as string) ?? undefined,
             mode: (data.mode as string) ?? undefined,
-            sub_task_index: typeof data.sub_task_index === "number" ? (data.sub_task_index as number) : undefined
+            sub_task_index: typeof data.sub_task_index === "number" ? (data.sub_task_index as number) : undefined,
+            report_type: (data.report_type as string) ?? undefined,
+            report_type_label: (data.report_type_label as string) ?? undefined
           });
           break;
         case "summary":

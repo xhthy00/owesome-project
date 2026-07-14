@@ -5,13 +5,12 @@
 据此知道要往 ``render_html_report(data=...)`` 里放哪些键，避免漏字段导致
 模板留空。
 
-Phase 1 落地 4 类模板（含升级后的通用 ``score_analysis_report``），其余
-``ReportType`` 在对应阶段补齐模板与 keys。
+当前已落地全部 9 类标准报告模板；每类报告页头均应展示 ``REPORT_TYPE``。
 """
 
 from __future__ import annotations
 
-from src.agent.education.report_types import Audience, ReportType
+from src.agent.education.report_types import Audience, ReportType, report_type_label
 
 #: 模板相对路径（相对 ``src/agent/resource/templates/``）。
 #: 仅列出已实现的模板；未实现的 ``ReportType`` 由 ``select_report_template``
@@ -28,36 +27,50 @@ _TEMPLATE_PATH: dict[ReportType, str] = {
     ReportType.DIAGNOSTIC_REPORT: "education/diagnostic_report.html",
 }
 
+#: 额外模板文件名 → ReportType（非主路径，但仍属上述标准类型）
+_ALIAS_TEMPLATE_STEMS: dict[str, ReportType] = {
+    "student_profile": ReportType.STUDENT_PROFILE,
+    "student_profile_parent": ReportType.STUDENT_PROFILE,
+    "student_exam_analysis": ReportType.STUDENT_PROFILE,
+    "student_subject_diagnosis": ReportType.STUDENT_PROFILE,
+    "class_overview_parent": ReportType.CLASS_OVERVIEW,
+}
+
 #: 受众 → 模板变体后缀（Phase 2 启用；当前仅 ``parent`` 有简化版）。
 _AUDIENCE_SUFFIX: dict[Audience, str] = {
     Audience.PARENT: "_parent",
 }
 
 #: 每个 report_type 模板期望的 ``data`` 字段清单（供 Agent 校验）。
+#: 九大类均要求 ``REPORT_TYPE``（标准中文类型名）。
 _REQUIRED_KEYS: dict[ReportType, list[str]] = {
     ReportType.CLASS_OVERVIEW: [
-        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME",
+        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME", "REPORT_TYPE",
         "CLASS_NAME", "EXAM_NAME",
         "TOTAL_COUNT", "AVG_SCORE", "PASS_RATE", "EXCELLENT_RATE", "STDEV",
-        "SCORE_DIST_CHART", "SUBJECT_RADAR_CHART",
+        "MAX_SCORE", "MIN_SCORE", "GOOD_RATE", "LOW_SCORE_RATE",
+        "SCORE_DIST_CHART", "SEGMENT_TABLE", "SUBJECT_RADAR_CHART",
         "SUBJECT_BREAKDOWN", "RANK_INFO", "SUMMARY", "RECOMMENDATIONS",
+        "VARIANCE", "STDEV_LEVEL", "STDEV_HINT", "VARIANCE_HINT", "DISPERSION_TIP",
     ],
     ReportType.GRADE_COMPARISON: [
-        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME",
+        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME", "REPORT_TYPE",
         "GRADE_NAME", "EXAM_NAME", "SUBJECT_NAME",
         "CLASS_COMPARE_CHART", "CLASS_RANKING_TABLE",
         "DISPERSION_INFO", "SUMMARY", "RECOMMENDATIONS",
     ],
     ReportType.SUBJECT_DIAGNOSIS: [
-        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME",
+        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME", "REPORT_TYPE",
         "SUBJECT_NAME", "EXAM_NAME", "SCOPE",
         "AVG_SCORE", "PASS_RATE", "EXCELLENT_RATE", "STDEV",
+        "VARIANCE", "STDEV_LEVEL", "STDEV_HINT", "VARIANCE_HINT", "DISPERSION_TIP",
         "SCORE_DIST_CHART", "SEGMENT_TABLE", "ITEM_TABLE",
         "KNOWLEDGE_TABLE", "KNOWLEDGE_CHART", "WEAK_KNOWLEDGE_LIST",
         "SUMMARY", "RECOMMENDATIONS",
+        "STUDENT_ARCHIVE_TABLE",
     ],
     ReportType.STUDENT_PROFILE: [
-        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME", "COVER_META",
+        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME", "REPORT_TYPE", "COVER_META",
         "STUDENT_NAME", "EXAM_NAME", "CLASS_NAME",
         "OVERVIEW_INSIGHT", "SCORE_SUMMARY_TABLE", "KEY_METRICS_TABLE",
         "SUBJECT_ANALYSIS_HTML", "TOTAL_ANALYSIS_TABLE", "TOTAL_TREND_INSIGHT",
@@ -67,20 +80,20 @@ _REQUIRED_KEYS: dict[ReportType, list[str]] = {
         "TOTAL_SCORE", "CLASS_RANK", "GRADE_RANK", "SUBJECT_TABLE", "SUMMARY",
     ],
     ReportType.TREND_TRACKING: [
-        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME",
+        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME", "REPORT_TYPE",
         "TARGET_NAME", "SUBJECT_NAME",
         "TREND_CHART", "TREND_TABLE", "CHANGE_INFO",
         "SUMMARY", "RECOMMENDATIONS",
     ],
     ReportType.TIER_ALERT: [
-        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME",
+        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME", "REPORT_TYPE",
         "SCOPE", "EXAM_NAME",
         "CRITICAL_COUNT", "REGRESSION_COUNT", "IMBALANCED_COUNT",
         "CRITICAL_TABLE", "REGRESSION_TABLE", "IMBALANCED_TABLE",
         "SUMMARY", "RECOMMENDATIONS",
     ],
     ReportType.GROUP_FEATURE: [
-        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME",
+        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME", "REPORT_TYPE",
         "SCOPE", "EXAM_NAME", "GROUP_DIMENSION",
         "GROUP_COMPARE_CHART", "GROUP_TABLE",
         "DIFF_INFO",
@@ -88,7 +101,7 @@ _REQUIRED_KEYS: dict[ReportType, list[str]] = {
     ],
     ReportType.COMPREHENSIVE: [
         # 封面 + 目录
-        "COVER_TITLE", "COVER_SUBTITLE", "COVER_META", "REPORT_TIME",
+        "COVER_TITLE", "COVER_SUBTITLE", "COVER_META", "REPORT_TIME", "REPORT_TYPE",
         # S1 班级整体概览
         "OVERVIEW_KPI_GRID", "OVERVIEW_INSIGHT",
         # S2 各科成绩趋势分析
@@ -113,7 +126,7 @@ _REQUIRED_KEYS: dict[ReportType, list[str]] = {
         "STUDENT_ARCHIVE_TABLE",
     ],
     ReportType.DIAGNOSTIC_REPORT: [
-        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME",
+        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME", "REPORT_TYPE",
         "SCOPE", "EXAM_NAME", "SUBJECT_NAME",
         "KPI_GRID", "GENERAL_TREND_CHART", "GENERAL_INSIGHT", "DISTRICT_COMPARE_CHART",
         "CLASS_DIFF_HEATMAP", "SEGMENT_COMPARE_TABLE", "SPECIAL_INSIGHT",
@@ -122,6 +135,44 @@ _REQUIRED_KEYS: dict[ReportType, list[str]] = {
         "SUMMARY", "RECOMMENDATIONS",
     ],
 }
+
+
+def resolve_report_type_from_template(template: str) -> ReportType | None:
+    """由模板路径解析对应标准 ``ReportType``（九大类之一）。"""
+    path = (template or "").replace("\\", "/").strip()
+    if not path:
+        return None
+    stem = path.rsplit("/", 1)[-1]
+    if stem.endswith(".html"):
+        stem = stem[: -len(".html")]
+    if stem in _ALIAS_TEMPLATE_STEMS:
+        return _ALIAS_TEMPLATE_STEMS[stem]
+    for rt, p in _TEMPLATE_PATH.items():
+        if path.endswith(p) or path == p:
+            return rt
+        p_stem = p.rsplit("/", 1)[-1]
+        if p_stem.endswith(".html"):
+            p_stem = p_stem[: -len(".html")]
+        if stem == p_stem:
+            return rt
+    return None
+
+
+def ensure_report_type_in_data(template: str, data: dict) -> dict:
+    """九大类模板：保证 ``REPORT_TYPE`` 为标准中文名（含枚举值纠偏）。"""
+    out = dict(data)
+    raw = str(out.get("REPORT_TYPE") or "").strip()
+    rt = resolve_report_type_from_template(template)
+    if raw:
+        # LLM 常直接填入 class_overview 等枚举值，统一换成中文角标
+        try:
+            out["REPORT_TYPE"] = report_type_label(ReportType(raw))
+            return out
+        except ValueError:
+            return out
+    if rt is not None:
+        out["REPORT_TYPE"] = report_type_label(rt)
+    return out
 
 
 def select_report_template(
@@ -148,4 +199,8 @@ def select_report_template(
     }
 
 
-__all__ = ["select_report_template"]
+__all__ = [
+    "ensure_report_type_in_data",
+    "resolve_report_type_from_template",
+    "select_report_template",
+]

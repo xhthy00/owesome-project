@@ -264,6 +264,28 @@ def _rec_group(title: str, items: list[dict[str, Any]], *, cat: str) -> str:
     )
 
 
+def _unique_student_and_exam_counts(
+    score_rows: list[dict[str, Any]] | None,
+) -> tuple[int, int]:
+    """从 score_rows 估计去重学生数与考试场次数。"""
+    students: set[str] = set()
+    exams: set[str] = set()
+    for r in score_rows or []:
+        if not isinstance(r, dict):
+            continue
+        for k in ("student_id", "student_name", "student", "name", "学号"):
+            v = r.get(k)
+            if v is not None and str(v).strip():
+                students.add(str(v).strip())
+                break
+        for k in ("exam_name", "exam_id", "exam"):
+            v = r.get(k)
+            if v is not None and str(v).strip():
+                exams.add(str(v).strip())
+                break
+    return len(students), len(exams)
+
+
 def build_diagnosis_summary(
     *,
     school_name: str = "",
@@ -272,6 +294,7 @@ def build_diagnosis_summary(
     stats: dict[str, Any] | None = None,
     item_rows: list[dict[str, Any]] | None = None,
     knowledge_rows: list[dict[str, Any]] | None = None,
+    score_rows: list[dict[str, Any]] | None = None,
     weak_threshold: float = 60.0,
     intervention_insights: dict[str, Any] | None = None,
 ) -> str:
@@ -293,12 +316,26 @@ def build_diagnosis_summary(
 
     if stats.get("count"):
         pass_tone = "ok" if (_num(stats.get("pass_rate")) or 0) >= 60 else "warn"
+        raw_count = int(stats.get("count") or 0)
+        uniq_students, exam_n = _unique_student_and_exam_counts(score_rows)
+        # 多场考试混算时 len(score_rows) 是人次；参考人数改为去重学生数
+        show_count = raw_count
+        multi_exam_note = ""
+        if exam_n >= 2 and uniq_students > 0 and uniq_students < raw_count:
+            show_count = uniq_students
+            multi_exam_note = (
+                f"<p class='edu-diag-muted'>跨 {exam_n} 场考试共 {raw_count} 条成绩；"
+                f"参考人数按去重学生计为 {uniq_students}。"
+                "多场考试对比请改用综合分析报告。</p>"
+            )
         parts.append('<div class="edu-diag-overview">')
-        parts.append(_diag_stat_card("参考人数", str(stats.get("count")), tone="primary"))
+        parts.append(_diag_stat_card("参考人数", str(show_count), tone="primary"))
         parts.append(_diag_stat_card("平均分", _fmt(stats.get("avg")), tone="primary"))
         parts.append(_diag_stat_card("及格率", f"{_fmt(stats.get('pass_rate'))}%", tone=pass_tone))
         parts.append(_diag_stat_card("优秀率", f"{_fmt(stats.get('excellent_rate'))}%", tone="neutral"))
         parts.append("</div>")
+        if multi_exam_note:
+            parts.append(multi_exam_note)
 
     if knowledge_rows:
         parts.append('<div class="edu-diag-section">')

@@ -77,6 +77,7 @@ def compute_score_stats(
             "avg": None,
             "median": None,
             "stdev": None,
+            "variance": None,
             "min": None,
             "max": None,
             "pass_rate": None,
@@ -119,6 +120,7 @@ def compute_score_stats(
         "avg": round(_safe_mean(valid) or 0, 2),
         "median": round(_safe_median(valid) or 0, 2),
         "stdev": None if _safe_stdev(valid) is None else round(_safe_stdev(valid) or 0, 2),
+        "variance": None if _safe_stdev(valid) is None else round((_safe_stdev(valid) or 0) ** 2, 2),
         "min": min(valid),
         "max": max(valid),
         "pass_rate": _rate(valid, lambda v: v >= pass_thr),
@@ -128,6 +130,84 @@ def compute_score_stats(
         "fail_rate": _rate(valid, lambda v: v < pass_thr),
         "full_score": upper,
         "segments": segments,
+    }
+
+
+def describe_score_dispersion(
+    stdev: float | None,
+    *,
+    full_score: float | None = None,
+    variance: float | None = None,
+) -> dict[str, Any]:
+    """把标准差/方差翻译成教学可读的离散程度说明。
+
+    分级按「标准差占满分」比例（常见学情经验阈值）：
+
+    - ``<10%``：较集中——多数学生分数靠近均分；
+    - ``10%–15%``：适中——有合理分层，班内差异正常；
+    - ``15%–20%``：偏大——尖子与学困差距拉大，需分层辅导；
+    - ``≥20%``：分化明显——两极分化风险高，优先关注两端。
+
+    方差 = 标准差²，单位是「分²」，数值越大同样表示更分散；解读等级与标准差一致。
+    """
+    empty = {
+        "level": "-",
+        "level_class": "",
+        "stdev_hint": "样本不足，暂无法评估离散程度",
+        "variance": "-",
+        "variance_hint": "方差为标准差的平方；样本不足暂无法计算",
+        "tip": (
+            "标准差/方差反映班内成绩离散程度：数值越大，分数越分散。"
+            "参照占比：&lt;10% 较集中 · 10%–15% 适中 · 15%–20% 偏大 · ≥20% 分化明显。"
+        ),
+    }
+    try:
+        stdev_f = float(stdev) if stdev is not None else None
+    except (TypeError, ValueError):
+        stdev_f = None
+    if stdev_f is None or stdev_f < 0:
+        return empty
+
+    try:
+        upper_f = float(full_score) if full_score is not None else None
+    except (TypeError, ValueError):
+        upper_f = None
+    if upper_f is None or upper_f <= 0:
+        upper_f = 100.0
+
+    ratio = stdev_f / upper_f
+    if ratio < 0.10:
+        level, level_class, meaning = "较集中", "ok", "多数学生分数靠近均分，班内差异较小"
+    elif ratio < 0.15:
+        level, level_class, meaning = "适中", "", "存在合理分层，班内差异属正常范围"
+    elif ratio < 0.20:
+        level, level_class, meaning = "偏大", "warn", "尖子与学困差距拉大，建议加强分层辅导"
+    else:
+        level, level_class, meaning = "分化明显", "bad", "两极分化风险较高，优先关注两端学生"
+
+    if variance is None:
+        var_f: float | str = round(stdev_f * stdev_f, 2)
+    else:
+        try:
+            var_f = round(float(variance), 2)
+        except (TypeError, ValueError):
+            var_f = round(stdev_f * stdev_f, 2)
+
+    pct = round(ratio * 100, 1)
+    return {
+        "level": level,
+        "level_class": level_class,
+        "stdev_hint": f"{level}（约占满分 {pct}%）· {meaning}",
+        "variance": var_f,
+        "variance_hint": (
+            f"{level} · 方差=标准差²={stdev_f:.2f}²，"
+            "同样表示离散程度，数值越大分数越分散"
+        ),
+        "tip": (
+            "标准差/方差反映班内成绩离散程度：数值越大，分数越分散。"
+            f"当前标准差约占满分 {pct}%。"
+            "参照：&lt;10% 较集中 · 10%–15% 适中 · 15%–20% 偏大 · ≥20% 分化明显。"
+        ),
     }
 
 
@@ -676,6 +756,7 @@ __all__ = [
     "compute_subject_extremes",
     "compute_top_progress_regress",
     "compute_trend_distribution",
+    "describe_score_dispersion",
     "identify_at_risk_students",
     "normalize_segments",
     "pearson_r",

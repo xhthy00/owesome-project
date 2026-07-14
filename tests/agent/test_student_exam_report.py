@@ -78,6 +78,12 @@ def test_extract_school_target_from_full_name():
     assert extract_school_target(q) == "南京市第一中学"
 
 
+def test_extract_school_target_before_particle_zai():
+    """「扬州中学在连淮扬镇…」校名后接「在」时仍能抽出。"""
+    q = "扬州中学在连淮扬镇数学考试中各个班级的横向多维对比分析"
+    assert extract_school_target(q) == "扬州中学"
+
+
 def test_extract_school_target_from_quoted_name():
     assert extract_school_target('分析「北京市第四中学」数学成绩') == "北京市第四中学"
 

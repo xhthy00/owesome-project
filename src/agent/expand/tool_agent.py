@@ -54,7 +54,7 @@ Word/PDF 内容或自然语言报告正文**；必须按以下工具调用流程
    **科目诊断报告（班级/学校聚合，含小题明细）— 必须分步、工具链可见**：
    1. **先调** `fetch_subject_diagnosis_data_tool(school_name=..., subject_name=...,
       exam_name=..., class_name=...)` 查询 `tb_score_detail` 小题与知识点（观察返回的
-      SQL 执行记录与 item_rows 条数）；
+      SQL 执行记录与 item_rows 条数），然后 **terminate**（**禁止**同子任务再渲染）；
    2. 调 `build_subject_diagnosis_sections_tool(school_name=..., exam_name=...,
       subject_name=..., class_name=..., render=true)`
       **一步完成 stats 计算 + 组装 + HTML 渲染并推送前端**（工具自动从本轮/上游
@@ -73,6 +73,7 @@ Word/PDF 内容或自然语言报告正文**；必须按以下工具调用流程
    `render_html_report`（报告已由 sections 工具推送）。
    **全市 + 考试 + 科目结构化诊断报告**（含区县对比、详细小题/知识点）— 3 步分工：
    - **子任务 2（fetch）**：仅 `fetch_subject_diagnosis_data_tool` → `terminate`；
+     **禁止**同子任务调 `build_*` 渲染（否则会出多份报告）；
    - **子任务 3（组装）**：**仅** `build_diagnostic_report_data_tool(scope_label=全市, exam_name=..., subject_name=..., render=true)` → `terminate`；
      **禁止**在子任务 3 再调 `fetch_subject_diagnosis_data_tool`（工具自动读取上游成绩与 fetch 数据）；
      **禁止**手传 `score_rows` / `fetch_data` / `item_rows`（大字典会截断成空表）；

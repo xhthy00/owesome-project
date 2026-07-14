@@ -340,7 +340,7 @@ def test_select_report_template_tool_implemented_type():
 
 
 def test_select_report_template_tool_unknown_report_type():
-    # 所有 7 类 ReportType 在 Phase 4 已实现；未知类型应返回 error
+    # 全部 9 类 ReportType 已实现；未知类型应返回 error
     result = _run(select_report_template_tool.execute(report_type="bogus"))
     assert result.data["error"] == "unknown report_type"
 
@@ -1207,6 +1207,23 @@ def test_intent_resolver_comprehensive_keyword():
     assert spec.report_type == ReportType.COMPREHENSIVE
 
 
+def test_intent_resolver_all_math_exams_routes_comprehensive():
+    from src.agent.education.orchestrator import ReportIntentResolver
+    resolver = ReportIntentResolver()
+    spec = resolver.resolve("扬州中学高三(11)班所有数学考试成绩分析")
+    assert spec.report_type == ReportType.COMPREHENSIVE
+
+
+def test_intent_resolver_school_class_comparison_routes_grade_comparison():
+    from src.agent.education.orchestrator import ReportIntentResolver
+    resolver = ReportIntentResolver()
+    spec = resolver.resolve("扬州中学在连淮扬镇数学考试中各个班级的横向多维对比分析")
+    assert spec.report_type == ReportType.GRADE_COMPARISON
+    assert spec.filters.get("school_name") == "扬州中学"
+    assert spec.filters.get("subject") == "数学"
+    assert "class_name" not in spec.filters
+
+
 def test_intent_resolver_comprehensive_overrides_class_overview():
     from src.agent.education.orchestrator import ReportIntentResolver
     resolver = ReportIntentResolver()
@@ -1358,17 +1375,46 @@ def test_build_subject_diagnosis_sections_tool_renders_html():
     result = _run(
         edu_tools.build_subject_diagnosis_sections_tool.execute(
             item_rows=[
-                {"question_no": 1, "knowledge_name": "集合", "score_rate": 80.0},
+                {
+                    "student_id": "S01",
+                    "question_no": 1,
+                    "knowledge_name": "集合",
+                    "score_rate": 30.0,
+                    "exam_name": "期末质量检测",
+                },
+                {
+                    "student_id": "S01",
+                    "question_no": 2,
+                    "knowledge_name": "函数",
+                    "score_rate": 90.0,
+                    "exam_name": "期末质量检测",
+                },
+                {
+                    "student_id": "S02",
+                    "question_no": 1,
+                    "knowledge_name": "集合",
+                    "score_rate": 80.0,
+                    "exam_name": "期末质量检测",
+                },
             ],
             knowledge_rows=[
-                {"knowledge_name": "集合", "score_rate": 80.0, "question_count": 1},
+                {"knowledge_name": "集合", "score_rate": 55.0, "question_count": 1},
             ],
             stats={
                 "avg": 86,
                 "pass_rate": 90,
                 "excellent_rate": 20,
                 "stdev": 8,
+                "full_score": 150,
+                "count": 2,
                 "segments": [{"label": "90-100", "count": 5, "ratio": 50}],
+            },
+            score_result={
+                "columns": ["student_id", "subject_name", "score", "exam_score"],
+                "rows": [
+                    ["S01", "数学", 120, 150],
+                    ["S02", "数学", 95, 150],
+                ],
             },
             school_name="南京市第一中学",
             exam_name="期末质量检测",
@@ -1381,6 +1427,74 @@ def test_build_subject_diagnosis_sections_tool_renders_html():
     html = result.data["html"]
     assert "集合" in html
     assert "数学" in html
+    assert "每位学生详细档案与个性化建议" in html
+    assert "archive-card" in html
+    assert "S01" in html
+    assert "S02" in html
+    # 单科诊断：不展示跨科优势/待提升/偏科度
+    assert "偏科度" not in html
+    assert "待提升" not in html
+    assert "优势" not in html or "优势 <b" not in html
+    # 建议应来自知识点/小题，而非「数学相对薄弱」空模板
+    assert "知识点薄弱" in html or "小题补漏" in html
+    assert "短板提升" not in html
+    assert "数学相对薄弱" not in html
+
+
+def test_subject_diagnosis_template_has_student_archive_slot():
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src/agent/resource/templates/education/subject_diagnosis.html"
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "每位学生详细档案与个性化建议" in text
+    assert "{{STUDENT_ARCHIVE_TABLE}}" in text
+    assert "archive-grid" in text
+
+
+def test_subject_diagnosis_archive_hides_cross_subject_meta():
+    from src.agent.education.tools import _subject_diagnosis_student_archive
+
+    html = _subject_diagnosis_student_archive(
+        score_rows=[
+            {"student_id": "A1", "subject_name": "数学", "score": 88, "exam_score": 150},
+            {"student_id": "A2", "subject_name": "数学", "score": 110, "exam_score": 150},
+        ],
+        item_rows=[
+            {
+                "student_id": "A1",
+                "question_no": 3,
+                "knowledge_name": "立体几何",
+                "score_rate": 25.0,
+                "exam_name": "一模",
+            },
+            {
+                "student_id": "A1",
+                "question_no": 5,
+                "knowledge_name": "概率统计",
+                "score_rate": 40.0,
+                "exam_name": "一模",
+            },
+            {
+                "student_id": "A2",
+                "question_no": 3,
+                "knowledge_name": "立体几何",
+                "score_rate": 95.0,
+                "exam_name": "一模",
+            },
+        ],
+        exam_name="一模",
+        subject_name="数学",
+        weak_threshold=60.0,
+    )
+    assert "偏科度" not in html
+    assert "待提升" not in html
+    assert "archive-card" in html
+    assert "立体几何" in html
+    assert "知识点薄弱" in html or "小题补漏" in html
+    assert "数学相对薄弱" not in html
 
 
 def test_build_subject_diagnosis_sections_auto_fetch_from_report_data():

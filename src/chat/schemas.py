@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # ============== Conversation Schemas ==============
 
@@ -133,6 +133,14 @@ class ChatRequest(BaseModel):
             "subject_teacher / parent / default。影响模板叙事密度，不影响数值。"
         ),
     )
+
+    @field_validator("question")
+    @classmethod
+    def _normalize_class_parentheses(cls, v: str) -> str:
+        """查询前把班级全角括号统一成半角，如 高三（10）班 → 高三(10)班。"""
+        from src.agent.education.query_parse import normalize_fullwidth_parentheses
+
+        return normalize_fullwidth_parentheses(v or "")
 
 
 class SQLValidationRequest(BaseModel):

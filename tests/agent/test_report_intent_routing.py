@@ -1,0 +1,221 @@
+"""意图识别 ↔ 确定性格径对齐回归。
+
+保证 ReportIntentResolver 与 query_parse 探测器、Planner 路由一致，
+避免「认出了 A 报告、计划却走 B」或关键词误伤。
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from src.agent.education.orchestrator import ReportIntentResolver
+from src.agent.education.query_parse import (
+    extract_exam_name_hint,
+    extract_school_target,
+    extract_student_target,
+    is_citywide_analysis_query,
+    is_individual_student_analysis_query,
+    is_multi_exam_class_analysis_query,
+    is_school_class_comparison_query,
+    is_school_exam_report_query,
+)
+from src.agent.education.report_types import ReportType
+from src.agent.expand.planner import (
+    build_comprehensive_class_plan_items,
+    build_school_class_comparison_plan_items,
+    build_school_subject_report_plan_items,
+)
+
+
+def _route(question: str) -> str:
+    """与 agent_runner 同优先级的确定性格径标签。"""
+    if is_citywide_analysis_query(question):
+        return "citywide"
+    if is_individual_student_analysis_query(question):
+        return "individual"
+    if is_multi_exam_class_analysis_query(question):
+        return "multi-exam"
+    if is_school_class_comparison_query(question):
+        return "class-comparison"
+    if is_school_exam_report_query(question):
+        return "school-exam"
+    return "llm"
+
+
+@pytest.mark.parametrize(
+    "question,report_type,route",
+    [
+        (
+            "扬州中学高三(11)班所有数学考试成绩分析",
+            ReportType.COMPREHENSIVE,
+            "multi-exam",
+        ),
+        (
+            "扬州中学在连淮扬镇数学考试中各个班级的横向多维对比分析",
+            ReportType.GRADE_COMPARISON,
+            "class-comparison",
+        ),
+        (
+            "帮我分析全市的江苏省高一上学期数学期末质量检测成绩，形成详细报告",
+            ReportType.DIAGNOSTIC_REPORT,
+            "citywide",
+        ),
+        (
+            "分析学生001这几次考试的成绩",
+            ReportType.STUDENT_PROFILE,
+            "individual",
+        ),
+        (
+            "查询学生编号为：STU20240003，江苏省高一上学期数学期末质量检测成绩分析，哪些知识点需要加强",
+            ReportType.STUDENT_PROFILE,
+            "individual",
+        ),
+        (
+            "扬州中学高三(11)班数学成绩详细分析",
+            ReportType.SUBJECT_DIAGNOSIS,
+            "school-exam",
+        ),
+        (
+            "分析扬州中学在连淮扬镇考试的数学成绩，多维分析形成报告",
+            ReportType.SUBJECT_DIAGNOSIS,
+            "school-exam",
+        ),
+        (
+            "初三1班三次考试综合分析报告",
+            ReportType.COMPREHENSIVE,
+            "multi-exam",
+        ),
+        (
+            "高三(10)班班级成绩总览",
+            ReportType.CLASS_OVERVIEW,
+            "llm",
+        ),
+        (
+            "临界生预警报告",
+            ReportType.TIER_ALERT,
+            "llm",
+        ),
+        (
+            "历次成绩趋势分析",
+            ReportType.TREND_TRACKING,
+            "llm",
+        ),
+        (
+            "扬州中学高三(9)班数学诊断报告",
+            ReportType.SUBJECT_DIAGNOSIS,
+            "school-exam",
+        ),
+        (
+            "南京市第一中学数学结构化诊断报告",
+            ReportType.DIAGNOSTIC_REPORT,
+            "llm",
+        ),
+        (
+            "帮我分析全市数学详细分析",
+            ReportType.DIAGNOSTIC_REPORT,
+            "citywide",
+        ),
+        (
+            "扬州中学数学详细分析",
+            ReportType.SUBJECT_DIAGNOSIS,
+            "school-exam",
+        ),
+    ],
+)
+def test_intent_aligned_with_plan_route(question, report_type, route):
+    spec = ReportIntentResolver().resolve(question)
+    assert spec.report_type == report_type
+    assert _route(question) == route
+
+
+def test_bare_xueqing_report_not_student_profile():
+    spec = ReportIntentResolver().resolve("学情报告")
+    assert spec.report_type != ReportType.STUDENT_PROFILE
+    assert _route("学情报告") == "llm"
+
+
+def test_parent_child_xueqing_is_student_profile():
+    spec = ReportIntentResolver().resolve("给家长看看孩子的学情报告")
+    assert spec.report_type == ReportType.STUDENT_PROFILE
+
+
+def test_negated_geban_not_class_comparison():
+    q = "不要看各班级，只要扬州中学全校数学报告"
+    assert is_school_class_comparison_query(q) is False
+    assert is_school_exam_report_query(q) is True
+    assert ReportIntentResolver().resolve(q).report_type == ReportType.SUBJECT_DIAGNOSIS
+
+
+def test_exam_hint_not_polluted_by_ban_prefix():
+    assert extract_exam_name_hint("扬州中学高三(11)班所有数学考试成绩分析") is None
+    assert extract_exam_name_hint("扬州中学在连淮扬镇数学考试中各个班级对比") == "连淮扬镇"
+    # 「班的XXX考试」：任意考试简称都应抽出，禁止因吃到「班」前缀而丢弃
+    assert extract_exam_name_hint("某校高三（10）班的宁镇扬联考班级分析") == "宁镇扬联考"
+    assert extract_exam_name_hint("某校高三(10)班苏北调研数学考试详细分析") == "苏北调研"
+    assert extract_exam_name_hint("扬州中学高三（10）班的连淮扬镇考试班级分析") == "连淮扬镇"
+
+
+def test_planner_uses_extracted_exam_not_placeholder():
+    from src.agent.expand.planner import build_school_subject_report_plan_items
+
+    q = "某中学高三（8）班的宁镇扬联考班级分析"
+    plans = build_school_subject_report_plan_items(q)
+    blob = " ".join(p["sub_task"] for p in plans)
+    assert "宁镇扬联考" in blob
+    assert "exam_name=宁镇扬联考" in blob
+    assert "exam_name=本次考试" not in blob
+    assert "【本次考试】" not in blob
+
+
+def test_chinese_student_name_extracted():
+    assert extract_student_target("分析学生张三学情报告") == "学生张三"
+    assert is_individual_student_analysis_query("分析学生张三学情报告") is True
+    assert ReportIntentResolver().resolve("分析学生张三学情报告").report_type == (
+        ReportType.STUDENT_PROFILE
+    )
+
+
+def test_school_class_comparison_plan_forbids_class_name():
+    q = "扬州中学在连淮扬镇数学考试中各个班级的横向多维对比分析"
+    plans = build_school_class_comparison_plan_items(q)
+    blob = " ".join(p["sub_task"] for p in plans)
+    assert "禁止传 class_name" in blob
+    assert "class_name=高三" not in blob
+    assert extract_school_target(q) == "扬州中学"
+
+
+def test_named_class_school_exam_plan_includes_class_name():
+    q = "扬州中学高三(11)班数学成绩详细分析"
+    plans = build_school_subject_report_plan_items(q)
+    blob = " ".join(p["sub_task"] for p in plans)
+    assert "class_name=高三(11)班" in blob
+    assert "禁止传 class_name" not in blob
+
+
+def test_multi_exam_plan_tool():
+    q = "扬州中学高三(11)班所有数学考试成绩分析"
+    plans = build_comprehensive_class_plan_items(q)
+    assert len(plans) == 2
+    assert "build_comprehensive_report_data_tool" in plans[1]["sub_task"]
+
+
+def test_grade_comparison_filters_omit_class_name():
+    q = "扬州中学在连淮扬镇数学考试中各个班级的横向多维对比分析"
+    spec = ReportIntentResolver().resolve(q)
+    assert "class_name" not in spec.filters
+    assert spec.filters.get("school_name") == "扬州中学"
+
+
+def test_normalize_fullwidth_parentheses_for_class():
+    from src.agent.education.orchestrator import _extract_class_name
+    from src.agent.education.query_parse import normalize_fullwidth_parentheses
+    from src.chat.schemas import ChatRequest
+
+    q = "扬州中学高三（10）班在连淮扬镇的数学考试考情分析"
+    assert normalize_fullwidth_parentheses(q) == (
+        "扬州中学高三(10)班在连淮扬镇的数学考试考情分析"
+    )
+    assert _extract_class_name(q) == "高三(10)班"
+    req = ChatRequest(question=q, datasource_id=1)
+    assert req.question == "扬州中学高三(10)班在连淮扬镇的数学考试考情分析"
+    assert "（" not in req.question

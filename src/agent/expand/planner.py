@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from src.agent.core.action.base import Action, ActionOutput
@@ -94,17 +95,21 @@ PLANNER_DESC = """[你的职责]
   "用 education/<模板名>.html 模板组装 HTML 报告（数据取上游子任务）"。
 
 - 班级总览报告（class_overview）：
-  ["查询该班各科均分、及格率、优秀率、分数段分布", "查询该班在年级中的排名位置",
-   {"task": "用 education/class_overview.html 模板组装 HTML 报告（数据取上游子任务）", "sub_task_agent": "ToolExpert"}]
-- 年级对比报告（grade_comparison）：
-  ["查询各班均分与离散度并排名", {"task": "用 education/grade_comparison.html 模板组装 HTML 报告（数据取上游子任务）", "sub_task_agent": "ToolExpert"}]
+  ["查询该班每位学生各科分数（SQL 须含 student_id/姓名、subject、score、exam_score；禁止只查班级 KPI 聚合）", "查询该班在年级中的排名位置",
+   {"task": "用 education/class_overview.html 模板组装 HTML 报告（数据取上游子任务；STUDENT_ARCHIVE_TABLE 由工具自动从上游成绩明细生成，勿手填空表）", "sub_task_agent": "ToolExpert"}]
+- 年级对比报告（grade_comparison）/ **学校 + 各班横向多维对比**
+  （如「扬州中学在连淮扬镇数学考试中各个班级的横向多维对比分析」）——
+  **必须拆 3 个子任务**，范围是**全校各班**，**严禁**填写 class_name（不得缩成某一个班）：
+  ["查询【XX学校】在【XX考试】【XX科目】整体成绩 KPI：均分、及格率、优秀率、分数段、各班对比（SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score；**禁止**按单班过滤）",
+   {"task": "调 fetch_subject_diagnosis_data_tool(school_name=【XX学校】, subject_name=【XX科目】, exam_name=【XX考试】) 查询小题明细与知识点——本步仅 fetch，禁止 render，**禁止传 class_name**；完成后 terminate", "sub_task_agent": "ToolExpert"},
+   {"task": "调 build_subject_diagnosis_sections_tool(school_name=【XX学校】, exam_name=【XX考试】, subject_name=【XX科目】, render=true) 一步完成全校 stats+各班对比 HTML；**禁止传 class_name**；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 - 科目诊断报告（subject_diagnosis）：
   ["查询该科目分数段分布与及格率/优秀率", {"task": "用 education/subject_diagnosis.html 模板组装 HTML 报告（数据取上游子任务）", "sub_task_agent": "ToolExpert"}]
 - **学校 + 科目 + 考试 + 多维分析/分析报告**（如「分析【XX学校】在【XX考试】的数学成绩，多维分析形成报告」）——
-  **必须拆 3 个子任务**（与班级诊断同构，class_name 可省略表示全校该科）：
-  ["查询【XX学校】在【XX考试】【XX科目】整体成绩 KPI：均分、及格率、优秀率、分数段、各班对比（SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score）",
-   {"task": "调 fetch_subject_diagnosis_data_tool(school_name=【XX学校】, subject_name=【XX科目】, exam_name=【XX考试】) 查询小题明细与知识点——本步仅 fetch，完成后 terminate", "sub_task_agent": "ToolExpert"},
-   {"task": "调 build_subject_diagnosis_sections_tool(school_name=【XX学校】, exam_name=【XX考试】, subject_name=【XX科目】, render=true) 一步完成 stats+HTML；完成后 terminate", "sub_task_agent": "ToolExpert"}]
+  **必须拆 3 个子任务**（与班级诊断同构，**省略 class_name 表示全校该科**）：
+  ["查询【XX学校】在【XX考试】【XX科目】整体成绩 KPI：均分、及格率、优秀率、分数段、各班对比（SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score；**禁止**按单班过滤）",
+   {"task": "调 fetch_subject_diagnosis_data_tool(school_name=【XX学校】, subject_name=【XX科目】, exam_name=【XX考试】) 查询小题明细与知识点——本步仅 fetch，完成后 terminate，**禁止传 class_name**", "sub_task_agent": "ToolExpert"},
+   {"task": "调 build_subject_diagnosis_sections_tool(school_name=【XX学校】, exam_name=【XX考试】, subject_name=【XX科目】, render=true) 一步完成 stats+HTML；**禁止传 class_name**；完成后 terminate", "sub_task_agent": "ToolExpert"}]
   **禁止** plans=[原问题]；**禁止** DataAnalyst 在子任务 2/3 组装报告。
 - **学校/班级 + 科目 + 小题（逐题）诊断**（如「分析【XX学校】在【XX考试】的数学成绩，
   细化到每一小题，形成详细分析报告」）——**拆 3 个子任务**，小题查询须在工具链可见：
@@ -124,6 +129,10 @@ PLANNER_DESC = """[你的职责]
   ["查询该学生及全班历次考试各科分数与排名（SQL 须含全班数据以便算排名，但不得为其他学生另做报告）",
    {"task": "用 build_student_exam_report_data_tool 组装该学生考试分析 HTML 报告（student_name 必须与问题一致，仅一份报告）", "sub_task_agent": "ToolExpert"}]
   **严禁**为其他学生（如学生009）额外增加子任务或报告。
+- **班级 + 所有/历次/多次考试分析**（如「扬州中学高三(11)班所有数学考试成绩分析」）——
+  **只拆 2 个子任务**，走综合报告（含考试对比/趋势），**禁止**走科目诊断 fetch+sections：
+  ["查询该班历次考试每位学生【科目】分数（SQL 须含 exam_name、student_id/姓名、score、exam_score；禁止只查 KPI 聚合、禁止只查一场）",
+   {"task": "调 build_comprehensive_report_data_tool(class_name=【班级】) 生成多次考试综合分析 HTML（考试对比/趋势/进退步）；**禁止** build_subject_diagnosis_sections_tool；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 - 多次考试综合分析报告（comprehensive，含 9 个维度：整体概览/各科趋势/相关性/
   分布/进退步/偏科/单科之最/总分轨迹/学生档案）：
   ["查询该班历次考试每位学生分数（SQL 须含 exam_name、student_id/姓名、score；禁止只查班级 KPI 聚合）",
@@ -143,20 +152,41 @@ PLANNER_DESC = """[你的职责]
 禁止只查总分后 terminate。"""
 
 
+def _plan_exam_name(question: str) -> str:
+    """从问句抽取考试名；抽不到返回空串——禁止回落「本次考试」占位。"""
+    from src.agent.education.orchestrator import _extract_exam
+
+    return (_extract_exam(question) or "").strip()
+
+
+def _plan_subject_name(question: str) -> str:
+    """从问句抽取科目；抽不到返回空串——禁止回落「该科目」占位。"""
+    from src.agent.education.orchestrator import _extract_subject
+
+    return (_extract_subject(question) or "").strip()
+
+
+def _plan_label(value: str, *, missing: str) -> str:
+    """计划文案展示用：有真实抽取结果用原值，否则用中性说明（非伪造考试/科目名）。"""
+    text = (value or "").strip()
+    return text if text else missing
+
+
 def build_citywide_team_plan_items(question: str) -> list[dict[str, str]]:
     """全市考试成绩分析的标准 3 步 Team 计划（不依赖 Planner LLM）。"""
-    from src.agent.education.orchestrator import _extract_exam, _extract_subject
-
-    exam = _extract_exam(question) or "本次考试"
-    subject = _extract_subject(question) or "该科目"
+    exam = _plan_exam_name(question)
+    subject = _plan_subject_name(question)
+    exam_l = _plan_label(exam, missing="问题中的考试")
+    subject_l = _plan_label(subject, missing="问题中的科目")
     return [
         {
             "sub_task": (
-                f"查询全市【{exam}】【{subject}】学生成绩 KPI 与明细"
+                f"查询全市【{exam_l}】【{subject_l}】学生成绩 KPI 与明细"
                 "（SQL 须 JOIN tb_school sch ON sc.school_id=sch.id JOIN tb_exam e ON sc.exam_id=e.id，"
                 "SELECT sc.score, sc.exam_score, sc.class, sch.district, sch.name AS school_name, "
                 "sc.student_id, sc.subject_name；按 subject_name 与 exam_name 过滤；"
-                "全市范围**不传** school_name/class_name）"
+                "全市范围**不传** school_name/class_name；"
+                "**exam_name / subject_name 必须取自问题原文，禁止填「本次考试」「该科目」**）"
             ),
             "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
         },
@@ -181,19 +211,83 @@ def build_citywide_team_plan_items(question: str) -> list[dict[str, str]]:
 
 
 def build_school_subject_report_plan_items(question: str) -> list[dict[str, str]]:
-    """学校 + 考试科目分析报告的标准 3 步计划（Planner 未拆解时的修正回落）。"""
-    from src.agent.education.orchestrator import _extract_exam, _extract_subject
-    from src.agent.education.query_parse import extract_school_target
+    """学校 + 考试科目分析报告的标准 3 步计划（Planner 未拆解时的修正回落）。
+
+    - 各班横向 / 未点名班级：全校取数，**禁止** class_name
+    - 已点名班级：带上 class_name 做单班科目诊断
+    """
+    from src.agent.education.orchestrator import _extract_class_name
+    from src.agent.education.query_parse import (
+        extract_school_target,
+        is_school_class_comparison_query,
+    )
 
     school = extract_school_target(question) or "该校"
-    exam = _extract_exam(question) or "本次考试"
-    subject = _extract_subject(question) or "该科目"
+    exam = _plan_exam_name(question)
+    subject = _plan_subject_name(question)
+    exam_l = _plan_label(exam, missing="问题中的考试")
+    subject_l = _plan_label(subject, missing="问题中的科目")
+    class_name = _extract_class_name(question) or ""
+    school_wide = is_school_class_comparison_query(question) or not class_name
+    class_arg = "" if school_wide else f", class_name={class_name}"
+    class_forbid = (
+        "，禁止传 class_name**；" if school_wide else "**；"
+    )
+    kpi_scope = (
+        "各班对比（SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score；**禁止**按单班过滤）"
+        if school_wide
+        else f"班级【{class_name}】KPI（SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score）"
+    )
+    build_note = (
+        "**一步完成全校 stats + 各班对比 HTML**；**禁止传 class_name**（不得缩成单班）；"
+        if school_wide
+        else f"**一步完成【{class_name}】stats + HTML**；"
+    )
     return [
         {
             "sub_task": (
-                f"查询【{school}】在【{exam}】【{subject}】整体成绩 KPI："
+                f"查询【{school}】在【{exam_l}】【{subject_l}】整体成绩 KPI："
+                f"均分、及格率、优秀率、分数段分布、{kpi_scope}；"
+                "**exam_name / subject_name 必须取自问题原文，禁止填「本次考试」「该科目」**"
+            ),
+            "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
+        },
+        {
+            "sub_task": (
+                f"调 fetch_subject_diagnosis_data_tool(school_name={school}, "
+                f"subject_name={subject}, exam_name={exam}{class_arg}) "
+                f"查询小题明细与知识点——**本步仅 fetch，禁止 render{class_forbid}"
+                "完成后 terminate"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        },
+        {
+            "sub_task": (
+                f"调 build_subject_diagnosis_sections_tool(school_name={school}, "
+                f"exam_name={exam}, subject_name={subject}{class_arg}, render=true) "
+                f"{build_note}完成后 terminate"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        },
+    ]
+
+
+def build_school_class_comparison_plan_items(question: str) -> list[dict[str, str]]:
+    """学校各班横向对比：强制全校取数，严禁 class_name。"""
+    from src.agent.education.query_parse import extract_school_target
+
+    school = extract_school_target(question) or "该校"
+    exam = _plan_exam_name(question)
+    subject = _plan_subject_name(question)
+    exam_l = _plan_label(exam, missing="问题中的考试")
+    subject_l = _plan_label(subject, missing="问题中的科目")
+    return [
+        {
+            "sub_task": (
+                f"查询【{school}】在【{exam_l}】【{subject_l}】整体成绩 KPI："
                 "均分、及格率、优秀率、分数段分布、各班对比"
-                "（SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score）"
+                "（SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score；**禁止**按单班过滤）；"
+                "**exam_name / subject_name 必须取自问题原文，禁止填「本次考试」「该科目」**"
             ),
             "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
         },
@@ -201,7 +295,8 @@ def build_school_subject_report_plan_items(question: str) -> list[dict[str, str]
             "sub_task": (
                 f"调 fetch_subject_diagnosis_data_tool(school_name={school}, "
                 f"subject_name={subject}, exam_name={exam}) "
-                "查询小题明细与知识点——**本步仅 fetch，禁止 render**；完成后 terminate"
+                "查询小题明细与知识点——**本步仅 fetch，禁止 render，禁止传 class_name**；"
+                "完成后 terminate"
             ),
             "sub_task_agent": _TOOL_EXPERT_AGENT,
         },
@@ -209,7 +304,8 @@ def build_school_subject_report_plan_items(question: str) -> list[dict[str, str]
             "sub_task": (
                 f"调 build_subject_diagnosis_sections_tool(school_name={school}, "
                 f"exam_name={exam}, subject_name={subject}, render=true) "
-                "**一步完成 stats 计算 + HTML 渲染**；完成后 terminate"
+                "**一步完成全校 stats + 各班对比 HTML**；**禁止传 class_name**（不得缩成单班）；"
+                "完成后 terminate"
             ),
             "sub_task_agent": _TOOL_EXPERT_AGENT,
         },
@@ -218,22 +314,21 @@ def build_school_subject_report_plan_items(question: str) -> list[dict[str, str]
 
 def build_individual_student_exam_plan_items(question: str) -> list[dict[str, str]]:
     """单个学生 + 单次考试：总分对照 + 个人知识点诊断报告（确定性 2 步）。"""
-    from src.agent.education.orchestrator import _extract_subject
-    from src.agent.education.query_parse import (
-        extract_exam_name_hint,
-        extract_student_target,
-    )
+    from src.agent.education.query_parse import extract_student_target
 
     sid = extract_student_target(question) or "该学生"
-    exam = extract_exam_name_hint(question) or "本次考试"
-    subject = _extract_subject(question) or ""
+    exam = _plan_exam_name(question)
+    subject = _plan_subject_name(question)
+    exam_l = _plan_label(exam, missing="问题中的考试")
     subject_arg = f", subject_name={subject}" if subject else ""
+    subject_disp = f"【{subject}】" if subject else ""
     return [
         {
             "sub_task": (
-                f"查询学生【{sid}】在【{exam}】"
-                f"{f'【{subject}】' if subject else ''}的总分、卷面满分、班级排名、"
-                "班级均分对照（SQL 须含全班同学分以便算排名；可 JOIN tb_exam/tb_school）"
+                f"查询学生【{sid}】在【{exam_l}】"
+                f"{subject_disp}的总分、卷面满分、班级排名、"
+                "班级均分对照（SQL 须含全班同学分以便算排名；可 JOIN tb_exam/tb_school）；"
+                "**exam_name 必须取自问题原文，禁止填「本次考试」**"
             ),
             "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
         },
@@ -247,6 +342,48 @@ def build_individual_student_exam_plan_items(question: str) -> list[dict[str, st
             "sub_task_agent": _TOOL_EXPERT_AGENT,
         },
     ]
+
+
+def build_comprehensive_class_plan_items(question: str) -> list[dict[str, str]]:
+    """班级多场考试 → 查数 + comprehensive 综合报告（含考试对比）。"""
+    from src.agent.education.orchestrator import _extract_class_name, _extract_subject
+
+    class_name = _extract_class_name(question) or "该班"
+    subject = _extract_subject(question) or ""
+    subject_label = f"【{subject}】" if subject else "各科"
+    return [
+        {
+            "sub_task": (
+                f"查询【{class_name}】历次{subject_label}考试每位学生分数"
+                "（SQL 须含 exam_name、student_id/姓名、score、exam_score；"
+                "须带出该班全部相关考试，禁止只查班级 KPI 聚合、禁止只查单场）"
+            ),
+            "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
+        },
+        {
+            "sub_task": (
+                f"调 build_comprehensive_report_data_tool(class_name={class_name}) "
+                "一步生成多次考试综合分析 HTML（含考试对比/趋势/进退步 TOP 与学生档案）；"
+                "**禁止** build_subject_diagnosis_sections_tool / fetch 渲染；完成后 terminate"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        },
+    ]
+
+
+def should_replace_with_comprehensive_plan(
+    question: str,
+    plan_items: list[dict[str, str]],
+) -> bool:
+    """多场考试班级分析：未点名 comprehensive 工具时强制改走综合报告计划。"""
+    from src.agent.education.query_parse import is_multi_exam_class_analysis_query
+
+    if not is_multi_exam_class_analysis_query(question):
+        return False
+    blob = " ".join(str(it.get("sub_task") or "") for it in plan_items)
+    if "build_comprehensive_report_data_tool" in blob:
+        return False
+    return True
 
 
 def should_replace_with_individual_student_plan(
@@ -272,13 +409,36 @@ def should_replace_with_individual_student_plan(
     return True
 
 
+def should_replace_with_school_class_comparison_plan(
+    question: str,
+    plan_items: list[dict[str, str]],
+) -> bool:
+    """各班横向对比：改用确定性全校 3 步（禁止 class_name）。"""
+    from src.agent.education.query_parse import is_school_class_comparison_query
+
+    if not is_school_class_comparison_query(question):
+        return False
+    blob = " ".join(str(it.get("sub_task") or "") for it in plan_items)
+    # 已是禁止 class_name 的标准全校 3 步则保留
+    if (
+        len(plan_items) >= 3
+        and "禁止传 class_name" in blob
+        and "build_subject_diagnosis_sections_tool" in blob
+        and not re.search(r"class_name\s*=\s*(?:高|初)[^\s,，)）]*", blob)
+    ):
+        return False
+    return True
+
+
 def coerce_plan_items_if_needed(
     question: str,
     plan_items: list[dict[str, str]],
 ) -> list[dict[str, str]]:
-    """学校报告 / 个人得分类问题若 Planner 回落为单任务，修正为标准多步计划。"""
+    """学校报告 / 个人得分 / 多场考试 / 各班对比类问题修正为标准多步计划。"""
     from src.agent.education.query_parse import (
         is_individual_student_analysis_query,
+        is_multi_exam_class_analysis_query,
+        is_school_class_comparison_query,
         is_school_exam_report_query,
     )
 
@@ -288,6 +448,26 @@ def coerce_plan_items_if_needed(
             "planner individual-student coerce: expanding to 2-step student subject diagnosis"
         )
         return build_individual_student_exam_plan_items(q)
+    if should_replace_with_comprehensive_plan(q, plan_items):
+        logger.info(
+            "planner multi-exam coerce: replacing %d plan(s) with comprehensive 2-step",
+            len(plan_items),
+        )
+        return build_comprehensive_class_plan_items(q)
+    if should_replace_with_school_class_comparison_plan(q, plan_items):
+        logger.info(
+            "planner class-comparison coerce: replacing %d plan(s) with school-wide 3-step",
+            len(plan_items),
+        )
+        return build_school_class_comparison_plan_items(q)
+    if should_replace_with_school_exam_plan(q, plan_items):
+        logger.info(
+            "planner school-exam coerce: replacing %d plan(s) with school subject 3-step",
+            len(plan_items),
+        )
+        return build_school_subject_report_plan_items(q)
+    if is_multi_exam_class_analysis_query(q) or is_school_class_comparison_query(q):
+        return plan_items
     if not is_school_exam_report_query(q):
         return plan_items
     if len(plan_items) <= 1 and (
@@ -298,6 +478,41 @@ def coerce_plan_items_if_needed(
         )
         return build_school_subject_report_plan_items(q)
     return plan_items
+
+
+def should_replace_with_school_exam_plan(
+    question: str,
+    plan_items: list[dict[str, str]],
+) -> bool:
+    """学校科目报告（非各班横向专用）：改用确定性 3 步。"""
+    from src.agent.education.query_parse import (
+        is_school_class_comparison_query,
+        is_school_exam_report_query,
+    )
+
+    if is_school_class_comparison_query(question):
+        return False
+    if not is_school_exam_report_query(question):
+        return False
+    if len(plan_items) <= 1:
+        return True
+    blob = " ".join(str(it.get("sub_task") or "") for it in plan_items)
+    # 计划过碎或混入多种出报告工具 → 强制收成标准 3 步，避免刷多份空/半空报告
+    report_builders = (
+        "build_subject_diagnosis_sections_tool",
+        "build_diagnostic_report_data_tool",
+        "build_comprehensive_report_data_tool",
+        "build_student_exam_report_data_tool",
+        "build_student_subject_diagnosis_tool",
+        "build_subject_diagnosis_report_tool",
+        "render_html_report",
+    )
+    builder_hits = sum(1 for name in report_builders if name in blob)
+    if len(plan_items) > 3 or builder_hits > 1:
+        return True
+    if "build_subject_diagnosis_sections_tool" in blob and "fetch_subject_diagnosis_data_tool" in blob:
+        return False
+    return True
 
 
 def should_replace_with_citywide_plan(
@@ -393,6 +608,7 @@ def _fallback_single_plan(question: str, reason: str) -> ActionOutput:
     """拆解失败 → 原问题作为唯一子任务；报告类改用标准多步回落。"""
     from src.agent.education.query_parse import (
         is_individual_student_analysis_query,
+        is_school_class_comparison_query,
         is_school_exam_report_query,
     )
 
@@ -408,8 +624,8 @@ def _fallback_single_plan(question: str, reason: str) -> ActionOutput:
             extra={"plans": plans, "plan_agents": plan_agents},
             terminate=True,
         )
-    if is_school_exam_report_query(q):
-        items = build_school_subject_report_plan_items(q)
+    if is_school_class_comparison_query(q) or is_school_exam_report_query(q):
+        items = build_school_class_comparison_plan_items(q) if is_school_class_comparison_query(q) else build_school_subject_report_plan_items(q)
         plans = [it["sub_task"] for it in items]
         plan_agents = [it["sub_task_agent"] for it in items]
         return ActionOutput(

@@ -15,6 +15,7 @@ export default function ChatPage() {
     messages,
     executionSteps,
     summary,
+    summaryByRunId,
     reports,
     queryResults,
     loading,
@@ -149,6 +150,7 @@ export default function ChatPage() {
                   <ChatExecutionPanel
                     steps={executionSteps}
                     summary={summary}
+                    summaryByRunId={summaryByRunId}
                     reports={reports}
                     queryResults={queryResults}
                     selectedStepId={selectedStepId}

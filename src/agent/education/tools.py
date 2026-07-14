@@ -21,7 +21,7 @@ from typing import Any
 from src.agent.education.charts import build_chart_option as _build_chart_option
 from src.agent.education.config import EducationConfig
 from src.agent.education.config_store import get_config as _get_effective_config
-from src.agent.education.report_types import Audience, ReportType
+from src.agent.education.report_types import Audience, ReportType, report_type_label
 from src.agent.education.schema_mapping import (
     ScoreSchemaMapping,
     infer_normalized_mapping,
@@ -713,10 +713,11 @@ def fetch_subject_diagnosis_data_tool(
         f"- 知识点汇总：{len(knowledge_rows)} 个\n"
         f"- 学生成绩（tb_score）：{len(score_values)} 条\n"
         f"SQL 执行记录：\n{_format_diagnosis_sql_logs(sql_logs)}\n"
-        "下一步（**勿重复调用本工具**）：全市诊断流程进入下一步时调 "
-        "build_diagnostic_report_data_tool(render=true)；科目诊断则调 "
-        "build_subject_diagnosis_sections_tool，或将 score_result 传给 "
-        "compute_score_stats_tool(exec_result=...)，然后 render_html_report → terminate。"
+        "下一步：**本步请 terminate**（禁止同子任务渲染报告）。"
+        "组装留给后续子任务："
+        "科目诊断调 `build_subject_diagnosis_sections_tool(render=true)`；"
+        "全市诊断调 `build_diagnostic_report_data_tool(render=true)`——"
+        "工具会自动读取本步 fetch 结果。"
     )
     if errors:
         content += "\n部分 SQL 失败：\n" + "\n".join(errors[:5])
@@ -752,6 +753,8 @@ def build_subject_diagnosis_sections_tool(
     report_data: dict[str, Any] | None = None,
     sub_task: str = "",
     tool_runtime_ctx: dict[str, Any] | None = None,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
 ) -> ToolResult:
     """组装科目诊断报告中的 ITEM_TABLE / KNOWLEDGE_TABLE / SUMMARY / RECOMMENDATIONS。
 
@@ -779,7 +782,21 @@ def build_subject_diagnosis_sections_tool(
         weak_threshold: 得分率低于该值视为薄弱知识点（默认 60）。
         render: True（默认）渲染 HTML；False 仅返回 data 字典（调试或手动 render）。
     """
-    from src.agent.education.query_parse import resolve_subject_diagnosis_fetch_data
+    from src.agent.education.query_parse import (
+        resolve_subject_diagnosis_fetch_data,
+        sub_task_primary_tool,
+    )
+
+    task_text = (sub_task or "").strip()
+    if render and sub_task_primary_tool(task_text) == "fetch_subject_diagnosis_data_tool":
+        return ToolResult(
+            content=(
+                "本子任务禁止渲染科目诊断报告。若任务是 fetch_subject_diagnosis_data_tool，"
+                "请仅调 fetch 后 terminate；build_subject_diagnosis_sections_tool(render=true) "
+                "留给下一步组装子任务。"
+            ),
+            data={"error": "render_not_allowed_in_fetch_subtask"},
+        )
 
     ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
     fetch_data = resolve_subject_diagnosis_fetch_data(
@@ -857,6 +874,14 @@ def build_subject_diagnosis_sections_tool(
             report_data=report_data,
             fetch_data=fetch_data if isinstance(fetch_data, dict) else None,
         )
+    if not score_rows and score_result:
+        rows_s, cols_s = _coerce_exec_result(score_result, None, None)
+        if cols_s and rows_s:
+            score_rows = [
+                dict(zip(cols_s, row)) if isinstance(row, (list, tuple)) else dict(row)
+                for row in rows_s
+                if isinstance(row, (list, tuple, dict))
+            ]
 
     intervention_insights: dict[str, Any] = {}
     intervention_html = ""
@@ -885,6 +910,7 @@ def build_subject_diagnosis_sections_tool(
         stats=stats,
         item_rows=items,
         knowledge_rows=knowledge,
+        score_rows=score_rows,
         weak_threshold=weak_threshold,
         intervention_insights=intervention_insights or None,
     )
@@ -956,6 +982,20 @@ def build_subject_diagnosis_sections_tool(
             )
     weak_cnt = sum(1 for r in knowledge if r.get("level") == "需加强")
 
+    archive_html = _subject_diagnosis_student_archive(
+        score_rows=score_rows,
+        item_rows=items,
+        exam_name=exam_name,
+        subject_name=subject_name,
+        school_name=school_name,
+        class_name=class_name,
+        full_score=(stats or {}).get("full_score") if isinstance(stats, dict) else None,
+        weak_threshold=weak_threshold,
+        datasource_id=datasource_id,
+        workspace_oid=workspace_oid,
+    )
+    data["STUDENT_ARCHIVE_TABLE"] = archive_html
+
     if not render:
         content = (
             f"科目诊断区块已组装：小题 {len(items)} 条，知识点 {len(knowledge)} 个"
@@ -972,8 +1012,15 @@ def build_subject_diagnosis_sections_tool(
     )
     has_scores = bool(st.get("count"))
     scope_label = class_name or school_name or "全年级"
+    rt = _resolve_subject_diagnosis_report_type(school_name=school_name, class_name=class_name)
+    type_label = report_type_label(rt)
+    if school_name and not class_name:
+        report_title = f"{subject_name or '科目'}班级横向对比分析"
+    else:
+        report_title = f"{subject_name or '科目'}诊断报告"
     template_payload: dict[str, Any] = {
-        "REPORT_TITLE": f"{subject_name or '科目'}诊断报告",
+        "REPORT_TITLE": report_title,
+        "REPORT_TYPE": type_label,
         "REPORT_SUBTITLE": _report_scope_subtitle(school_name, class_name) or scope_label,
         "REPORT_TIME": _now_str(),
         "SUBJECT_NAME": subject_name or "全科",
@@ -983,7 +1030,25 @@ def build_subject_diagnosis_sections_tool(
         "PASS_RATE": _fmt_val(st.get("pass_rate")),
         "EXCELLENT_RATE": _fmt_val(st.get("excellent_rate")),
         "STDEV": _fmt_val(st.get("stdev")),
+        "VARIANCE": _fmt_val(st.get("variance")),
     }
+    try:
+        from src.agent.education.stats import describe_score_dispersion
+
+        info = describe_score_dispersion(
+            st.get("stdev"),
+            full_score=st.get("full_score"),
+            variance=st.get("variance"),
+        )
+        template_payload["STDEV_LEVEL"] = info["level"]
+        template_payload["STDEV_LEVEL_CLASS"] = info["level_class"]
+        template_payload["STDEV_HINT"] = info["stdev_hint"]
+        template_payload["VARIANCE_HINT"] = info["variance_hint"]
+        template_payload["DISPERSION_TIP"] = info["tip"]
+        if template_payload.get("VARIANCE") in (None, "", "-") and info["variance"] != "-":
+            template_payload["VARIANCE"] = _fmt_val(info["variance"])
+    except Exception:
+        pass
     template_payload.update(data)
     if not has_scores:
         template_payload["SUMMARY"] = (
@@ -1043,6 +1108,7 @@ def build_subject_diagnosis_sections_tool(
             "**禁止**再调 select_report_template / build_chart_option / render_html_report。"
         ),
         payload,
+        report_type=rt,
     )
 
 
@@ -1165,6 +1231,7 @@ def build_subject_diagnosis_report_tool(
         stats=stats,
         item_rows=item_rows,
         knowledge_rows=knowledge_enriched,
+        score_rows=score_rows,
         weak_threshold=weak_threshold,
         intervention_insights=intervention_insights or None,
     )
@@ -1228,9 +1295,18 @@ def build_subject_diagnosis_report_tool(
 
     # ---------- 4. 填充模板字段 ----------
     scope_label = class_name or school_name or "全年级"
+    rt = _resolve_subject_diagnosis_report_type(school_name=school_name, class_name=class_name)
+    type_label = report_type_label(rt)
+    if school_name and not class_name:
+        report_title = f"{subject_name or '科目'}班级横向对比分析"
+        subtitle = school_name
+    else:
+        report_title = f"{subject_name or '科目'}诊断报告"
+        subtitle = f"{school_name} {class_name}".strip()
     report_data: dict[str, Any] = {
-        "REPORT_TITLE": f"{subject_name or '科目'}诊断报告",
-        "REPORT_SUBTITLE": f"{school_name} {class_name}".strip(),
+        "REPORT_TITLE": report_title,
+        "REPORT_TYPE": type_label,
+        "REPORT_SUBTITLE": subtitle,
         "REPORT_TIME": _now_str(),
         "SUBJECT_NAME": subject_name or "全科",
         "EXAM_NAME": exam_name or "本次考试",
@@ -1239,8 +1315,39 @@ def build_subject_diagnosis_report_tool(
         "PASS_RATE": _fmt_val(stats.get("pass_rate")),
         "EXCELLENT_RATE": _fmt_val(stats.get("excellent_rate")),
         "STDEV": _fmt_val(stats.get("stdev")),
+        "VARIANCE": _fmt_val(stats.get("variance")),
     }
+    try:
+        from src.agent.education.stats import describe_score_dispersion
+
+        info = describe_score_dispersion(
+            stats.get("stdev") if isinstance(stats, dict) else None,
+            full_score=stats.get("full_score") if isinstance(stats, dict) else None,
+            variance=stats.get("variance") if isinstance(stats, dict) else None,
+        )
+        report_data["STDEV_LEVEL"] = info["level"]
+        report_data["STDEV_LEVEL_CLASS"] = info["level_class"]
+        report_data["STDEV_HINT"] = info["stdev_hint"]
+        report_data["VARIANCE_HINT"] = info["variance_hint"]
+        report_data["DISPERSION_TIP"] = info["tip"]
+        if report_data.get("VARIANCE") in (None, "", "-") and info["variance"] != "-":
+            report_data["VARIANCE"] = _fmt_val(info["variance"])
+    except Exception:
+        pass
     report_data.update(section_data)
+
+    report_data["STUDENT_ARCHIVE_TABLE"] = _subject_diagnosis_student_archive(
+        score_rows=score_rows,
+        item_rows=item_rows,
+        exam_name=exam_name,
+        subject_name=subject_name,
+        school_name=school_name,
+        class_name=class_name,
+        full_score=stats.get("full_score") if isinstance(stats, dict) else None,
+        weak_threshold=weak_threshold,
+        datasource_id=datasource_id,
+        workspace_oid=workspace_oid,
+    )
 
     if not render:
         return ToolResult(
@@ -1281,14 +1388,15 @@ def build_subject_diagnosis_report_tool(
         if score_values
         else "⚠️ 成绩(tb_score)为空——KPI 与分数段将显示为空，请检查 tb_score 是否有匹配记录"
     )
-    return ToolResult(
-        content=(
+    return _html_report_tool_result(
+        (
             f"科目诊断报告已渲染完成（{len(item_rows)} 题、{len(knowledge_enriched)} 知识点、"
             f"薄弱 {weak_cnt} 个、{score_note}、HTML {len(safe_html)} 字符）。\n"
             f"小题查询 SQL 记录：\n{sql_note}\n"
             "报告已自动推送到前端，直接调 terminate 结束即可。"
         ),
-        data=payload,
+        payload,
+        report_type=rt,
     )
 
 
@@ -1363,7 +1471,10 @@ def _diagnosis_where_parts(
     if school_name:
         parts.append(f"sch.name = '{_esc(school_name)}'")
     if class_name:
-        parts.append(f"sc.class = '{_esc(class_name)}'")
+        from src.agent.education.query_parse import normalize_fullwidth_parentheses
+
+        cls = normalize_fullwidth_parentheses(class_name.strip())
+        parts.append(f"sc.class = '{_esc(cls)}'")
     if subject_name:
         parts.append(f"sc.subject_name = '{_esc(subject_name)}'")
     if exam_ids:
@@ -1786,12 +1897,129 @@ def _report_scope_subtitle(school_name: str = "", class_name: str = "") -> str:
     return " ".join(parts)
 
 
-def _html_report_tool_result(content: str, payload: dict[str, Any]) -> ToolResult:
-    """HTML 报告工具成功返回：标记 is_final，避免 LLM 下一轮格式错误。"""
+def _html_report_tool_result(
+    content: str,
+    payload: dict[str, Any],
+    *,
+    report_type: ReportType | str | None = None,
+) -> ToolResult:
+    """HTML 报告工具成功返回：附带报告类型，并标记 is_final。"""
+    from src.agent.education.report_types import report_type_label
+
+    data = dict(payload)
+    if report_type is not None:
+        rt = report_type if isinstance(report_type, ReportType) else _coerce_report_type(str(report_type))
+        if rt is not None:
+            from src.agent.education.report_types import format_report_display_title
+
+            label = report_type_label(rt)
+            data["report_type"] = rt.value
+            data["report_type_label"] = label
+            data["title"] = format_report_display_title(
+                str(data.get("title") or "").strip(),
+                rt,
+                type_label=label,
+            )
+            # 同步 chunks 标题
+            chunks = data.get("chunks")
+            if isinstance(chunks, list) and chunks and isinstance(chunks[0], dict):
+                chunks = [dict(chunks[0])]
+                chunks[0]["title"] = data["title"]
+                data["chunks"] = chunks
     return ToolResult(
         content=content + "\n任务已完成，无需再调用其他工具。",
-        data=payload,
+        data=data,
         is_final=True,
+    )
+
+
+def _resolve_subject_diagnosis_report_type(*, school_name: str = "", class_name: str = "") -> ReportType:
+    """全校无班级 → 班级横向对比；否则科目诊断。"""
+    if (school_name or "").strip() and not (class_name or "").strip():
+        return ReportType.GRADE_COMPARISON
+    return ReportType.SUBJECT_DIAGNOSIS
+
+
+def _subject_diagnosis_student_archive(
+    *,
+    score_rows: list[dict[str, Any]] | None,
+    item_rows: list[dict[str, Any]] | None = None,
+    exam_name: str = "",
+    subject_name: str = "",
+    school_name: str = "",
+    class_name: str = "",
+    full_score: float | None = None,
+    weak_threshold: float = 60.0,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+) -> str:
+    """科目诊断：单科档案（无优势/待提升/偏科度），建议按逐人知识点得分生成。"""
+    from src.agent.education.comprehensive import (
+        aggregate_student_item_insights,
+        build_student_archive_from_score_rows,
+    )
+
+    enriched: list[dict[str, Any]] = []
+    for r in score_rows or []:
+        if not isinstance(r, dict):
+            continue
+        rr = dict(r)
+        if subject_name and not str(rr.get("subject") or rr.get("subject_name") or "").strip():
+            rr["subject_name"] = subject_name
+        if exam_name and not str(rr.get("exam") or rr.get("exam_name") or "").strip():
+            rr["exam_name"] = exam_name
+        enriched.append(rr)
+
+    detail_rows = list(item_rows or [])
+    has_student_detail = any(
+        isinstance(r, dict)
+        and str(r.get("student_id") or r.get("student") or "").strip()
+        for r in detail_rows
+    )
+    # 班级科目诊断的 fetch item_rows 多为按题聚合（无学号）——需另查逐人小题明细
+    if not has_student_detail and datasource_id:
+        try:
+            fetched = _fetch_class_student_item_rows(
+                datasource_id=int(datasource_id),
+                class_name=class_name or "",
+                exam_name=exam_name or "",
+                subject_name=subject_name or "",
+                school_name=school_name or "",
+                workspace_oid=workspace_oid,
+            )
+            if fetched:
+                detail_rows = fetched
+                has_student_detail = True
+        except Exception:  # noqa: BLE001
+            logger.exception("subject diagnosis: fetch per-student item rows failed")
+
+    insights: dict[str, dict[str, Any]] | None = None
+    if has_student_detail and detail_rows:
+        raw = aggregate_student_item_insights(
+            detail_rows,
+            weak_threshold=weak_threshold,
+            exam_name=exam_name,
+        )
+        if raw:
+            insights = raw
+
+    fs = full_score
+    if fs is None:
+        for r in enriched:
+            try:
+                v = r.get("exam_score")
+                if v is not None and v != "":
+                    fs = float(v)
+                    break
+            except (TypeError, ValueError):
+                continue
+
+    return build_student_archive_from_score_rows(
+        enriched,
+        exam_name=exam_name or "本次考试",
+        full_score=fs,
+        student_item_insights=insights,
+        single_subject=True,
     )
 
 
@@ -2233,13 +2461,14 @@ def build_comprehensive_report_data_tool(
         "mode": "template",
         "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
     }
-    return ToolResult(
-        content=(
+    return _html_report_tool_result(
+        (
             f"综合分析报告已渲染完成（{len(records)} 条记录、{n_exams} 次考试、"
             f"HTML {len(safe_html)} 字符{item_note}）{upstream_note}。"
             "报告已自动推送到前端，直接调 terminate 结束即可。"
         ),
-        data=payload,
+        payload,
+        report_type=ReportType.COMPREHENSIVE,
     )
 
 
@@ -2708,12 +2937,13 @@ def build_student_exam_report_data_tool(
         "mode": "template",
         "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
     }
-    return ToolResult(
-        content=(
+    return _html_report_tool_result(
+        (
             f"{target} 考试分析报告已渲染完成（HTML {len(safe_html)} 字符{item_note}）。"
             "报告已自动推送到前端，直接调 terminate 结束即可。"
         ),
-        data=payload,
+        payload,
+        report_type=ReportType.STUDENT_PROFILE,
     )
 
 
@@ -2906,6 +3136,7 @@ def build_citywide_exam_analysis_report_tool(
             f"小题 {len(item_rows)}、知识点 {len(knowledge_rows)}、HTML {len(safe_html)} 字符）。"
         ),
         payload,
+        report_type=ReportType.DIAGNOSTIC_REPORT,
     )
 
 
@@ -3061,6 +3292,7 @@ def build_diagnostic_report_data_tool(
     return _html_report_tool_result(
         f"结构化诊断报告已渲染（HTML {len(safe_html)} 字符）。",
         payload,
+        report_type=ReportType.DIAGNOSTIC_REPORT,
     )
 
 
@@ -3278,6 +3510,7 @@ def build_student_subject_diagnosis_tool(
 
     data: dict[str, Any] = {
         "REPORT_TITLE": f"{sid} {subject_name or '科目'}学情分析报告",
+        "REPORT_TYPE": report_type_label(ReportType.STUDENT_PROFILE),
         "REPORT_SUBTITLE": subtitle or f"学号 {sid}",
         "REPORT_TIME": _now_str(),
         "STUDENT_NAME": sid,
@@ -3399,6 +3632,7 @@ def build_student_subject_diagnosis_tool(
             f"{warn_note}"
         ),
         payload,
+        report_type=ReportType.STUDENT_PROFILE,
     )
 
 

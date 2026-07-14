@@ -1,7 +1,7 @@
 """报告类型 / 受众 / 报告规格。
 
-``ReportType`` 是 7 类学情报告的枚举——Phase 1 落地前 4 类，其余在
-后续阶段补齐，但枚举一次性定义齐全，避免后续到处加分支。
+``ReportType`` 是当前系统的 **9 类标准学情报告** 枚举；生成报告时应在页头
+角标 / 列表标题中显示对应中文名（见 ``REPORT_TYPE_LABELS``）。
 
 ``Audience`` 决定同一份数据的叙事风格（校长看宏观排名、家长看个体建议），
 模板层据此切换文案密度与术语。
@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -41,6 +42,81 @@ class Audience(str, Enum):
     DEFAULT = "default"              # 未指定时的默认（接近班主任视角）
 
 
+#: 报告类型 → 中文展示名（报告页角标 / 列表标题共用）
+REPORT_TYPE_LABELS: dict[ReportType, str] = {
+    ReportType.CLASS_OVERVIEW: "班级总览报告",
+    ReportType.GRADE_COMPARISON: "班级横向对比报告",
+    ReportType.SUBJECT_DIAGNOSIS: "科目诊断报告",
+    ReportType.STUDENT_PROFILE: "学生学情报告",
+    ReportType.TREND_TRACKING: "成绩趋势报告",
+    ReportType.TIER_ALERT: "分层预警报告",
+    ReportType.GROUP_FEATURE: "群体特征报告",
+    ReportType.COMPREHENSIVE: "综合分析报告",
+    ReportType.DIAGNOSTIC_REPORT: "结构化诊断报告",
+}
+
+_KNOWN_TYPE_MARKERS: frozenset[str] = frozenset(
+    {rt.value for rt in ReportType} | set(REPORT_TYPE_LABELS.values())
+)
+
+
+def report_type_label(report_type: ReportType | str) -> str:
+    """返回报告类型的中文名。"""
+    if isinstance(report_type, ReportType):
+        return REPORT_TYPE_LABELS.get(report_type, "学情报告")
+    raw = str(report_type or "").strip()
+    if raw in REPORT_TYPE_LABELS.values():
+        return raw
+    try:
+        return REPORT_TYPE_LABELS.get(ReportType(raw), "学情报告")
+    except ValueError:
+        return "学情报告"
+
+
+def strip_report_type_markers(title: str) -> str:
+    """去掉标题首尾的类型角标（兼容 ``【class_overview】`` / ``【班级总览报告】``）。"""
+    t = str(title or "").strip()
+    while True:
+        m = re.match(r"^【([^】]+)】\s*", t)
+        if not m:
+            break
+        token = m.group(1).strip()
+        if token not in _KNOWN_TYPE_MARKERS:
+            break
+        t = t[m.end() :].strip()
+    m = re.search(r"[【（(]([^】）)]+)[】）)]\s*$", t)
+    if m and m.group(1).strip() in _KNOWN_TYPE_MARKERS:
+        t = t[: m.start()].strip()
+    return t
+
+
+def format_report_display_title(
+    title: str,
+    report_type: ReportType | str | None = None,
+    *,
+    type_label: str | None = None,
+) -> str:
+    """按「报告名称【报告类型】」拼接列表/预览角标标题。"""
+    base = strip_report_type_markers(title)
+    label = ""
+    raw_label = str(type_label or "").strip()
+    if raw_label in REPORT_TYPE_LABELS.values():
+        label = raw_label
+    elif raw_label:
+        converted = report_type_label(raw_label)
+        if converted != "学情报告" or raw_label == "学情报告":
+            label = converted
+    if not label and report_type is not None:
+        label = report_type_label(report_type)
+    if not label:
+        return base or "Report"
+    if not base:
+        return label
+    if label in base:
+        return base
+    return f"{base}【{label}】"
+
+
 @dataclass
 class ReportSpec:
     """一次报告生成的完整规格。
@@ -56,4 +132,12 @@ class ReportSpec:
     include_charts: bool = True
 
 
-__all__ = ["Audience", "ReportSpec", "ReportType"]
+__all__ = [
+    "Audience",
+    "REPORT_TYPE_LABELS",
+    "ReportSpec",
+    "ReportType",
+    "format_report_display_title",
+    "report_type_label",
+    "strip_report_type_markers",
+]

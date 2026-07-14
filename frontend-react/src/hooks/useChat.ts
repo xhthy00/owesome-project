@@ -27,6 +27,10 @@ export type ReportPayload = {
   html: string;
   mode?: string;
   subTaskIndex?: number;
+  reportType?: string;
+  reportTypeLabel?: string;
+  /** 关联多轮对话中的某次运行，用于点击历史步骤时回显对应报告 */
+  runId?: string;
 };
 
 export type QueryResult = {
@@ -35,6 +39,7 @@ export type QueryResult = {
   columns: string[];
   rows: unknown[][];
   rowCount: number;
+  runId?: string;
 };
 
 type SendOptions = {
@@ -53,18 +58,63 @@ const asText = (value: unknown): string => {
   }
 };
 
+const REPORT_TYPE_MARKERS = new Set([
+  "class_overview",
+  "grade_comparison",
+  "subject_diagnosis",
+  "student_profile",
+  "trend_tracking",
+  "tier_alert",
+  "group_feature",
+  "comprehensive",
+  "diagnostic_report",
+  "班级总览报告",
+  "班级横向对比报告",
+  "科目诊断报告",
+  "学生学情报告",
+  "成绩趋势报告",
+  "分层预警报告",
+  "群体特征报告",
+  "综合分析报告",
+  "结构化诊断报告"
+]);
+
+/** 报告列表/预览标题：报告名称【报告类型】 */
+export const formatReportDisplayTitle = (title: string, typeLabel?: string): string => {
+  let base = (title || "").trim();
+  while (true) {
+    const m = base.match(/^【([^】]+)】\s*/);
+    if (!m || !REPORT_TYPE_MARKERS.has(m[1].trim())) break;
+    base = base.slice(m[0].length).trim();
+  }
+  const tail = base.match(/[【（(]([^】）)]+)[】）)]\s*$/);
+  if (tail && REPORT_TYPE_MARKERS.has(tail[1].trim())) {
+    base = base.slice(0, tail.index).trim();
+  }
+  const label = (typeLabel || "").trim();
+  if (!label) return base || "Report";
+  if (!base) return label;
+  if (base.includes(label)) return base;
+  return `${base}【${label}】`;
+};
+
 export const extractReportFromToolData = (
   data: Record<string, unknown> | undefined,
   subTaskIndex?: number
 ): ReportPayload | null => {
   if (!data) return null;
   const html = asText(data.html).trim();
+  const typeMeta = {
+    reportType: data.report_type ? asText(data.report_type) : undefined,
+    reportTypeLabel: data.report_type_label ? asText(data.report_type_label) : undefined
+  };
   if (data.output_type === "html" && html) {
     return {
-      title: asText(data.title) || "Report",
+      title: formatReportDisplayTitle(asText(data.title) || "Report", typeMeta.reportTypeLabel),
       html,
       mode: data.mode ? asText(data.mode) : undefined,
-      subTaskIndex
+      subTaskIndex,
+      ...typeMeta
     };
   }
   const chunks = data.chunks;
@@ -76,10 +126,14 @@ export const extractReportFromToolData = (
     const chunkHtml = asText(c.content).trim();
     if (!chunkHtml) continue;
     return {
-      title: asText(c.title) || asText(data.title) || "Report",
+      title: formatReportDisplayTitle(
+        asText(c.title) || asText(data.title) || "Report",
+        typeMeta.reportTypeLabel
+      ),
       html: chunkHtml,
       mode: data.mode ? asText(data.mode) : undefined,
-      subTaskIndex
+      subTaskIndex,
+      ...typeMeta
     };
   }
   return null;
@@ -87,7 +141,7 @@ export const extractReportFromToolData = (
 
 const appendReportIfNew = (prev: ReportPayload[], report: ReportPayload): ReportPayload[] => {
   if (!report.html.trim()) return prev;
-  if (prev.some((r) => r.html === report.html)) return prev;
+  if (prev.some((r) => r.html === report.html && (r.runId ?? "") === (report.runId ?? ""))) return prev;
   return [...prev, report];
 };
 
@@ -113,7 +167,9 @@ const deriveReportsFromRecord = (record: {
         title: asText(r?.title) || "Report",
         html,
         mode: r?.mode ? asText(r.mode) : undefined,
-        subTaskIndex: r?.sub_task_index
+        subTaskIndex: r?.sub_task_index,
+        reportType: r?.report_type ? asText(r.report_type) : undefined,
+        reportTypeLabel: r?.report_type_label ? asText(r.report_type_label) : undefined
       });
     });
   }
@@ -134,6 +190,7 @@ export function useChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [executionSteps, setExecutionSteps] = useState<ExecutionStep[]>([]);
   const [summary, setSummary] = useState("");
+  const [summaryByRunId, setSummaryByRunId] = useState<Record<string, string>>({});
   const [reports, setReports] = useState<ReportPayload[]>([]);
   const [queryResults, setQueryResults] = useState<QueryResult[]>([]);
   const [loading, setLoading] = useState(false);
@@ -201,13 +258,13 @@ export function useChat() {
           section: "plan"
         }
       ]);
+      // 多轮对话保留历史报告/查询结果；本轮摘要待生成时先置空显示槽位
       setSummary("");
-      setReports([]);
-      setQueryResults([]);
 
       let latest = "";
       let latestSql = "";
       const stripBootstrap = (prev: ExecutionStep[]) => prev.filter((s) => s.id !== bootstrapId);
+      const withRun = <T extends { runId?: string }>(item: T): T => ({ ...item, runId });
       const writeAssistant = (content: string) => {
         latest = content;
         setMessages((prev) => prev.map((msg) => (msg.id === assistantId ? { ...msg, content } : msg)));
@@ -344,20 +401,24 @@ export function useChat() {
                 }
               ]);
             },
-            onReport: ({ title, html, mode, sub_task_index }) => {
-              const report: ReportPayload = {
-                title: asText(title) || "Report",
+            onReport: ({ title, html, mode, sub_task_index, report_type, report_type_label }) => {
+              const typeLabel = report_type_label ? asText(report_type_label) : undefined;
+              const normalizedTitle = formatReportDisplayTitle(asText(title) || "Report", typeLabel);
+              const report: ReportPayload = withRun({
+                title: normalizedTitle,
                 html: asText(html),
                 mode: mode ? asText(mode) : undefined,
-                subTaskIndex: sub_task_index
-              };
+                subTaskIndex: sub_task_index,
+                reportType: report_type ? asText(report_type) : undefined,
+                reportTypeLabel: typeLabel
+              });
               setReports((prev) => appendReportIfNew(prev, report));
               setExecutionSteps((prev) => [
                 ...stripBootstrap(prev),
                 {
                   id: genUUID(),
                   title: "生成报告",
-                  detail: `${asText(title) || "Report"}${mode ? ` (${asText(mode)})` : ""}`,
+                  detail: `${normalizedTitle}${mode ? ` (${asText(mode)})` : ""}`,
                   status: "done",
                   runId,
                   section: "result",
@@ -405,13 +466,13 @@ export function useChat() {
                 if (safeColumns.length && rawRows.length) {
                   setQueryResults((prev) => [
                     ...prev,
-                    {
+                    withRun({
                       key: genUUID(),
                       sql: asText(data.sql) || latestSql,
                       columns: safeColumns,
                       rows: rawRows,
                       rowCount: typeof data.row_count === "number" ? data.row_count : rawRows.length
-                    }
+                    })
                   ]);
                 }
               }
@@ -419,7 +480,7 @@ export function useChat() {
               if (data && typeof data === "object") {
                 const extracted = extractReportFromToolData(data as Record<string, unknown>, sub_task_index);
                 if (extracted) {
-                  setReports((prev) => appendReportIfNew(prev, extracted));
+                  setReports((prev) => appendReportIfNew(prev, withRun(extracted)));
                 }
               }
               setExecutionSteps((prev) => {
@@ -470,13 +531,13 @@ export function useChat() {
               if (safeColumns.length && safeRows.length) {
                 setQueryResults((prev) => [
                   ...prev,
-                  {
+                  withRun({
                     key: genUUID(),
                     sql: latestSql,
                     columns: safeColumns,
                     rows: safeRows,
                     rowCount
-                  }
+                  })
                 ]);
               }
               appendAssistant(`执行完成，返回 ${rowCount} 行结果。`);
@@ -494,6 +555,7 @@ export function useChat() {
               if (safeContent.trim()) {
                 writeAssistant(safeContent);
                 setSummary(safeContent);
+                setSummaryByRunId((prev) => ({ ...prev, [runId]: safeContent }));
               }
             },
             onError: (msg) => {
@@ -524,7 +586,7 @@ export function useChat() {
                     detail.records?.find((r) => r.id === recordId) ??
                     detail.records?.[detail.records.length - 1];
                   if (record) {
-                    const derived = deriveReportsFromRecord(record);
+                    const derived = deriveReportsFromRecord(record).map((r) => withRun(r));
                     if (derived.length) {
                       setReports((prev) => {
                         let next = [...prev];
@@ -567,22 +629,27 @@ export function useChat() {
     const nextMessages: Message[] = [];
     const nextSteps: ExecutionStep[] = [];
     let nextSummary = "";
+    const nextSummaryByRunId: Record<string, string> = {};
     const nextReports: ReportPayload[] = [];
     const nextQueryResults: QueryResult[] = [];
     const queryResultSignatures = new Set<string>();
 
     detail.records?.forEach((record) => {
+      const recordRunId = `record-${record.id}`;
       if (asText(record.question).trim()) {
-        nextMessages.push({ id: `u-${record.id}`, role: "user", content: asText(record.question), runId: `record-${record.id}` });
+        nextMessages.push({ id: `u-${record.id}`, role: "user", content: asText(record.question), runId: recordRunId });
       }
       const answer = asText(record.summary || record.reasoning || "").trim();
       if (answer) {
-        nextMessages.push({ id: `a-${record.id}`, role: "assistant", content: answer, runId: `record-${record.id}` });
+        nextMessages.push({ id: `a-${record.id}`, role: "assistant", content: answer, runId: recordRunId });
       }
       if (asText(record.summary).trim()) {
         nextSummary = asText(record.summary);
+        nextSummaryByRunId[recordRunId] = asText(record.summary);
       }
-      nextReports.push(...deriveReportsFromRecord(record));
+      deriveReportsFromRecord(record).forEach((r) => {
+        nextReports.push({ ...r, runId: recordRunId });
+      });
       const sqlText = asText(record.sql);
       const execColumns = Array.isArray(record.exec_result?.columns)
         ? record.exec_result.columns.map((col) => asText(col))
@@ -597,7 +664,8 @@ export function useChat() {
             sql: sqlText,
             columns: execColumns,
             rows: execRows,
-            rowCount: record.exec_result?.row_count ?? execRows.length
+            rowCount: record.exec_result?.row_count ?? execRows.length,
+            runId: recordRunId
           });
         }
       }
@@ -610,7 +678,7 @@ export function useChat() {
             title: `计划 ${idx + 1}: ${p}`,
             detail: ps?.sub_task_agent ? `执行角色: ${asText(ps.sub_task_agent)}` : "",
             status: ps?.state === "ok" ? "done" : ps?.state === "error" ? "error" : "running",
-            runId: `record-${record.id}`,
+            runId: recordRunId,
             section: "plan",
             subTaskIndex: idx,
             progressPct: ps?.state === "ok" ? 100 : 0,
@@ -625,7 +693,7 @@ export function useChat() {
           title: `工具结果: ${asText(tc.tool) || "tool"}`,
           detail: `${asText(tc.content)}${tc.elapsed_ms ? `\n耗时: ${tc.elapsed_ms}ms` : ""}`.trim(),
           status: tc.success === false ? "error" : "done",
-          runId: `record-${record.id}`,
+          runId: recordRunId,
           section: "result",
           subTaskIndex: tc.sub_task_index,
           round: tc.round
@@ -645,7 +713,8 @@ export function useChat() {
                 sql,
                 columns: safeColumns,
                 rows: rawRows,
-                rowCount
+                rowCount,
+                runId: recordRunId
               });
             }
           }
@@ -658,7 +727,7 @@ export function useChat() {
           title: asText(st.label || st.name || "步骤"),
           detail: asText(st.detail),
           status: st.status === "error" ? "error" : "done",
-          runId: `record-${record.id}`,
+          runId: recordRunId,
           section: "step",
           subTaskIndex: st.sub_task_index
         });
@@ -668,6 +737,7 @@ export function useChat() {
     setMessages(nextMessages);
     setExecutionSteps(nextSteps);
     setSummary(nextSummary);
+    setSummaryByRunId(nextSummaryByRunId);
     setReports(nextReports);
     setQueryResults(nextQueryResults);
     setLoading(false);
@@ -678,6 +748,7 @@ export function useChat() {
     setMessages([]);
     setExecutionSteps([]);
     setSummary("");
+    setSummaryByRunId({});
     setReports([]);
     setQueryResults([]);
     setLoading(false);
@@ -687,6 +758,7 @@ export function useChat() {
     messages,
     executionSteps,
     summary,
+    summaryByRunId,
     reports,
     queryResults,
     loading,

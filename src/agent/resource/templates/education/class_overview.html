@@ -8,35 +8,269 @@
   <style>
     :root {
       --edu-primary: #1677ff;
+      --edu-primary-soft: #e8f3ff;
       --edu-primary-bg: #e6f4ff;
       --edu-text-lv1: rgba(0,0,0,0.88);
       --edu-text-lv2: rgba(0,0,0,0.65);
       --edu-text-lv3: rgba(0,0,0,0.45);
-      --edu-border: #f0f0f0;
+      --edu-border: #e8edf3;
+      --edu-surface: #f7f9fc;
       --edu-success: #52c41a;
       --edu-warning: #faad14;
       --edu-error: #ff4d4f;
+      --edu-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 12px rgba(16, 24, 40, 0.04);
     }
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #f0f2f5; color: var(--edu-text-lv1); }
-    .edu-container { max-width: 1040px; margin: 24px auto; padding: 0 16px; }
-    .edu-card { background: #fff; border: 1px solid var(--edu-border); border-radius: 8px; padding: 20px 24px; margin-bottom: 16px; }
-    h1 { margin: 0 0 8px; font-size: 24px; }
-    h2 { margin: 0 0 12px; font-size: 18px; }
-    h3 { margin: 14px 0 8px; font-size: 15px; color: var(--edu-text-lv2); }
-    p { margin: 6px 0; line-height: 1.7; }
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #eef3f9 0%, #f0f2f5 40%, #f5f6f8 100%);
+      color: var(--edu-text-lv1);
+    }
+    .edu-container { max-width: 1040px; margin: 24px auto; padding: 0 16px 32px; }
+    .edu-card {
+      background: #fff;
+      border: 1px solid var(--edu-border);
+      border-radius: 14px;
+      padding: 22px 24px;
+      margin-bottom: 16px;
+      box-shadow: var(--edu-shadow);
+    }
+    .edu-card > h2 {
+      margin: 0 0 16px;
+      font-size: 17px;
+      font-weight: 650;
+      letter-spacing: 0.01em;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--edu-border);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .edu-card > h2::before {
+      content: "";
+      width: 4px;
+      height: 16px;
+      border-radius: 2px;
+      background: var(--edu-primary);
+      flex: 0 0 auto;
+    }
+    h1 { margin: 0 0 8px; font-size: 24px; font-weight: 700; letter-spacing: -0.02em; }
+    h3 { margin: 16px 0 10px; font-size: 14px; color: var(--edu-text-lv2); font-weight: 600; }
+    p { margin: 6px 0; line-height: 1.75; }
     .edu-sub { color: var(--edu-text-lv3); font-size: 13px; }
-    .edu-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; }
-    .edu-kpi { border: 1px solid var(--edu-border); border-radius: 8px; padding: 12px 14px; background: #fafafa; }
+    .edu-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+    .edu-kpi {
+      border: 1px solid var(--edu-border);
+      border-radius: 12px;
+      padding: 14px 16px;
+      background: linear-gradient(180deg, #fafcff 0%, #f5f8fc 100%);
+      border-left: 3px solid var(--edu-primary);
+      box-shadow: 0 1px 2px rgba(22, 119, 255, 0.04);
+    }
+    .edu-kpi.ok { border-left-color: var(--edu-success); }
+    .edu-kpi.warn { border-left-color: var(--edu-warning); }
+    .edu-kpi.bad { border-left-color: var(--edu-error); }
     .edu-kpi .label { font-size: 12px; color: var(--edu-text-lv3); }
-    .edu-kpi .value { margin-top: 4px; font-size: 20px; font-weight: 600; color: var(--edu-primary); }
-    .edu-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    .edu-table th, .edu-table td { border: 1px solid var(--edu-border); padding: 8px 10px; text-align: left; }
-    .edu-table th { background: var(--edu-primary-bg); color: var(--edu-text-lv2); font-weight: 600; }
-    .edu-table tr:nth-child(even) td { background: #fafafa; }
+    .edu-kpi .value {
+      margin-top: 6px;
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--edu-primary);
+      letter-spacing: -0.02em;
+      line-height: 1.2;
+      font-variant-numeric: tabular-nums;
+    }
+    .edu-kpi.ok .value { color: var(--edu-success); }
+    .edu-kpi.warn .value { color: #d48806; }
+    .edu-kpi.bad .value { color: var(--edu-error); }
+    .edu-kpi .hint {
+      margin-top: 8px;
+      font-size: 11.5px;
+      line-height: 1.45;
+      color: var(--edu-text-lv3);
+    }
+    .edu-kpi .level-tag {
+      display: inline-block;
+      margin-bottom: 4px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 600;
+      background: var(--edu-primary-soft);
+      color: var(--edu-primary);
+    }
+    .edu-kpi.ok .level-tag { background: #f6ffed; color: var(--edu-success); }
+    .edu-kpi.warn .level-tag { background: #fffbe6; color: #d48806; }
+    .edu-kpi.bad .level-tag { background: #fff2f0; color: var(--edu-error); }
+    .dispersion-tip {
+      margin-top: 14px;
+      padding: 12px 14px;
+      font-size: 12.5px;
+      line-height: 1.65;
+      color: var(--edu-text-lv2);
+      background: var(--edu-surface);
+      border: 1px dashed var(--edu-border);
+      border-radius: 10px;
+    }
+
+    /* 表格：圆角容器 + 轻边框 */
+    .edu-table-wrap {
+      overflow-x: auto;
+      margin: 4px 0 8px;
+      border: 1px solid var(--edu-border);
+      border-radius: 12px;
+      background: #fff;
+    }
+    table, .edu-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      min-width: 420px;
+    }
+    table th, table td,
+    .edu-table th, .edu-table td {
+      border: none;
+      border-bottom: 1px solid var(--edu-border);
+      padding: 11px 14px;
+      text-align: left;
+      vertical-align: middle;
+      color: var(--edu-text-lv1);
+    }
+    table thead th, .edu-table thead th,
+    table > tr > th:first-child, table tr:first-child th {
+      background: linear-gradient(180deg, #f3f8ff 0%, var(--edu-primary-bg) 100%);
+      color: #3b6fb8;
+      font-weight: 650;
+      white-space: nowrap;
+      font-size: 12.5px;
+      letter-spacing: 0.02em;
+    }
+    /* 无 thead 时第一行当表头 */
+    table:not(:has(thead)) > tbody > tr:first-child > td,
+    table:not(:has(thead)) > tr:first-child > td {
+      background: linear-gradient(180deg, #f3f8ff 0%, var(--edu-primary-bg) 100%);
+      color: #3b6fb8;
+      font-weight: 650;
+    }
+    table tbody tr:nth-child(even) td,
+    .edu-table tbody tr:nth-child(even) td { background: #fafcfe; }
+    table tbody tr:hover td,
+    .edu-table tbody tr:hover td { background: #f0f7ff; }
+    table tbody tr:last-child td,
+    .edu-table tbody tr:last-child td { border-bottom: none; }
+    table .num, .edu-table .num,
+    table td:nth-child(n+2) {
+      font-variant-numeric: tabular-nums;
+    }
+    table th.num, table td.num,
+    .edu-table th.num, .edu-table td.num { text-align: right; white-space: nowrap; }
+
     .edu-chart { width: 100%; height: 320px; }
-    .edu-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: var(--edu-primary-bg); color: var(--edu-primary); }
-    .edu-footer { color: var(--edu-text-lv3); font-size: 12px; text-align: right; }
-    @media print { body { background: #fff; } .edu-card { border: none; } }
+    .edu-chart-empty {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      height: 180px;
+      color: var(--edu-text-lv3);
+      background: var(--edu-surface);
+      border: 1px dashed var(--edu-border);
+      border-radius: 12px;
+      font-size: 13px;
+    }
+    .edu-badge {
+      display: inline-block;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      background: var(--edu-primary-soft);
+      color: var(--edu-primary);
+      font-weight: 500;
+    }
+    .edu-footer { color: var(--edu-text-lv3); font-size: 12px; text-align: right; padding: 4px 4px 0; }
+    .segment-wrap { margin-top: 14px; }
+
+    /* 文字段卡片化 */
+    .prose-stack { display: flex; flex-direction: column; gap: 12px; }
+    .prose-card, .summary-block > p, .rank-block > p {
+      margin: 0;
+      padding: 14px 16px;
+      line-height: 1.8;
+      color: var(--edu-text-lv2);
+      background: linear-gradient(135deg, #fafcff 0%, #f7f9fc 100%);
+      border: 1px solid var(--edu-border);
+      border-radius: 12px;
+      border-left: 3px solid var(--edu-primary);
+      box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
+    }
+    .summary-block > p + p,
+    .rank-block > p + p { margin-top: 12px; }
+    .summary-block strong, .rank-block strong, .prose-card strong {
+      color: var(--edu-text-lv1);
+      font-weight: 650;
+    }
+
+    /* 建议列表卡片 */
+    .summary-block ol, .summary-block ul,
+    .rec-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      counter-reset: rec;
+    }
+    .summary-block ol > li, .summary-block ul > li,
+    .rec-list > li {
+      position: relative;
+      margin: 0;
+      padding: 14px 16px 14px 52px;
+      line-height: 1.75;
+      color: var(--edu-text-lv2);
+      background: #fff;
+      border: 1px solid var(--edu-border);
+      border-radius: 12px;
+      box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
+    }
+    .summary-block ol > li {
+      counter-increment: rec;
+    }
+    .summary-block ol > li::before {
+      content: counter(rec);
+      position: absolute;
+      left: 14px;
+      top: 14px;
+      width: 26px;
+      height: 26px;
+      border-radius: 8px;
+      background: var(--edu-primary-soft);
+      color: var(--edu-primary);
+      font-size: 13px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .summary-block ul > li::before {
+      content: "";
+      position: absolute;
+      left: 22px;
+      top: 22px;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--edu-primary);
+    }
+
+    .rank-block, .summary-block { color: var(--edu-text-lv2); }
+    .rank-block .edu-table-wrap,
+    .summary-block .edu-table-wrap,
+    #subjectBreakdown .edu-table-wrap { margin-top: 4px; }
+
+    @media print {
+      body { background: #fff; }
+      .edu-card { border: none; box-shadow: none; }
+    }
   </style>
 </head>
 <body>
@@ -45,6 +279,7 @@
       <h1>{{REPORT_TITLE}}</h1>
       <p class="edu-sub">{{REPORT_SUBTITLE}}</p>
       <p class="edu-sub">
+        <span class="edu-badge">{{REPORT_TYPE}}</span>
         <span class="edu-badge">{{CLASS_NAME}}</span>
         <span class="edu-badge">{{EXAM_NAME}}</span>
         {{REPORT_TIME}}
@@ -56,60 +291,133 @@
       <div class="edu-grid">
         <div class="edu-kpi"><div class="label">参考人数</div><div class="value">{{TOTAL_COUNT}}</div></div>
         <div class="edu-kpi"><div class="label">平均分</div><div class="value">{{AVG_SCORE}}</div></div>
-        <div class="edu-kpi"><div class="label">及格率</div><div class="value">{{PASS_RATE}}%</div></div>
-        <div class="edu-kpi"><div class="label">优秀率</div><div class="value">{{EXCELLENT_RATE}}%</div></div>
-        <div class="edu-kpi"><div class="label">标准差</div><div class="value">{{STDEV}}</div></div>
-        <div class="edu-kpi"><div class="label">最高分</div><div class="value">{{MAX_SCORE}}</div></div>
-        <div class="edu-kpi"><div class="label">最低分</div><div class="value">{{MIN_SCORE}}</div></div>
-        <div class="edu-kpi"><div class="label">良好率</div><div class="value">{{GOOD_RATE}}%</div></div>
-        <div class="edu-kpi"><div class="label">低分率</div><div class="value">{{LOW_SCORE_RATE}}%</div></div>
+        <div class="edu-kpi ok"><div class="label">及格率</div><div class="value">{{PASS_RATE}}</div></div>
+        <div class="edu-kpi ok"><div class="label">优秀率</div><div class="value">{{EXCELLENT_RATE}}</div></div>
+        <div class="edu-kpi {{STDEV_LEVEL_CLASS}}">
+          <div class="label">标准差</div>
+          <div class="value">{{STDEV}}</div>
+          <div class="hint"><span class="level-tag">{{STDEV_LEVEL}}</span>{{STDEV_HINT}}</div>
+        </div>
+        <div class="edu-kpi {{STDEV_LEVEL_CLASS}}">
+          <div class="label">方差</div>
+          <div class="value">{{VARIANCE}}</div>
+          <div class="hint">{{VARIANCE_HINT}}</div>
+        </div>
+        <div class="edu-kpi ok"><div class="label">最高分</div><div class="value">{{MAX_SCORE}}</div></div>
+        <div class="edu-kpi warn"><div class="label">最低分</div><div class="value">{{MIN_SCORE}}</div></div>
+        <div class="edu-kpi"><div class="label">良好率</div><div class="value">{{GOOD_RATE}}</div></div>
+        <div class="edu-kpi bad"><div class="label">低分率</div><div class="value">{{LOW_SCORE_RATE}}</div></div>
       </div>
+      <p class="dispersion-tip">{{DISPERSION_TIP}}</p>
     </section>
 
     <section class="edu-card">
       <h2>分数段分布</h2>
       <div id="scoreDist" class="edu-chart"></div>
+      <div id="scoreDistEmpty" class="edu-chart-empty">暂无分数段分布数据</div>
       <script type="application/json" id="scoreDistData">{{SCORE_DIST_CHART}}</script>
       <script>
         (function () {
+          var el = document.getElementById('scoreDist');
+          var empty = document.getElementById('scoreDistEmpty');
           var raw = (document.getElementById('scoreDistData').textContent || '').trim();
-          if (!raw) { return; }
-          try { echarts.init(document.getElementById('scoreDist')).setOption(JSON.parse(raw)); } catch (e) {}
+          if (!raw || raw === '{}' || raw === 'null') {
+            el.style.display = 'none';
+            empty.style.display = 'flex';
+            return;
+          }
+          try {
+            echarts.init(el).setOption(JSON.parse(raw));
+          } catch (e) {
+            el.style.display = 'none';
+            empty.style.display = 'flex';
+          }
         })();
       </script>
+      <div class="segment-wrap">
+        <h3>分数段明细</h3>
+        <div>{{SEGMENT_TABLE}}</div>
+      </div>
     </section>
 
-    <section class="edu-card">
-      <h2>各科目表现</h2>
+    <section class="edu-card" id="subjectSection">
+      <h2>学科能力画像</h2>
+      <p class="edu-sub" id="abilityPortraitNote">综合均分、达标率与均衡度，刻画本班本场学科能力轮廓。</p>
       <div id="subjectRadar" class="edu-chart"></div>
       <script type="application/json" id="subjectRadarData">{{SUBJECT_RADAR_CHART}}</script>
+      <div id="subjectBreakdown">{{SUBJECT_BREAKDOWN}}</div>
       <script>
         (function () {
+          var section = document.getElementById('subjectSection');
+          var note = document.getElementById('abilityPortraitNote');
           var raw = (document.getElementById('subjectRadarData').textContent || '').trim();
-          if (!raw) { return; }
-          try { echarts.init(document.getElementById('subjectRadar')).setOption(JSON.parse(raw)); } catch (e) {}
+          var breakdown = (document.getElementById('subjectBreakdown').innerHTML || '').trim();
+          var hasChart = false;
+          if (raw && raw !== '{}' && raw !== 'null') {
+            try {
+              echarts.init(document.getElementById('subjectRadar')).setOption(JSON.parse(raw));
+              hasChart = true;
+            } catch (e) {}
+          }
+          if (!hasChart) {
+            var radar = document.getElementById('subjectRadar');
+            if (radar) radar.style.display = 'none';
+            if (note) note.style.display = 'none';
+          }
+          if (!hasChart && !breakdown) {
+            section.style.display = 'none';
+          }
         })();
       </script>
-      <h3>分科目明细</h3>
-      <div>{{SUBJECT_BREAKDOWN}}</div>
     </section>
 
-    <section class="edu-card">
+    <section class="edu-card" id="rankSection">
       <h2>年级排名</h2>
-      <div>{{RANK_INFO}}</div>
+      <div class="rank-block prose-stack">{{RANK_INFO}}</div>
+      <script>
+        (function () {
+          var section = document.getElementById('rankSection');
+          var html = (section.querySelector('.rank-block').innerHTML || '').trim();
+          if (!html) section.style.display = 'none';
+        })();
+      </script>
     </section>
 
     <section class="edu-card">
       <h2>总体分析</h2>
-      <div>{{SUMMARY}}</div>
+      <div class="summary-block prose-stack">{{SUMMARY}}</div>
     </section>
 
     <section class="edu-card">
       <h2>改进建议</h2>
-      <div>{{RECOMMENDATIONS}}</div>
+      <div class="summary-block prose-stack">{{RECOMMENDATIONS}}</div>
     </section>
 
     <div class="edu-footer">Generated by awesome-project · 教育学情分析</div>
   </div>
+  <script>
+    (function () {
+      // 美化 LLM 注入的裸 table：加圆角容器与 edu-table 类
+      document.querySelectorAll('.edu-container table').forEach(function (t) {
+        t.classList.add('edu-table');
+        if (t.closest('.edu-table-wrap')) return;
+        var wrap = document.createElement('div');
+        wrap.className = 'edu-table-wrap';
+        t.parentNode.insertBefore(wrap, t);
+        wrap.appendChild(t);
+      });
+      // 纯文本段落无 <p> 时，包一层 prose-card
+      document.querySelectorAll('.summary-block, .rank-block').forEach(function (block) {
+        if (block.querySelector('p, ol, ul, table, .prose-card')) return;
+        var text = (block.textContent || '').trim();
+        if (!text) return;
+        var card = document.createElement('div');
+        card.className = 'prose-card';
+        card.innerHTML = block.innerHTML;
+        block.innerHTML = '';
+        block.appendChild(card);
+      });
+    })();
+  </script>
 </body>
 </html>

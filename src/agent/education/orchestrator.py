@@ -58,15 +58,27 @@ ResolveSchemaFn = Callable[[], Awaitable[ScoreSchemaMapping]]
 
 # ---- 意图识别 ------------------------------------------------------------
 
-# 关键词 → ReportType。顺序敏感：越具体越靠前。
+# 关键词 → ReportType。仅作「非专用探测器」场景的回落；顺序敏感：越具体越靠前。
+# 专用探测器（全市 / 个人 / 多场 / 各班对比 / 学校报告）优先于本表。
 _INTENT_KEYWORDS: list[tuple[ReportType, tuple[str, ...]]] = [
     (ReportType.DIAGNOSTIC_REPORT, ("结构化诊断", "区域诊断报告", "诊断报告三节", "全市区县诊断")),
-    (ReportType.COMPREHENSIVE, ("综合分析报告", "综合报告", "综合分析", "多次考试", "三次考试", "两次考试", "纵向分析", "学业诊断报告")),
+    (ReportType.COMPREHENSIVE, (
+        "综合分析报告", "综合报告", "综合分析", "多次考试", "三次考试", "两次考试",
+        "纵向分析", "所有考试", "全部考试", "历次考试", "各次考试",
+        "所有数学考试", "所有语文考试",
+    )),
     (ReportType.TIER_ALERT, ("预警", "临界生", "退步生", "偏科", "分层")),
-    (ReportType.TREND_TRACKING, ("趋势", "变化", "历次", "走势", "进退步")),
-    (ReportType.STUDENT_PROFILE, ("学生个体", "个人报告", "该生", "这名学生", "学情报告", "这几次考试", "考试成绩分析")),
-    (ReportType.SUBJECT_DIAGNOSIS, ("科目诊断", "科目分析", "学科诊断", "某科", "数学分析", "语文分析", "小题", "逐题", "每一小题", "每一题", "知识点", "详细分析")),
-    (ReportType.GRADE_COMPARISON, ("年级对比", "各班对比", "班级对比", "年级排名", "班级排名")),
+    (ReportType.TREND_TRACKING, ("趋势", "变化", "历次成绩", "历次", "走势", "进退步")),
+    (ReportType.STUDENT_PROFILE, ("学生个体", "个人报告", "该生", "这名学生", "这几次考试")),
+    # 各班横向对比须先于科目诊断
+    (ReportType.GRADE_COMPARISON, (
+        "年级对比", "各班对比", "班级对比", "年级排名", "班级排名",
+        "各个班级", "各班级", "横向对比", "横向分析", "横向多维", "多维对比", "多维分析",
+    )),
+    (ReportType.SUBJECT_DIAGNOSIS, (
+        "科目诊断", "科目分析", "学科诊断", "某科", "数学分析", "语文分析",
+        "小题", "逐题", "每一小题", "每一题", "知识点", "详细分析", "诊断报告",
+    )),
     (ReportType.CLASS_OVERVIEW, ("班级总览", "班级报告", "班级分析", "班级成绩", "期中分析", "期末分析")),
 ]
 
@@ -79,14 +91,41 @@ _AUDIENCE_KEYWORDS: list[tuple[Audience, tuple[str, ...]]] = [
 
 
 class ReportIntentResolver:
-    """把自然语言问题映射到 ``ReportSpec``（纯规则，无 LLM）。"""
+    """把自然语言问题映射到 ``ReportSpec``（纯规则，无 LLM）。
+
+    优先级与 ``agent_runner`` / Planner 确定性格径对齐：
+    全市 → 个人学生 → 多场综合 → 各班横向 → 结构化诊断 → 学校科目报告 → 关键词回落。
+    """
 
     def resolve(self, question: str, audience_hint: str | None = None) -> ReportSpec:
         q = (question or "").strip()
-        from src.agent.education.query_parse import extract_student_target, is_citywide_analysis_query
+        from src.agent.education.query_parse import (
+            extract_student_target,
+            is_citywide_analysis_query,
+            is_individual_student_analysis_query,
+            is_multi_exam_class_analysis_query,
+            is_school_class_comparison_query,
+            is_school_exam_report_query,
+            is_structured_diagnostic_query,
+        )
 
         if is_citywide_analysis_query(q):
             report_type = ReportType.DIAGNOSTIC_REPORT
+        elif is_individual_student_analysis_query(q):
+            report_type = ReportType.STUDENT_PROFILE
+        elif is_multi_exam_class_analysis_query(q):
+            report_type = ReportType.COMPREHENSIVE
+        elif is_school_class_comparison_query(q):
+            report_type = ReportType.GRADE_COMPARISON
+        elif is_structured_diagnostic_query(q):
+            report_type = ReportType.DIAGNOSTIC_REPORT
+        elif is_school_exam_report_query(q):
+            report_type = ReportType.SUBJECT_DIAGNOSIS
+        elif "学情报告" in q and any(
+            h in q for h in ("孩子", "家长", "该生", "学生", "个人", "这名")
+        ):
+            # 无明确学号时的家长/个体学情（探测器要求 extract_student_target）
+            report_type = ReportType.STUDENT_PROFILE
         elif extract_student_target(q) and any(
             h in q for h in ("知识点", "成绩分析", "学情", "薄弱", "加强", "分析报告")
         ):
@@ -102,7 +141,7 @@ class ReportIntentResolver:
         # 简单的过滤条件抽取：班级名（初三/初二/高一...N班）、科目、考试名。
         filters: dict[str, str] = {}
         class_name = _extract_class_name(q)
-        if class_name:
+        if class_name and report_type != ReportType.GRADE_COMPARISON:
             filters["class_name"] = class_name
         subject = _extract_subject(q)
         if subject:
@@ -152,7 +191,10 @@ _EXAM_FULL_RE = _re.compile(
 
 
 def _extract_class_name(q: str) -> str | None:
-    m = _CLASS_RE.search(q)
+    from src.agent.education.query_parse import normalize_fullwidth_parentheses
+
+    text = normalize_fullwidth_parentheses(q or "")
+    m = _CLASS_RE.search(text)
     return m.group(0) if m else None
 
 
@@ -162,11 +204,18 @@ def _extract_subject(q: str) -> str | None:
 
 
 def _extract_exam(q: str) -> str | None:
-    m = _EXAM_FULL_RE.search(q)
+    from src.agent.education.query_parse import normalize_fullwidth_parentheses
+
+    text = normalize_fullwidth_parentheses(q or "")
+    m = _EXAM_FULL_RE.search(text)
     if m:
         return m.group(1).strip("在的于对")
-    m = _EXAM_RE.search(q)
-    return m.group(1) if m else None
+    m = _EXAM_RE.search(text)
+    if m:
+        return m.group(1)
+    from src.agent.education.query_parse import extract_exam_name_hint
+
+    return extract_exam_name_hint(text)
 
 
 # ---- 编排 ----------------------------------------------------------------
@@ -284,6 +333,8 @@ class ReportOrchestrator:
                 title="分数段分布",
             )
 
+        from src.agent.education.report_types import report_type_label
+
         class_name = spec.filters.get("class_name", "")
         subject = spec.filters.get("subject", "")
         exam_name = spec.filters.get("exam_name", "")
@@ -292,6 +343,7 @@ class ReportOrchestrator:
         # 组装通用字段；具体模板未用到的 key 由 Jinja2/regex 兜底为空。
         data: dict[str, Any] = {
             "REPORT_TITLE": self._title(spec),
+            "REPORT_TYPE": report_type_label(spec.report_type),
             "REPORT_SUBTITLE": self._subtitle(spec),
             "REPORT_TIME": _now_str(),
             "CLASS_NAME": class_name,
@@ -301,13 +353,14 @@ class ReportOrchestrator:
             "SCOPE": scope_label,
             "TOTAL_COUNT": str(stats.get("count") or 0),
             "AVG_SCORE": _fmt(stats.get("avg")),
-            "PASS_RATE": _fmt(stats.get("pass_rate")),
-            "EXCELLENT_RATE": _fmt(stats.get("excellent_rate")),
-            "GOOD_RATE": _fmt(stats.get("good_rate")),
-            "LOW_SCORE_RATE": _fmt(stats.get("low_score_rate")),
+            "PASS_RATE": _fmt_pct(stats.get("pass_rate")),
+            "EXCELLENT_RATE": _fmt_pct(stats.get("excellent_rate")),
+            "GOOD_RATE": _fmt_pct(stats.get("good_rate")),
+            "LOW_SCORE_RATE": _fmt_pct(stats.get("low_score_rate")),
             "MAX_SCORE": _fmt(stats.get("max")),
             "MIN_SCORE": _fmt(stats.get("min")),
             "STDEV": _fmt(stats.get("stdev")),
+            "VARIANCE": _fmt(stats.get("variance")),
             "SCORE_DIST_CHART": charts.get("SCORE_DIST_CHART", ""),
             "SUBJECT_RADAR_CHART": "",
             "SUBJECT_BREAKDOWN": "",
@@ -318,9 +371,18 @@ class ReportOrchestrator:
             "WEAK_KNOWLEDGE_LIST": "",
             "SUMMARY": "<p>由 ReportOrchestrator 自动生成。</p>",
             "RECOMMENDATIONS": "<p>结合 KPI 与分数段分布关注薄弱区间。</p>",
+            "STUDENT_ARCHIVE_TABLE": "",
             "_stats": stats,
             "_charts": charts,
         }
+        data.update(_dispersion_fields(stats.get("stdev"), full_score=stats.get("full_score"), variance=stats.get("variance")))
+        if spec.report_type == ReportType.CLASS_OVERVIEW and not data.get("SUBJECT_RADAR_CHART"):
+            try:
+                from src.agent.resource.tool.business import _fill_class_overview_ability_portrait
+
+                _fill_class_overview_ability_portrait(data, rows)
+            except Exception:
+                pass
         if spec.report_type == ReportType.DIAGNOSTIC_REPORT:
             score_rows = [
                 {
@@ -545,19 +607,11 @@ class ReportOrchestrator:
 
     @staticmethod
     def _title(spec: ReportSpec) -> str:
-        labels = {
-            ReportType.CLASS_OVERVIEW: "班级成绩分析报告",
-            ReportType.GRADE_COMPARISON: "年级班级对比报告",
-            ReportType.SUBJECT_DIAGNOSIS: "科目诊断报告",
-            ReportType.STUDENT_PROFILE: "学生学情报告",
-            ReportType.TREND_TRACKING: "成绩趋势追踪报告",
-            ReportType.TIER_ALERT: "分层预警报告",
-            ReportType.GROUP_FEATURE: "群体特征报告",
-            ReportType.COMPREHENSIVE: "综合分析报告",
-            ReportType.DIAGNOSTIC_REPORT: "结构化诊断报告",
-        }
+        from src.agent.education.report_types import report_type_label
+
+        label = report_type_label(spec.report_type)
         prefix = spec.filters.get("class_name") or spec.filters.get("subject") or ""
-        return f"{prefix}{labels.get(spec.report_type, '学情报告')}".strip()
+        return f"{prefix}{label}".strip()
 
     @staticmethod
     def _subtitle(spec: ReportSpec) -> str:
@@ -576,6 +630,41 @@ def _fmt(v: Any) -> str:
     if isinstance(v, float):
         return f"{v:.2f}"
     return str(v)
+
+
+def _fmt_pct(v: Any) -> str:
+    if v is None:
+        return "-"
+    return f"{_fmt(v)}%"
+
+
+def _dispersion_fields(
+    stdev: Any,
+    *,
+    full_score: float | None = None,
+    variance: Any = None,
+) -> dict[str, str]:
+    from src.agent.education.stats import describe_score_dispersion
+
+    try:
+        stdev_f = float(stdev) if stdev is not None else None
+    except (TypeError, ValueError):
+        stdev_f = None
+    try:
+        var_f = float(variance) if variance is not None else None
+    except (TypeError, ValueError):
+        var_f = None
+    info = describe_score_dispersion(stdev_f, full_score=full_score, variance=var_f)
+    out = {
+        "STDEV_LEVEL": str(info["level"]),
+        "STDEV_LEVEL_CLASS": str(info["level_class"]),
+        "STDEV_HINT": str(info["stdev_hint"]),
+        "VARIANCE_HINT": str(info["variance_hint"]),
+        "DISPERSION_TIP": str(info["tip"]),
+    }
+    if info["variance"] != "-":
+        out["VARIANCE"] = _fmt(info["variance"])
+    return out
 
 
 def _sql_escape(val: str) -> str:

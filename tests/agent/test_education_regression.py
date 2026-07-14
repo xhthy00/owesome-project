@@ -219,6 +219,24 @@ def test_build_diagnostic_blocks_render_in_fetch_subtask():
     assert result.data.get("error") == "render_not_allowed_in_fetch_subtask"
 
 
+def test_build_sections_blocks_render_in_fetch_subtask():
+    """Team 3 步计划中 fetch 子任务禁止同轮渲染，避免多份报告。"""
+    from src.agent.education.tools import build_subject_diagnosis_sections_tool
+
+    result = build_subject_diagnosis_sections_tool._fn(
+        sub_task=(
+            "调 fetch_subject_diagnosis_data_tool(school_name=扬州中学, "
+            "subject_name=数学, class_name=高三(11)班) 查询小题——"
+            "**本步仅 fetch，禁止 render**；完成后 terminate"
+        ),
+        school_name="扬州中学",
+        subject_name="数学",
+        class_name="高三(11)班",
+        render=True,
+    )
+    assert result.data.get("error") == "render_not_allowed_in_fetch_subtask"
+
+
 def test_build_diagnostic_blocks_render_in_planner_fetch_subtask_text():
     from src.agent.education.tools import build_diagnostic_report_data_tool
 

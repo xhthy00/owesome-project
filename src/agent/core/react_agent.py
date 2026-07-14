@@ -282,7 +282,8 @@ class ReActAgent(ConversableAgent):
                 "tool": tool_name or "tool_call",
                 "success": bool(action_out.is_exe_success),
                 "content": action_out.observations or action_out.content or "",
-                "data": action_out.extra.get("tool_data"),
+                # 去重命中时禁止再带 HTML，避免前端重复挂载报告
+                "data": None if is_deduplicated else action_out.extra.get("tool_data"),
                 "elapsed_ms": elapsed_ms,
                 "terminate": bool(action_out.terminate),
                 "deduplicated": is_deduplicated,

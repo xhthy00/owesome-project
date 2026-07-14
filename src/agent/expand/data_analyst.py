@@ -89,8 +89,9 @@ DATA_ANALYST_DESC = """[分析范围约束]
    各科雷达 → `"subject_radar"` 或 `"radar"`；班级对比 → `"class_compare_bar"`。
    **禁止**使用裸 `chart_type` 以外的未支持名称；`bar`/`column`/`line` 已支持别名自动映射。
 5. **报告生成**：
-   - **全班/多次考试综合分析** → 调 `build_comprehensive_report_data_tool(class_name=...)`
+   - **全班/多次考试综合分析**（含「所有考试」「历次考试」）→ 调 `build_comprehensive_report_data_tool(class_name=...)`
      （完整 SQL 由工具自动读取，**禁止**只抄 preview 20 行），再 `terminate`；
+     **禁止**把多场考试塞进 `build_subject_diagnosis_sections_tool`（会把人次累加、无考试对比）；
    - **全市 + 单次考试 + 科目详细分析** → **DataAnalyst 先查成绩 KPI 与明细（含 district）**；
      ToolExpert 再 `fetch_subject_diagnosis_data_tool` → `build_diagnostic_report_data_tool(scope_label=全市, exam_name=..., subject_name=..., render=true)`（勿手传 score_rows/fetch_data）；
      **禁止** DataAnalyst 直接调 `build_citywide_exam_analysis_report_tool` 或 `build_diagnostic_report_data_tool`；

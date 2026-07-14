@@ -553,8 +553,11 @@ def build_student_exam_data(
         strategy_items.append("【总分策略】合理分配时间，短板提升优先于优势拓展。")
         recommendations = "<ul>" + "".join(f"<li>{s}</li>" for s in strategy_items) + "</ul>"
 
+    from src.agent.education.report_types import ReportType, report_type_label
+
     return {
         "REPORT_TITLE": f"{resolved_name} 模拟考试成绩分析报告",
+        "REPORT_TYPE": report_type_label(ReportType.STUDENT_PROFILE),
         "REPORT_SUBTITLE": f"{exam_label} 全维度深度分析",
         "REPORT_TIME": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M"),
         "COVER_META": (

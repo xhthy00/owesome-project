@@ -20,6 +20,7 @@
     h4 { margin: 12px 0 6px; font-size: 14px; color: var(--edu-text-lv2); }
     p { margin: 6px 0; line-height: 1.75; }
     .edu-sub { color: var(--edu-text-lv3); font-size: 13px; }
+    .edu-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: var(--edu-primary-bg); color: var(--edu-primary); margin-right: 6px; }
     .insight { background: #f6ffed; border: 1px solid #b7eb8f; border-radius: 6px; padding: 12px 14px; margin: 10px 0; line-height: 1.7; }
     .edu-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 8px 0; }
     .edu-table th, .edu-table td { border: 1px solid var(--edu-border); padding: 8px 10px; text-align: center; }
@@ -36,6 +37,9 @@
     <section class="edu-card">
       <h1>{{REPORT_TITLE}}</h1>
       <p class="edu-sub">{{REPORT_SUBTITLE}}</p>
+      <p class="edu-sub">
+        <span class="edu-badge">{{REPORT_TYPE}}</span>
+      </p>
       <p class="edu-sub">{{COVER_META}}</p>
       <p class="edu-sub">生成时间：{{REPORT_TIME}}</p>
     </section>

@@ -217,6 +217,98 @@ def _sanitize_report_html(raw_html: str) -> str:
     return html
 
 
+#: 班级总览：内联 HTML（非模板）也注入统一表格/文字卡片样式
+_CLASS_OVERVIEW_POLISH_CSS = """
+:root{
+  --edu-primary:#1677ff;--edu-primary-soft:#e8f3ff;--edu-primary-bg:#e6f4ff;
+  --edu-text-lv1:rgba(0,0,0,.88);--edu-text-lv2:rgba(0,0,0,.65);--edu-text-lv3:rgba(0,0,0,.45);
+  --edu-border:#e8edf3;--edu-surface:#f7f9fc;
+}
+.edu-table-wrap{overflow-x:auto;margin:8px 0 12px;border:1px solid var(--edu-border);border-radius:12px;background:#fff}
+table,.edu-table{width:100%;border-collapse:collapse;font-size:13px;min-width:420px}
+table th,table td,.edu-table th,.edu-table td{
+  border:none;border-bottom:1px solid var(--edu-border);padding:11px 14px;text-align:left;vertical-align:middle;color:var(--edu-text-lv1)
+}
+table thead th,.edu-table thead th,table tr:first-child th{
+  background:linear-gradient(180deg,#f3f8ff 0%,var(--edu-primary-bg) 100%);color:#3b6fb8;font-weight:650;white-space:nowrap;font-size:12.5px
+}
+table tbody tr:nth-child(even) td,.edu-table tbody tr:nth-child(even) td{background:#fafcfe}
+table tbody tr:hover td,.edu-table tbody tr:hover td{background:#f0f7ff}
+table tbody tr:last-child td,.edu-table tbody tr:last-child td{border-bottom:none}
+.prose-card,.edu-prose-card{
+  margin:0 0 12px;padding:14px 16px;line-height:1.8;color:var(--edu-text-lv2);
+  background:linear-gradient(135deg,#fafcff 0%,#f7f9fc 100%);border:1px solid var(--edu-border);
+  border-radius:12px;border-left:3px solid var(--edu-primary);box-shadow:0 1px 2px rgba(16,24,40,.03)
+}
+.prose-card strong,.edu-prose-card strong{color:var(--edu-text-lv1);font-weight:650}
+.edu-rec-list,ol.edu-rec-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:10px;counter-reset:rec}
+.edu-rec-list>li,ol.edu-rec-list>li{
+  position:relative;margin:0;padding:14px 16px 14px 52px;line-height:1.75;color:var(--edu-text-lv2);
+  background:#fff;border:1px solid var(--edu-border);border-radius:12px;box-shadow:0 1px 2px rgba(16,24,40,.03);
+  counter-increment:rec
+}
+.edu-rec-list>li::before,ol.edu-rec-list>li::before{
+  content:counter(rec);position:absolute;left:14px;top:14px;width:26px;height:26px;border-radius:8px;
+  background:var(--edu-primary-soft);color:var(--edu-primary);font-size:13px;font-weight:700;
+  display:flex;align-items:center;justify-content:center
+}
+""".strip()
+
+_CLASS_OVERVIEW_POLISH_JS = """
+(function(){
+  if(window.__eduClassOverviewPolished) return;
+  window.__eduClassOverviewPolished=true;
+  document.querySelectorAll('table').forEach(function(t){
+    t.classList.add('edu-table');
+    if(t.closest('.edu-table-wrap')) return;
+    var w=document.createElement('div');
+    w.className='edu-table-wrap';
+    t.parentNode.insertBefore(w,t);
+    w.appendChild(t);
+  });
+  document.querySelectorAll('ol').forEach(function(ol){
+    if(ol.classList.contains('edu-rec-list')) return;
+    if(ol.querySelector('li') && ol.closest('body')) ol.classList.add('edu-rec-list');
+  });
+  document.querySelectorAll('p').forEach(function(p){
+    if(p.closest('.edu-table-wrap,.edu-kpi,.edu-badge')) return;
+    if(p.classList.contains('prose-card')||p.classList.contains('edu-prose-card')) return;
+    var t=(p.textContent||'').trim();
+    if(t.length<40) return;
+    p.classList.add('edu-prose-card');
+  });
+})();
+""".strip()
+
+
+def _looks_like_class_overview_html(html: str, *, template: str = "", title: str = "") -> bool:
+    tpl = (template or "").replace("\\", "/")
+    if "class_overview" in tpl:
+        return True
+    blob = f"{title}\n{html[:3000]}"
+    return ("班级总览" in blob) or ("class_overview" in blob.lower())
+
+
+def _polish_class_overview_html(html: str, *, template: str = "", title: str = "") -> str:
+    """为班级总览（含 LLM 内联 HTML）注入表格/文字卡片样式。"""
+    if not html or not _looks_like_class_overview_html(html, template=template, title=title):
+        return html
+    if "edu-class-overview-polish" in html:
+        return html
+    style = f'<style id="edu-class-overview-polish">{_CLASS_OVERVIEW_POLISH_CSS}</style>'
+    script = f'<script id="edu-class-overview-polish-js">{_CLASS_OVERVIEW_POLISH_JS}</script>'
+    out = html
+    if re.search(r"(?i)</head>", out):
+        out = re.sub(r"(?i)</head>", style + "</head>", out, count=1)
+    else:
+        out = style + out
+    if re.search(r"(?i)</body>", out):
+        out = re.sub(r"(?i)</body>", script + "</body>", out, count=1)
+    else:
+        out = out + script
+    return out
+
+
 def _render_template_html(template_name: str, data: dict[str, Any]) -> str:
     from src.agent.education.subject_diagnosis import coerce_report_table_fields
 
@@ -391,6 +483,8 @@ def render_html_report(
     template_path: str = "",
     data: dict[str, Any] | None = None,
     file_path: str = "",
+    report_data: dict[str, Any] | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
 ) -> ToolResult:
     """生成 HTML 报告载荷（DB-GPT html_interpreter 风格）。
 
@@ -402,6 +496,9 @@ def render_html_report(
 
     综合 / 科目诊断 / 全市诊断 / 学生考试分析等有专用工具的学情模板，
     **禁止**本工具手填——请改用对应 ``build_*_report*_tool``。
+
+    ``class_overview`` 渲染时若未手填 ``STUDENT_ARCHIVE_TABLE``，会自动从上游
+    SQL 成绩明细组装「每位学生详细档案与个性化建议」。
     """
     template = (template_name or "").strip() or (template_path or "").strip()
     redirected = _edu_template_redirect(template, html)
@@ -410,12 +507,20 @@ def render_html_report(
 
     mode = "inline"
     try:
-        report_data = _parse_report_data(data)
+        report_payload = _parse_report_data(data)
+        report_payload = _ensure_edu_report_type(template, report_payload)
+        report_payload = _strip_edu_report_title_markers(report_payload)
+        report_payload = _enrich_class_overview_archive(
+            template,
+            report_payload,
+            report_data=report_data,
+            tool_runtime_ctx=tool_runtime_ctx,
+        )
 
         if template:
             mode = "template"
             try:
-                html = _render_template_html(template, report_data)
+                html = _render_template_html(template, report_payload)
             except Exception as e:
                 # 对齐 DB-GPT 的体验：模板失败不直接中断；若调用方还给了 inline html，就降级回退。
                 if html and html.strip():
@@ -435,22 +540,763 @@ def render_html_report(
                 data=None,
             )
         safe_html = _sanitize_report_html(html)
+        safe_html = _polish_class_overview_html(
+            safe_html,
+            template=template,
+            title=(title or "") + " " + str((report_payload or {}).get("REPORT_TITLE") or ""),
+        )
+        out_title = (title or "Report").strip() or "Report"
+        type_label = str(report_payload.get("REPORT_TYPE") or "").strip()
+        rt_value = ""
+        rt = None
+        try:
+            from src.agent.education.report_types import format_report_display_title
+            from src.agent.education.templates import resolve_report_type_from_template
+
+            rt = resolve_report_type_from_template(template)
+            if rt is not None:
+                rt_value = rt.value
+            out_title = format_report_display_title(
+                out_title,
+                rt,
+                type_label=type_label or None,
+            )
+        except Exception:
+            if type_label and type_label not in out_title:
+                out_title = f"{out_title}【{type_label}】"
         payload = {
             "output_type": "html",
-            "title": (title or "Report").strip() or "Report",
+            "title": out_title,
             "html": safe_html,
             "mode": mode,
             "chunks": [
                 {
                     "output_type": "html",
-                    "title": (title or "Report").strip() or "Report",
+                    "title": out_title,
                     "content": safe_html,
                 }
             ],
         }
+        if type_label:
+            if rt_value:
+                payload["report_type"] = rt_value
+            payload["report_type_label"] = type_label
         return ToolResult(content=f"HTML 报告已生成（mode={mode}）。", data=payload)
     except Exception as e:
         return ToolResult(content=f"报告生成失败：{e}", data=None)
+
+
+def _ensure_edu_report_type(template: str, data: dict[str, Any]) -> dict[str, Any]:
+    """九大类标准模板：补齐 REPORT_TYPE 中文名。"""
+    try:
+        from src.agent.education.templates import ensure_report_type_in_data
+
+        return ensure_report_type_in_data(template, data)
+    except Exception:
+        return data
+
+
+def _strip_edu_report_title_markers(data: dict[str, Any]) -> dict[str, Any]:
+    """页内 REPORT_TITLE 去掉类型枚举/中文角标前缀，避免主标题再带【class_overview】。"""
+    out = dict(data)
+    raw = str(out.get("REPORT_TITLE") or "").strip()
+    if not raw:
+        return out
+    try:
+        from src.agent.education.report_types import strip_report_type_markers
+
+        cleaned = strip_report_type_markers(raw)
+        if cleaned:
+            out["REPORT_TITLE"] = cleaned
+    except Exception:
+        pass
+    return out
+
+
+def _enrich_class_overview_archive(
+    template: str,
+    data: dict[str, Any],
+    *,
+    report_data: dict[str, Any] | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """class_overview：补齐 REPORT_TYPE、KPI、分数段图/表；结构化字段转 HTML。"""
+    tpl = (template or "").replace("\\", "/")
+    if "class_overview" not in tpl:
+        return data
+    out = dict(data)
+    try:
+        from src.agent.education.report_types import (
+            ReportType,
+            format_report_display_title,
+            report_type_label,
+            strip_report_type_markers,
+        )
+
+        out["REPORT_TYPE"] = report_type_label(ReportType.CLASS_OVERVIEW)
+        raw_title = str(out.get("REPORT_TITLE") or "").strip()
+        if raw_title:
+            cleaned = strip_report_type_markers(raw_title)
+            if "班级级" in cleaned:
+                cleaned = cleaned.replace("班级级", "班级")
+            out["REPORT_TITLE"] = cleaned or raw_title
+        if out.get("_display_title"):
+            out["_display_title"] = format_report_display_title(
+                str(out.get("_display_title")),
+                ReportType.CLASS_OVERVIEW,
+            )
+    except Exception:
+        if not str(out.get("REPORT_TYPE") or "").strip():
+            out["REPORT_TYPE"] = "班级总览报告"
+        title = str(out.get("REPORT_TITLE") or "")
+        if "班级级" in title:
+            out["REPORT_TITLE"] = title.replace("班级级", "班级")
+
+    rows = _collect_class_overview_rows(report_data, tool_runtime_ctx)
+    if rows:
+        _fill_class_overview_kpis_from_rows(out, rows)
+
+    for key in ("PASS_RATE", "EXCELLENT_RATE", "GOOD_RATE", "LOW_SCORE_RATE"):
+        out[key] = _normalize_pct_display(out.get(key))
+    for key in ("MAX_SCORE", "MIN_SCORE", "AVG_SCORE", "STDEV", "VARIANCE", "TOTAL_COUNT"):
+        if _is_blank_metric(out.get(key)):
+            out[key] = "-"
+
+    _fill_dispersion_explain(out)
+    _fill_class_overview_ability_portrait(
+        out,
+        rows,
+        report_data=report_data,
+        tool_runtime_ctx=tool_runtime_ctx,
+    )
+    _coerce_class_overview_structured_fields(out)
+
+    # 班级总览不再展示「每位学生详细档案与个性化建议」
+    out["STUDENT_ARCHIVE_TABLE"] = ""
+    return out
+
+
+def _collect_class_overview_rows(
+    report_data: dict[str, Any] | None,
+    tool_runtime_ctx: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    try:
+        from src.agent.education.query_parse import extract_score_rows_from_report_data
+    except Exception:
+        extract_score_rows_from_report_data = None  # type: ignore[assignment]
+
+    rows: list[dict[str, Any]] = []
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    upstream = report_data if isinstance(report_data, dict) else ctx.get("report_data")
+    if isinstance(upstream, dict) and extract_score_rows_from_report_data is not None:
+        rows = extract_score_rows_from_report_data(upstream) or []
+    if not rows:
+        er = ctx.get("last_exec_result")
+        if isinstance(er, dict):
+            cols = er.get("columns") or []
+            raw = er.get("rows") or []
+            if cols and raw:
+                rows = [dict(zip(cols, row)) for row in raw]
+            elif extract_score_rows_from_report_data is not None:
+                rows = extract_score_rows_from_report_data({"exec_result": er}) or []
+    return rows
+
+
+def _is_blank_metric(val: Any) -> bool:
+    s = str(val if val is not None else "").strip()
+    return (not s) or s in {"-", "—", "N/A", "n/a", "null", "None", "%"}
+
+
+def _fmt_metric(v: Any) -> str:
+    if v is None:
+        return "-"
+    if isinstance(v, float):
+        return f"{v:.2f}"
+    return str(v)
+
+
+def _normalize_pct_display(val: Any) -> str:
+    """统一比率展示为「数值%」；已含说明文案时保留原文并去掉多余尾部 %。"""
+    if _is_blank_metric(val):
+        return "-"
+    s = str(val).strip()
+    while s.endswith("%") and s.count("%") > 1:
+        s = s[:-1].rstrip()
+    if s.endswith(" %"):
+        s = s[:-2].rstrip()
+    s = s.strip()
+    if not s:
+        return "-"
+    if "%" in s:
+        return s
+    return f"{s}%"
+
+
+def _resolve_full_score_from_score_rows(rows: list[dict[str, Any]]) -> float | None:
+    seen: set[float] = set()
+    for row in rows:
+        for key in ("exam_score", "full_score", "满分"):
+            raw = row.get(key)
+            if raw is None or raw == "":
+                continue
+            try:
+                seen.add(float(raw))
+            except (TypeError, ValueError):
+                continue
+    if not seen:
+        return None
+    return max(seen)
+
+
+def _infer_full_score_for_segments(
+    rows: list[dict[str, Any]],
+    scores: list[float],
+    out: dict[str, Any] | None = None,
+) -> float | None:
+    """推断满分：优先行内 exam_score；否则按常见满分上取；再否则用分数最大值上取整。"""
+    explicit = _resolve_full_score_from_score_rows(rows)
+    if explicit is not None and explicit > 0:
+        return explicit
+    if out:
+        for key in ("FULL_SCORE", "full_score", "EXAM_FULL_SCORE"):
+            raw = out.get(key)
+            if raw is None or raw == "":
+                continue
+            try:
+                v = float(str(raw).replace("%", "").strip())
+                if v > 0:
+                    return v
+            except (TypeError, ValueError):
+                continue
+        # 副标题常见「满分150」
+        blob = " ".join(str(out.get(k) or "") for k in ("REPORT_SUBTITLE", "REPORT_TITLE", "EXAM_NAME"))
+        m = re.search(r"满分\s*(\d+(?:\.\d+)?)", blob)
+        if m:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                pass
+    if not scores:
+        return None
+    mx = max(scores)
+    for cand in (100.0, 120.0, 150.0, 200.0):
+        if mx <= cand:
+            return cand
+    import math
+
+    return float(math.ceil(mx / 10.0) * 10.0)
+
+
+def _fill_class_overview_kpis_from_rows(out: dict[str, Any], rows: list[dict[str, Any]]) -> None:
+    """用成绩行补齐缺失 KPI / 强制重算分数段图与表。"""
+    try:
+        from src.agent.education.charts import build_chart_option
+        from src.agent.education.config import EducationConfig
+        from src.agent.education.stats import compute_score_stats
+        from src.agent.education.subject_diagnosis import build_segment_table_html
+    except Exception:
+        return
+
+    scores: list[float] = []
+    for r in rows:
+        raw = r.get("score")
+        if raw is None or raw == "":
+            continue
+        try:
+            scores.append(float(raw))
+        except (TypeError, ValueError):
+            continue
+    if not scores:
+        return
+
+    full_score = _infer_full_score_for_segments(rows, scores, out)
+    stats = compute_score_stats(scores, EducationConfig(), full_score)
+
+    kpi_map = {
+        "TOTAL_COUNT": str(stats.get("count") or 0),
+        "AVG_SCORE": _fmt_metric(stats.get("avg")),
+        "PASS_RATE": _fmt_metric(stats.get("pass_rate")),
+        "EXCELLENT_RATE": _fmt_metric(stats.get("excellent_rate")),
+        "GOOD_RATE": _fmt_metric(stats.get("good_rate")),
+        "LOW_SCORE_RATE": _fmt_metric(stats.get("low_score_rate")),
+        "MAX_SCORE": _fmt_metric(stats.get("max")),
+        "MIN_SCORE": _fmt_metric(stats.get("min")),
+        "STDEV": _fmt_metric(stats.get("stdev")),
+        "VARIANCE": _fmt_metric(stats.get("variance")),
+    }
+    for key, val in kpi_map.items():
+        if _is_blank_metric(out.get(key)):
+            out[key] = val
+
+    segments = stats.get("segments") or []
+    # 有成绩行时始终按正确满分重算图/表（覆盖 LLM 满分 100 的全 0 表）
+    out["SCORE_DIST_CHART"] = build_chart_option(
+        "score_distribution",
+        {"segments": segments, "pass_rate": stats.get("pass_rate")},
+        title="分数段分布",
+    )
+    out["SEGMENT_TABLE"] = build_segment_table_html(
+        segments,
+        full_score=stats.get("full_score"),
+    )
+    # 供离散度说明使用
+    if stats.get("full_score") is not None:
+        out.setdefault("_FULL_SCORE", stats.get("full_score"))
+
+
+def _fill_dispersion_explain(out: dict[str, Any]) -> None:
+    """根据 STDEV / 满分补齐标准差与方差的可读说明。"""
+    try:
+        from src.agent.education.stats import describe_score_dispersion
+    except Exception:
+        return
+
+    stdev_raw = out.get("STDEV")
+    try:
+        stdev_f = float(str(stdev_raw).replace("%", "").strip()) if not _is_blank_metric(stdev_raw) else None
+    except (TypeError, ValueError):
+        stdev_f = None
+
+    full_score = out.get("_FULL_SCORE") or out.get("FULL_SCORE")
+    if full_score is None:
+        full_score = _infer_full_score_for_segments([], [], out)
+
+    var_raw = out.get("VARIANCE")
+    try:
+        var_f = float(str(var_raw).strip()) if not _is_blank_metric(var_raw) else None
+    except (TypeError, ValueError):
+        var_f = None
+
+    info = describe_score_dispersion(stdev_f, full_score=full_score, variance=var_f)
+    out["STDEV_LEVEL"] = info["level"]
+    out["STDEV_LEVEL_CLASS"] = info["level_class"]
+    out["STDEV_HINT"] = info["stdev_hint"]
+    if _is_blank_metric(out.get("VARIANCE")) and info["variance"] != "-":
+        out["VARIANCE"] = _fmt_metric(info["variance"])
+    out["VARIANCE_HINT"] = info["variance_hint"]
+    out["DISPERSION_TIP"] = info["tip"]
+
+
+def _chart_option_blank(raw: Any) -> bool:
+    s = str(raw or "").strip()
+    return (not s) or s in {"{}", "null", "None", "[]", "undefined"}
+
+
+def _metric_float(val: Any) -> float | None:
+    if _is_blank_metric(val):
+        return None
+    s = str(val).strip().replace("%", "").replace(",", "")
+    # "75.00 (39/52)" → 取首位数字
+    m = re.match(r"^-?\d+(?:\.\d+)?", s)
+    if not m:
+        return None
+    try:
+        return float(m.group(0))
+    except ValueError:
+        return None
+
+
+def _collect_knowledge_rows_for_overview(
+    report_data: dict[str, Any] | None,
+    tool_runtime_ctx: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    sources: list[Any] = []
+    for blob in (report_data, ctx.get("report_data"), ctx):
+        if not isinstance(blob, dict):
+            continue
+        for key in ("knowledge_rows", "knowledge"):
+            raw = blob.get(key)
+            if isinstance(raw, list) and raw:
+                sources.append(raw)
+        # tool_calls / fetch 结果里也可能挂着
+        fetch = blob.get("fetch_data") if isinstance(blob.get("fetch_data"), dict) else None
+        if fetch and isinstance(fetch.get("knowledge_rows"), list):
+            sources.append(fetch["knowledge_rows"])
+    for rows in sources:
+        out = [dict(r) for r in rows if isinstance(r, dict)]
+        if out:
+            return out
+    return []
+
+
+def _guess_subject_name(rows: list[dict[str, Any]], out: dict[str, Any]) -> str:
+    for key in ("SUBJECT_NAME", "subject_name", "subject"):
+        v = str(out.get(key) or "").strip()
+        if v and v not in ("全科", "全部", "-"):
+            return v
+    names: list[str] = []
+    for r in rows:
+        sub = str(r.get("subject") or r.get("subject_name") or "").strip()
+        if sub:
+            names.append(sub)
+    uniq = sorted({n for n in names if n})
+    if len(uniq) == 1:
+        return uniq[0]
+    return ""
+
+
+def _fill_class_overview_ability_portrait(
+    out: dict[str, Any],
+    rows: list[dict[str, Any]],
+    *,
+    report_data: dict[str, Any] | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> None:
+    """补齐学科能力画像雷达：知识点能力层级 > 多科均分 > 单科 KPI 维度。"""
+    if not _chart_option_blank(out.get("SUBJECT_RADAR_CHART")):
+        return
+    try:
+        from src.agent.education.charts import build_chart_option
+    except Exception:
+        return
+
+    class_name = str(out.get("CLASS_NAME") or "").strip()
+    subject = _guess_subject_name(rows, out)
+    portrait_title = (
+        f"{class_name}{(' ' + subject) if subject else ''}能力画像".strip()
+        or "学科能力画像"
+    )
+
+    # 1) 知识点能力层级雷达（有 ability_level / score_rate 时）
+    knowledge = _collect_knowledge_rows_for_overview(report_data, tool_runtime_ctx)
+    if knowledge:
+        try:
+            from src.agent.education.knowledge_tier import (
+                ABILITY_LABELS,
+                build_ability_tier_summary,
+            )
+
+            tier = build_ability_tier_summary(knowledge)
+            levels: list[str] = []
+            values: list[float] = []
+            for s in tier.get("by_ability_level") or []:
+                lv = str(s.get("ability_level") or "")
+                if lv in ("", "unknown"):
+                    continue
+                rate = s.get("avg_score_rate")
+                if rate is None:
+                    continue
+                levels.append(ABILITY_LABELS.get(lv, lv))
+                values.append(round(float(rate), 1))
+            if len(levels) >= 2:
+                out["SUBJECT_RADAR_CHART"] = build_chart_option(
+                    "ability_radar",
+                    {"levels": levels, "values": values},
+                    title=portrait_title,
+                )
+                return
+        except Exception:
+            pass
+
+    # 2) 多科目：各科均分雷达
+    by_subj: dict[str, list[float]] = {}
+    for r in rows:
+        sub = str(r.get("subject") or r.get("subject_name") or "").strip()
+        if not sub:
+            continue
+        raw = r.get("score")
+        if raw is None or raw == "":
+            continue
+        try:
+            by_subj.setdefault(sub, []).append(float(raw))
+        except (TypeError, ValueError):
+            continue
+    if len(by_subj) >= 2:
+        subjects = sorted(by_subj.keys())
+        avgs = [round(sum(by_subj[s]) / len(by_subj[s]), 2) for s in subjects]
+        full = out.get("_FULL_SCORE") or _infer_full_score_for_segments(rows, [x for xs in by_subj.values() for x in xs], out) or 100
+        out["SUBJECT_RADAR_CHART"] = build_chart_option(
+            "subject_radar",
+            {
+                "subjects": subjects,
+                "values": avgs,
+                "full_score": full,
+                "series_name": "均分",
+            },
+            title=portrait_title or "各科目能力画像",
+        )
+        return
+
+    # 3) 单科/班级 KPI 维度雷达（与此前「数学能力维度」一致，统一到 0–100）
+    avg = _metric_float(out.get("AVG_SCORE"))
+    pass_rate = _metric_float(out.get("PASS_RATE"))
+    exc_rate = _metric_float(out.get("EXCELLENT_RATE"))
+    max_score = _metric_float(out.get("MAX_SCORE"))
+    stdev = _metric_float(out.get("STDEV"))
+    full = _metric_float(out.get("_FULL_SCORE") or out.get("FULL_SCORE"))
+    if full is None or full <= 0:
+        full = _infer_full_score_for_segments(rows, [], out) or 100.0
+    if avg is None and max_score is None and pass_rate is None:
+        return
+
+    def _pct_of_full(v: float | None) -> float:
+        if v is None:
+            return 0.0
+        return round(max(0.0, min(100.0, v / float(full) * 100.0)), 1)
+
+    # 成绩均衡：标准差占满分比例越低越好
+    balance = 0.0
+    if stdev is not None and full > 0:
+        balance = round(max(0.0, min(100.0, 100.0 - (stdev / float(full) * 100.0))), 1)
+
+    levels = ["平均分", "及格率", "优秀率", "最高分", "成绩均衡"]
+    values = [
+        _pct_of_full(avg),
+        round(max(0.0, min(100.0, pass_rate or 0.0)), 1),
+        round(max(0.0, min(100.0, exc_rate or 0.0)), 1),
+        _pct_of_full(max_score),
+        balance,
+    ]
+    out["SUBJECT_RADAR_CHART"] = build_chart_option(
+        "ability_radar",
+        {"levels": levels, "values": values},
+        title=portrait_title,
+    )
+
+
+def _parse_structured_blob(val: Any) -> Any | None:
+    """解析 LLM 误填的 list/dict / JSON / Python 字面量。"""
+    if isinstance(val, (dict, list)):
+        return val
+    if val is None:
+        return None
+    s = str(val).strip()
+    if not s or s.startswith("<"):
+        return None
+    if not (s.startswith("{") or s.startswith("[")):
+        return None
+    try:
+        import ast
+
+        return ast.literal_eval(s)
+    except Exception:
+        pass
+    try:
+        import json
+
+        return json.loads(s)
+    except Exception:
+        return None
+
+
+def _dict_to_kv_table_html(data: dict[str, Any]) -> str:
+    # 嵌套 list/dict 勿直接 str()，否则会出现 items 一格塞满 JSON
+    simple: dict[str, Any] = {}
+    nested_html: list[str] = []
+    for k, v in data.items():
+        if v is None or (not isinstance(v, (list, dict)) and str(v).strip() == ""):
+            continue
+        if isinstance(v, list) and v and all(isinstance(x, dict) for x in v):
+            nested_html.append(_list_of_dicts_to_table_html(_normalize_rank_item_rows(v)))
+        elif isinstance(v, dict):
+            nested_html.append(_dict_to_kv_table_html(v))
+        elif isinstance(v, list):
+            continue
+        else:
+            simple[k] = v
+    parts: list[str] = []
+    if simple:
+        rows = "".join(
+            f"<tr><th>{_html_escape(str(k))}</th><td>{_html_escape(str(v))}</td></tr>"
+            for k, v in simple.items()
+        )
+        parts.append(
+            '<div class="edu-table-wrap">'
+            f'<table class="edu-table"><tbody>{rows}</tbody></table>'
+            "</div>"
+        )
+    parts.extend(nested_html)
+    return "".join(parts)
+
+
+_RANK_ITEM_KEY_LABELS: dict[str, str] = {
+    "指标": "指标",
+    "metric": "指标",
+    "name": "指标",
+    "value": "本班",
+    "数值": "本班",
+    "rank": "年级排名",
+    "排名": "年级排名",
+    "total": "参评班数",
+    "cohort_avg": "年级对照",
+    "grade_avg": "年级对照",
+    "avg": "年级对照",
+}
+
+
+def _normalize_rank_item_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """年级排名 items：统一中文列名，并格式化「第 x / 共 y」。"""
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        row: dict[str, Any] = {}
+        # 优先按标准列顺序输出
+        metric = r.get("指标") or r.get("metric") or r.get("name") or ""
+        value = r.get("value") if "value" in r else r.get("数值")
+        rank = r.get("rank") if "rank" in r else r.get("排名")
+        total = r.get("total") if "total" in r else r.get("参评班数")
+        cohort = r.get("cohort_avg") or r.get("grade_avg") or r.get("年级对照")
+
+        if metric != "" or any(k in r for k in ("value", "数值", "rank", "排名")):
+            row["指标"] = metric
+            if value is not None:
+                row["本班"] = value
+            if rank is not None:
+                if total is not None:
+                    row["年级排名"] = f"第 {rank} / 共 {total} 班"
+                else:
+                    row["年级排名"] = f"第 {rank}"
+            elif total is not None:
+                row["参评班数"] = total
+            if cohort is not None:
+                row["年级对照"] = cohort
+            # 保留未映射字段
+            used = {
+                "指标", "metric", "name", "value", "数值", "rank", "排名",
+                "total", "参评班数", "cohort_avg", "grade_avg", "年级对照", "avg",
+            }
+            for k, v in r.items():
+                if k in used:
+                    continue
+                label = _RANK_ITEM_KEY_LABELS.get(str(k), str(k))
+                if label not in row:
+                    row[label] = v
+            out.append(row)
+            continue
+
+        mapped: dict[str, Any] = {}
+        for k, v in r.items():
+            mapped[_RANK_ITEM_KEY_LABELS.get(str(k), str(k))] = v
+        out.append(mapped)
+    return out
+
+
+def _format_rank_info_html(parsed: Any) -> str:
+    """年级排名专用：支持 {scope, items, summary} / items 列表 / 扁平 KV。"""
+    if isinstance(parsed, list) and parsed and all(isinstance(x, dict) for x in parsed):
+        return _list_of_dicts_to_table_html(_normalize_rank_item_rows(parsed))
+
+    if not isinstance(parsed, dict):
+        return ""
+
+    # 嵌套结构：scope + items(+ summary)
+    items = parsed.get("items") or parsed.get("Items") or parsed.get("排名明细")
+    if isinstance(items, str):
+        items = _parse_structured_blob(items)
+    scope = parsed.get("scope") or parsed.get("Scope") or parsed.get("范围") or ""
+    summary = parsed.get("summary") or parsed.get("Summary") or parsed.get("综述") or ""
+
+    if isinstance(items, list) and items and all(isinstance(x, dict) for x in items):
+        parts: list[str] = []
+        if scope:
+            parts.append(f'<p class="prose-card"><strong>对比范围</strong>：{_html_escape(str(scope))}</p>')
+        parts.append(_list_of_dicts_to_table_html(_normalize_rank_item_rows(items)))
+        if summary:
+            parts.append(f'<p class="prose-card">{_html_escape(str(summary))}</p>')
+        # 其它附加字段（排除已渲染）
+        rest = {
+            k: v
+            for k, v in parsed.items()
+            if k not in {
+                "items", "Items", "排名明细", "scope", "Scope", "范围",
+                "summary", "Summary", "综述",
+            }
+            and v is not None
+            and not isinstance(v, (list, dict))
+            and str(v).strip() != ""
+        }
+        if rest:
+            parts.append(_dict_to_kv_table_html(rest))
+        return "".join(parts)
+
+    # 扁平 dict：若值里仍有 list[dict]，走通用 dict 渲染
+    return _dict_to_kv_table_html(parsed)
+
+
+def _list_of_dicts_to_table_html(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return ""
+    keys: list[str] = []
+    for r in rows:
+        for k in r.keys():
+            if k not in keys:
+                keys.append(str(k))
+    head = "".join(f"<th>{_html_escape(k)}</th>" for k in keys)
+    body = "".join(
+        "<tr>"
+        + "".join(f"<td>{_html_escape(str(r.get(k, '')))}</td>" for k in keys)
+        + "</tr>"
+        for r in rows
+    )
+    return (
+        '<div class="edu-table-wrap">'
+        f'<table class="edu-table"><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>'
+        "</div>"
+    )
+
+
+def _html_escape(s: str) -> str:
+    return (
+        s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _coerce_class_overview_structured_fields(out: dict[str, Any]) -> None:
+    """SUBJECT_BREAKDOWN / RANK_INFO：把 JSON/字面量转成表格 HTML。"""
+    # SUBJECT_BREAKDOWN
+    raw_bd = out.get("SUBJECT_BREAKDOWN")
+    if raw_bd is not None and not (isinstance(raw_bd, str) and "<table" in raw_bd.lower()):
+        parsed_bd = _parse_structured_blob(raw_bd)
+        if parsed_bd is None:
+            s = str(raw_bd).strip()
+            if s.startswith(("{", "[")) or "'科目'" in s:
+                out["SUBJECT_BREAKDOWN"] = ""
+        elif isinstance(parsed_bd, list) and parsed_bd and all(isinstance(x, dict) for x in parsed_bd):
+            out["SUBJECT_BREAKDOWN"] = _list_of_dicts_to_table_html(parsed_bd)
+        elif isinstance(parsed_bd, dict):
+            out["SUBJECT_BREAKDOWN"] = _dict_to_kv_table_html(parsed_bd)
+        else:
+            out["SUBJECT_BREAKDOWN"] = ""
+
+    # RANK_INFO（含 {scope, items, summary} 嵌套）
+    raw_rank = out.get("RANK_INFO")
+    if raw_rank is None:
+        return
+    if isinstance(raw_rank, str) and "<table" in raw_rank.lower():
+        # 已正确渲染且无 JSON 泄漏
+        if not (("[{'" in raw_rank or '[{"' in raw_rank) and ("'rank'" in raw_rank or '"rank"' in raw_rank or "'指标'" in raw_rank)):
+            return
+        # 坏表：尝试从页面可见的 Python/JSON 片段抢救
+        m = re.search(r"(\[[^<>]*\{[^<>]*'指标'[^<>]*\}[^<>]*\])", raw_rank)
+        if not m:
+            m = re.search(r"(\[[^<>]*\{[^<>]*\"指标\"[^<>]*\}[^<>]*\])", raw_rank)
+        if m:
+            rescued = _parse_structured_blob(m.group(1))
+            if isinstance(rescued, list):
+                scope_m = re.search(r"<td>([^<]*共\s*\d+\s*个班[^<]*)</td>", raw_rank)
+                summary_m = re.search(r"<td>([^<]*排名[^<]*)</td>", raw_rank)
+                payload = {
+                    "scope": scope_m.group(1) if scope_m else "",
+                    "items": rescued,
+                    "summary": summary_m.group(1) if summary_m else "",
+                }
+                out["RANK_INFO"] = _format_rank_info_html(payload)
+                return
+        return
+
+    parsed_rank = _parse_structured_blob(raw_rank)
+    if parsed_rank is None:
+        s = str(raw_rank).strip()
+        if s.startswith(("{", "[")) or "'年级排名'" in s or "'指标'" in s:
+            out["RANK_INFO"] = ""
+        return
+
+    out["RANK_INFO"] = _format_rank_info_html(parsed_rank)
 
 
 @tool()

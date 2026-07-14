@@ -6,19 +6,31 @@ import re
 from typing import Any
 
 _SCHOOL_SUFFIX = r"(?:中学|学校|学院|大学|附中|分校)"
+# 校名后常接「在/的/高三/数学」，仅排除「附属」等续写，勿要求非汉字边界
+_SCHOOL_TRAIL = r"(?!附属)"
 _SCHOOL_PATTERNS = (
     re.compile(rf"[「\"'【]([^「\"'」】]+{_SCHOOL_SUFFIX})[」\"'】]"),
     re.compile(
         rf"([\u4e00-\u9fff]{{2,4}}(?:市|省|区|县)[\u4e00-\u9fff\d]{{0,12}}{_SCHOOL_SUFFIX})"
+        rf"{_SCHOOL_TRAIL}"
     ),
     re.compile(
-        rf"(?<![\u4e00-\u9fff])([\u4e00-\u9fff]{{2,8}}{_SCHOOL_SUFFIX})(?![\u4e00-\u9fff])"
+        rf"(?<![\u4e00-\u9fff])([\u4e00-\u9fff]{{2,8}}{_SCHOOL_SUFFIX}){_SCHOOL_TRAIL}"
     ),
+)
+_SUBJECT_NAME_TOKENS = (
+    "数学", "语文", "英语", "物理", "化学", "生物", "政治", "历史", "地理", "科学",
 )
 
 _STUDENT_PATTERNS = (
     re.compile(r"[「\"'](学生\s*\d+)[」\"']"),
     re.compile(r"(?<![A-Za-z0-9_])(学生\s*\d+)(?![A-Za-z0-9_])"),
+    # 「学生张三」中文名（排除学生编号；短匹配并停在学情/报告等边界）
+    re.compile(
+        r"(?<![A-Za-z0-9_])学生"
+        r"([\u4e00-\u9fff]{2,4}?)"
+        r"(?=学情|报告|成绩|考试|知识点|分析|诊断|薄弱|的|在|，|,|。|！|!|$)"
+    ),
     re.compile(r"[「\"']([\u4e00-\u9fff]{2,4})[」\"']"),
 )
 
@@ -37,6 +49,13 @@ def normalize_student_key(name: str) -> str:
     return re.sub(r"\s+", "", str(name or "")).lower()
 
 
+def normalize_fullwidth_parentheses(text: str) -> str:
+    """将全角括号（）统一为半角 ()，使「高三（10）班」与库内「高三(10)班」一致。"""
+    if not text:
+        return text
+    return text.replace("（", "(").replace("）", ")")
+
+
 def extract_student_id_target(question: str) -> str | None:
     """从问题中抽取学号（如 STU20240003 / 2024_STU..._YZZX_3884）。"""
     q = (question or "").strip()
@@ -50,7 +69,7 @@ def extract_student_id_target(question: str) -> str | None:
 
 
 def extract_student_target(question: str) -> str | None:
-    """从问题中抽取目标学生标识（学号或「学生001」等）。"""
+    """从问题中抽取目标学生标识（学号或「学生001」/「学生张三」等）。"""
     sid = extract_student_id_target(question)
     if sid:
         return sid
@@ -60,13 +79,22 @@ def extract_student_target(question: str) -> str | None:
     for pat in _STUDENT_PATTERNS:
         m = pat.search(q)
         if m:
-            return re.sub(r"\s+", "", m.group(1))
+            raw = re.sub(r"\s+", "", m.group(1))
+            # 「学生张三」捕获组仅姓名 → 归一为完整称谓，便于匹配
+            if (
+                raw
+                and not raw.startswith("学生")
+                and re.fullmatch(r"[\u4e00-\u9fff]{2,4}", raw)
+                and "学生" + raw in re.sub(r"\s+", "", q)
+            ):
+                return "学生" + raw
+            return raw
     return None
 
 
 def extract_exam_name_hint(question: str) -> str | None:
-    """从问题中抽取考试名线索（含「连淮扬镇考试」这类简称）。"""
-    q = (question or "").strip()
+    """从问题中抽取考试名线索（如「XX联考」「区域名+考试」等任意简称）。"""
+    q = normalize_fullwidth_parentheses((question or "").strip())
     if not q:
         return None
     # 完整/半正式考试名
@@ -81,15 +109,52 @@ def extract_exam_name_hint(question: str) -> str | None:
             return token
     for pat in (
         re.compile(r"在([\u4e00-\u9fffA-Za-z0-9]{2,40}?)(?:考试|测试|检测|调研)"),
+        # 「高三(10)班的XX考试」——任意简称；后缀不用单独的「调研」（避免「苏北调研数学考试」被截成「苏北」）
+        re.compile(r"班的?([\u4e00-\u9fff]{2,20}?)(?:考试|测试|检测)"),
         re.compile(r"([\u4e00-\u9fff]{2,20}(?:联考|统考|调研|模拟))(?:考试|测试)?"),
         re.compile(r"([\u4e00-\u9fff]{2,16})考试"),
     ):
         m = pat.search(q)
         if m:
-            name = m.group(1).strip("的于对在")
-            if name and name not in ("本次", "该次", "此次", "一次", "哪次"):
+            name = _clean_exam_name_candidate(m.group(1))
+            if name:
                 return name
     return None
+
+
+def _clean_exam_name_candidate(raw: str) -> str | None:
+    """清洗考试名候选项：去掉班级前缀/科目后缀，过滤无效碎片。"""
+    name = str(raw or "").strip("的于对在")
+    if not name:
+        return None
+    # 连续汉字匹配可能把「班」尾巴吃进考试名，先剥掉班级前缀
+    name = re.sub(r"^[\u4e00-\u9fff]{0,12}班的?", "", name)
+    # 若仍含「…班的XXX」，取最后一段（贪婪吃入学校+班级时）
+    tail = re.search(r"班的?([\u4e00-\u9fffA-Za-z0-9]{2,20})$", name)
+    if tail:
+        name = tail.group(1)
+    name = name.strip("的于对在")
+    for subj in _SUBJECT_NAME_TOKENS:
+        if name.endswith(subj) and len(name) > len(subj):
+            name = name[: -len(subj)]
+            break
+    name = name.strip("的于对在")
+    if not name or name in ("本次", "该次", "此次", "一次", "哪次"):
+        return None
+    # 丢弃班级语境误吃入的碎片（如「班所有」「所有」「三次」）
+    if re.match(
+        r"^(?:班|该|本|此|一次|几次|所有|全部|历次|多次|三次|两次)",
+        name,
+    ):
+        return None
+    if len(name) < 2:
+        return None
+    # 像「扬州中学」这种被贪婪扫进考试名的学校串不算考试
+    if re.search(r"(?:中学|学校|学院|大学|附中|分校)$", name):
+        return None
+    if re.fullmatch(r"高[一二三]|初[一二三]|年级|班级", name):
+        return None
+    return name
 
 
 def is_individual_student_analysis_query(question: str) -> bool:
@@ -136,7 +201,15 @@ def extract_district_target(question: str) -> str | None:
 
 
 _CITYWIDE_MARKERS = ("全市", "全域", "市域", "全区县", "各区县")
-_CITYWIDE_ANALYSIS_HINTS = ("成绩分析", "详细报告", "质量检测", "期末", "分析报告", "形成报告")
+_CITYWIDE_ANALYSIS_HINTS = (
+    "成绩分析",
+    "详细报告",
+    "详细分析",
+    "质量检测",
+    "期末",
+    "分析报告",
+    "形成报告",
+)
 
 
 def is_citywide_analysis_query(question: str) -> bool:
@@ -156,21 +229,138 @@ _SCHOOL_REPORT_HINTS = (
     "分析报告",
     "形成报告",
     "多维分析",
+    "多维对比",
+    "横向对比",
+    "横向分析",
     "学情报告",
     "诊断报告",
     "详细报告",
+    "详细分析",
     "质量检测",
+    "整体分析",
+    "班级整体",
+    "班级分析",
+    "班级报告",
+    "科目分析",
+    "数学分析",
+    "语文分析",
+    "英语分析",
+)
+
+_STRUCTURED_DIAGNOSTIC_HINTS = (
+    "结构化诊断",
+    "区域诊断报告",
+    "诊断报告三节",
+    "全市区县诊断",
+)
+
+_CLASS_COMPARISON_HINTS = (
+    "各个班级",
+    "各班级",
+    "各班对比",
+    "各班横向",
+    "班级对比",
+    "班级横向",
+    "横向对比",
+    "横向分析",
+    "横向多维",
+    "年级对比",
+    "班级排名",
+    "年级排名",
+    "多维对比",
+)
+
+_MULTI_EXAM_HINTS = (
+    "所有考试",
+    "全部考试",
+    "历次考试",
+    "多次考试",
+    "几次考试",
+    "三次考试",
+    "两次考试",
+    "各次考试",
+    "每场考试",
+    "各场考试",
 )
 
 
-def is_school_exam_report_query(question: str) -> bool:
-    """学校/班级范围 + 考试 + 分析报告类问题（非全市、非个人学生）。"""
+def is_multi_exam_class_analysis_query(question: str) -> bool:
+    """班级范围 + 多场/历次考试综合分析（应走 comprehensive，非单科诊断）。"""
     q = (question or "").strip()
     if not q or is_citywide_analysis_query(q) or is_individual_student_analysis_query(q):
         return False
+    # 须含班级语境（班 / 高三(11)班 等）
+    if "班" not in q and "班级" not in q:
+        return False
+    if any(h in q for h in _MULTI_EXAM_HINTS):
+        return True
+    if "所有" in q and "考试" in q:
+        return True
+    if "历次" in q and "考试" in q:
+        return True
+    return False
+
+
+def is_school_class_comparison_query(question: str) -> bool:
+    """学校范围 + 各班/横向对比（应走全校班级对比，禁止缩成单班科目诊断）。"""
+    q = (question or "").strip()
+    if not q or is_citywide_analysis_query(q) or is_individual_student_analysis_query(q):
+        return False
+    if is_multi_exam_class_analysis_query(q):
+        return False
     if not extract_school_target(q):
         return False
-    return any(h in q for h in _SCHOOL_REPORT_HINTS) or ("分析" in q and "报告" in q)
+    # 否定语境：「无各班 / 不要各班级」≠ 要做各班对比
+    if re.search(r"(?:无|不要|别看|别对|非|不是).{0,8}(?:各个班级|各班级|各班)", q):
+        return False
+    # 已点名具体班级且无「各班/横向」意图 → 单班分析，不走班级对比
+    has_named_class = bool(
+        re.search(
+            r"高[一二三]\(\d+\)班|"
+            r"(?:初三|初二|初一|高三|高二|高一|九年级|八年级|七年级)"
+            r"[\d班]*\d?班",
+            q,
+        )
+    )
+    if has_named_class and not any(
+        h in q for h in ("各个", "各班", "横向", "对比", "排名")
+    ):
+        return False
+    if any(h in q for h in _CLASS_COMPARISON_HINTS):
+        return True
+    return ("各班" in q or "各个班级" in q) and ("对比" in q or "分析" in q)
+
+
+def is_structured_diagnostic_query(question: str) -> bool:
+    """结构化/区县诊断报告（非普通科目诊断）。"""
+    q = (question or "").strip()
+    return bool(q) and any(h in q for h in _STRUCTURED_DIAGNOSTIC_HINTS)
+
+
+def is_school_exam_report_query(question: str) -> bool:
+    """学校/班级范围 + 考试 + 分析报告类问题（非全市、非个人学生、非多场综合）。"""
+    q = (question or "").strip()
+    if not q or is_citywide_analysis_query(q) or is_individual_student_analysis_query(q):
+        return False
+    if is_multi_exam_class_analysis_query(q):
+        return False
+    if is_structured_diagnostic_query(q):
+        return False
+    if not extract_school_target(q):
+        return False
+    if is_school_class_comparison_query(q):
+        return True
+    if any(h in q for h in _SCHOOL_REPORT_HINTS) or ("分析" in q and "报告" in q):
+        return True
+    # 「扬州中学全校数学报告」类：有校名 + 报告 + 科目/全校/成绩
+    if "报告" in q and any(h in q for h in ("全校", "成绩", "数学", "语文", "英语", "诊断")):
+        return True
+    # 「扬州中学高三(10)班 · 连淮扬镇数学考试 · 班级整体分析」：校名 + 考试 + 分析
+    if "分析" in q and "考试" in q and any(
+        h in q for h in ("班", "数学", "语文", "英语", "成绩", "学情", "诊断")
+    ):
+        return True
+    return False
 
 
 def extract_school_target(question: str) -> str | None:
@@ -981,6 +1171,11 @@ __all__ = [
     "extract_student_target",
     "format_scope_constraints",
     "is_citywide_analysis_query",
+    "is_multi_exam_class_analysis_query",
+    "is_school_class_comparison_query",
+    "is_school_exam_report_query",
+    "is_structured_diagnostic_query",
+    "normalize_fullwidth_parentheses",
     "normalize_student_key",
     "extract_upstream_participant_count",
     "extract_best_exec_result_from_report_data",

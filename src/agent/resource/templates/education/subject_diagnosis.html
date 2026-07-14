@@ -29,6 +29,15 @@
     .edu-kpi { border: 1px solid var(--edu-border); border-radius: 8px; padding: 12px 14px; background: #fafafa; }
     .edu-kpi .label { font-size: 12px; color: var(--edu-text-lv3); }
     .edu-kpi .value { margin-top: 4px; font-size: 20px; font-weight: 600; color: var(--edu-primary); }
+    .edu-kpi .hint { margin-top: 6px; font-size: 11.5px; line-height: 1.45; color: var(--edu-text-lv3); }
+    .edu-kpi .level-tag {
+      display: inline-block; margin-bottom: 4px; padding: 1px 7px; border-radius: 999px;
+      font-size: 11px; font-weight: 600; background: var(--edu-primary-bg); color: var(--edu-primary);
+    }
+    .dispersion-tip {
+      margin-top: 12px; padding: 10px 12px; font-size: 12.5px; line-height: 1.65;
+      color: var(--edu-text-lv2); background: #fafafa; border: 1px dashed var(--edu-border); border-radius: 8px;
+    }
     .edu-table { width: 100%; border-collapse: collapse; font-size: 13px; }
     .edu-table th, .edu-table td { border: 1px solid var(--edu-border); padding: 8px 10px; text-align: left; }
     .edu-table th { background: var(--edu-primary-bg); color: var(--edu-text-lv2); font-weight: 600; }
@@ -104,6 +113,31 @@
     .edu-rec-desc { font-size: 13px; color: var(--edu-text-lv2); margin-top: 2px; line-height: 1.5; }
     .edu-rec-metric { display: inline-block; margin-top: 6px; font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #f5f5f5; color: var(--edu-text-lv3); }
     .edu-footer { color: var(--edu-text-lv3); font-size: 12px; text-align: right; }
+    /* 学生档案（与 comprehensive 第 9 节同构） */
+    .archive-note { font-size: 13px; color: var(--edu-text-lv2); margin-bottom: 12px; }
+    .archive-grid { display: grid; grid-template-columns: 1fr; gap: 14px; }
+    .archive-card { border: 1px solid var(--edu-border); border-radius: 10px; padding: 14px 16px; background: #fafafa; }
+    .archive-head { margin-bottom: 8px; }
+    .archive-name { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .archive-name strong { font-size: 15px; }
+    .level-pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; color: #fff; }
+    .archive-meta { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-top: 6px; font-size: 12px; color: var(--edu-text-lv2); }
+    .archive-meta .ok { color: var(--edu-success); }
+    .archive-meta .bad { color: var(--edu-error); }
+    .score-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 10px; }
+    .score-chip { display: inline-flex; flex-direction: column; min-width: 72px; padding: 6px 10px; background: #fff; border: 1px solid var(--edu-border); border-radius: 8px; }
+    .score-chip em { font-style: normal; font-size: 11px; color: var(--edu-text-lv3); }
+    .score-chip b { font-size: 16px; color: var(--edu-text-lv1); line-height: 1.3; }
+    .score-chip.muted b { color: #bfbfbf; }
+    .archive-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+    .tags-label { font-size: 12px; color: var(--edu-text-lv3); margin-right: 4px; }
+    .weak-tag { font-size: 11px; background: #fff2f0; color: var(--edu-error); border-radius: 6px; padding: 2px 8px; }
+    .archive-advice { background: #fff; border-radius: 8px; padding: 8px 12px; border: 1px solid var(--edu-border); }
+    .advice-list { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--edu-text-lv2); line-height: 1.55; }
+    .advice-list li { margin: 4px 0; }
+    @media (min-width: 900px) {
+      .archive-grid { grid-template-columns: 1fr 1fr; }
+    }
     @media print { body { background: #fff; } .edu-card { border: none; } }
   </style>
 </head>
@@ -113,6 +147,7 @@
       <h1>{{REPORT_TITLE}}</h1>
       <p class="edu-sub">{{REPORT_SUBTITLE}}</p>
       <p class="edu-sub">
+        <span class="edu-badge">{{REPORT_TYPE}}</span>
         <span class="edu-badge">{{SUBJECT_NAME}}</span>
         <span class="edu-badge">{{EXAM_NAME}}</span>
         <span class="edu-badge">{{SCOPE}}</span>
@@ -126,8 +161,18 @@
         <div class="edu-kpi"><div class="label">平均分</div><div class="value">{{AVG_SCORE}}</div></div>
         <div class="edu-kpi"><div class="label">及格率</div><div class="value">{{PASS_RATE}}%</div></div>
         <div class="edu-kpi"><div class="label">优秀率</div><div class="value">{{EXCELLENT_RATE}}%</div></div>
-        <div class="edu-kpi"><div class="label">标准差</div><div class="value">{{STDEV}}</div></div>
+        <div class="edu-kpi">
+          <div class="label">标准差</div>
+          <div class="value">{{STDEV}}</div>
+          <div class="hint"><span class="level-tag">{{STDEV_LEVEL}}</span>{{STDEV_HINT}}</div>
+        </div>
+        <div class="edu-kpi">
+          <div class="label">方差</div>
+          <div class="value">{{VARIANCE}}</div>
+          <div class="hint">{{VARIANCE_HINT}}</div>
+        </div>
       </div>
+      <p class="dispersion-tip">{{DISPERSION_TIP}}</p>
     </section>
 
     <section class="edu-card edu-intervention" id="interventionSection">
@@ -224,6 +269,12 @@
       <h2>教学建议</h2>
       <p class="edu-sub">按 P1→P2 优先级给出可执行动作（过关/培优、相对薄弱知识点与题型）；建议本周落地并下周复测。</p>
       <div>{{RECOMMENDATIONS}}</div>
+    </section>
+
+    <section class="edu-card" id="studentArchiveSection">
+      <h2>每位学生详细档案与个性化建议</h2>
+      <p class="edu-sub">按本报告范围内参考学生逐人展示本场得分；个性化建议依据该生小题/知识点得分率生成（不展示跨科优势、待提升与偏科度），便于任课教师与班主任跟进。</p>
+      <div>{{STUDENT_ARCHIVE_TABLE}}</div>
     </section>
 
     <div class="edu-footer">Generated by awesome-project · 教育学情分析</div>

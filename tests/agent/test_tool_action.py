@@ -293,7 +293,7 @@ def test_sanitize_strips_hand_filled_records():
         constraints={"target_classes": ["高三（10）班"]},
         sub_task="用 education/comprehensive.html 组装报告",
     )
-    assert out == {"class_name": "高三（10）班"}
+    assert out == {"class_name": "高三(10)班"}
     assert "records" not in out
     assert "report_data" not in out
 
@@ -354,8 +354,30 @@ def test_sanitize_fills_class_name_from_sub_task():
         {},
         sub_task="调 build_comprehensive_report_data_tool 为高三（10）班生成综合分析 HTML",
     )
-    assert out.get("class_name") == "高三（10）班"
+    assert out.get("class_name") == "高三(10)班"
     assert "records" not in out
+
+
+def test_sanitize_strips_class_name_for_school_wide_diagnosis():
+    from src.agent.core.action.tool_action import _sanitize_report_tool_args
+
+    out = _sanitize_report_tool_args(
+        "build_subject_diagnosis_sections_tool",
+        {
+            "school_name": "扬州中学",
+            "class_name": "高三(9)班",
+            "subject_name": "数学",
+            "exam_name": "连淮扬镇",
+            "render": True,
+        },
+        sub_task=(
+            "调 build_subject_diagnosis_sections_tool(school_name=扬州中学, "
+            "exam_name=连淮扬镇, subject_name=数学, render=true) "
+            "**禁止传 class_name**（不得缩成单班）"
+        ),
+    )
+    assert "class_name" not in out
+    assert out.get("school_name") == "扬州中学"
 
 
 def test_json_truncate_rescues_comprehensive_report(monkeypatch, audit_spy):
@@ -417,7 +439,7 @@ def test_json_truncate_rescues_comprehensive_report(monkeypatch, audit_spy):
     assert out.action == "build_comprehensive_report_data_tool"
     assert out.extra.get("rescued_report") is True
     assert len(calls) == 1
-    assert calls[0]["class_name"] == "高三（10）班"
+    assert calls[0]["class_name"] == "高三(10)班"
 
 
 def test_comprehensive_strips_records_before_invoke():
@@ -458,7 +480,7 @@ def test_comprehensive_strips_records_before_invoke():
     out = _run(action.run(ai_msg, sub_task="综合分析报告"))
     assert out.is_exe_success is True
     assert seen["records"] is None
-    assert seen["class_name"] == "高三（10）班"
+    assert seen["class_name"] == "高三(10)班"
     assert seen["report_data"] is report_data
 
 

@@ -228,8 +228,8 @@ def test_run_planner_phase_citywide_skips_llm(monkeypatch):
     assert any(evt == "agent_speak" and data.get("deterministic") for evt, data in emitted)
 
 
-def test_non_citywide_planner_output_not_rewritten():
-    """非全市问题：Planner 输出原样保留，不做确定性覆盖。"""
+def test_individual_student_wrong_school_plan_is_rewritten():
+    """个人知识点问法：Planner 误走班级 fetch+sections 时应改写为个人 2 步。"""
     from src.agent.expand.planner import coerce_plan_items_if_needed, should_replace_with_citywide_plan
 
     q = (
@@ -248,7 +248,10 @@ def test_non_citywide_planner_output_not_rewritten():
         },
     ]
     assert should_replace_with_citywide_plan(q, planner_output) is False
-    assert len(coerce_plan_items_if_needed(q, planner_output)) == 3
+    fixed = coerce_plan_items_if_needed(q, planner_output)
+    assert len(fixed) == 2
+    assert "build_student_subject_diagnosis_tool" in fixed[1]["sub_task"]
+    assert fixed[1]["sub_task"].strip().startswith("调 build_student_subject_diagnosis")
 
 
 def test_school_report_query_coerced_to_three_steps():
@@ -272,6 +275,73 @@ def test_school_report_query_coerced_to_three_steps():
     direct = build_school_subject_report_plan_items(q)
     assert "南京市第一中学" in direct[0]["sub_task"]
     assert "数学" in direct[0]["sub_task"]
+
+
+def test_multi_exam_class_query_coerced_to_comprehensive():
+    from src.agent.education.query_parse import (
+        is_multi_exam_class_analysis_query,
+        is_school_exam_report_query,
+    )
+    from src.agent.expand.planner import (
+        coerce_plan_items_if_needed,
+        should_replace_with_comprehensive_plan,
+    )
+
+    q = "扬州中学高三(11)班所有数学考试成绩分析"
+    assert is_multi_exam_class_analysis_query(q) is True
+    assert is_school_exam_report_query(q) is False
+    wrong_plan = [
+        {"sub_task": "查询 KPI", "sub_task_agent": "DataAnalyst"},
+        {
+            "sub_task": "调 fetch_subject_diagnosis_data_tool(subject_name=数学)",
+            "sub_task_agent": "ToolExpert",
+        },
+        {
+            "sub_task": "调 build_subject_diagnosis_sections_tool(render=true)",
+            "sub_task_agent": "ToolExpert",
+        },
+    ]
+    assert should_replace_with_comprehensive_plan(q, wrong_plan) is True
+    fixed = coerce_plan_items_if_needed(q, wrong_plan)
+    assert len(fixed) == 2
+    assert "历次" in fixed[0]["sub_task"] or "考试" in fixed[0]["sub_task"]
+    assert "build_comprehensive_report_data_tool" in fixed[1]["sub_task"]
+    assert fixed[1]["sub_task_agent"] == "ToolExpert"
+    assert "禁止" in fixed[1]["sub_task"] and "build_subject_diagnosis_sections_tool" in fixed[1]["sub_task"]
+    assert not fixed[1]["sub_task"].strip().startswith("调 build_subject_diagnosis")
+
+
+def test_school_class_comparison_query_coerced_to_school_wide():
+    from src.agent.education.query_parse import (
+        is_school_class_comparison_query,
+        is_school_exam_report_query,
+    )
+    from src.agent.expand.planner import (
+        coerce_plan_items_if_needed,
+        should_replace_with_school_class_comparison_plan,
+    )
+
+    q = "扬州中学在连淮扬镇数学考试中各个班级的横向多维对比分析"
+    assert is_school_class_comparison_query(q) is True
+    assert is_school_exam_report_query(q) is True
+    wrong_plan = [
+        {
+            "sub_task": "调 fetch_subject_diagnosis_data_tool(school_name=扬州中学, class_name=高三(9)班)",
+            "sub_task_agent": "ToolExpert",
+        },
+        {
+            "sub_task": "调 build_subject_diagnosis_sections_tool(class_name=高三(9)班, render=true)",
+            "sub_task_agent": "ToolExpert",
+        },
+    ]
+    assert should_replace_with_school_class_comparison_plan(q, wrong_plan) is True
+    fixed = coerce_plan_items_if_needed(q, wrong_plan)
+    assert len(fixed) == 3
+    assert "扬州中学" in fixed[0]["sub_task"]
+    assert "连淮扬镇" in fixed[1]["sub_task"] or "连淮扬镇" in fixed[0]["sub_task"]
+    blob = " ".join(it["sub_task"] for it in fixed)
+    assert "禁止传 class_name" in blob
+    assert "class_name=高三" not in blob
 
 
 def test_planner_infers_tool_expert_for_html_report_task():

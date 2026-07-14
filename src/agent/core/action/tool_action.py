@@ -38,9 +38,9 @@ _DEDUP_EXEMPT_TOOLS = frozenset({TERMINATE_TOOL_NAME})
 
 _NEXT_TOOL_HINTS: dict[str, str] = {
     "fetch_subject_diagnosis_data_tool": (
-        "fetch 子任务：`terminate`。**禁止** `build_diagnostic_report_data_tool(render=true)`；"
-        "同子任务组装：`build_subject_diagnosis_sections_tool(render=true)`（勿手传 fetch_data）；"
-        "跨子任务组装诊断报告：改调 `build_diagnostic_report_data_tool(render=true)`，**禁止**再 fetch"
+        "`terminate`（本步仅 fetch）。**禁止**同子任务再调 "
+        "`build_subject_diagnosis_sections_tool` / `build_diagnostic_report_data_tool(render=true)`——"
+        "组装留给下一步 ToolExpert"
     ),
     "build_diagnostic_report_data_tool": "`terminate`（报告已渲染）",
     "build_comprehensive_report_data_tool": "`terminate`（综合报告已渲染，含进步/退步 TOP 与学生档案）",
@@ -68,6 +68,7 @@ _STRIP_TABLE_ARGS_TOOLS = frozenset(
         "build_student_exam_report_data_tool",
         "build_subject_diagnosis_sections_tool",
         "build_diagnostic_report_data_tool",
+        "fetch_subject_diagnosis_data_tool",
     }
 )
 # records 等由上游注入；report_data / tool_runtime_ctx 必须保留 bindings，禁止 LLM 覆盖。
@@ -103,6 +104,18 @@ def _sanitize_report_tool_args(
         for k in _STRIP_TABLE_ARG_KEYS:
             out.pop(k, None)
     ctx = constraints if isinstance(constraints, dict) else {}
+    task = sub_task or ""
+    # 全校各班对比：丢弃 LLM 误填的 class_name（会把报告缩成单班）
+    _school_wide_tools = (
+        "fetch_subject_diagnosis_data_tool",
+        "build_subject_diagnosis_sections_tool",
+    )
+    if tool_name in _school_wide_tools and (
+        "禁止传 class_name" in task
+        or "不得缩成单班" in task
+        or ("各班" in task and "禁止" in task and "class_name" in task)
+    ):
+        out.pop("class_name", None)
     if tool_name == "build_comprehensive_report_data_tool" and not str(out.get("class_name") or "").strip():
         classes = ctx.get("target_classes") or []
         if isinstance(classes, list) and classes:
@@ -136,6 +149,11 @@ def _sanitize_report_tool_args(
             m = re.search(r"((?:高|初)[一二三123]?\s*[（(]?\d+[）)]?\s*班)", sub_task or "")
             if m:
                 out["class_name"] = m.group(1).replace(" ", "")
+    # 工具入参中的班级名统一半角括号
+    if str(out.get("class_name") or "").strip():
+        from src.agent.education.query_parse import normalize_fullwidth_parentheses
+
+        out["class_name"] = normalize_fullwidth_parentheses(str(out["class_name"]).strip())
     return out
 
 
@@ -541,11 +559,14 @@ class ToolAction(Action):
                     action=tool_name_str,
                     thoughts=thoughts,
                     observations=skip_msg,
-                    terminate=False,
+                    # 报告类首次成功多为 is_final：重复调用也应结束，避免继续刷报告工具
+                    terminate=bool(cached.terminate),
                     extra={
                         **dict(cached.extra or {}),
                         "tool_args": dict(args),
                         "deduplicated": True,
+                        # 去掉 tool_data，防止上层再推一遍 HTML
+                        "tool_data": None,
                     },
                 )
 
@@ -603,7 +624,7 @@ class ToolAction(Action):
         if (
             isinstance(cache, dict)
             and tool_name_str not in _DEDUP_EXEMPT_TOOLS
-            and not result.is_final
         ):
+            # 含 is_final 的报告工具也去重：同参重复调用不再二次渲染/推送
             cache[tool_call_fingerprint(tool_name_str, args)] = action_out
         return action_out

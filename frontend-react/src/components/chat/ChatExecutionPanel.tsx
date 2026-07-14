@@ -17,7 +17,7 @@ import {
 import { Pagination, message, Modal } from "antd";
 import React, { useRef } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { ExecutionStep, QueryResult, ReportPayload } from "@/hooks/useChat";
+import { ExecutionStep, QueryResult, ReportPayload, formatReportDisplayTitle } from "@/hooks/useChat";
 import G2Chart, { G2ChartType } from "@/components/chat/G2Chart";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -25,6 +25,7 @@ import remarkGfm from "remark-gfm";
 type Props = {
   steps: ExecutionStep[];
   summary?: string;
+  summaryByRunId?: Record<string, string>;
   reports?: ReportPayload[];
   queryResults?: QueryResult[];
   selectedStepId?: string;
@@ -75,6 +76,7 @@ function parseThinkContent(raw: unknown) {
 export default function ChatExecutionPanel({
   steps,
   summary,
+  summaryByRunId = {},
   reports = [],
   queryResults = [],
   selectedStepId,
@@ -99,31 +101,52 @@ export default function ChatExecutionPanel({
     Charter: "制图",
     Summarizer: "总结"
   };
-  const activeReportIndex = useMemo(() => {
-    if (!reports.length) return -1;
-    if (selectedReportIndex < 0 || selectedReportIndex >= reports.length) {
-      return reports.length - 1;
-    }
-    return selectedReportIndex;
-  }, [reports, selectedReportIndex]);
-  const activeReport = reports.length ? reports[activeReportIndex] : undefined;
-  const reportOptionLabels = useMemo(() => {
-    return reports.map((r, idx) => {
-      const sub = r.subTaskIndex;
-      const prefix = sub != null ? `子任务 ${sub + 1} · ` : "";
-      const tail = idx === reports.length - 1 ? "（最新）" : `报告 ${idx + 1}`;
-      return `${prefix}${r.title || tail}`;
-    });
-  }, [reports]);
-
   const selectedStep = useMemo(
     () => steps.find((s) => s.id === selectedStepId) ?? steps[steps.length - 1],
     [steps, selectedStepId]
   );
+  const selectedRunId = selectedStep?.runId;
+  const scopedSteps = useMemo(() => {
+    if (!selectedRunId) return steps;
+    const matched = steps.filter((s) => s.runId === selectedRunId);
+    return matched.length ? matched : steps;
+  }, [steps, selectedRunId]);
+  const scopedReports = useMemo(() => {
+    if (!selectedRunId) return reports;
+    return reports.filter((r) => r.runId === selectedRunId);
+  }, [reports, selectedRunId]);
+  const scopedQueryResults = useMemo(() => {
+    if (!selectedRunId) return queryResults;
+    return queryResults.filter((q) => q.runId === selectedRunId);
+  }, [queryResults, selectedRunId]);
+  const scopedSummary = useMemo(() => {
+    if (selectedRunId && summaryByRunId[selectedRunId]) {
+      return summaryByRunId[selectedRunId];
+    }
+    return summary || "";
+  }, [selectedRunId, summaryByRunId, summary]);
+  const activeReportIndex = useMemo(() => {
+    if (!scopedReports.length) return -1;
+    if (selectedReportIndex < 0 || selectedReportIndex >= scopedReports.length) {
+      return scopedReports.length - 1;
+    }
+    return selectedReportIndex;
+  }, [scopedReports, selectedReportIndex]);
+  const activeReport = scopedReports.length ? scopedReports[activeReportIndex] : undefined;
+  const reportOptionLabels = useMemo(() => {
+    return scopedReports.map((r, idx) => {
+      const sub = r.subTaskIndex;
+      const prefix = sub != null ? `子任务 ${sub + 1} · ` : "";
+      const withType = formatReportDisplayTitle(r.title || "", r.reportTypeLabel);
+      const tail = idx === scopedReports.length - 1 ? "（最新）" : `报告 ${idx + 1}`;
+      return `${prefix}${withType || tail}`;
+    });
+  }, [scopedReports]);
+
   const selectedStepTitleText = useMemo(() => normalizeToText(selectedStep?.title), [selectedStep?.title]);
   const selectedStepStatusText = useMemo(() => normalizeToText(selectedStep?.status), [selectedStep?.status]);
   const detailText = useMemo(() => normalizeToText(selectedStep?.detail), [selectedStep?.detail]);
-  const summaryText = useMemo(() => normalizeToText(summary), [summary]);
+  const summaryText = useMemo(() => normalizeToText(scopedSummary), [scopedSummary]);
   const parsedDetail = useMemo(() => parseThinkContent(detailText), [detailText]);
   const parsedSummary = useMemo(() => parseThinkContent(summaryText), [summaryText]);
   const detailFallbackText = useMemo(
@@ -148,16 +171,19 @@ export default function ChatExecutionPanel({
   }, [summaryMarkdownText]);
   const markdownPlugins = useMemo(() => [remarkGfm], []);
   const safeReportHtml = useMemo(() => normalizeToText(activeReport?.html || ""), [activeReport?.html]);
-  const safeReportTitle = useMemo(() => normalizeToText(activeReport?.title || "Report"), [activeReport?.title]);
+  const safeReportTitle = useMemo(
+    () => formatReportDisplayTitle(activeReport?.title || "Report", activeReport?.reportTypeLabel),
+    [activeReport?.title, activeReport?.reportTypeLabel]
+  );
   const activeQuery = useMemo(() => {
-    if (!queryResults.length) return undefined;
-    if (selectedQueryIndex < 0 || selectedQueryIndex >= queryResults.length) {
-      return queryResults[queryResults.length - 1];
+    if (!scopedQueryResults.length) return undefined;
+    if (selectedQueryIndex < 0 || selectedQueryIndex >= scopedQueryResults.length) {
+      return scopedQueryResults[scopedQueryResults.length - 1];
     }
-    return queryResults[selectedQueryIndex];
-  }, [queryResults, selectedQueryIndex]);
+    return scopedQueryResults[selectedQueryIndex];
+  }, [scopedQueryResults, selectedQueryIndex]);
   const queryDisplayLabels = useMemo(() => {
-    return queryResults.map((item, idx) => {
+    return scopedQueryResults.map((item, idx) => {
       const cols = item.columns || [];
       const metricCols = cols.length >= 2 ? cols.slice(1, 4) : cols.slice(0, 3);
       const metricLabel = metricCols.filter(Boolean).join(" / ");
@@ -170,17 +196,17 @@ export default function ChatExecutionPanel({
         metricLabel ||
         sqlBrief ||
         `查询 ${idx + 1}`;
-      const prefix = idx === queryResults.length - 1 ? "最终查询" : `查询 ${idx + 1}`;
+      const prefix = idx === scopedQueryResults.length - 1 ? "最终查询" : `查询 ${idx + 1}`;
       return `${prefix}：${main}`;
     });
-  }, [queryResults]);
+  }, [scopedQueryResults]);
   const activeQueryIndex = useMemo(() => {
-    if (!queryResults.length) return -1;
-    if (selectedQueryIndex < 0 || selectedQueryIndex >= queryResults.length) {
-      return queryResults.length - 1;
+    if (!scopedQueryResults.length) return -1;
+    if (selectedQueryIndex < 0 || selectedQueryIndex >= scopedQueryResults.length) {
+      return scopedQueryResults.length - 1;
     }
     return selectedQueryIndex;
-  }, [queryResults, selectedQueryIndex]);
+  }, [scopedQueryResults, selectedQueryIndex]);
   const pagedRows = useMemo(() => {
     if (!activeQuery) return [];
     const start = (dataPage - 1) * pageSize;
@@ -190,12 +216,26 @@ export default function ChatExecutionPanel({
     setDataPage(1);
   }, [activeQueryIndex]);
   useEffect(() => {
-    if (!reports.length) return;
+    setSelectedReportIndex(-1);
+    setSelectedQueryIndex(-1);
+  }, [selectedRunId]);
+  useEffect(() => {
+    if (!scopedReports.length) return;
     setSelectedReportIndex((prev) => {
-      if (prev < 0 || prev >= reports.length) return reports.length - 1;
+      if (prev < 0 || prev >= scopedReports.length) return scopedReports.length - 1;
       return prev;
     });
-  }, [reports]);
+  }, [scopedReports]);
+  // 切换到另一轮对话且该轮有报告时，自动切到摘要以便回看历史报告
+  const prevRunIdRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (!selectedRunId || prevRunIdRef.current === selectedRunId) {
+      prevRunIdRef.current = selectedRunId;
+      return;
+    }
+    prevRunIdRef.current = selectedRunId;
+    if (scopedReports.length) setActiveTab("summary");
+  }, [selectedRunId, scopedReports.length]);
   const isToolResultStep = selectedStepTitleText.startsWith("工具结果:");
   const isStepError =
     selectedStepStatusText === "error" ||
@@ -267,7 +307,7 @@ export default function ChatExecutionPanel({
     flowAgents.forEach((agent) => {
       statusMap[agent] = "idle";
     });
-    steps.forEach((step) => {
+    scopedSteps.forEach((step) => {
       const [agent, event] = normalizeToText(step.title).split(":").map((v) => v.trim());
       if (!flowAgents.includes(agent as (typeof flowAgents)[number])) return;
       if (event === "error" || step.status === "error") {
@@ -279,15 +319,15 @@ export default function ChatExecutionPanel({
       }
     });
     // 历史会话通常不会保留 start/end 事件；若无 running 且存在执行记录，则将 idle 兜底为 done。
-    const hasSteps = steps.length > 0;
-    const hasRunning = steps.some((step) => step.status === "running");
+    const hasSteps = scopedSteps.length > 0;
+    const hasRunning = scopedSteps.some((step) => step.status === "running");
     if (hasSteps && !hasRunning) {
       flowAgents.forEach((agent) => {
         if (statusMap[agent] === "idle") statusMap[agent] = "done";
       });
     }
     return statusMap;
-  }, [steps]);
+  }, [scopedSteps]);
 
   return (
     <div className="flex h-full w-full min-w-0 flex-col overflow-hidden border-l border-[#eceff5] bg-[#f8f9fc] dark:border-[#2f3441] dark:bg-[#171b24]">
@@ -419,7 +459,7 @@ export default function ChatExecutionPanel({
             </div>
           </div>
         ) : activeTab === "summary" ? (
-          summary || reports.length || queryResults.length ? (
+          scopedSummary || scopedReports.length || scopedQueryResults.length ? (
             <div className="space-y-3">
               {parsedSummary.thinkBlocks.length ? (
                 <div className="rounded-xl border border-[#e6eefc] bg-white p-4 dark:border-[#2f3441] dark:bg-[#11131a]">
@@ -484,7 +524,7 @@ export default function ChatExecutionPanel({
                         {safeReportTitle}
                       </span>
                       <div className="flex items-center gap-1.5">
-                        {reports.length > 1 ? (
+                        {scopedReports.length > 1 ? (
                           <select
                             value={activeReportIndex}
                             onChange={(e) => setSelectedReportIndex(Number(e.target.value))}
@@ -530,7 +570,7 @@ export default function ChatExecutionPanel({
                       </div>
                     </div>
                     <iframe
-                      key={`report-${activeReportIndex}-${safeReportHtml.length}`}
+                      key={`report-${selectedRunId || "latest"}-${activeReportIndex}`}
                       ref={reportIframeRef}
                       title={safeReportTitle}
                       className="h-[360px] w-full border-0"
@@ -551,7 +591,7 @@ export default function ChatExecutionPanel({
                         onChange={(e) => setSelectedQueryIndex(Number(e.target.value))}
                         className="rounded-md border border-[#d9e2ef] bg-white px-2 py-1 text-xs text-[#475467] dark:border-[#334155] dark:bg-[#0f172a] dark:text-[#cbd5e1]"
                       >
-                        {queryResults.map((item, idx) => (
+                        {scopedQueryResults.map((item, idx) => (
                           <option key={item.key} value={idx}>
                             {queryDisplayLabels[idx]}
                           </option>
@@ -681,16 +721,16 @@ export default function ChatExecutionPanel({
                   ) : null}
                 </div>
               ) : null}
-              {!parsedSummary.thinkBlocks.length && !parsedSummary.plain && !reports.length && !activeQuery ? (
+              {!parsedSummary.thinkBlocks.length && !parsedSummary.plain && !scopedReports.length && !activeQuery ? (
                 <div className="flex h-full items-center justify-center text-sm">暂无摘要</div>
               ) : null}
             </div>
           ) : (
             <div className="flex h-full items-center justify-center text-sm">暂无摘要</div>
           )
-        ) : steps.length ? (
+        ) : scopedSteps.length ? (
           <div className="space-y-2">
-            {steps.map((step) => (
+            {scopedSteps.map((step) => (
               <button
                 key={step.id}
                 onClick={() => onSelectStep?.(step.id)}
@@ -726,7 +766,7 @@ export default function ChatExecutionPanel({
         styles={{ body: { padding: 0 } }}
       >
         <iframe
-          key={`report-dialog-${safeReportHtml.length}`}
+          key={`report-dialog-${selectedRunId || "latest"}-${activeReportIndex}`}
           title={`${safeReportTitle}-full`}
           className="h-[72vh] w-full border-0"
           srcDoc={safeReportHtml}

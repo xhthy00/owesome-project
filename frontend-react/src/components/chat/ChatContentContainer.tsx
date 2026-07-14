@@ -122,6 +122,7 @@ export default function ChatContentContainer({ messages, steps = [], selectedSte
           title: `计划 ${subTaskIdx + 1}: 子任务 ${subTaskIdx + 1}`,
           detail: "根据执行过程自动推断的子任务计划",
           status: "running" as const,
+          runId: msg.runId,
           section: "plan" as const,
           subTaskIndex: subTaskIdx,
           progressPct: 0
@@ -134,6 +135,7 @@ export default function ChatContentContainer({ messages, steps = [], selectedSte
             title: `计划 1: ${toText(msg.content).trim() || "当前任务"}`,
             detail: "执行计划未显式返回，已按当前任务兜底展示",
             status: "running" as const,
+            runId: msg.runId,
             section: "plan" as const,
             subTaskIndex: 0,
             progressPct: 0
@@ -203,12 +205,21 @@ export default function ChatContentContainer({ messages, steps = [], selectedSte
                     </div>
                     {expandedGroups.plan ? (
                       <div className="space-y-1 px-3 pb-3">
-                        {entry.derivedPlanSteps.map((step) => (
+                        {entry.derivedPlanSteps.map((step) => {
+                          const realPlan =
+                            entry.mergedSteps.find(
+                              (s) => s.section === "plan" && s.subTaskIndex === step.subTaskIndex
+                            ) ||
+                            entry.mergedSteps.find((s) => s.subTaskIndex === step.subTaskIndex) ||
+                            entry.mergedSteps[0];
+                          const selectId = realPlan?.id ?? step.id;
+                          const selected = selectedStepId === selectId || selectedStepId === step.id;
+                          return (
                           <button
                             key={step.id}
-                            onClick={() => onSelectStep?.(step.id)}
+                            onClick={() => onSelectStep?.(selectId)}
                             className={`w-full rounded-md border px-2 py-1.5 text-left ${
-                              selectedStepId === step.id
+                              selected
                                 ? "border-[#91caff] bg-[#f0f7ff] dark:border-[#3b82f6] dark:bg-[#1e293b]"
                                 : "border-[#d9e7f7] bg-white/90 dark:border-[#36506e] dark:bg-[#0f1a29]"
                             }`}
@@ -229,7 +240,8 @@ export default function ChatContentContainer({ messages, steps = [], selectedSte
                               <div className="mt-1 pl-4 text-[11px] text-[#98a2b3] dark:text-[#64748b]">{toText(step.detail)}</div>
                             ) : null}
                           </button>
-                        ))}
+                          );
+                        })}
                       </div>
                     ) : null}
                   </section>

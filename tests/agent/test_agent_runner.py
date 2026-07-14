@@ -442,3 +442,107 @@ def test_report_passes_when_school_scope_matches_upstream():
 
     names = [e for e, _ in events]
     assert "report" in names
+
+
+def test_report_skipped_when_deduplicated():
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event: str, data: dict) -> None:
+        events.append((event, dict(data)))
+
+    state = _RunState()
+    payload = {
+        "deduplicated": True,
+        "data": {
+            "output_type": "html",
+            "title": "数学诊断报告",
+            "html": "<html><body><div class='edu-card'>ok</div></body></html>",
+        },
+    }
+    _run(_maybe_emit_report(payload, emit, state))
+    assert "report" not in [e for e, _ in events]
+    assert state.reports == []
+
+
+def test_report_skipped_when_kpi_empty_shell():
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event: str, data: dict) -> None:
+        events.append((event, dict(data)))
+
+    state = _RunState()
+    html = (
+        "<html><body><p>KPI 将显示为空</p>"
+        "<div class='edu-kpi'><div class='value'>-</div></div>"
+        "<div class='edu-kpi'><div class='value'>-</div></div>"
+        "<div class='edu-kpi'><div class='value'>-</div></div>"
+        "</body></html>"
+    )
+    payload = {
+        "data": {
+            "output_type": "html",
+            "title": "数学诊断报告",
+            "html": html,
+        },
+    }
+    _run(_maybe_emit_report(payload, emit, state))
+    assert "report" not in [e for e, _ in events]
+
+
+def test_report_dedupes_same_type_weaker_copy():
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event: str, data: dict) -> None:
+        events.append((event, dict(data)))
+
+    state = _RunState()
+    rich = "<html><body>" + ("<tr><td>1</td></tr>" * 20) + "<p>充实报告</p></body></html>"
+    weak = "<html><body><p>弱报告</p></body></html>"
+    first = {
+        "data": {
+            "output_type": "html",
+            "title": "【科目诊断报告】数学诊断报告",
+            "report_type": "subject_diagnosis",
+            "report_type_label": "科目诊断报告",
+            "html": rich,
+        },
+    }
+    second = {
+        "data": {
+            "output_type": "html",
+            "title": "【科目诊断报告】数学诊断报告",
+            "report_type": "subject_diagnosis",
+            "report_type_label": "科目诊断报告",
+            "html": weak,
+        },
+    }
+    _run(_maybe_emit_report(first, emit, state))
+    _run(_maybe_emit_report(second, emit, state))
+    assert len([e for e, _ in events if e == "report"]) == 1
+    assert len(state.reports) == 1
+
+
+def test_class_overall_analysis_is_school_exam_report_query():
+    from src.agent.education.query_parse import is_school_exam_report_query
+
+    q = "扬州中学高三(10)班 · 连淮扬镇数学考试 · 班级整体分析"
+    assert is_school_exam_report_query(q) is True
+
+
+def test_bloated_school_plan_replaced_when_multiple_report_builders():
+    from src.agent.expand.planner import should_replace_with_school_exam_plan
+
+    q = "分析扬州中学高三(10)班在连淮扬镇数学考试的成绩，形成详细报告"
+    plans = [
+        {"sub_task": "查 KPI", "sub_task_agent": "DataAnalyst"},
+        {"sub_task": "fetch_subject_diagnosis_data_tool", "sub_task_agent": "ToolExpert"},
+        {
+            "sub_task": "build_subject_diagnosis_sections_tool(render=true)",
+            "sub_task_agent": "ToolExpert",
+        },
+        {
+            "sub_task": "build_diagnostic_report_data_tool(render=true) 个性化诊断",
+            "sub_task_agent": "ToolExpert",
+        },
+    ]
+    assert should_replace_with_school_exam_plan(q, plans) is True

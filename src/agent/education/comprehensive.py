@@ -13,6 +13,7 @@ from typing import Any
 
 from src.agent.education.charts import build_chart_option
 from src.agent.education.config import EducationConfig
+from src.agent.education.report_types import ReportType, report_type_label
 from src.agent.education.stats import (
     compute_correlations,
     compute_imbalance_degree,
@@ -195,8 +196,13 @@ def _advice(
     weak_avg: float | None,
     *,
     item_insight: dict[str, Any] | None = None,
+    single_subject: bool = False,
+    avg_score: float | None = None,
 ) -> str:
-    """生成个性化建议；有小题/知识点时优先据此，覆盖历次考试而非仅最近一次。"""
+    """生成个性化建议；有小题/知识点时优先据此。
+
+    ``single_subject=True``（科目诊断）：不按多科优劣势叙事，强制以知识点/小题得分驱动。
+    """
     parts: list[str] = []
     insight = item_insight or {}
     weak_items = list(insight.get("weak_items") or [])
@@ -205,7 +211,6 @@ def _advice(
 
     if weak_items or weak_know:
         if weak_items:
-            # 按考试分组，确保每次考试的薄弱小题都能进建议
             by_exam: dict[str, list[dict[str, Any]]] = {}
             for it in weak_items:
                 lab = _short_exam_label(str(it.get("exam_name") or insight.get("exam_name") or "考试"))
@@ -226,20 +231,40 @@ def _advice(
                             pass
                     qbits.append(bit)
                 if qbits:
-                    parts.append(f"【小题补漏·{lab}】重点攻克：{'；'.join(qbits)}。")
+                    if single_subject and lab and lab not in ("-", "考试"):
+                        prefix = f"【小题补漏·{lab}】"
+                    elif single_subject:
+                        prefix = "【小题补漏】"
+                    else:
+                        prefix = f"【小题补漏·{lab}】"
+                    parts.append(f"{prefix}重点攻克：{'；'.join(qbits)}。")
         if weak_know:
             names = [str(k.get("knowledge_name") or k) for k in weak_know[:5]]
             names = [n for n in names if n and n != "未关联知识点"]
             if names:
+                tag = "【知识点薄弱】" if single_subject else "【知识点薄弱·历次】"
                 parts.append(
-                    f"【知识点薄弱·历次】优先复习：{'、'.join(names)}。"
+                    f"{tag}优先复习：{'、'.join(names)}。"
                     "建议回归课本例题与变式训练。"
                 )
         if strong_know:
             names = [str(k.get("knowledge_name") or k) for k in strong_know[:3]]
             names = [n for n in names if n and n != "未关联知识点"]
             if names:
-                parts.append(f"【保持优势】{'、'.join(names)}掌握较好，可做拓展拔高题。")
+                parts.append(f"【掌握较好】{'、'.join(names)}得分率较高，可做拓展拔高题。")
+        if single_subject:
+            parts.append("【执行建议】本周先过关薄弱知识点对应基础题，下周用同类变式复测。")
+    elif single_subject:
+        if avg_score is not None:
+            parts.append(
+                f"【成绩定位】本次得分 {_fmt(avg_score)}，建议结合错题本复盘失分题，"
+                "对照知识点清单逐项过关。"
+            )
+        else:
+            parts.append(
+                "【学习建议】暂未加载到该生小题/知识点得分明细，"
+                "请核对 tb_score_detail；可先复盘课堂笔记与错题。"
+            )
     else:
         subject_tips = {
             "语文": "加强文言文阅读和作文训练，积累素材。",
@@ -254,15 +279,15 @@ def _advice(
         if not parts:
             parts.append("【学习建议】结合错题与课堂笔记复盘薄弱环节，制定每周专项训练。")
 
-    if delta > 5:
-        parts.append("【趋势向好】总分呈进步趋势，请巩固有效学习节奏。")
-    elif delta < -5:
-        parts.append("【警惕下滑】总分呈退步趋势，建议复盘近期错题与时间分配。")
-    else:
-        parts.append("【维持稳定】成绩相对平稳，可在薄弱题型上寻求突破。")
-
-    if weak_avg is not None and weak and weak not in _PLACEHOLDER_SUBJECTS and weak_avg < 90:
-        parts.append(f"【{weak}补基】均分 {_fmt(weak_avg)}，需加强基础题正确率。")
+    if not single_subject:
+        if delta > 5:
+            parts.append("【趋势向好】总分呈进步趋势，请巩固有效学习节奏。")
+        elif delta < -5:
+            parts.append("【警惕下滑】总分呈退步趋势，建议复盘近期错题与时间分配。")
+        else:
+            parts.append("【维持稳定】成绩相对平稳，可在薄弱题型上寻求突破。")
+        if weak_avg is not None and weak and weak not in _PLACEHOLDER_SUBJECTS and weak_avg < 90:
+            parts.append(f"【{weak}补基】均分 {_fmt(weak_avg)}，需加强基础题正确率。")
 
     return (
         '<ul class="advice-list">'
@@ -282,6 +307,7 @@ def _build_student_archive_html(
     imbalance: list[dict[str, Any]],
     level_full: float,
     student_item_insights: dict[str, dict[str, Any]] | None = None,
+    single_subject: bool = False,
 ) -> str:
     """卡片式学生档案：短考试标签 + 小题驱动建议，避免宽表空白。"""
     insights = student_item_insights or {}
@@ -303,7 +329,9 @@ def _build_student_archive_html(
         ordered = sorted(subs_avg.items(), key=lambda kv: float(kv[1]), reverse=True)
         # 单科占位名不作为优/劣势展示；有知识点则用知识点
         real_subs = [(s, a) for s, a in ordered if s not in _PLACEHOLDER_SUBJECTS]
-        if real_subs:
+        if single_subject:
+            strong, weak, weak_avg = "", "", None
+        elif real_subs:
             strong, weak = real_subs[0][0], real_subs[-1][0]
             weak_avg = real_subs[-1][1]
         elif insight.get("strong_knowledge") or insight.get("weak_knowledge"):
@@ -345,7 +373,7 @@ def _build_student_archive_html(
                 qno = it.get("question_no")
                 kn = str(it.get("knowledge_name") or "").strip()
                 elab = _short_exam_label(str(it.get("exam_name") or ""))
-                label = f"{elab}·第{qno}题" if elab and elab != "-" else f"第{qno}题"
+                label = f"{elab}·第{qno}题" if elab and elab not in ("-", "") else f"第{qno}题"
                 if kn and kn != "未关联知识点":
                     label += f"·{kn}"
                 tags.append(f'<span class="weak-tag">{label}</span>')
@@ -355,23 +383,61 @@ def _build_student_archive_html(
                 + "</div>"
             )
 
-        strong_disp = strong or "—"
-        weak_disp = weak or "—"
+        weak_know_tags = ""
+        w_know = list(insight.get("weak_knowledge") or [])
+        if single_subject and w_know:
+            kn_tags = []
+            for k in w_know[:5]:
+                kn = str(k.get("knowledge_name") or k).strip()
+                if not kn or kn == "未关联知识点":
+                    continue
+                rate = k.get("score_rate") if isinstance(k, dict) else None
+                label = kn
+                if rate is not None:
+                    try:
+                        label += f" {float(rate):.0f}%"
+                    except (TypeError, ValueError):
+                        pass
+                kn_tags.append(f'<span class="weak-tag">{label}</span>')
+            if kn_tags:
+                weak_know_tags = (
+                    '<div class="archive-tags"><span class="tags-label">薄弱知识点</span>'
+                    + "".join(kn_tags)
+                    + "</div>"
+                )
+
+        meta_bits = [
+            f'<span>得分 <b>{_fmt(avg_total)}</b></span>',
+            f'<span>{_trend_label(delta)}</span>',
+        ]
+        if not single_subject:
+            strong_disp = strong or "—"
+            weak_disp = weak or "—"
+            meta_bits.extend(
+                [
+                    f'<span>优势 <b class="ok">{strong_disp}</b></span>',
+                    f'<span>待提升 <b class="bad">{weak_disp}</b></span>',
+                    f'<span>偏科度 {degree}</span>',
+                ]
+            )
+
         advice_html = _advice(
-            strong, weak, delta, weak_avg, item_insight=insight or None
+            strong,
+            weak,
+            delta,
+            weak_avg,
+            item_insight=insight or None,
+            single_subject=single_subject,
+            avg_score=avg_total if per_exam_vals else None,
         )
         cards.append(
             f'<article class="archive-card">'
             f'<header class="archive-head">'
             f'<div class="archive-name"><strong>{name}</strong>'
             f'<span class="level-pill" style="background:{level_color}">{level_label}</span></div>'
-            f'<div class="archive-meta">'
-            f'<span>均分 <b>{_fmt(avg_total)}</b></span>'
-            f'<span>{_trend_label(delta)}</span>'
-            f'<span>优势 <b class="ok">{strong_disp}</b></span>'
-            f'<span>待提升 <b class="bad">{weak_disp}</b></span>'
-            f'<span>偏科度 {degree}</span></div></header>'
+            f'<div class="archive-meta">{"".join(meta_bits)}</div></header>'
             f'<div class="score-row">{"".join(score_chips)}</div>'
+            f'{weak_know_tags}'
             f'{weak_item_tags}'
             f'<div class="archive-advice">{advice_html}</div>'
             f"</article>"
@@ -382,11 +448,21 @@ def _build_student_archive_html(
             '<p class="insight warning">暂无学生明细：请确认 SQL 已返回 '
             "student_id/姓名、exam、score 等逐人成绩行（勿仅查班级 KPI 聚合）。</p>"
         )
-    note = ""
     if any(insights.get(s) or insights.get(_normalize_student_key(s)) for s in students):
+        if single_subject:
+            note = (
+                '<p class="archive-note">个性化建议已结合<strong>本场考试</strong>该科小题得分率与知识点掌握情况；'
+                "得分率偏低的知识点与题目列入补漏清单。</p>"
+            )
+        else:
+            note = (
+                '<p class="archive-note">个性化建议已结合<strong>全部考试</strong>的小题得分率与知识点掌握情况；'
+                "得分率低于阈值的题目按考试分别列入补漏清单。</p>"
+            )
+    elif single_subject:
         note = (
-            '<p class="archive-note">个性化建议已结合<strong>全部考试</strong>的小题得分率与知识点掌握情况；'
-            "得分率低于阈值的题目按考试分别列入补漏清单。</p>"
+            '<p class="archive-note">未加载到逐人小题/知识点明细时，仅展示得分；'
+            "系统将尝试从 tb_score_detail 拉取每位学生明细以生成知识点建议。</p>"
         )
     else:
         note = (
@@ -394,6 +470,140 @@ def _build_student_archive_html(
             "导入 tb_score_detail 后可自动融入历次考试薄弱小题与知识点。</p>"
         )
     return note + f'<div class="archive-grid">{"".join(cards)}</div>'
+
+
+def build_student_archive_from_score_rows(
+    rows: list[dict[str, Any]],
+    *,
+    exam_name: str = "",
+    full_score: float | None = None,
+    student_item_insights: dict[str, dict[str, Any]] | None = None,
+    single_subject: bool = False,
+) -> str:
+    """从成绩明细行组装「每位学生详细档案与个性化建议」HTML。
+
+    供 ``class_overview`` / 综合报告 / ``subject_diagnosis``（``single_subject=True``）共用。
+    行字段兼容：``student`` / ``student_id`` / ``name``、``score``、
+    ``subject`` / ``subject_name``、``exam`` / ``exam_name``。
+    """
+    if not rows:
+        return (
+            '<p class="edu-sub">暂无学生明细：请确认成绩查询已返回学号/姓名与分数'
+            "（勿仅查班级 KPI 聚合）。</p>"
+        )
+
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        sid = str(
+            r.get("student") or r.get("student_id") or r.get("name") or ""
+        ).strip()
+        if not sid:
+            continue
+        exam = str(
+            r.get("exam") or r.get("exam_name") or exam_name or "本次考试"
+        ).strip() or "本次考试"
+        subj = str(
+            r.get("subject") or r.get("subject_name") or "全科"
+        ).strip() or "全科"
+        score = r.get("score")
+        try:
+            score_f = float(score) if score is not None else None
+        except (TypeError, ValueError):
+            score_f = None
+        key = (sid, exam)
+        rec = grouped.setdefault(
+            key,
+            {"student": sid, "exam": exam, "subjects": {}, "total": None},
+        )
+        if score_f is not None:
+            # 同行已有同分科目时累加，兼容科目分+总分混排
+            prev = rec["subjects"].get(subj)
+            if prev is None:
+                rec["subjects"][subj] = score_f
+            else:
+                rec["subjects"][subj] = max(float(prev), score_f)
+
+    records = list(grouped.values())
+    for rec in records:
+        subs = rec.get("subjects") or {}
+        if not subs:
+            continue
+        # 仅一科或含「总分」占位时用科目和作为总分
+        if len(subs) == 1:
+            rec["total"] = float(next(iter(subs.values())))
+        else:
+            rec["total"] = float(sum(float(v) for v in subs.values()))
+
+    if not records:
+        return (
+            '<p class="edu-sub">暂无学生明细：成绩行缺少学号/姓名字段。</p>'
+        )
+
+    _normalize_records(records)
+    by_exam: dict[str, list[dict[str, Any]]] = {}
+    for r in records:
+        by_exam.setdefault(str(r.get("exam") or ""), []).append(r)
+    exams = [e for e in by_exam if _exam_has_valid_data(by_exam, e)]
+    if not exams:
+        exams = list(by_exam.keys())
+
+    student_first_total: dict[str, float] = {}
+    student_last_total: dict[str, float] = {}
+    student_subject_avgs: dict[str, dict[str, list[float]]] = {}
+    if exams:
+        first_exam, last_exam = exams[0], exams[-1]
+        for r in records:
+            name = str(r.get("student") or "")
+            e = str(r.get("exam") or "")
+            eff = _record_effective_total(r)
+            if eff is None:
+                continue
+            if e == first_exam:
+                student_first_total[name] = eff
+            if e == last_exam:
+                student_last_total[name] = eff
+            for sub, val in (r.get("subjects") or {}).items():
+                try:
+                    student_subject_avgs.setdefault(name, {}).setdefault(str(sub), []).append(
+                        float(val)
+                    )
+                except (TypeError, ValueError):
+                    continue
+
+    imbalance: list[dict[str, Any]] = []
+    for name, subs in student_subject_avgs.items():
+        avgs = [sum(v) / len(v) for v in subs.values() if v]
+        if len(avgs) >= 2:
+            imbalance.append({"name": name, "degree": _stdev(avgs)})
+
+    all_students = sorted(
+        {str(r.get("student") or "") for r in records if str(r.get("student") or "").strip()}
+    )
+    level_full = float(full_score) if full_score else 100.0
+    if full_score is None:
+        all_scores = [
+            float(v)
+            for r in records
+            for v in (r.get("subjects") or {}).values()
+            if v is not None
+        ]
+        if all_scores:
+            level_full = max(max(all_scores), 100.0)
+
+    return _build_student_archive_html(
+        students=all_students,
+        exams=exams,
+        by_exam=by_exam,
+        student_first_total=student_first_total,
+        student_last_total=student_last_total,
+        student_subject_avgs=student_subject_avgs,
+        imbalance=imbalance,
+        level_full=level_full,
+        student_item_insights=student_item_insights,
+        single_subject=single_subject,
+    )
 
 
 def build_comprehensive_data(
@@ -754,6 +964,7 @@ def build_comprehensive_data(
         "COVER_TITLE": cover_title,
         "COVER_SUBTITLE": cover_subtitle,
         "COVER_META": cover_meta,
+        "REPORT_TYPE": report_type_label(ReportType.COMPREHENSIVE),
         "REPORT_TIME": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M"),
         "OVERVIEW_KPI_GRID": _kpi_grid(overview_cards),
         "OVERVIEW_INSIGHT": overview_insight,
@@ -867,4 +1078,8 @@ def aggregate_student_item_insights(
     return out
 
 
-__all__ = ["build_comprehensive_data", "aggregate_student_item_insights"]
+__all__ = [
+    "aggregate_student_item_insights",
+    "build_comprehensive_data",
+    "build_student_archive_from_score_rows",
+]
