@@ -18,12 +18,14 @@ from src.agent.education.query_parse import (
     is_multi_exam_class_analysis_query,
     is_school_class_comparison_query,
     is_school_exam_report_query,
+    is_tier_alert_query,
 )
 from src.agent.education.report_types import ReportType
 from src.agent.expand.planner import (
     build_comprehensive_class_plan_items,
     build_school_class_comparison_plan_items,
     build_school_subject_report_plan_items,
+    build_tier_alert_plan_items,
 )
 
 
@@ -35,6 +37,8 @@ def _route(question: str) -> str:
         return "individual"
     if is_multi_exam_class_analysis_query(question):
         return "multi-exam"
+    if is_tier_alert_query(question):
+        return "tier-alert"
     if is_school_class_comparison_query(question):
         return "class-comparison"
     if is_school_exam_report_query(question):
@@ -93,7 +97,12 @@ def _route(question: str) -> str:
         (
             "临界生预警报告",
             ReportType.TIER_ALERT,
-            "llm",
+            "tier-alert",
+        ),
+        (
+            "扬州中学高三(10)班数学临界生预警报告",
+            ReportType.TIER_ALERT,
+            "tier-alert",
         ),
         (
             "历次成绩趋势分析",
@@ -197,6 +206,20 @@ def test_multi_exam_plan_tool():
     plans = build_comprehensive_class_plan_items(q)
     assert len(plans) == 2
     assert "build_comprehensive_report_data_tool" in plans[1]["sub_task"]
+
+
+def test_tier_alert_plan_tool():
+    q = "扬州中学高三(10)班数学临界生预警报告"
+    assert is_tier_alert_query(q) is True
+    assert is_school_exam_report_query(q) is False
+    plans = build_tier_alert_plan_items(q)
+    assert len(plans) == 2
+    assert "build_tier_alert_report_data_tool" in plans[1]["sub_task"]
+    assert "build_subject_diagnosis_sections_tool" in plans[1]["sub_task"]
+    blob = " ".join(p["sub_task"] for p in plans)
+    assert "class_name=高三(10)班" in blob
+    assert "subject_name=数学" in blob
+    assert "school_name=扬州中学" in blob
 
 
 def test_grade_comparison_filters_omit_class_name():

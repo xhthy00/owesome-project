@@ -587,6 +587,69 @@ def test_identify_at_risk_students_tool_custom_thresholds():
     assert result.data["regression"] == []
 
 
+def test_build_tier_alert_report_data_tool_renders_and_scales_pass_line():
+    from src.agent.education.tools import build_tier_alert_report_data_tool
+
+    # 150 分卷：及格线 90；88 落在 [85, 95) → 临界生；勿按默认 60 误判
+    result = _run(
+        build_tier_alert_report_data_tool.execute(
+            students=[
+                {"name": "临界生甲", "subject": "数学", "score": 88},
+                {"name": "退步乙", "subject": "数学", "score": 70, "prev_score": 95},
+                {"name": "偏科丙", "subject": "数学", "score": 50},
+                {"name": "偏科丙", "subject": "语文", "score": 95},
+            ],
+            score_rows=[
+                {"name": "临界生甲", "subject": "数学", "score": 88, "exam_score": 150},
+            ],
+            class_name="高三(10)班",
+            school_name="扬州中学",
+            subject_name="数学",
+            exam_name="联考",
+            full_score=150,
+            render=True,
+        )
+    )
+    assert result.is_final is True
+    assert result.data.get("output_type") == "html"
+    html = result.data.get("html") or ""
+    assert "分层预警" in html
+    assert "临界生甲" in html
+    assert "退步乙" in html
+    assert "偏科丙" in html
+
+
+def test_build_tier_alert_report_data_tool_from_upstream_report_data():
+    from src.agent.education.tools import build_tier_alert_report_data_tool
+
+    report_data = {
+        "sub_tasks": [
+            {
+                "sub_task_agent": "DataAnalyst",
+                "exec_result": {
+                    "columns": ["姓名", "score", "exam_score", "prev_score", "subject"],
+                    "rows": [
+                        ["张三", 58, 100, 80, "数学"],
+                        ["李四", 92, 100, None, "数学"],
+                    ],
+                },
+            }
+        ]
+    }
+    result = _run(
+        build_tier_alert_report_data_tool.execute(
+            class_name="初三1班",
+            subject_name="数学",
+            render=False,
+            report_data=report_data,
+        )
+    )
+    assert "error" not in (result.data or {})
+    assert result.data["CRITICAL_COUNT"] == "1"
+    assert any(s["name"] == "张三" for s in result.data["critical"])
+    assert any(s["name"] == "张三" for s in result.data["regression"])
+
+
 # ---- Phase 2: trend_line chart + new templates ----------------------------
 
 def test_build_chart_option_tool_trend_line():

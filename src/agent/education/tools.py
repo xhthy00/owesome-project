@@ -2492,6 +2492,314 @@ def identify_at_risk_students_tool(
     return ToolResult(content=content, data=result)
 
 
+def _tier_alert_table_html(headers: list[str], rows: list[list[str]]) -> str:
+    if not rows:
+        return "<p>暂无</p>"
+    head = "<tr>" + "".join(f"<th>{h}</th>" for h in headers) + "</tr>"
+    body = "".join(
+        "<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows
+    )
+    return (
+        f'<div class="edu-table-wrap"><table class="edu-table">'
+        f"<thead>{head}</thead><tbody>{body}</tbody></table></div>"
+    )
+
+
+def _score_rows_to_at_risk_students(
+    score_rows: list[dict[str, Any]],
+    *,
+    default_subject: str = "",
+) -> list[dict[str, Any]]:
+    students: list[dict[str, Any]] = []
+    for r in score_rows:
+        if not isinstance(r, dict) or r.get("score") is None:
+            continue
+        name = str(
+            r.get("name") or r.get("student_name") or r.get("student_id") or ""
+        ).strip()
+        if not name:
+            continue
+        try:
+            score_val = float(r["score"])
+        except (TypeError, ValueError):
+            continue
+        item: dict[str, Any] = {
+            "name": name,
+            "subject": str(
+                r.get("subject") or r.get("subject_name") or default_subject or ""
+            ),
+            "score": score_val,
+        }
+        prev = r.get("prev_score")
+        if prev is not None and prev != "":
+            try:
+                item["prev_score"] = float(prev)
+            except (TypeError, ValueError):
+                pass
+        students.append(item)
+    return students
+
+
+def _build_tier_alert_template_data(
+    at_risk: dict[str, list[dict[str, Any]]],
+    *,
+    class_name: str = "",
+    school_name: str = "",
+    subject_name: str = "",
+    exam_name: str = "",
+    pass_line: float | None = None,
+) -> dict[str, Any]:
+    critical = list(at_risk.get("critical") or [])
+    regression = list(at_risk.get("regression") or [])
+    imbalanced = list(at_risk.get("imbalanced") or [])
+
+    crit_rows = [
+        [
+            str(s.get("name") or ""),
+            str(s.get("subject") or subject_name or ""),
+            f"{float(s['score']):.1f}" if s.get("score") is not None else "",
+            str(s.get("reason") or ""),
+        ]
+        for s in critical
+    ]
+    reg_rows = [
+        [
+            str(s.get("name") or ""),
+            str(s.get("subject") or subject_name or ""),
+            f"{float(s['score']):.1f}" if s.get("score") is not None else "",
+            (
+                f"{float(s['prev_score']):.1f}"
+                if s.get("prev_score") is not None
+                else ""
+            ),
+            str(s.get("reason") or ""),
+        ]
+        for s in regression
+    ]
+    imb_rows = [
+        [
+            str(s.get("name") or ""),
+            str(s.get("low_subject") or ""),
+            f"{float(s['low_score']):.1f}" if s.get("low_score") is not None else "",
+            str(s.get("high_subject") or ""),
+            f"{float(s['high_score']):.1f}" if s.get("high_score") is not None else "",
+            str(s.get("reason") or ""),
+        ]
+        for s in imbalanced
+    ]
+
+    scope = " · ".join(p for p in (school_name, class_name) if p) or class_name or school_name or "本班"
+    title_bits = [p for p in (school_name, class_name, subject_name) if p]
+    title = f"{' · '.join(title_bits)}分层预警报告" if title_bits else "分层预警报告"
+    pass_hint = f"{pass_line:.0f} 分" if pass_line is not None else "及格线"
+
+    summary = (
+        f"<p>共识别临界生 <strong>{len(critical)}</strong> 人、"
+        f"大幅退步 <strong>{len(regression)}</strong> 人、"
+        f"偏科 <strong>{len(imbalanced)}</strong> 人"
+        f"（临界区间参考 {pass_hint} ± 临界幅度）。</p>"
+    )
+    recs: list[str] = []
+    if critical:
+        recs.append("<li>临界生：针对近及格线知识点开展巩固练习，重点盯周测过关。</li>")
+    if regression:
+        recs.append("<li>大幅退步：一对一面谈溯因（知识点断层/心态/缺考），制定追赶计划。</li>")
+    if imbalanced:
+        recs.append("<li>偏科生：补短板科目课时，优势科保持节奏避免回落。</li>")
+    if not recs:
+        recs.append("<li>本班暂无明显预警对象，维持常规学情跟踪即可。</li>")
+    recommendations = "<ul>" + "".join(recs) + "</ul>"
+
+    return {
+        "REPORT_TITLE": title,
+        "REPORT_TYPE": report_type_label(ReportType.TIER_ALERT),
+        "REPORT_SUBTITLE": scope,
+        "REPORT_TIME": _now_str(),
+        "SCOPE": scope,
+        "EXAM_NAME": exam_name or "本次考试",
+        "SUBJECT_NAME": subject_name or "全科",
+        "CRITICAL_COUNT": str(len(critical)),
+        "REGRESSION_COUNT": str(len(regression)),
+        "IMBALANCED_COUNT": str(len(imbalanced)),
+        "CRITICAL_TABLE": _tier_alert_table_html(
+            ["姓名", "科目", "分数", "原因"], crit_rows
+        ),
+        "REGRESSION_TABLE": _tier_alert_table_html(
+            ["姓名", "科目", "本次", "上次", "原因"], reg_rows
+        ),
+        "IMBALANCED_TABLE": _tier_alert_table_html(
+            ["姓名", "劣势科目", "低分", "优势科目", "高分", "原因"], imb_rows
+        ),
+        "SUMMARY": summary,
+        "RECOMMENDATIONS": recommendations,
+    }
+
+
+@tool()
+def build_tier_alert_report_data_tool(
+    students: list[dict[str, Any]] | None = None,
+    score_rows: list[dict[str, Any]] | None = None,
+    rows: list[list[Any]] | None = None,
+    columns: list[str] | None = None,
+    class_name: str = "",
+    school_name: str = "",
+    subject_name: str = "",
+    exam_name: str = "",
+    pass_threshold: float | None = None,
+    critical_margin: float | None = None,
+    regression_threshold: float | None = None,
+    full_score: float | None = None,
+    render: bool = True,
+    report_data: dict[str, Any] | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """组装分层预警报告（临界生 / 大幅退步 / 偏科）并直接渲染 HTML。
+
+    **临界生预警的关键工具**：从上游成绩行识别预警名单后填入
+    ``education/tier_alert.html``。LLM 调完只需 ``terminate``，
+    **禁止**再调 ``build_subject_diagnosis_sections_tool`` / ``render_html_report``。
+
+    入参优先级：``students`` → ``score_rows`` → ``rows``+``columns`` →
+    运行时 ``report_data`` / ``last_exec_result`` 上游 SQL 结果。
+
+    有 ``exam_score`` / ``full_score`` 时，及格线 = 满分 × pass_ratio（如 150×0.6=90），
+    避免 150 分卷面仍按默认 60 分线误判临界生。
+    """
+    from src.agent.education.query_parse import (
+        resolve_comprehensive_table_input,
+        resolve_diagnostic_score_rows,
+    )
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    rd = report_data if isinstance(report_data, dict) else ctx.get("report_data")
+
+    resolved_rows = resolve_diagnostic_score_rows(
+        score_rows=score_rows if score_rows else None,
+        report_data=rd if isinstance(rd, dict) else None,
+        fetch_data=None,
+    )
+    if not resolved_rows and (rows and columns):
+        _, long_rows, long_cols, _ = resolve_comprehensive_table_input(
+            records=None,
+            rows=rows,
+            columns=columns,
+            last_exec_result=ctx.get("last_exec_result"),
+            report_data=rd if isinstance(rd, dict) else None,
+        )
+        if long_rows and long_cols:
+            resolved_rows = resolve_diagnostic_score_rows(
+                score_rows=None,
+                report_data={
+                    "sub_tasks": [
+                        {
+                            "exec_result": {
+                                "columns": long_cols,
+                                "rows": long_rows,
+                            }
+                        }
+                    ]
+                },
+            )
+    if not resolved_rows:
+        _, long_rows, long_cols, _ = resolve_comprehensive_table_input(
+            records=None,
+            rows=None,
+            columns=None,
+            last_exec_result=ctx.get("last_exec_result"),
+            report_data=rd if isinstance(rd, dict) else None,
+        )
+        if long_rows and long_cols:
+            resolved_rows = resolve_diagnostic_score_rows(
+                score_rows=None,
+                report_data={
+                    "sub_tasks": [
+                        {
+                            "exec_result": {
+                                "columns": long_cols,
+                                "rows": long_rows,
+                            }
+                        }
+                    ]
+                },
+            )
+
+    student_list: list[dict[str, Any]] = []
+    if students:
+        student_list = [dict(s) for s in students if isinstance(s, dict)]
+    if not student_list:
+        student_list = _score_rows_to_at_risk_students(
+            resolved_rows, default_subject=subject_name
+        )
+    if not student_list:
+        return ToolResult(
+            content="build_tier_alert_report_data_tool 失败：无学生成绩数据。",
+            data={"error": "empty students"},
+        )
+
+    cfg = _get_effective_config()
+    fs = full_score
+    if fs is None:
+        for r in resolved_rows:
+            if r.get("exam_score") is not None:
+                try:
+                    fs = float(r["exam_score"])
+                    break
+                except (TypeError, ValueError):
+                    pass
+    if pass_threshold is not None:
+        cfg.pass_threshold = float(pass_threshold)
+    elif fs is not None and float(fs) > 0:
+        cfg.pass_threshold = float(fs) * float(cfg.pass_ratio)
+    if critical_margin is not None:
+        cfg.critical_margin = float(critical_margin)
+    if regression_threshold is not None:
+        cfg.regression_threshold = float(regression_threshold)
+
+    at_risk = _identify_at_risk(student_list, cfg)
+    data = _build_tier_alert_template_data(
+        at_risk,
+        class_name=class_name,
+        school_name=school_name,
+        subject_name=subject_name,
+        exam_name=exam_name,
+        pass_line=cfg.pass_threshold,
+    )
+
+    if not render:
+        data["critical"] = at_risk.get("critical") or []
+        data["regression"] = at_risk.get("regression") or []
+        data["imbalanced"] = at_risk.get("imbalanced") or []
+        return ToolResult(content="分层预警报告 data 已组装。", data=data)
+
+    from src.agent.resource.tool.business import _render_template_html, _sanitize_report_html
+
+    template_name = "education/tier_alert.html"
+    title = data.get("REPORT_TITLE") or "分层预警报告"
+    try:
+        raw_html = _render_template_html(template_name, data)
+        safe_html = _sanitize_report_html(raw_html.strip())
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(
+            content=f"分层预警报告渲染失败：{e}",
+            data={"error": str(e), **{k: data[k] for k in ("CRITICAL_COUNT", "REGRESSION_COUNT", "IMBALANCED_COUNT") if k in data}},
+        )
+    payload = {
+        "output_type": "html",
+        "title": title,
+        "html": safe_html,
+        "mode": "template",
+        "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
+    }
+    return _html_report_tool_result(
+        (
+            f"分层预警报告已渲染（临界生 {data['CRITICAL_COUNT']} / "
+            f"退步 {data['REGRESSION_COUNT']} / 偏科 {data['IMBALANCED_COUNT']}）。"
+        ),
+        payload,
+        report_type=ReportType.TIER_ALERT,
+    )
+
+
 @tool()
 def build_comprehensive_report_data_tool(
     records: list[dict[str, Any]] | None = None,
@@ -4182,6 +4490,7 @@ EDUCATION_TOOLS = [
     build_chart_option_tool,
     select_report_template_tool,
     build_comprehensive_report_data_tool,
+    build_tier_alert_report_data_tool,
     build_student_exam_report_data_tool,
     build_student_subject_diagnosis_tool,
     fetch_subject_diagnosis_data_tool,
@@ -4207,6 +4516,7 @@ __all__ = [
     "build_student_subject_diagnosis_tool",
     "build_subject_diagnosis_report_tool",
     "build_subject_diagnosis_sections_tool",
+    "build_tier_alert_report_data_tool",
     "compute_rankings_tool",
     "compute_score_stats_tool",
     "cross_analyze_tool",

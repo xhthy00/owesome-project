@@ -441,6 +441,10 @@ _EDU_TEMPLATE_DEDICATED_BUILDERS: dict[str, tuple[str, str]] = {
         "build_student_subject_diagnosis_tool(student_id=..., subject_name=..., render=true)",
         "use_build_student_subject_diagnosis_tool",
     ),
+    "tier_alert": (
+        "build_tier_alert_report_data_tool(class_name=..., subject_name=..., render=true)",
+        "use_build_tier_alert_report_data_tool",
+    ),
 }
 
 

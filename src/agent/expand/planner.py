@@ -124,6 +124,10 @@ PLANNER_DESC = """[你的职责]
   **严禁**为班级/全校生成 subject_diagnosis 聚合报告。
 - 个体画像/趋势/预警/群体对比同理，分别用 education/student_exam_analysis.html、
   education/trend_tracking.html、education/tier_alert.html、education/group_feature.html。
+- **班级/学校 + 临界生/分层预警报告**（如「扬州中学高三(10)班数学临界生预警报告」）——
+  **只拆 2 个子任务**，走分层预警，**禁止**走科目诊断 fetch+sections：
+  ["查询该班【科目】每位学生得分（SQL 须含 student_id/姓名、score、exam_score；有上次成绩则带 prev_score）",
+   {"task": "调 build_tier_alert_report_data_tool(class_name=【班级】, subject_name=【科目】, render=true) 生成分层预警 HTML（临界生/退步/偏科）；**禁止** build_subject_diagnosis_sections_tool；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 - **单个学生多次考试分析**（如「分析学生001这几次考试的成绩」）：
   只拆 **2 个子任务**，且**只为问题中指定的那一个学生**生成报告：
   ["查询该学生及全班历次考试各科分数与排名（SQL 须含全班数据以便算排名，但不得为其他学生另做报告）",
@@ -404,6 +408,51 @@ def build_comprehensive_class_plan_items(question: str) -> list[dict[str, str]]:
     ]
 
 
+def build_tier_alert_plan_items(question: str) -> list[dict[str, str]]:
+    """临界生/分层预警：查学生分数 + 一键渲染 tier_alert 报告。"""
+    from src.agent.education.orchestrator import _extract_class_name, _extract_subject
+    from src.agent.education.query_parse import extract_school_target
+
+    school = extract_school_target(question) or ""
+    class_name = _extract_class_name(question) or ""
+    subject = _plan_subject_name(question) or (_extract_subject(question) or "")
+    exam = _plan_exam_name(question)
+    school_l = school or "该校"
+    class_l = class_name or "该班"
+    subject_l = f"【{subject}】" if subject else ""
+    exam_l = _plan_label(exam, missing="本次相关考试")
+    scope_args = []
+    if school:
+        scope_args.append(f"school_name={school}")
+    if class_name:
+        scope_args.append(f"class_name={class_name}")
+    if subject:
+        scope_args.append(f"subject_name={subject}")
+    if exam:
+        scope_args.append(f"exam_name={exam}")
+    tool_args = ", ".join(scope_args)
+    if tool_args:
+        tool_args = tool_args + ", "
+    return [
+        {
+            "sub_task": (
+                f"查询【{school_l}】【{class_l}】在【{exam_l}】{subject_l}每位学生得分"
+                "（SQL 须含 student_id/姓名、score、exam_score；"
+                "有上次同科成绩则带 prev_score；禁止只查 KPI 聚合）"
+            ),
+            "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
+        },
+        {
+            "sub_task": (
+                f"调 build_tier_alert_report_data_tool({tool_args}render=true) "
+                "生成分层预警 HTML（临界生/大幅退步/偏科名单）；完成后 terminate。"
+                "**禁止** build_subject_diagnosis_sections_tool / fetch 渲染"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        },
+    ]
+
+
 def should_replace_with_comprehensive_plan(
     question: str,
     plan_items: list[dict[str, str]],
@@ -463,16 +512,31 @@ def should_replace_with_school_class_comparison_plan(
     return True
 
 
+def should_replace_with_tier_alert_plan(
+    question: str,
+    plan_items: list[dict[str, str]],
+) -> bool:
+    """临界生/分层预警：强制改走 tier_alert 2 步计划。"""
+    from src.agent.education.query_parse import is_tier_alert_query
+
+    if not is_tier_alert_query(question):
+        return False
+    blob = " ".join(str(it.get("sub_task") or "") for it in plan_items)
+    if "build_tier_alert_report_data_tool" in blob:
+        return False
+    return True
+
+
 def coerce_plan_items_if_needed(
     question: str,
     plan_items: list[dict[str, str]],
 ) -> list[dict[str, str]]:
-    """学校报告 / 个人得分 / 多场考试 / 各班对比类问题修正为标准多步计划。"""
+    """学校报告 / 个人得分 / 多场考试 / 各班对比 / 分层预警类问题修正为标准多步计划。"""
     from src.agent.education.query_parse import (
-        is_individual_student_analysis_query,
         is_multi_exam_class_analysis_query,
         is_school_class_comparison_query,
         is_school_exam_report_query,
+        is_tier_alert_query,
     )
 
     q = (question or "").strip()
@@ -481,6 +545,12 @@ def coerce_plan_items_if_needed(
             "planner individual-student coerce: expanding to 2-step student subject diagnosis"
         )
         return build_individual_student_exam_plan_items(q)
+    if should_replace_with_tier_alert_plan(q, plan_items):
+        logger.info(
+            "planner tier-alert coerce: replacing %d plan(s) with tier_alert 2-step",
+            len(plan_items),
+        )
+        return build_tier_alert_plan_items(q)
     if should_replace_with_comprehensive_plan(q, plan_items):
         logger.info(
             "planner multi-exam coerce: replacing %d plan(s) with comprehensive 2-step",
@@ -499,7 +569,7 @@ def coerce_plan_items_if_needed(
             len(plan_items),
         )
         return build_school_subject_report_plan_items(q)
-    if is_multi_exam_class_analysis_query(q) or is_school_class_comparison_query(q):
+    if is_multi_exam_class_analysis_query(q) or is_school_class_comparison_query(q) or is_tier_alert_query(q):
         return plan_items
     if not is_school_exam_report_query(q):
         return plan_items

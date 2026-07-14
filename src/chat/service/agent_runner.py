@@ -726,6 +726,7 @@ async def _run_planner_phase(
         is_multi_exam_class_analysis_query,
         is_school_class_comparison_query,
         is_school_exam_report_query,
+        is_tier_alert_query,
     )
     from src.agent.expand.planner import (
         build_citywide_team_plan_items,
@@ -733,12 +734,14 @@ async def _run_planner_phase(
         build_individual_student_exam_plan_items,
         build_school_class_comparison_plan_items,
         build_school_subject_report_plan_items,
+        build_tier_alert_plan_items,
         coerce_plan_items_if_needed,
         should_replace_with_citywide_plan,
         should_replace_with_comprehensive_plan,
         should_replace_with_individual_student_plan,
         should_replace_with_school_class_comparison_plan,
         should_replace_with_school_exam_plan,
+        should_replace_with_tier_alert_plan,
     )
 
     await emit("agent_speak", {"agent": "Planner", "status": "start"})
@@ -774,6 +777,20 @@ async def _run_planner_phase(
     # 班级多场考试：确定性走 comprehensive，避免误入单科诊断导致人次累加、无对比
     if is_multi_exam_class_analysis_query(request.question):
         plan_items = build_comprehensive_class_plan_items(request.question)
+        await emit(
+            "agent_speak",
+            {
+                "agent": "Planner",
+                "status": "end",
+                "plan_count": len(plan_items),
+                "deterministic": True,
+            },
+        )
+        return plan_items
+
+    # 临界生/分层预警：优先于学校科目诊断
+    if is_tier_alert_query(request.question):
+        plan_items = build_tier_alert_plan_items(request.question)
         await emit(
             "agent_speak",
             {
@@ -834,6 +851,8 @@ async def _run_planner_phase(
             plan_items = build_citywide_team_plan_items(request.question)
         elif should_replace_with_individual_student_plan(request.question, plan_items):
             plan_items = build_individual_student_exam_plan_items(request.question)
+        elif should_replace_with_tier_alert_plan(request.question, plan_items):
+            plan_items = build_tier_alert_plan_items(request.question)
         elif should_replace_with_comprehensive_plan(request.question, plan_items):
             plan_items = build_comprehensive_class_plan_items(request.question)
         elif should_replace_with_school_class_comparison_plan(request.question, plan_items):
@@ -868,6 +887,12 @@ async def _run_planner_phase(
             len(plan_items),
         )
         plan_items = build_individual_student_exam_plan_items(request.question)
+    elif should_replace_with_tier_alert_plan(request.question, plan_items):
+        logger.info(
+            "planner tier-alert fallback: replacing %d plan(s) with 2-step tier alert plan",
+            len(plan_items),
+        )
+        plan_items = build_tier_alert_plan_items(request.question)
     elif should_replace_with_comprehensive_plan(request.question, plan_items):
         logger.info(
             "planner multi-exam fallback: replacing %d plan(s) with comprehensive 2-step",

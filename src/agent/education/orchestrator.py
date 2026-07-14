@@ -107,6 +107,7 @@ class ReportIntentResolver:
             is_school_class_comparison_query,
             is_school_exam_report_query,
             is_structured_diagnostic_query,
+            is_tier_alert_query,
         )
 
         if is_citywide_analysis_query(q):
@@ -117,6 +118,8 @@ class ReportIntentResolver:
             report_type = ReportType.COMPREHENSIVE
         elif is_school_class_comparison_query(q):
             report_type = ReportType.GRADE_COMPARISON
+        elif is_tier_alert_query(q):
+            report_type = ReportType.TIER_ALERT
         elif is_structured_diagnostic_query(q):
             report_type = ReportType.DIAGNOSTIC_REPORT
         elif is_school_exam_report_query(q):

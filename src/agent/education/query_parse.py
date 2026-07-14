@@ -386,6 +386,32 @@ def is_structured_diagnostic_query(question: str) -> bool:
     return bool(q) and any(h in q for h in _STRUCTURED_DIAGNOSTIC_HINTS)
 
 
+_TIER_ALERT_HINTS = (
+    "临界生预警",
+    "分层预警",
+    "预警报告",
+    "临界生报告",
+    "退步生预警",
+    "偏科预警",
+    "临界生",
+    "退步生",
+    "分层预警报告",
+)
+
+
+def is_tier_alert_query(question: str) -> bool:
+    """临界生/退步/偏科分层预警报告（优先于学校科目诊断）。"""
+    q = (question or "").strip()
+    if not q or is_citywide_analysis_query(q) or is_individual_student_analysis_query(q):
+        return False
+    if any(h in q for h in _TIER_ALERT_HINTS):
+        return True
+    # 「…预警报告」且含临界/退步/偏科/分层
+    if "预警" in q and any(h in q for h in ("临界", "退步", "偏科", "分层", "报告")):
+        return True
+    return False
+
+
 def is_school_exam_report_query(question: str) -> bool:
     """学校/班级范围 + 考试 + 分析报告类问题（非全市、非个人学生、非多场综合）。"""
     q = (question or "").strip()
@@ -394,6 +420,8 @@ def is_school_exam_report_query(question: str) -> bool:
     if is_multi_exam_class_analysis_query(q):
         return False
     if is_structured_diagnostic_query(q):
+        return False
+    if is_tier_alert_query(q):
         return False
     if not extract_school_target(q):
         return False
@@ -613,6 +641,8 @@ _CLASS_COL_HINTS = ("class", "class_name", "班级")
 _SCHOOL_COL_HINTS = ("school_name", "学校")
 _SUBJECT_COL_HINTS = ("subject", "subject_name", "科目")
 _STUDENT_COL_HINTS = ("student_id", "学号", "学生")
+_NAME_COL_HINTS = ("姓名", "student_name")
+_PREV_SCORE_COL_HINTS = ("prev_score", "上次得分", "上次成绩", "上次分数")
 
 
 def _col_index(cols: list[str], hints: tuple[str, ...]) -> int | None:
@@ -665,6 +695,12 @@ def extract_score_rows_from_report_data(
         sch_i = _col_index(cols, _SCHOOL_COL_HINTS)
         sub_i = _col_index(cols, _SUBJECT_COL_HINTS)
         stu_i = _col_index(cols, _STUDENT_COL_HINTS)
+        name_i = _col_index(cols, _NAME_COL_HINTS)
+        if name_i is None:
+            lower_cols = [str(c).lower() for c in cols]
+            if "name" in lower_cols:
+                name_i = lower_cols.index("name")
+        prev_i = _col_index(cols, _PREV_SCORE_COL_HINTS)
         parsed: list[dict[str, Any]] = []
         for row in raw_rows:
             if isinstance(row, dict):
@@ -688,14 +724,23 @@ def extract_score_rows_from_report_data(
                 ("class_name", ci),
                 ("school_name", sch_i),
                 ("subject", sub_i),
+                ("subject_name", sub_i),
                 ("student_id", stu_i),
+                ("name", name_i),
+                ("prev_score", prev_i),
             )
             for key, idx in field_map:
                 val = drow.get(key)
+                if val is None and key == "name":
+                    val = drow.get("姓名") or drow.get("student_name")
+                if val is None and key == "prev_score":
+                    val = drow.get("上次得分") or drow.get("上次成绩")
                 if val is None and idx is not None:
                     val = _cell(row, idx)
                 if val is not None and val != "":
                     out[key] = val
+            if not out.get("name") and out.get("student_id") is not None:
+                out["name"] = str(out["student_id"])
             parsed.append(out)
         if len(parsed) > len(best):
             best = parsed
@@ -1226,6 +1271,7 @@ __all__ = [
     "is_school_class_comparison_query",
     "is_school_exam_report_query",
     "is_structured_diagnostic_query",
+    "is_tier_alert_query",
     "normalize_fullwidth_parentheses",
     "normalize_student_key",
     "extract_upstream_participant_count",
