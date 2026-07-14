@@ -313,22 +313,55 @@ def build_school_class_comparison_plan_items(question: str) -> list[dict[str, st
 
 
 def build_individual_student_exam_plan_items(question: str) -> list[dict[str, str]]:
-    """单个学生 + 单次考试：总分对照 + 个人知识点诊断报告（确定性 2 步）。"""
-    from src.agent.education.query_parse import extract_student_target
+    """单个学生分析：单场 → 知识点诊断；多次/这几次 → 趋势对比报告。"""
+    from src.agent.education.query_parse import (
+        extract_student_target,
+        is_multi_exam_student_analysis_query,
+        is_vague_exam_name,
+    )
 
     sid = extract_student_target(question) or "该学生"
     exam = _plan_exam_name(question)
     subject = _plan_subject_name(question)
-    exam_l = _plan_label(exam, missing="问题中的考试")
+    if is_vague_exam_name(exam):
+        exam = ""
     subject_arg = f", subject_name={subject}" if subject else ""
     subject_disp = f"【{subject}】" if subject else ""
+
+    if is_multi_exam_student_analysis_query(question):
+        subject_label = subject_disp or "各科"
+        return [
+            {
+                "sub_task": (
+                    f"查询学生【{sid}】及全班历次{subject_label}考试分数与排名"
+                    "（SQL 须含 exam_name、student_id、score、exam_score、class；"
+                    "须覆盖该生全部相关考试，禁止只查单场；"
+                    "须含全班同学分以便算班级均分与第1名；"
+                    "**禁止**把 exam_name 写成「这几次/本次考试」）"
+                ),
+                "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
+            },
+            {
+                "sub_task": (
+                    f"调 build_student_exam_report_data_tool(student_id={sid}"
+                    f"{subject_arg}, render=true) "
+                    "组装该生**多次考试**学情 HTML（须体现：具体考试次数、历次得分明细、"
+                    "多次均分、与班级第1名差距、成绩趋势）；完成后 terminate。"
+                    "**禁止** build_student_subject_diagnosis_tool；"
+                    "**禁止** exam_name 填「这几次」"
+                ),
+                "sub_task_agent": _TOOL_EXPERT_AGENT,
+            },
+        ]
+
+    exam_l = _plan_label(exam, missing="问题中的考试")
     return [
         {
             "sub_task": (
                 f"查询学生【{sid}】在【{exam_l}】"
                 f"{subject_disp}的总分、卷面满分、班级排名、"
                 "班级均分对照（SQL 须含全班同学分以便算排名；可 JOIN tb_exam/tb_school）；"
-                "**exam_name 必须取自问题原文，禁止填「本次考试」**"
+                "**exam_name 必须取自问题原文，禁止填「本次考试/这几次」**"
             ),
             "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
         },

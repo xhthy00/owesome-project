@@ -1959,33 +1959,107 @@ def _score_column_index(col_l: list[str]) -> int | None:
     return None
 
 
+def _parse_rank_value(value: Any) -> int | None:
+    """解析排名：17 / 17.0 / 「第17名」/ 「17名」→ int。"""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    if isinstance(value, float):
+        if value != value:  # NaN
+            return None
+        iv = int(value)
+        return iv if iv > 0 and abs(value - iv) < 1e-6 else None
+    text = str(value).strip()
+    if not text or text in {"-", "—", "None", "null"}:
+        return None
+    m = re.search(r"(\d+)", text)
+    if not m:
+        return None
+    try:
+        iv = int(m.group(1))
+    except ValueError:
+        return None
+    return iv if iv > 0 else None
+
+
 def _pick_score_from_score_rows(
     score_rows: list[dict[str, Any]],
     student_id: str,
 ) -> tuple[float | None, Any]:
-    """从 score_rows 取该生数值得分，并在可能时给出班级内名次。"""
+    """从 score_rows 取该生数值得分，并在班级样本足够时给出班内名次。
+
+    仅有本人 1 行时**不算排名**（会错误得到第 1 名），返回 rank=None。
+    """
     from src.agent.education.query_parse import student_matches
 
     sid = (student_id or "").strip()
     scored: list[tuple[float, bool]] = []
     own: float | None = None
+    peer_ids: set[str] = set()
     for r in score_rows:
         if not isinstance(r, dict):
             continue
         val = _coerce_numeric_score(r.get("score"))
         if val is None:
             continue
-        is_self = student_matches(str(r.get("student_id") or r.get("id") or ""), sid)
+        rid = str(r.get("student_id") or r.get("id") or "").strip()
+        is_self = student_matches(rid, sid) if rid else False
         scored.append((val, is_self))
+        if rid:
+            peer_ids.add(rid)
         if is_self and own is None:
             own = val
     if own is None and len(scored) == 1:
         own = scored[0][0]
     if own is None:
         return None, None
+    # 样本不足：无法可靠算班排（常见于按学号过滤后只剩 1 行）
+    distinct_n = len(peer_ids) if peer_ids else len(scored)
+    if distinct_n < 2:
+        return own, None
     # 同分并列：高于本人的人数 + 1
     class_rank = 1 + sum(1 for s, _ in scored if s > own)
     return own, class_rank
+
+
+def _compute_class_rank_from_rows(
+    rows: list[Any],
+    cols: list[str],
+    student_id: str,
+    *,
+    score_i: int | None,
+    sid_i: int | None,
+) -> tuple[float | None, int | None]:
+    """从一张含全班得分的表计算本人得分与班级排名。"""
+    from src.agent.education.query_parse import student_matches
+
+    if score_i is None or not rows:
+        return None, None
+    sid = (student_id or "").strip()
+    scored: list[tuple[float, bool]] = []
+    own: float | None = None
+    for row in rows:
+        if not isinstance(row, (list, tuple)):
+            continue
+        try:
+            raw = row[score_i]
+        except IndexError:
+            continue
+        val = _coerce_numeric_score(raw)
+        if val is None:
+            continue
+        is_self = False
+        if sid_i is not None and sid_i < len(row):
+            is_self = student_matches(str(row[sid_i] or "").strip(), sid)
+        scored.append((val, is_self))
+        if is_self and own is None:
+            own = val
+    if own is None:
+        return None, None
+    if len(scored) < 2:
+        return own, None
+    return own, 1 + sum(1 for s, _ in scored if s > own)
 
 
 def _report_scope_subtitle(school_name: str = "", class_name: str = "") -> str:
@@ -3477,7 +3551,11 @@ def _pick_student_overview_from_report(
     *,
     subject_name: str = "",
 ) -> dict[str, Any]:
-    """从上游 DataAnalyst 子任务 SQL 结果提取该生成绩概览。"""
+    """从上游 DataAnalyst 子任务 SQL 结果提取该生成绩概览。
+
+    会遍历全部子任务合并字段：优先采用带 ``班级排名`` 列的结果；
+    若无排名列但有全班得分表，则按得分计算班排（避免单人表误算第 1 名）。
+    """
     from src.agent.education.query_parse import student_matches
 
     out: dict[str, Any] = {}
@@ -3485,7 +3563,10 @@ def _pick_student_overview_from_report(
         return out
     sid = (student_id or "").strip()
     subj_key = (subject_name or "").strip().lower()
-    for st in reversed(report_data.get("sub_tasks") or []):
+    best_computed: tuple[int, float | None, int | None] = (-1, None, None)
+    # (row_count, score, class_rank)
+
+    for st in report_data.get("sub_tasks") or []:
         if st.get("sub_task_agent") not in (None, "", "DataAnalyst"):
             continue
         er = st.get("exec_result") or st.get("last_exec_result") or {}
@@ -3502,7 +3583,6 @@ def _pick_student_overview_from_report(
         if subj_key:
             for i, c in enumerate(col_l):
                 if subj_key in c and any(k in c for k in ("分", "score", "成绩")) and "率" not in c:
-                    # 科目名列优先，但仍须能解析为数值才采用
                     score_i = i
                     break
         class_rank_i = next(
@@ -3523,31 +3603,238 @@ def _pick_student_overview_from_report(
         )
 
         def _cell(row: Any, idx: int | None) -> Any:
-            if idx is None or idx >= len(row):
+            if idx is None or not isinstance(row, (list, tuple)) or idx >= len(row):
                 return None
             return row[idx]
 
+        # 1) 本人行上的显式排名列
         for row in rows:
+            if not isinstance(row, (list, tuple)):
+                continue
             if sid_i is not None:
                 rv = str(_cell(row, sid_i) or "").strip()
                 if rv and not student_matches(rv, sid):
                     continue
             raw_score = _cell(row, score_i) if score_i is not None else None
             numeric = _coerce_numeric_score(raw_score)
-            # 科目列误命中学号时丢弃，避免 KPI 显示学号
             if numeric is None and score_i is not None and raw_score is not None:
-                # 再试一次标准 score 列
                 fallback_i = _score_column_index(col_l)
                 if fallback_i is not None and fallback_i != score_i:
                     numeric = _coerce_numeric_score(_cell(row, fallback_i))
-            if numeric is not None:
+            if numeric is not None and out.get("total_score") is None:
                 out["total_score"] = numeric
-            out["class_rank"] = _cell(row, class_rank_i)
-            out["grade_rank"] = _cell(row, grade_rank_i)
-            out["class_name"] = _cell(row, class_i)
-            out["school_name"] = _cell(row, school_i)
-            return out
+            parsed_rank = _parse_rank_value(_cell(row, class_rank_i))
+            if parsed_rank is not None and out.get("class_rank") is None:
+                out["class_rank"] = parsed_rank
+            parsed_grade = _parse_rank_value(_cell(row, grade_rank_i))
+            if parsed_grade is not None and out.get("grade_rank") is None:
+                out["grade_rank"] = parsed_grade
+            if out.get("class_name") in (None, "", "-"):
+                cn = _cell(row, class_i)
+                if cn:
+                    out["class_name"] = cn
+            if out.get("school_name") in (None, "", "-"):
+                sn = _cell(row, school_i)
+                if sn:
+                    out["school_name"] = sn
+
+        # 2) 无显式排名时，用全班得分表推算（优先行数更多的结果）
+        if out.get("class_rank") is None and score_i is not None and len(rows) >= 2:
+            c_score, c_rank = _compute_class_rank_from_rows(
+                rows, cols, sid, score_i=score_i, sid_i=sid_i
+            )
+            if c_rank is not None and len(rows) > best_computed[0]:
+                best_computed = (len(rows), c_score, c_rank)
+
+    if out.get("class_rank") is None and best_computed[2] is not None:
+        out["class_rank"] = best_computed[2]
+        if out.get("total_score") is None and best_computed[1] is not None:
+            out["total_score"] = best_computed[1]
     return out
+
+
+def _pick_student_multi_exam_series_from_report(
+    report_data: dict[str, Any] | None,
+    student_id: str,
+    *,
+    subject_name: str = "",
+) -> list[dict[str, Any]]:
+    """从上游 SQL 提取该生各场得分，并用同结果全班数据推算均分/最高分/差距。"""
+    from collections import defaultdict
+
+    from src.agent.education.query_parse import is_vague_exam_name, student_matches
+
+    if not report_data:
+        return []
+    sid = (student_id or "").strip()
+    subj_key = (subject_name or "").strip().lower()
+
+    by_exam: dict[str, dict[str, Any]] = {}
+    exam_order: list[str] = []
+    class_scores: dict[str, list[float]] = defaultdict(list)
+
+    for st in report_data.get("sub_tasks") or []:
+        if st.get("sub_task_agent") not in (None, "", "DataAnalyst"):
+            continue
+        er = st.get("exec_result") or st.get("last_exec_result") or {}
+        cols = [str(c) for c in (er.get("columns") or [])]
+        rows = er.get("rows") or []
+        if not cols or not rows:
+            continue
+        col_l = [c.lower() for c in cols]
+        sid_i = next(
+            (i for i, c in enumerate(col_l) if c in ("student_id", "id", "学号")),
+            None,
+        )
+        exam_i = next(
+            (
+                i
+                for i, c in enumerate(col_l)
+                if c in ("exam_name", "exam", "考试", "考试名称") or ("exam" in c and "score" not in c)
+            ),
+            None,
+        )
+        if exam_i is None:
+            continue
+        score_i = _score_column_index(col_l)
+        if subj_key:
+            for i, c in enumerate(col_l):
+                if subj_key in c and any(k in c for k in ("分", "score", "成绩")) and "率" not in c:
+                    score_i = i
+                    break
+        class_rank_i = next(
+            (i for i, c in enumerate(col_l) if "class_rank" in c or c in ("班级排名", "班排")),
+            None,
+        )
+
+        def _cell(row: Any, idx: int | None) -> Any:
+            if idx is None or not isinstance(row, (list, tuple)) or idx >= len(row):
+                return None
+            return row[idx]
+
+        for row in rows:
+            if not isinstance(row, (list, tuple)):
+                continue
+            exam = str(_cell(row, exam_i) or "").strip()
+            if not exam or is_vague_exam_name(exam):
+                continue
+            score = _coerce_numeric_score(_cell(row, score_i))
+            if score is None:
+                continue
+            class_scores[exam].append(score)
+            is_self = True
+            if sid_i is not None:
+                rv = str(_cell(row, sid_i) or "").strip()
+                is_self = bool(rv) and student_matches(rv, sid)
+            if not is_self:
+                continue
+            if exam not in by_exam:
+                exam_order.append(exam)
+                by_exam[exam] = {}
+            by_exam[exam]["score"] = score
+            rank = _cell(row, class_rank_i)
+            if rank is not None:
+                by_exam[exam]["class_rank"] = rank
+
+    out: list[dict[str, Any]] = []
+    for exam in exam_order:
+        row = dict(by_exam.get(exam) or {})
+        score = _coerce_numeric_score(row.get("score"))
+        if score is None:
+            continue
+        scores = class_scores.get(exam) or []
+        if scores:
+            row["class_avg"] = round(sum(scores) / len(scores), 2)
+            row["class_max"] = max(scores)
+            row["gap_to_first"] = round(max(scores) - score, 2)
+        out.append({"exam_name": exam, **row})
+    return out
+
+
+def _build_student_multi_exam_overview_html(
+    series: list[dict[str, Any]],
+    *,
+    student_id: str = "",
+) -> tuple[str, str, str, str]:
+    """返回 (overview_title, exam_badge, kpi_html, detail_html含表+趋势图)。"""
+    if len(series) < 2:
+        return "", "", "", ""
+    exams = [str(s.get("exam_name") or "") for s in series]
+    scores = [_coerce_numeric_score(s.get("score")) for s in series]
+    valid_scores = [v for v in scores if v is not None]
+    avg = round(sum(valid_scores) / len(valid_scores), 2) if valid_scores else None
+    last = series[-1]
+    last_score = _coerce_numeric_score(last.get("score"))
+    last_gap = _coerce_numeric_score(last.get("gap_to_first"))
+    if last_gap is None:
+        cm = _coerce_numeric_score(last.get("class_max"))
+        if cm is not None and last_score is not None:
+            last_gap = round(cm - last_score, 2)
+
+    badge = f"共{len(series)}次考试（{'、'.join(exams)}）"
+    title = f"多次考试概览（共{len(series)}次）"
+    kpi = (
+        f'<div class="edu-kpi"><div class="label">考试次数</div><div class="value">{len(series)}</div></div>'
+        f'<div class="edu-kpi"><div class="label">多次均分</div><div class="value">{_fmt_val(avg)}</div></div>'
+        f'<div class="edu-kpi"><div class="label">最近得分</div><div class="value">{_fmt_val(last_score)}</div></div>'
+        f'<div class="edu-kpi"><div class="label">最近距第1名</div><div class="value">'
+        f'{_fmt_val(last_gap) if last_gap is not None else "-"}</div></div>'
+    )
+    head = (
+        "<tr><th>考试</th><th class='num'>得分</th><th class='num'>班级均分</th>"
+        "<th class='num'>班级最高</th><th class='num'>与第1名差距</th><th class='num'>班级排名</th></tr>"
+    )
+    body_parts: list[str] = []
+    for s in series:
+        sc = _coerce_numeric_score(s.get("score"))
+        ca = _coerce_numeric_score(s.get("class_avg"))
+        cm = _coerce_numeric_score(s.get("class_max"))
+        gap = _coerce_numeric_score(s.get("gap_to_first"))
+        if gap is None and sc is not None and cm is not None:
+            gap = round(cm - sc, 2)
+        body_parts.append(
+            f"<tr><td>{s.get('exam_name') or '-'}</td>"
+            f"<td class='num'>{_fmt_val(sc)}</td>"
+            f"<td class='num'>{_fmt_val(ca)}</td>"
+            f"<td class='num'>{_fmt_val(cm)}</td>"
+            f"<td class='num'>{_fmt_val(gap) if gap is not None else '-'}</td>"
+            f"<td class='num'>{_fmt_val(s.get('class_rank'))}</td></tr>"
+        )
+    table = (
+        '<div class="edu-table-wrap"><table class="edu-table"><thead>'
+        f"{head}</thead><tbody>{''.join(body_parts)}</tbody></table></div>"
+    )
+    chart = ""
+    if valid_scores:
+        chart = _build_chart_option(
+            "trend_line",
+            {
+                "x_labels": exams,
+                "series": [
+                    {
+                        "name": "得分",
+                        "values": [float(v) if v is not None else 0 for v in scores],
+                    }
+                ],
+            },
+            title=f"{student_id or '该生'} 历次得分趋势",
+        )
+    chart_block = ""
+    if chart:
+        chart_block = (
+            '<div id="multiExamTrend" class="edu-chart"></div>'
+            f'<script type="application/json" id="multiExamTrendData">{chart}</script>'
+            "<script>(function(){var el=document.getElementById('multiExamTrendData');"
+            "if(!el)return;var raw=(el.textContent||'').trim();if(!raw){"
+            "document.getElementById('multiExamTrend').style.display='none';return;}"
+            "try{echarts.init(document.getElementById('multiExamTrend')).setOption(JSON.parse(raw));}"
+            "catch(e){}})();</script>"
+        )
+    detail = (
+        '<p class="edu-sub">以下为各场得分明细对比；与第1名差距为正表示落后班级最高分。</p>'
+        f"{table}{chart_block}"
+    )
+    return title, badge, kpi, detail
 
 
 def _build_student_subject_summary(
@@ -3607,17 +3894,23 @@ def build_student_subject_diagnosis_tool(
     weak_threshold: float = 60.0,
     render: bool = True,
 ) -> ToolResult:
-    """组装**单个学生**单次考试科目分析报告（个人视角，非班级聚合）。
+    """组装**单个学生**科目分析报告（个人视角）。
 
+    单场：小题/知识点诊断；检测到多场成绩时自动切换多次概览（次数、均分、与第1名差距、趋势）。
     内部按 ``student_id`` 查询小题/知识点明细，渲染 ``education/student_subject_diagnosis.html``。
     LLM 调完只需 ``terminate``。
     """
+    from src.agent.education.query_parse import is_vague_exam_name
+
     sid = (student_id or "").strip()
     if not sid:
         return ToolResult(
             content="build_student_subject_diagnosis_tool 失败：student_id 为空。",
             data={"error": "missing student_id"},
         )
+    # 模糊表述不能写进 SQL / 报告标题
+    if is_vague_exam_name(exam_name):
+        exam_name = ""
     try:
         from src.agent.resource.tool.business import _load_datasource
 
@@ -3663,8 +3956,17 @@ def build_student_subject_diagnosis_tool(
         overview["total_score"] = overview_score
     else:
         overview["total_score"] = None
-    if overview.get("class_rank") is None and row_class_rank is not None:
+    # 班排：优先上游可靠排名；仅当 score_rows 含全班样本时才用本地推算覆盖空值
+    # （按学号 fetch 常只剩 1 行，推算会错误得到第 1 名）
+    overview_rank = _parse_rank_value(overview.get("class_rank"))
+    if overview_rank is not None:
+        overview["class_rank"] = overview_rank
+    elif row_class_rank is not None:
         overview["class_rank"] = row_class_rank
+    else:
+        overview["class_rank"] = None
+    grade_rank = _parse_rank_value(overview.get("grade_rank"))
+    overview["grade_rank"] = grade_rank
 
     class_label = str(overview.get("class_name") or fetch_class or class_name or "").strip()
     school_label = str(
@@ -3683,6 +3985,45 @@ def build_student_subject_diagnosis_tool(
         except (TypeError, ValueError):
             full_score_val = None
 
+    multi_series = _pick_student_multi_exam_series_from_report(
+        report_data, sid, subject_name=subject_name
+    )
+    # score_rows 也可能含多场（无 exam 列时无法拆）
+    if len(multi_series) < 2 and score_rows:
+        from src.agent.education.query_parse import student_matches
+
+        exam_scores: dict[str, float] = {}
+        for r in score_rows:
+            if not isinstance(r, dict):
+                continue
+            if not student_matches(str(r.get("student_id") or r.get("id") or ""), sid):
+                # 全班行：无学号匹配时若仅有一行本人则接受
+                if r.get("student_id") or r.get("id"):
+                    continue
+            en = str(r.get("exam_name") or r.get("exam") or "").strip()
+            sc = _coerce_numeric_score(r.get("score"))
+            if en and sc is not None and not is_vague_exam_name(en):
+                exam_scores[en] = sc
+        if len(exam_scores) >= 2 and len(multi_series) < 2:
+            multi_series = [{"exam_name": e, "score": s} for e, s in exam_scores.items()]
+
+    ov_title, exam_badge, multi_kpi, multi_detail = _build_student_multi_exam_overview_html(
+        multi_series, student_id=sid
+    )
+    is_multi = bool(ov_title)
+    display_exam = exam_badge if is_multi else (exam_name or "本次考试")
+    if is_vague_exam_name(display_exam):
+        display_exam = exam_badge or "本次考试"
+
+    single_kpi = (
+        f'<div class="edu-kpi"><div class="label">得分</div><div class="value">{_fmt_val(overview.get("total_score"))}</div></div>'
+        f'<div class="edu-kpi"><div class="label">满分</div><div class="value">{_fmt_val(full_score_val)}</div></div>'
+        f'<div class="edu-kpi"><div class="label">班级排名</div><div class="value">'
+        f'{_fmt_val(overview.get("class_rank")) if overview.get("class_rank") is not None else "-"}</div></div>'
+        f'<div class="edu-kpi"><div class="label">年级排名</div><div class="value">'
+        f'{_fmt_val(overview.get("grade_rank")) if overview.get("grade_rank") is not None else "-"}</div></div>'
+    )
+
     data: dict[str, Any] = {
         "REPORT_TITLE": f"{sid} {subject_name or '科目'}学情分析报告",
         "REPORT_TYPE": report_type_label(ReportType.STUDENT_PROFILE),
@@ -3691,7 +4032,10 @@ def build_student_subject_diagnosis_tool(
         "STUDENT_NAME": sid,
         "SUBJECT_NAME": subject_name or "全科",
         "CLASS_NAME": class_label or "-",
-        "EXAM_NAME": exam_name or "本次考试",
+        "EXAM_NAME": display_exam,
+        "OVERVIEW_TITLE": ov_title if is_multi else "本次考试概览",
+        "OVERVIEW_KPIS": multi_kpi if is_multi else single_kpi,
+        "MULTI_EXAM_SECTION": multi_detail if is_multi else "",
         "TOTAL_SCORE": _fmt_val(overview.get("total_score")),
         "FULL_SCORE": _fmt_val(full_score_val),
         "CLASS_RANK": _fmt_val(overview.get("class_rank")) if overview.get("class_rank") is not None else "-",
@@ -3712,7 +4056,7 @@ def build_student_subject_diagnosis_tool(
         "SUMMARY": _build_student_subject_summary(
             student_id=sid,
             subject_name=subject_name,
-            exam_name=exam_name,
+            exam_name=display_exam,
             knowledge_rows=knowledge_rows,
             item_rows=item_rows,
             overview=overview,

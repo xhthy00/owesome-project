@@ -269,7 +269,27 @@ def build_student_exam_data(
             if v is not None:
                 stu_sub_scores[sub][e] = float(v)
 
-    exam_label = "·".join(exams) if exams else "历次考试"
+    exam_label = (
+        f"共{len(exams)}次考试（{'、'.join(exams)}）" if exams else "历次考试"
+    )
+
+    stu_avg = (
+        round(sum(stu_totals.values()) / len(stu_totals), 2) if stu_totals else None
+    )
+    last_exam = exams[-1] if exams else ""
+    last_tv = stu_totals.get(last_exam) if last_exam else None
+    last_cm = _class_max(last_exam) if last_exam else None
+    last_gap = (
+        (last_cm - last_tv) if last_cm is not None and last_tv is not None else None
+    )
+    avg_gap_parts: list[float] = []
+    for e in exams:
+        tv, cm = stu_totals.get(e), _class_max(e)
+        if tv is not None and cm is not None:
+            avg_gap_parts.append(cm - tv)
+    avg_gap_to_first = (
+        round(sum(avg_gap_parts) / len(avg_gap_parts), 2) if avg_gap_parts else None
+    )
 
     summary_header = ["考试", *subjects]
     for sub in subjects:
@@ -508,10 +528,29 @@ def build_student_exam_data(
     )
 
     overview = (
-        f"{resolved_name}在{len(exams)}次模拟考试中，"
-        f"{'优势科目为' + strong_sub + '，' if strong_sub else ''}"
-        f"{'需重点提升' + weak_sub + '。' if weak_sub else ''}"
-        f"{trend_narrative}"
+        f"{resolved_name}共分析 <strong>{len(exams)}</strong> 次考试"
+        f"（{'、'.join(exams)}）。"
+        + (
+            f"多次均分 <strong>{_fmt(stu_avg)}</strong> 分；"
+            if stu_avg is not None
+            else ""
+        )
+        + (
+            f"最近一场（{last_exam}）得分 {_fmt(last_tv)}，"
+            f"距班级第1名 {_fmt(last_gap)} 分；"
+            if last_exam and last_tv is not None and last_gap is not None
+            else ""
+        )
+        + (
+            f"各场相对班级第1名平均差距 {_fmt(avg_gap_to_first)} 分。"
+            if avg_gap_to_first is not None
+            else ""
+        )
+        + (
+            f"{'优势科目为' + strong_sub + '，' if strong_sub else ''}"
+            f"{'需重点提升' + weak_sub + '。' if weak_sub else ''}"
+        )
+        + f"{trend_narrative}"
     )
     weak_know_names = [
         str(k.get("knowledge_name") or k)
@@ -555,19 +594,34 @@ def build_student_exam_data(
 
     from src.agent.education.report_types import ReportType, report_type_label
 
+    title_subject = subjects[0] if len(subjects) == 1 else ""
+    report_title = (
+        f"{resolved_name} {title_subject}学情分析报告"
+        if title_subject
+        else f"{resolved_name} 学情分析报告"
+    )
     return {
-        "REPORT_TITLE": f"{resolved_name} 模拟考试成绩分析报告",
+        "REPORT_TITLE": report_title,
         "REPORT_TYPE": report_type_label(ReportType.STUDENT_PROFILE),
-        "REPORT_SUBTITLE": f"{exam_label} 全维度深度分析",
+        "REPORT_SUBTITLE": f"{exam_label} · 趋势与对比",
         "REPORT_TIME": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M"),
         "COVER_META": (
             f"分析对象：{resolved_name} | 考试范围：{'、'.join(exams)}（共{len(exams)}次）"
-            f"{f' | 班级：{class_name}' if class_name else ''}"
-            f"{f' | 班级人数：{n_class}人' if n_class else ''}"
+            + (f" | 多次均分：{_fmt(stu_avg)}" if stu_avg is not None else "")
+            + (
+                f" | 最近与第1名差距：{_fmt(last_gap)}分"
+                if last_gap is not None
+                else ""
+            )
+            + (f" | 班级：{class_name}" if class_name else "")
+            + (f" | 班级人数：{n_class}人" if n_class else "")
         ),
         "STUDENT_NAME": resolved_name,
         "CLASS_NAME": class_name or "-",
         "EXAM_NAME": exam_label,
+        "EXAM_COUNT": str(len(exams)),
+        "MULTI_EXAM_AVG": _fmt(stu_avg) if stu_avg is not None else "-",
+        "GAP_TO_FIRST": _fmt(last_gap) if last_gap is not None else "-",
         "OVERVIEW_INSIGHT": overview,
         "SCORE_SUMMARY_TABLE": score_summary_table,
         "KEY_METRICS_TABLE": key_metrics_table,

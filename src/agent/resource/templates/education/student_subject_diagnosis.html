@@ -27,6 +27,8 @@
     .edu-table th, .edu-table td { border: 1px solid var(--edu-border); padding: 8px 10px; text-align: left; }
     .edu-table th { background: var(--edu-primary-bg); color: var(--edu-text-lv2); font-weight: 600; }
     .edu-table tr:nth-child(even) td { background: #fafafa; }
+    .edu-table .num { text-align: right; white-space: nowrap; }
+    .edu-table-wrap { overflow-x: auto; margin: 8px 0 12px; }
     .edu-chart { width: 100%; height: 320px; margin: 8px 0; }
     .edu-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: var(--edu-primary-bg); color: var(--edu-primary); margin-right: 6px; }
     .edu-insight { background: #f6ffed; border: 1px solid #b7eb8f; border-radius: 6px; padding: 12px 14px; margin: 10px 0; line-height: 1.7; }
@@ -72,13 +74,9 @@
     </section>
 
     <section class="edu-card">
-      <h2>本次考试概览</h2>
-      <div class="edu-grid">
-        <div class="edu-kpi"><div class="label">得分</div><div class="value">{{TOTAL_SCORE}}</div></div>
-        <div class="edu-kpi"><div class="label">满分</div><div class="value">{{FULL_SCORE}}</div></div>
-        <div class="edu-kpi"><div class="label">班级排名</div><div class="value">{{CLASS_RANK}}</div></div>
-        <div class="edu-kpi"><div class="label">年级排名</div><div class="value">{{GRADE_RANK}}</div></div>
-      </div>
+      <h2>{{OVERVIEW_TITLE}}</h2>
+      <div class="edu-grid">{{OVERVIEW_KPIS}}</div>
+      <div>{{MULTI_EXAM_SECTION}}</div>
     </section>
 
     <section class="edu-card" id="abilityPortraitSection">

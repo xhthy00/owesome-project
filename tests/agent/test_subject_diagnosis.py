@@ -209,6 +209,55 @@ def test_pick_student_overview_rejects_student_id_as_score():
     assert rank == 2
 
 
+def test_pick_score_from_score_rows_skips_rank_when_only_self():
+    """按学号过滤后仅 1 行时不得误算为第 1 名。"""
+    from src.agent.education.tools import _pick_score_from_score_rows
+
+    sid = "2024_STU20260002_YZZX_8955"
+    score, rank = _pick_score_from_score_rows(
+        [{"student_id": sid, "score": 122.0}],
+        sid,
+    )
+    assert score == 122.0
+    assert rank is None
+
+
+def test_pick_student_overview_computes_rank_from_full_class_table():
+    """上游全班得分表（无排名列）应推算出正确班排，不被后续单人结果覆盖。"""
+    from src.agent.education.tools import _pick_student_overview_from_report
+
+    sid = "2024_STU20260002_YZZX_8955"
+    # 构造：本人 122，另有 16 人更高 → 第 17 名；后面再跟一条单人查询
+    class_rows = []
+    for i in range(16):
+        class_rows.append([f"H{i}", 145 - i * 0.5, "高三(10)班"])
+    class_rows.append([sid, 122.0, "高三(10)班"])
+    for i in range(35):
+        class_rows.append([f"L{i}", 100 - i * 0.5, "高三(10)班"])
+    report_data = {
+        "sub_tasks": [
+            {
+                "sub_task_agent": "DataAnalyst",
+                "exec_result": {
+                    "columns": ["student_id", "score", "class"],
+                    "rows": class_rows,
+                },
+            },
+            {
+                "sub_task_agent": "DataAnalyst",
+                "exec_result": {
+                    "columns": ["student_id", "score"],
+                    "rows": [[sid, 122.0]],
+                },
+            },
+        ]
+    }
+    overview = _pick_student_overview_from_report(report_data, sid)
+    assert overview.get("total_score") == 122.0
+    assert overview.get("class_rank") == 17
+    assert overview.get("class_name") == "高三(10)班"
+
+
 def test_pick_student_overview_prefers_score_column():
     from src.agent.education.tools import _pick_student_overview_from_report
 
@@ -227,6 +276,15 @@ def test_pick_student_overview_prefers_score_column():
     overview = _pick_student_overview_from_report(report_data, sid)
     assert overview.get("total_score") == 91.5
     assert overview.get("class_rank") == 3
+
+
+def test_parse_rank_value_from_chinese():
+    from src.agent.education.tools import _parse_rank_value
+
+    assert _parse_rank_value("第 17 名") == 17
+    assert _parse_rank_value(17) == 17
+    assert _parse_rank_value("17.0") == 17
+    assert _parse_rank_value("-") is None
 
 
 def test_build_item_table_html_student_row_fields():

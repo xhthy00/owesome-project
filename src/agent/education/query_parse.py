@@ -139,11 +139,11 @@ def _clean_exam_name_candidate(raw: str) -> str | None:
             name = name[: -len(subj)]
             break
     name = name.strip("的于对在")
-    if not name or name in ("本次", "该次", "此次", "一次", "哪次"):
+    if not name or is_vague_exam_name(name):
         return None
     # 丢弃班级语境误吃入的碎片（如「班所有」「所有」「三次」）
     if re.match(
-        r"^(?:班|该|本|此|一次|几次|所有|全部|历次|多次|三次|两次)",
+        r"^(?:班|该|本|此|一次|几次|几场|所有|全部|历次|多次|三次|两次)",
         name,
     ):
         return None
@@ -155,6 +155,37 @@ def _clean_exam_name_candidate(raw: str) -> str | None:
     if re.fullmatch(r"高[一二三]|初[一二三]|年级|班级", name):
         return None
     return name
+
+
+def is_vague_exam_name(name: str) -> bool:
+    """是否为不可用于 SQL 过滤的模糊考试表述（这几次/本次考试等）。"""
+    n = str(name or "").strip()
+    if not n:
+        return True
+    if n in {
+        "本次",
+        "该次",
+        "此次",
+        "一次",
+        "哪次",
+        "本次考试",
+        "该次考试",
+        "这几次",
+        "最近几次",
+        "这几场",
+        "最近几场",
+        "历次考试",
+        "多次考试",
+        "几次考试",
+        "这几次考试",
+        "这几次成绩",
+    }:
+        return True
+    if re.fullmatch(r"(?:这|最近|近)?几[次场](?:考试|成绩|的)?", n):
+        return True
+    if re.fullmatch(r"(?:历次|多次|各次|各场|所有|全部)(?:考试)?", n):
+        return True
+    return False
 
 
 def is_individual_student_analysis_query(question: str) -> bool:
@@ -281,7 +312,25 @@ _MULTI_EXAM_HINTS = (
     "各次考试",
     "每场考试",
     "各场考试",
+    "这几次考试",
+    "这几次的",
+    "最近几次",
+    "这几场",
 )
+
+
+def is_multi_exam_student_analysis_query(question: str) -> bool:
+    """单个学生 + 多次/这几次考试（应走学生多次考试趋势报告，非单场诊断）。"""
+    q = (question or "").strip()
+    if not is_individual_student_analysis_query(q):
+        return False
+    if any(h in q for h in _MULTI_EXAM_HINTS):
+        return True
+    if ("这几次" in q or "最近几次" in q or "这几场" in q) and "考试" in q:
+        return True
+    if ("历次" in q or "多次" in q) and "考试" in q:
+        return True
+    return False
 
 
 def is_multi_exam_class_analysis_query(question: str) -> bool:
@@ -1168,6 +1217,8 @@ __all__ = [
     "extract_student_id_target",
     "extract_student_target",
     "is_individual_student_analysis_query",
+    "is_multi_exam_student_analysis_query",
+    "is_vague_exam_name",
     "extract_student_target",
     "format_scope_constraints",
     "is_citywide_analysis_query",

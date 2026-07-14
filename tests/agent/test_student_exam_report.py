@@ -128,6 +128,63 @@ def test_report_participant_count_conflicts_detects_mismatch():
     assert not report_participant_count_conflicts("<p>参考人数 24 人</p>", 24)
 
 
+def test_extract_exam_name_hint_rejects_vague_zhe_jici():
+    from src.agent.education.query_parse import extract_exam_name_hint, is_vague_exam_name
+
+    assert extract_exam_name_hint("分析学生001这几次的数学考试成绩") is None
+    assert is_vague_exam_name("这几次") is True
+    assert is_vague_exam_name("这几次考试") is True
+    assert is_vague_exam_name("连淮扬镇") is False
+
+
+def test_multi_exam_student_plan_uses_exam_report_tool():
+    from src.agent.education.query_parse import is_multi_exam_student_analysis_query
+    from src.agent.expand.planner import build_individual_student_exam_plan_items
+
+    q = "分析学生2024_STU20260002_YZZX_8955这几次的数学考试成绩"
+    assert is_multi_exam_student_analysis_query(q) is True
+    plan = build_individual_student_exam_plan_items(q)
+    assert len(plan) == 2
+    assert "build_student_exam_report_data_tool" in plan[1]["sub_task"]
+    assert plan[1]["sub_task"].index("build_student_exam_report_data_tool") < plan[1]["sub_task"].index("禁止")
+    assert "数学" in plan[0]["sub_task"] or "subject_name=数学" in plan[1]["sub_task"]
+    # exam_name 不应作为这几次传入正调用参数区
+    call_part = plan[1]["sub_task"].split("禁止")[0]
+    assert "exam_name=这几次" not in call_part
+    assert "这几次" not in call_part or "禁止" in plan[1]["sub_task"]
+
+
+def test_build_student_multi_exam_overview_html():
+    from src.agent.education.tools import _build_student_multi_exam_overview_html
+
+    title, badge, kpi, detail = _build_student_multi_exam_overview_html(
+        [
+            {"exam_name": "一模", "score": 100, "class_avg": 90, "class_max": 140, "gap_to_first": 40, "class_rank": 20},
+            {"exam_name": "二模", "score": 120, "class_avg": 95, "class_max": 145, "gap_to_first": 25, "class_rank": 15},
+            {"exam_name": "三模", "score": 125, "class_avg": 98, "class_max": 148, "gap_to_first": 23, "class_rank": 12},
+        ],
+        student_id="STU001",
+    )
+    assert "共3次" in title
+    assert "一模" in badge and "二模" in badge
+    assert "多次均分" in kpi
+    assert "115" in kpi or "115.00" in kpi  # (100+120+125)/3
+    assert "与第1名差距" in detail
+    assert "一模" in detail and "三模" in detail
+    assert "这几次" not in badge
+
+
+def test_build_student_exam_data_shows_exam_count_and_gap():
+    records = _sample_class_records()
+    data = build_student_exam_data(records, "学生001", exam_order=["一模", "二模", "三模"], class_name="初三1班")
+    assert "共3次考试" in data["EXAM_NAME"]
+    assert data["EXAM_COUNT"] == "3"
+    assert data["MULTI_EXAM_AVG"] not in ("", "-", None)
+    assert "与第1名" in data["COVER_META"] or data.get("GAP_TO_FIRST") not in (None, "")
+    assert "共3次" in data["OVERVIEW_INSIGHT"] or "3" in data["OVERVIEW_INSIGHT"]
+    assert "这几次" not in data["EXAM_NAME"]
+
+
 def test_build_student_exam_data_rich_sections():
     records = _sample_class_records()
     data = build_student_exam_data(records, "学生001", exam_order=["一模", "二模", "三模"], class_name="初三1班")
