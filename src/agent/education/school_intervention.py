@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from src.agent.education.aggregation import aggregate_by
+from src.agent.education.aggregation import aggregate_by, prepare_score_rows_for_kpi
 from src.agent.education.config import EducationConfig
 from src.agent.education.cross_analysis import compare_groups
 from src.agent.education.knowledge_tier import ABILITY_LABELS, build_ability_tier_summary
-from src.agent.education.stats import normalize_segments
+from src.agent.education.stats import compute_score_stats, normalize_segments
 from src.agent.education.subject_diagnosis import identify_weak_items, identify_weak_knowledge
 
 
@@ -195,8 +195,30 @@ def build_school_intervention_insights(
 
     knowledge = list(knowledge_rows or [])
     items = list(item_rows or [])
-    rows = list(score_rows or [])
-    st = stats or {}
+    raw_rows = list(score_rows or [])
+    rows = prepare_score_rows_for_kpi(raw_rows)
+    st = dict(stats or {})
+    # 多场/重复行会导致人数膨胀：按清洗后成绩重算 KPI 与分数段
+    if rows and (
+        not st.get("count")
+        or int(st.get("count") or 0) != len(rows)
+        or len(rows) < len(raw_rows)
+    ):
+        scores: list[float] = []
+        fs: float | None = None
+        for r in rows:
+            try:
+                if r.get("score") is not None and r.get("score") != "":
+                    scores.append(float(r["score"]))
+            except (TypeError, ValueError):
+                continue
+            if fs is None and r.get("exam_score") is not None:
+                try:
+                    fs = float(r["exam_score"])
+                except (TypeError, ValueError):
+                    pass
+        if scores:
+            st = compute_score_stats(scores, config, fs)
 
     weak_classes = identify_weak_classes(rows, st, config=config)
     concern_segments = identify_concern_segments(st.get("segments"), st, config=config)
@@ -216,6 +238,7 @@ def build_school_intervention_insights(
         "weak_ability_levels": weak_levels,
         "weak_question_types": weak_qtypes,
         "class_compare": class_agg,
+        "stats": st,
         "has_intervention": bool(
             weak_classes or concern_segments or weak_knowledge
             or weak_levels or weak_qtypes

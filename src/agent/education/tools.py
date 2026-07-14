@@ -61,6 +61,7 @@ from src.agent.education.subject_diagnosis import (
     build_diagnosis_recommendations,
     build_diagnosis_summary,
     build_item_table_html,
+    build_knowledge_class_rows_from_items,
     build_knowledge_compare_chart_payload,
     build_knowledge_table_html,
     build_segment_table_html,
@@ -909,6 +910,8 @@ def build_subject_diagnosis_sections_tool(
             config=cfg,
             weak_threshold=weak_threshold,
         )
+        if intervention_insights.get("stats"):
+            stats = intervention_insights["stats"]
         intervention_html = build_intervention_section_html(intervention_insights)
         if intervention_insights.get("class_compare"):
             class_compare_html = build_class_compare_table_html(
@@ -1217,6 +1220,8 @@ def build_subject_diagnosis_report_tool(
             config=cfg,
             weak_threshold=weak_threshold,
         )
+        if intervention_insights.get("stats"):
+            stats = intervention_insights["stats"]
         intervention_html = build_intervention_section_html(intervention_insights)
         if intervention_insights.get("class_compare"):
             class_compare_html = build_class_compare_table_html(
@@ -1633,7 +1638,6 @@ def _diagnosis_class_compare_sql(
     knowledge_sql = (
         "SELECT sc.class AS class_name,\n"
         "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
-        "       k.ability_level AS ability_level,\n"
         "       COUNT(DISTINCT sd.question_no) AS question_count,\n"
         f"       {know_rate} AS score_rate\n"
         "FROM tb_score_detail sd\n"
@@ -1644,7 +1648,7 @@ def _diagnosis_class_compare_sql(
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
         "JOIN tb_exam e ON sc.exam_id = e.id"
         + where_clause_detail
-        + "\nGROUP BY sc.class, COALESCE(k.knowledge_name, '未关联知识点'), k.ability_level\n"
+        + "\nGROUP BY sc.class, COALESCE(k.knowledge_name, '未关联知识点')\n"
         "ORDER BY knowledge_name, sc.class\nLIMIT 10000"
     )
     return item_sql, knowledge_sql
@@ -1862,6 +1866,33 @@ def _fetch_subject_diagnosis_rows(
                 f"成绩记录按班级 `{class_name}` 未查到，已放宽班级过滤重试"
                 f"（命中 {len(sv_r)} 条）。建议核查 tb_score.class 实际值。"
             )
+
+    # 考试名 LIKE 可能命中多场：班级横向对比/单场诊断收敛至参与人数最多的一场
+    if (
+        (exam_name or want_class_compare)
+        and not student_id
+        and score_rows
+    ):
+        from src.agent.education.aggregation import pick_primary_exam_id
+
+        exam_keys = {
+            str(r.get("exam_id") or "").strip()
+            for r in score_rows
+            if isinstance(r, dict) and str(r.get("exam_id") or "").strip()
+        }
+        if len(exam_keys) > 1:
+            primary = pick_primary_exam_id(score_rows)
+            if primary:
+                detail_wc_n, score_wc_n = _diagnosis_where_clause_pair(
+                    **base_kw, exam_ids=[primary], skip_exam_name=True
+                )
+                item_rows, knowledge_rows, score_values, full_score, exam_ids, score_rows = (
+                    run_bundle(detail_wc_n, score_wc_n, "narrow_primary_exam")
+                )
+                warnings.append(
+                    f"考试名匹配到多场（{len(exam_keys)}），"
+                    f"已收敛至参与人数最多的 exam_id={primary}"
+                )
 
     item_class_rows: list[dict[str, Any]] = []
     knowledge_class_rows: list[dict[str, Any]] = []
@@ -2128,6 +2159,11 @@ def _apply_grade_compare_section_tables(
     item_cmp = list(item_class_rows or [])
     know_cmp = list(knowledge_class_rows or [])
     use_item_cmp = is_grade_compare and len(collect_class_names(item_cmp)) >= 2
+    # 优先由小题行按「题号→唯一知识点」聚合，避免各班关联不一致导致知识点膨胀与缺班格
+    if use_item_cmp:
+        derived = build_knowledge_class_rows_from_items(item_cmp)
+        if len(collect_class_names(derived)) >= 2:
+            know_cmp = derived
     use_know_cmp = is_grade_compare and len(collect_class_names(know_cmp)) >= 2
 
     if use_item_cmp:
@@ -2279,7 +2315,9 @@ def _stats_from_fetch_bundle(
     """从 fetch 返回的 score_rows / score_result 计算 KPI。"""
     if not isinstance(fetch_data, dict):
         return None
-    score_rows = fetch_data.get("score_rows") or []
+    from src.agent.education.aggregation import prepare_score_rows_for_kpi
+
+    score_rows = prepare_score_rows_for_kpi(fetch_data.get("score_rows") or [])
     values: list[float] = []
     fs_val: float | None = None
     if score_rows:
@@ -2942,6 +2980,80 @@ def build_group_feature_report_data_tool(
         report_type=ReportType.GROUP_FEATURE,
     )
 
+
+@tool()
+def build_class_overview_report_data_tool(
+    class_name: str = "",
+    school_name: str = "",
+    subject_name: str = "",
+    exam_name: str = "",
+    render: bool = True,
+    report_data: dict[str, Any] | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """组装班级总览报告并直接渲染 HTML（``education/class_overview.html``）。
+
+    **成绩总览 / 班级总览的关键工具**：从上游学生明细补齐 KPI、分数段、能力画像后渲染。
+    LLM 调完只需 ``terminate``，**禁止**再调 ``build_subject_diagnosis_sections_tool``。
+    """
+    from src.agent.resource.tool.business import (
+        _enrich_class_overview_archive,
+        _polish_class_overview_html,
+        _render_template_html,
+        _sanitize_report_html,
+    )
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    rd = report_data if isinstance(report_data, dict) else ctx.get("report_data")
+    title_bits = [p for p in (school_name, class_name, subject_name) if p]
+    title = f"{' · '.join(title_bits)}班级总览报告" if title_bits else "班级总览报告"
+    data: dict[str, Any] = {
+        "REPORT_TITLE": title,
+        "REPORT_TYPE": report_type_label(ReportType.CLASS_OVERVIEW),
+        "REPORT_SUBTITLE": class_name or school_name or "本班",
+        "REPORT_TIME": _now_str(),
+        "CLASS_NAME": class_name or "",
+        "EXAM_NAME": exam_name or "本次考试",
+        "SUBJECT_NAME": subject_name or "全科",
+        "SUMMARY": "<p>班级成绩总览：关注均分、及格率与分数段分布。</p>",
+        "RECOMMENDATIONS": "<p>结合 KPI 与分数段，对薄弱区间安排巩固练习。</p>",
+    }
+    data = _enrich_class_overview_archive(
+        "education/class_overview.html",
+        data,
+        report_data=rd if isinstance(rd, dict) else None,
+        tool_runtime_ctx=ctx,
+    )
+    if not render:
+        return ToolResult(content="班级总览报告 data 已组装。", data=data)
+
+    template_name = "education/class_overview.html"
+    try:
+        raw_html = _render_template_html(template_name, data)
+        safe_html = _sanitize_report_html(raw_html.strip())
+        safe_html = _polish_class_overview_html(
+            safe_html, template=template_name, title=str(data.get("REPORT_TITLE") or "")
+        )
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(content=f"班级总览报告渲染失败：{e}", data={"error": str(e)})
+    payload = {
+        "output_type": "html",
+        "title": data.get("REPORT_TITLE") or title,
+        "html": safe_html,
+        "mode": "template",
+        "chunks": [
+            {
+                "output_type": "html",
+                "title": data.get("REPORT_TITLE") or title,
+                "content": safe_html,
+            }
+        ],
+    }
+    return _html_report_tool_result(
+        f"班级总览报告已渲染（{data.get('CLASS_NAME') or class_name or '本班'}）。",
+        payload,
+        report_type=ReportType.CLASS_OVERVIEW,
+    )
 
 
 @tool()
@@ -4636,6 +4748,7 @@ EDUCATION_TOOLS = [
     build_comprehensive_report_data_tool,
     build_tier_alert_report_data_tool,
     build_group_feature_report_data_tool,
+    build_class_overview_report_data_tool,
     build_student_exam_report_data_tool,
     build_student_subject_diagnosis_tool,
     fetch_subject_diagnosis_data_tool,
@@ -4655,6 +4768,7 @@ __all__ = [
     "build_chart_option_tool",
     "build_comprehensive_report_data_tool",
     "build_citywide_exam_analysis_report_tool",
+    "build_class_overview_report_data_tool",
     "build_diagnostic_report_data_tool",
     "build_group_feature_report_data_tool",
     "build_knowledge_tier_sections_tool",

@@ -83,7 +83,10 @@ _INTENT_KEYWORDS: list[tuple[ReportType, tuple[str, ...]]] = [
         "科目诊断", "科目分析", "学科诊断", "某科", "数学分析", "语文分析",
         "小题", "逐题", "每一小题", "每一题", "知识点", "详细分析", "诊断报告",
     )),
-    (ReportType.CLASS_OVERVIEW, ("班级总览", "班级报告", "班级分析", "班级成绩", "期中分析", "期末分析")),
+    (ReportType.CLASS_OVERVIEW, (
+        "班级总览", "成绩总览", "班级成绩总览", "总览报告", "成绩概览", "班级成绩概览",
+        "班级报告", "班级分析", "班级成绩", "期中分析", "期末分析",
+    )),
 ]
 
 _AUDIENCE_KEYWORDS: list[tuple[Audience, tuple[str, ...]]] = [
@@ -98,7 +101,7 @@ class ReportIntentResolver:
     """把自然语言问题映射到 ``ReportSpec``（纯规则，无 LLM）。
 
     优先级与 ``agent_runner`` / Planner 确定性格径对齐：
-    全市 → 个人学生 → 多场综合 → 分层预警 → 群体特征 → 各班横向 →
+    全市 → 个人学生 → 多场综合 → 分层预警 → 群体特征 → 班级总览 → 各班横向 →
     结构化诊断 → 学校科目报告 → 关键词回落。
     """
 
@@ -107,6 +110,7 @@ class ReportIntentResolver:
         from src.agent.education.query_parse import (
             extract_student_target,
             is_citywide_analysis_query,
+            is_class_overview_query,
             is_individual_student_analysis_query,
             is_multi_exam_class_analysis_query,
             is_group_feature_query,
@@ -126,6 +130,8 @@ class ReportIntentResolver:
             report_type = ReportType.TIER_ALERT
         elif is_group_feature_query(q):
             report_type = ReportType.GROUP_FEATURE
+        elif is_class_overview_query(q):
+            report_type = ReportType.CLASS_OVERVIEW
         elif is_school_class_comparison_query(q):
             report_type = ReportType.GRADE_COMPARISON
         elif is_structured_diagnostic_query(q):

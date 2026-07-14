@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from src.agent.education.school_intervention import (
+    build_class_compare_table_html,
     build_intervention_section_html,
     build_school_intervention_insights,
     identify_concern_segments,
@@ -99,3 +100,59 @@ def test_build_school_intervention_insights_and_html():
     assert "学科薄弱环节" in html
     assert "高一2班" in html
     assert "函数" in html
+
+
+def test_class_compare_count_narrows_multi_exam_inflation():
+    """多场考试叠加人次时，班级对比人数应按单场去重学生计。"""
+    from src.agent.education.aggregation import prepare_score_rows_for_kpi
+
+    rows: list[dict] = []
+    # 3 场考试 × 同批学生，模拟考试名模糊匹配膨胀
+    for exam_id in ("1", "2", "3"):
+        for i in range(52):
+            rows.append({
+                "exam_id": exam_id,
+                "student_id": f"11-{i}",
+                "class": "高三(11)班",
+                "score": 100.0,
+                "exam_score": 150.0,
+            })
+        for i in range(55):
+            rows.append({
+                "exam_id": exam_id,
+                "student_id": f"9-{i}",
+                "class": "高三(9)班",
+                "score": 106.0,
+                "exam_score": 150.0,
+            })
+        for i in range(52):
+            rows.append({
+                "exam_id": exam_id,
+                "student_id": f"10-{i}",
+                "class": "高三(10)班",
+                "score": 109.0,
+                "exam_score": 150.0,
+            })
+    assert len(rows) == 159 * 3
+    cleaned = prepare_score_rows_for_kpi(rows)
+    assert len(cleaned) == 159
+
+    insights = build_school_intervention_insights(
+        score_rows=rows,
+        stats={"count": len(rows), "avg": 105.0, "pass_rate": 70.0, "full_score": 150},
+    )
+    by_class = {
+        g["dimension_value"]: int(g["count"])
+        for g in insights["class_compare"]
+    }
+    assert by_class["高三(11)班"] == 52
+    assert by_class["高三(9)班"] == 55
+    assert by_class["高三(10)班"] == 52
+    assert insights["stats"]["count"] == 159
+    html = build_class_compare_table_html(
+        insights["class_compare"],
+        insights.get("weak_classes"),
+        school_stats=insights["stats"],
+    )
+    assert ">52<" in html or ">52</td>" in html
+    assert "156" not in html

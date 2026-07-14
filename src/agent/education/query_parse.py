@@ -111,6 +111,12 @@ def extract_exam_name_hint(question: str) -> str | None:
         re.compile(r"在([\u4e00-\u9fffA-Za-z0-9]{2,40}?)(?:考试|测试|检测|调研)"),
         # 「高三(10)班的XX考试」——任意简称；后缀不用单独的「调研」（避免「苏北调研数学考试」被截成「苏北」）
         re.compile(r"班的?([\u4e00-\u9fff]{2,20}?)(?:考试|测试|检测)"),
+        # 「高三(10)班连淮扬镇数学成绩总览」——班后考试简称 + 科目，可无「考试」二字
+        re.compile(
+            r"班的?([\u4e00-\u9fff]{2,20}?)"
+            r"(?:数学|语文|英语|物理|化学|生物|政治|历史|地理|科学)"
+            r"(?:成绩|总览|分析|报告|考试|测试|检测)?"
+        ),
         re.compile(r"([\u4e00-\u9fff]{2,20}(?:联考|统考|调研|模拟))(?:考试|测试)?"),
         re.compile(r"([\u4e00-\u9fff]{2,16})考试"),
     ):
@@ -357,6 +363,9 @@ def is_school_class_comparison_query(question: str) -> bool:
         return False
     if is_multi_exam_class_analysis_query(q):
         return False
+    # 「成绩总览 / 班级总览」独立路由，不占用班级横向对比
+    if is_class_overview_query(q):
+        return False
     # 「群体特征」口径独立路由，不占用班级横向对比
     if is_group_feature_query(q):
         return False
@@ -441,6 +450,59 @@ def is_group_feature_query(question: str) -> bool:
     return False
 
 
+#: 仅匹配明确「总览」口径，避免夺走科目诊断 / 横向对比等。
+_CLASS_OVERVIEW_HINTS = (
+    "成绩总览",
+    "班级总览",
+    "班级成绩总览",
+    "总览报告",
+    "班级成绩概览",
+    "成绩概览",
+)
+_CLASS_OVERVIEW_BLOCKERS = (
+    "详细分析",
+    "科目诊断",
+    "学科诊断",
+    "小题",
+    "逐题",
+    "知识点",
+    "横向",
+    "各班",
+    "各个班级",
+    "预警",
+    "临界生",
+    "群体特征",
+    "对比特征",
+    "综合分析",
+    "结构化诊断",
+    "多维分析",
+    "多维对比",
+)
+
+
+def is_class_overview_query(question: str) -> bool:
+    """班级成绩总览 / 班级总览 → class_overview（窄化，不抢科目诊断等）。"""
+    q = (question or "").strip()
+    if not q or is_citywide_analysis_query(q) or is_individual_student_analysis_query(q):
+        return False
+    if is_multi_exam_class_analysis_query(q):
+        return False
+    if is_tier_alert_query(q) or is_group_feature_query(q):
+        return False
+    if any(b in q for b in _CLASS_OVERVIEW_BLOCKERS):
+        return False
+    if any(h in q for h in _CLASS_OVERVIEW_HINTS):
+        return True
+    # 「…总览」且点名班级（高三(10)班 / 初三1班）
+    if "总览" in q and re.search(
+        r"高[一二三]\(\d+\)班|"
+        r"(?:初三|初二|初一|高三|高二|高一|九年级|八年级|七年级)[\d班]*\d?班",
+        q,
+    ):
+        return True
+    return False
+
+
 def infer_group_feature_dimension(question: str) -> str:
     """从问句推断群体特征聚合维度，默认班级。"""
     q = (question or "").strip()
@@ -467,6 +529,8 @@ def is_school_exam_report_query(question: str) -> bool:
     if is_tier_alert_query(q):
         return False
     if is_group_feature_query(q):
+        return False
+    if is_class_overview_query(q):
         return False
     if not extract_school_target(q):
         return False
@@ -1431,6 +1495,7 @@ __all__ = [
     "is_structured_diagnostic_query",
     "is_tier_alert_query",
     "is_group_feature_query",
+    "is_class_overview_query",
     "infer_group_feature_dimension",
     "resolve_group_feature_score_rows",
     "normalize_fullwidth_parentheses",

@@ -97,6 +97,112 @@ def collect_class_names(rows: list[dict[str, Any]]) -> list[str]:
     return names
 
 
+_UNLINKED_KNOWLEDGE = "未关联知识点"
+
+
+def _knowledge_label(name: Any) -> str:
+    s = str(name or "").strip()
+    return s or _UNLINKED_KNOWLEDGE
+
+
+def resolve_question_knowledge_map(item_rows: list[dict[str, Any]]) -> dict[Any, str]:
+    """题号 → 全场统一知识点。
+
+    各班同一题号若因 question_id 关联不一致而挂到不同知识点，
+    取多数票（优先非「未关联知识点」），避免知识点并集膨胀与缺班格。
+    """
+    from collections import Counter, defaultdict
+
+    votes: dict[Any, Counter[str]] = defaultdict(Counter)
+    for r in item_rows:
+        qno = r.get("question_no")
+        if qno is None:
+            continue
+        votes[qno][_knowledge_label(r.get("knowledge_name"))] += 1
+    out: dict[Any, str] = {}
+    for qno, counter in votes.items():
+        linked = [(n, c) for n, c in counter.items() if n != _UNLINKED_KNOWLEDGE]
+        pool = linked if linked else list(counter.items())
+        pool.sort(key=lambda x: (-x[1], x[0]))
+        out[qno] = pool[0][0]
+    return out
+
+
+def apply_canonical_knowledge_to_item_rows(
+    item_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """将各班小题行的知识点统一为「按题号」的规范名称。"""
+    mapping = resolve_question_knowledge_map(item_rows)
+    if not mapping:
+        return [dict(r) for r in item_rows]
+    out: list[dict[str, Any]] = []
+    for r in item_rows:
+        nr = dict(r)
+        qno = nr.get("question_no")
+        if qno in mapping:
+            nr["knowledge_name"] = mapping[qno]
+        out.append(nr)
+    return out
+
+
+def build_knowledge_class_rows_from_items(
+    item_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """由小题各班行聚合知识点对比行（一题一知识点，题数与卷面一致）。"""
+    from collections import defaultdict
+
+    rows = [
+        normalize_item_row(r)
+        for r in apply_canonical_knowledge_to_item_rows(item_rows)
+    ]
+    classes = collect_class_names(rows)
+    buckets: dict[tuple[str, str], list[tuple[float | None, float | None, float | None]]] = (
+        defaultdict(list)
+    )
+    qnos_by_kn: dict[str, set[Any]] = defaultdict(set)
+    for r in rows:
+        cls = _row_class_name(r)
+        kn = _knowledge_label(r.get("knowledge_name"))
+        if not cls:
+            continue
+        qno = r.get("question_no")
+        if qno is not None:
+            qnos_by_kn[kn].add(qno)
+        buckets[(cls, kn)].append(
+            (_num(r.get("avg_score")), _num(r.get("full_score")), _num(r.get("score_rate")))
+        )
+    kn_order = sorted(qnos_by_kn.keys(), key=lambda k: (k == _UNLINKED_KNOWLEDGE, k))
+    result: list[dict[str, Any]] = []
+    for kn in kn_order:
+        qc = len(qnos_by_kn[kn])
+        for cls in classes:
+            vals = buckets.get((cls, kn))
+            if not vals:
+                continue
+            rate: float | None = None
+            pairs = [(a, f) for a, f, _ in vals if a is not None and f is not None and f > 0]
+            if pairs:
+                sa = sum(a for a, _ in pairs)
+                sf = sum(f for _, f in pairs)
+                if sf > 0:
+                    rate = round(sa / sf * 100, 2)
+            if rate is None:
+                rates_only = [rr for _, _, rr in vals if rr is not None]
+                if rates_only:
+                    rate = round(sum(rates_only) / len(rates_only), 2)
+            if rate is None:
+                continue
+            result.append(
+                {
+                    "class_name": cls,
+                    "knowledge_name": kn,
+                    "question_count": qc,
+                    "score_rate": rate,
+                }
+            )
+    return result
+
+
 def build_item_table_html(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "<p class='edu-sub'>暂无小题数据</p>"
@@ -147,6 +253,7 @@ def build_item_compare_table_html(rows: list[dict[str, Any]]) -> str:
         return build_item_table_html(
             [{k: v for k, v in r.items() if k not in ("class_name", "class")} for r in rows]
         )
+    kn_map = resolve_question_knowledge_map(rows)
     norm = [normalize_item_row(r) for r in rows]
     # question_no → meta + class → avg
     order: list[Any] = []
@@ -157,7 +264,7 @@ def build_item_compare_table_html(rows: list[dict[str, Any]]) -> str:
         if qno not in meta:
             order.append(qno)
             meta[qno] = {
-                "knowledge_name": r.get("knowledge_name") or "-",
+                "knowledge_name": kn_map.get(qno) or r.get("knowledge_name") or "-",
                 "full_score": r.get("full_score"),
                 "question_type": r.get("question_type") or "-",
             }
@@ -1079,10 +1186,12 @@ def enrich_knowledge_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "apply_canonical_knowledge_to_item_rows",
     "build_diagnosis_recommendations",
     "build_diagnosis_summary",
     "build_item_compare_table_html",
     "build_item_table_html",
+    "build_knowledge_class_rows_from_items",
     "build_knowledge_compare_chart_payload",
     "build_knowledge_compare_table_html",
     "build_knowledge_table_html",
@@ -1093,4 +1202,5 @@ __all__ = [
     "identify_weak_items",
     "identify_weak_knowledge",
     "normalize_item_row",
+    "resolve_question_knowledge_map",
 ]

@@ -449,6 +449,10 @@ _EDU_TEMPLATE_DEDICATED_BUILDERS: dict[str, tuple[str, str]] = {
         "build_group_feature_report_data_tool(school_name=..., dimension=class, render=true)",
         "use_build_group_feature_report_data_tool",
     ),
+    "class_overview": (
+        "build_class_overview_report_data_tool(class_name=..., subject_name=..., render=true)",
+        "use_build_class_overview_report_data_tool",
+    ),
 }
 
 

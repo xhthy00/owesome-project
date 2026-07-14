@@ -348,6 +348,129 @@ def test_build_knowledge_compare_table_html_per_class_rate():
     assert "掌握水平" not in html
 
 
+def test_build_knowledge_class_rows_from_items_unifies_per_question():
+    """各班同一题号挂到不同知识点时，统一后不膨胀，缺班格可补齐。"""
+    from src.agent.education.subject_diagnosis import (
+        build_knowledge_class_rows_from_items,
+        build_knowledge_compare_table_html,
+    )
+
+    item_rows = [
+        {
+            "class_name": "高三(10)班",
+            "question_no": 15,
+            "knowledge_name": "圆的方程",
+            "avg_score": 3.92,
+            "full_score": 5,
+            "score_rate": 78.46,
+        },
+        {
+            "class_name": "高三(11)班",
+            "question_no": 15,
+            "knowledge_name": "未关联知识点",  # 关联异常
+            "avg_score": 3.25,
+            "full_score": 5,
+            "score_rate": 65.0,
+        },
+        {
+            "class_name": "高三(9)班",
+            "question_no": 15,
+            "knowledge_name": "圆的方程",
+            "avg_score": 3.2,
+            "full_score": 5,
+            "score_rate": 64.0,
+        },
+        {
+            "class_name": "高三(10)班",
+            "question_no": 1,
+            "knowledge_name": "集合",
+            "avg_score": 4.0,
+            "full_score": 5,
+            "score_rate": 80.0,
+        },
+        {
+            "class_name": "高三(11)班",
+            "question_no": 1,
+            "knowledge_name": "集合",
+            "avg_score": 3.5,
+            "full_score": 5,
+            "score_rate": 70.0,
+        },
+        {
+            "class_name": "高三(9)班",
+            "question_no": 1,
+            "knowledge_name": "集合",
+            "avg_score": 3.8,
+            "full_score": 5,
+            "score_rate": 76.0,
+        },
+    ]
+    kn_rows = build_knowledge_class_rows_from_items(item_rows)
+    names = {r["knowledge_name"] for r in kn_rows}
+    assert names == {"圆的方程", "集合"}
+    assert "未关联知识点" not in names
+    assert sum(1 for r in kn_rows if r["knowledge_name"] == "圆的方程") == 3
+    rates_circle = {
+        r["class_name"]: r["score_rate"]
+        for r in kn_rows
+        if r["knowledge_name"] == "圆的方程"
+    }
+    assert rates_circle["高三(11)班"] == 65.0
+    html = build_knowledge_compare_table_html(kn_rows)
+    assert "圆的方程" in html
+    assert "65.00%" in html
+    # 涉及题数之和应等于卷面题数（每题唯一知识点）
+    q_counts = {
+        r["knowledge_name"]: r["question_count"]
+        for r in kn_rows
+    }
+    assert q_counts["圆的方程"] == 1
+    assert q_counts["集合"] == 1
+    assert sum(q_counts.values()) == 2
+
+
+def test_apply_grade_compare_prefers_item_derived_knowledge():
+    """横向对比：知识点表由小题行推导，修复跨班知识点名不一致。"""
+    from src.agent.education.tools import _apply_grade_compare_section_tables
+
+    data: dict = {}
+    _apply_grade_compare_section_tables(
+        data,
+        items=[],
+        knowledge=[],
+        item_class_rows=[
+            {
+                "class_name": "1班",
+                "question_no": 3,
+                "knowledge_name": "圆的方程",
+                "avg_score": 4,
+                "full_score": 5,
+                "score_rate": 80,
+                "question_type": "选择",
+            },
+            {
+                "class_name": "2班",
+                "question_no": 3,
+                "knowledge_name": "未关联知识点",
+                "avg_score": 3,
+                "full_score": 5,
+                "score_rate": 60,
+                "question_type": "选择",
+            },
+        ],
+        knowledge_class_rows=[
+            # SQL 侧会形成膨胀/缺班：故意给错误数据
+            {"class_name": "1班", "knowledge_name": "圆的方程", "question_count": 1, "score_rate": 80},
+            {"class_name": "2班", "knowledge_name": "未关联知识点", "question_count": 1, "score_rate": 60},
+        ],
+        is_grade_compare=True,
+    )
+    assert "圆的方程" in data["KNOWLEDGE_TABLE"]
+    assert "未关联知识点" not in data["KNOWLEDGE_TABLE"]
+    assert "60.00%" in data["KNOWLEDGE_TABLE"]
+    assert "80.00%" in data["KNOWLEDGE_TABLE"]
+
+
 def test_build_question_type_compare_table_html():
     from src.agent.education.knowledge_tier import build_question_type_compare_table_html
 

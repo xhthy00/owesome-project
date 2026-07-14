@@ -97,6 +97,10 @@ PLANNER_DESC = """[你的职责]
 - 班级总览报告（class_overview）：
   ["查询该班每位学生各科分数（SQL 须含 student_id/姓名、subject、score、exam_score；禁止只查班级 KPI 聚合）", "查询该班在年级中的排名位置",
    {"task": "用 education/class_overview.html 模板组装 HTML 报告（数据取上游子任务；STUDENT_ARCHIVE_TABLE 由工具自动从上游成绩明细生成，勿手填空表）", "sub_task_agent": "ToolExpert"}]
+- **学校/班级 + 成绩总览/班级总览**（如「扬州中学高三(10)班连淮扬镇数学成绩总览」）——
+  **只拆 2 个子任务**，走班级总览，**禁止**走科目诊断 fetch+sections：
+  ["查询该班【考试】【科目】每位学生得分（SQL 须含 student_id/姓名、score、exam_score；禁止只查 KPI）",
+   {"task": "调 build_class_overview_report_data_tool(class_name=【班级】, subject_name=【科目】, render=true) 生成班级总览 HTML；**禁止** build_subject_diagnosis_sections_tool；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 - 年级对比报告（grade_comparison）/ **学校 + 各班横向多维对比**
   （如「扬州中学在连淮扬镇数学考试中各个班级的横向多维对比分析」）——
   **必须拆 3 个子任务**，范围是**全校各班**，**严禁**填写 class_name（不得缩成某一个班）：
@@ -509,6 +513,50 @@ def build_group_feature_plan_items(question: str) -> list[dict[str, str]]:
     ]
 
 
+def build_class_overview_plan_items(question: str) -> list[dict[str, str]]:
+    """班级成绩总览：查该班学生分数 + 渲染 class_overview。"""
+    from src.agent.education.orchestrator import _extract_class_name, _extract_subject
+    from src.agent.education.query_parse import extract_school_target
+
+    school = extract_school_target(question) or ""
+    class_name = _extract_class_name(question) or ""
+    subject = _plan_subject_name(question) or (_extract_subject(question) or "")
+    exam = _plan_exam_name(question)
+    school_l = school or "该校"
+    class_l = class_name or "该班"
+    subject_l = f"【{subject}】" if subject else ""
+    exam_l = _plan_label(exam, missing="问题中的考试")
+    scope_args = []
+    if school:
+        scope_args.append(f"school_name={school}")
+    if class_name:
+        scope_args.append(f"class_name={class_name}")
+    if subject:
+        scope_args.append(f"subject_name={subject}")
+    if exam:
+        scope_args.append(f"exam_name={exam}")
+    tool_args = ", ".join(scope_args)
+    if tool_args:
+        tool_args = tool_args + ", "
+    return [
+        {
+            "sub_task": (
+                f"查询【{school_l}】【{class_l}】在【{exam_l}】{subject_l}每位学生得分"
+                "（SQL 须含 student_id/姓名、score、exam_score；禁止只查班级 KPI 聚合）"
+            ),
+            "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
+        },
+        {
+            "sub_task": (
+                f"调 build_class_overview_report_data_tool({tool_args}render=true) "
+                "生成班级总览 HTML；完成后 terminate。"
+                "**禁止** build_subject_diagnosis_sections_tool / fetch 渲染"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        },
+    ]
+
+
 def should_replace_with_comprehensive_plan(
     question: str,
     plan_items: list[dict[str, str]],
@@ -598,12 +646,30 @@ def should_replace_with_group_feature_plan(
     return True
 
 
+def should_replace_with_class_overview_plan(
+    question: str,
+    plan_items: list[dict[str, str]],
+) -> bool:
+    """成绩总览/班级总览：强制改走 class_overview 2 步计划。"""
+    from src.agent.education.query_parse import is_class_overview_query
+
+    if not is_class_overview_query(question):
+        return False
+    blob = " ".join(str(it.get("sub_task") or "") for it in plan_items)
+    if "build_class_overview_report_data_tool" in blob:
+        return False
+    if "education/class_overview.html" in blob:
+        return False
+    return True
+
+
 def coerce_plan_items_if_needed(
     question: str,
     plan_items: list[dict[str, str]],
 ) -> list[dict[str, str]]:
-    """学校报告 / 个人得分 / 多场考试 / 各班对比 / 分层预警 / 群体特征修正为标准多步计划。"""
+    """学校报告 / 个人得分 / 多场考试 / 各班对比 / 分层预警 / 群体特征 / 班级总览修正。"""
     from src.agent.education.query_parse import (
+        is_class_overview_query,
         is_group_feature_query,
         is_multi_exam_class_analysis_query,
         is_school_class_comparison_query,
@@ -629,6 +695,12 @@ def coerce_plan_items_if_needed(
             len(plan_items),
         )
         return build_group_feature_plan_items(q)
+    if should_replace_with_class_overview_plan(q, plan_items):
+        logger.info(
+            "planner class-overview coerce: replacing %d plan(s) with class_overview 2-step",
+            len(plan_items),
+        )
+        return build_class_overview_plan_items(q)
     if should_replace_with_comprehensive_plan(q, plan_items):
         logger.info(
             "planner multi-exam coerce: replacing %d plan(s) with comprehensive 2-step",
@@ -652,6 +724,7 @@ def coerce_plan_items_if_needed(
         or is_school_class_comparison_query(q)
         or is_tier_alert_query(q)
         or is_group_feature_query(q)
+        or is_class_overview_query(q)
     ):
         return plan_items
     if not is_school_exam_report_query(q):

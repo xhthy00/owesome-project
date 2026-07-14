@@ -133,4 +133,103 @@ def _resolve_full_score(rows: list[dict[str, Any]], key: str) -> float | None:
     return max(seen) if len(seen) > 1 else seen.pop()
 
 
-__all__ = ["DIMENSIONS", "aggregate_by", "aggregate_hierarchy"]
+def _student_key(row: dict[str, Any]) -> str:
+    for k in ("student_id", "student_name", "student", "name", "学号"):
+        v = row.get(k)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    return ""
+
+
+def _exam_key(row: dict[str, Any]) -> str:
+    for k in ("exam_id", "exam_name", "exam"):
+        v = row.get(k)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    return ""
+
+
+def pick_primary_exam_id(score_rows: list[dict[str, Any]]) -> str | None:
+    """多场考试并存时，选参与学生数（或行数）最多的一场。"""
+    by_exam_students: dict[str, set[str]] = defaultdict(set)
+    by_exam_rows: dict[str, int] = defaultdict(int)
+    for r in score_rows:
+        if not isinstance(r, dict):
+            continue
+        eid = _exam_key(r)
+        if not eid:
+            continue
+        by_exam_rows[eid] += 1
+        sk = _student_key(r)
+        if sk:
+            by_exam_students[eid].add(sk)
+    if not by_exam_rows:
+        return None
+
+    def _sort_key(eid: str) -> tuple[int, int, int]:
+        students = len(by_exam_students.get(eid) or ())
+        rows = by_exam_rows[eid]
+        try:
+            id_num = int(float(eid))
+        except (TypeError, ValueError):
+            id_num = 0
+        return (students or rows, rows, id_num)
+
+    return max(by_exam_rows.keys(), key=_sort_key)
+
+
+def narrow_score_rows_to_primary_exam(
+    score_rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], str | None]:
+    """若含多场考试，只保留参与人数最多的一场。"""
+    rows = [dict(r) for r in score_rows if isinstance(r, dict)]
+    exams = {_exam_key(r) for r in rows if _exam_key(r)}
+    if len(exams) <= 1:
+        return rows, (next(iter(exams)) if exams else None)
+    primary = pick_primary_exam_id(rows)
+    if not primary:
+        return rows, None
+    return [r for r in rows if _exam_key(r) == primary], primary
+
+
+def dedupe_score_rows_by_student(
+    score_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """同一学生（+科目）保留一行；无学生标识的行全部保留。"""
+    out: list[dict[str, Any]] = []
+    index_by_key: dict[str, int] = {}
+    for r in score_rows:
+        if not isinstance(r, dict):
+            continue
+        nr = dict(r)
+        sk = _student_key(nr)
+        if not sk:
+            out.append(nr)
+            continue
+        subj = str(nr.get("subject") or nr.get("subject_name") or "").strip()
+        key = f"{sk}|{subj}"
+        if key in index_by_key:
+            out[index_by_key[key]] = nr
+        else:
+            index_by_key[key] = len(out)
+            out.append(nr)
+    return out
+
+
+def prepare_score_rows_for_kpi(
+    score_rows: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """单场 KPI 口径：收敛多场考试 + 按学生去重，避免班级人数按人次膨胀。"""
+    narrowed, _ = narrow_score_rows_to_primary_exam(list(score_rows or []))
+    return dedupe_score_rows_by_student(narrowed)
+
+
+__all__ = [
+    "DIMENSIONS",
+    "aggregate_by",
+    "aggregate_hierarchy",
+    "dedupe_score_rows_by_student",
+    "narrow_score_rows_to_primary_exam",
+    "pick_primary_exam_id",
+    "prepare_score_rows_for_kpi",
+]

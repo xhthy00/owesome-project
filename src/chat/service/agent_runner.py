@@ -722,6 +722,7 @@ async def _run_planner_phase(
     """跑 Planner 得到 sub_task 列表。失败一律回落 [原问题]，不抛。"""
     from src.agent.education.query_parse import (
         is_citywide_analysis_query,
+        is_class_overview_query,
         is_group_feature_query,
         is_individual_student_analysis_query,
         is_multi_exam_class_analysis_query,
@@ -731,6 +732,7 @@ async def _run_planner_phase(
     )
     from src.agent.expand.planner import (
         build_citywide_team_plan_items,
+        build_class_overview_plan_items,
         build_comprehensive_class_plan_items,
         build_group_feature_plan_items,
         build_individual_student_exam_plan_items,
@@ -739,6 +741,7 @@ async def _run_planner_phase(
         build_tier_alert_plan_items,
         coerce_plan_items_if_needed,
         should_replace_with_citywide_plan,
+        should_replace_with_class_overview_plan,
         should_replace_with_comprehensive_plan,
         should_replace_with_group_feature_plan,
         should_replace_with_individual_student_plan,
@@ -819,6 +822,20 @@ async def _run_planner_phase(
         )
         return plan_items
 
+    # 班级成绩总览：优先于学校科目诊断
+    if is_class_overview_query(request.question):
+        plan_items = build_class_overview_plan_items(request.question)
+        await emit(
+            "agent_speak",
+            {
+                "agent": "Planner",
+                "status": "end",
+                "plan_count": len(plan_items),
+                "deterministic": True,
+            },
+        )
+        return plan_items
+
     # 学校各班横向对比：确定性全校 3 步，禁止缩成单班诊断
     if is_school_class_comparison_query(request.question):
         plan_items = build_school_class_comparison_plan_items(request.question)
@@ -872,6 +889,8 @@ async def _run_planner_phase(
             plan_items = build_tier_alert_plan_items(request.question)
         elif should_replace_with_group_feature_plan(request.question, plan_items):
             plan_items = build_group_feature_plan_items(request.question)
+        elif should_replace_with_class_overview_plan(request.question, plan_items):
+            plan_items = build_class_overview_plan_items(request.question)
         elif should_replace_with_comprehensive_plan(request.question, plan_items):
             plan_items = build_comprehensive_class_plan_items(request.question)
         elif should_replace_with_school_class_comparison_plan(request.question, plan_items):
@@ -918,6 +937,12 @@ async def _run_planner_phase(
             len(plan_items),
         )
         plan_items = build_group_feature_plan_items(request.question)
+    elif should_replace_with_class_overview_plan(request.question, plan_items):
+        logger.info(
+            "planner class-overview fallback: replacing %d plan(s) with 2-step class overview plan",
+            len(plan_items),
+        )
+        plan_items = build_class_overview_plan_items(request.question)
     elif should_replace_with_comprehensive_plan(request.question, plan_items):
         logger.info(
             "planner multi-exam fallback: replacing %d plan(s) with comprehensive 2-step",

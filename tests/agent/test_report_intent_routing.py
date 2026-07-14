@@ -14,6 +14,7 @@ from src.agent.education.query_parse import (
     extract_school_target,
     extract_student_target,
     is_citywide_analysis_query,
+    is_class_overview_query,
     is_group_feature_query,
     is_individual_student_analysis_query,
     is_multi_exam_class_analysis_query,
@@ -23,6 +24,7 @@ from src.agent.education.query_parse import (
 )
 from src.agent.education.report_types import ReportType
 from src.agent.expand.planner import (
+    build_class_overview_plan_items,
     build_comprehensive_class_plan_items,
     build_group_feature_plan_items,
     build_school_class_comparison_plan_items,
@@ -43,6 +45,8 @@ def _route(question: str) -> str:
         return "tier-alert"
     if is_group_feature_query(question):
         return "group-feature"
+    if is_class_overview_query(question):
+        return "class-overview"
     if is_school_class_comparison_query(question):
         return "class-comparison"
     if is_school_exam_report_query(question):
@@ -96,7 +100,12 @@ def _route(question: str) -> str:
         (
             "高三(10)班班级成绩总览",
             ReportType.CLASS_OVERVIEW,
-            "llm",
+            "class-overview",
+        ),
+        (
+            "扬州中学高三(10)班连淮扬镇数学成绩总览",
+            ReportType.CLASS_OVERVIEW,
+            "class-overview",
         ),
         (
             "临界生预警报告",
@@ -171,6 +180,9 @@ def test_exam_hint_not_polluted_by_ban_prefix():
     assert extract_exam_name_hint("某校高三（10）班的宁镇扬联考班级分析") == "宁镇扬联考"
     assert extract_exam_name_hint("某校高三(10)班苏北调研数学考试详细分析") == "苏北调研"
     assert extract_exam_name_hint("扬州中学高三（10）班的连淮扬镇考试班级分析") == "连淮扬镇"
+    # 「班+考试简称+科目+总览」可无「考试」二字
+    assert extract_exam_name_hint("扬州中学高三(10)班连淮扬镇数学成绩总览") == "连淮扬镇"
+    assert extract_exam_name_hint("某校高三(8)班宁镇扬联考英语成绩概览") == "宁镇扬联考"
 
 
 def test_planner_uses_extracted_exam_not_placeholder():
@@ -245,6 +257,25 @@ def test_group_feature_plan_not_class_comparison():
     cmp_q = "扬州中学在连淮扬镇数学考试中各个班级的横向多维对比分析"
     assert is_group_feature_query(cmp_q) is False
     assert is_school_class_comparison_query(cmp_q) is True
+
+
+def test_class_overview_plan_not_subject_diagnosis():
+    q = "扬州中学高三(10)班连淮扬镇数学成绩总览"
+    assert is_class_overview_query(q) is True
+    assert is_school_exam_report_query(q) is False
+    plans = build_class_overview_plan_items(q)
+    assert len(plans) == 2
+    assert "build_class_overview_report_data_tool" in plans[1]["sub_task"]
+    blob = " ".join(p["sub_task"] for p in plans)
+    assert "class_name=高三(10)班" in blob
+    assert "subject_name=数学" in blob
+    assert "连淮扬镇" in blob
+    assert "exam_name=连淮扬镇" in blob
+    assert "【问题中的考试】" not in blob
+    # 「详细分析」仍走学校科目诊断
+    detail_q = "扬州中学高三(9)班数学诊断报告"
+    assert is_class_overview_query(detail_q) is False
+    assert is_school_exam_report_query(detail_q) is True
 
 
 def test_grade_comparison_filters_omit_class_name():
