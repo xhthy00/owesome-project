@@ -19,13 +19,23 @@
     h3 { margin: 14px 0 8px; font-size: 15px; color: var(--edu-text-lv2); }
     p { margin: 6px 0; line-height: 1.7; }
     .edu-sub { color: var(--edu-text-lv3); font-size: 13px; }
+    .edu-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+    .edu-kpi { border: 1px solid var(--edu-border); border-radius: 8px; padding: 12px 14px; background: #fafafa; }
+    .edu-kpi .label { font-size: 12px; color: var(--edu-text-lv3); }
+    .edu-kpi .value { margin-top: 4px; font-size: 20px; font-weight: 600; color: var(--edu-primary); }
+    .edu-kpi .hint { margin-top: 6px; font-size: 11.5px; color: var(--edu-text-lv3); }
     .edu-table { width: 100%; border-collapse: collapse; font-size: 13px; }
     .edu-table th, .edu-table td { border: 1px solid var(--edu-border); padding: 8px 10px; text-align: left; }
     .edu-table th { background: var(--edu-primary-bg); color: var(--edu-text-lv2); font-weight: 600; }
     .edu-table tr:nth-child(even) td { background: #fafafa; }
-    .edu-chart { width: 100%; height: 360px; }
-    .edu-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: var(--edu-primary-bg); color: var(--edu-primary); }
+    .edu-table-wrap { overflow-x: auto; margin: 8px 0 12px; }
+    .edu-chart { width: 100%; height: 340px; }
+    .edu-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: var(--edu-primary-bg); color: var(--edu-primary); margin-left: 8px; }
+    .edu-feature-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+    .edu-feature-card { border: 1px solid var(--edu-border); border-radius: 8px; padding: 12px 14px; background: #fafafa; }
+    .edu-feature-title { font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
     .edu-footer { color: var(--edu-text-lv3); font-size: 12px; text-align: right; }
+    .edu-section-empty { display: none; }
     @media print { body { background: #fff; } .edu-card { border: none; } }
   </style>
 </head>
@@ -38,13 +48,19 @@
         <span class="edu-badge">{{REPORT_TYPE}}</span>
         <span class="edu-badge">{{SCOPE}}</span>
         <span class="edu-badge">{{EXAM_NAME}}</span>
+        <span class="edu-badge">{{SUBJECT_NAME}}</span>
         <span class="edu-badge">{{GROUP_DIMENSION}}</span>
         {{REPORT_TIME}}
       </p>
     </section>
 
     <section class="edu-card">
-      <h2>分组对比</h2>
+      <h2>整体概览</h2>
+      <div>{{KPI_GRID}}</div>
+    </section>
+
+    <section class="edu-card">
+      <h2>分组均分对比</h2>
       <div id="groupCompare" class="edu-chart"></div>
       <script type="application/json" id="groupCompareData">{{GROUP_COMPARE_CHART}}</script>
       <script>
@@ -54,13 +70,49 @@
           try { echarts.init(document.getElementById('groupCompare')).setOption(JSON.parse(raw)); } catch (e) {}
         })();
       </script>
-      <h3>分组明细</h3>
+    </section>
+
+    <section class="edu-card">
+      <h2>分组及格率对比</h2>
+      <div id="passCompare" class="edu-chart"></div>
+      <script type="application/json" id="passCompareData">{{PASS_COMPARE_CHART}}</script>
+      <script>
+        (function () {
+          var raw = (document.getElementById('passCompareData').textContent || '').trim();
+          if (!raw) { return; }
+          try { echarts.init(document.getElementById('passCompare')).setOption(JSON.parse(raw)); } catch (e) {}
+        })();
+      </script>
+    </section>
+
+    <section class="edu-card">
+      <h2>分组明细与特征</h2>
       <div>{{GROUP_TABLE}}</div>
     </section>
 
     <section class="edu-card">
-      <h2>差异分析</h2>
+      <h2>群体特征画像</h2>
+      <div>{{FEATURE_CARDS}}</div>
+    </section>
+
+    <section class="edu-card">
+      <h2>差异与均衡分析</h2>
       <div>{{DIFF_INFO}}</div>
+    </section>
+
+    <section class="edu-card {{KNOWLEDGE_SECTION_CLASS}}">
+      <h2>各班知识点掌握对比</h2>
+      <div>{{KNOWLEDGE_COMPARE_TABLE}}</div>
+    </section>
+
+    <section class="edu-card {{QUESTION_TYPE_SECTION_CLASS}}">
+      <h2>各班题型得分对比</h2>
+      <div>{{QUESTION_TYPE_COMPARE_TABLE}}</div>
+    </section>
+
+    <section class="edu-card {{ITEM_SECTION_CLASS}}">
+      <h2>各班小题均分对比</h2>
+      <div>{{ITEM_COMPARE_TABLE}}</div>
     </section>
 
     <section class="edu-card">
@@ -69,7 +121,7 @@
     </section>
 
     <section class="edu-card">
-      <h2>建议</h2>
+      <h2>干预建议</h2>
       <div>{{RECOMMENDATIONS}}</div>
     </section>
 

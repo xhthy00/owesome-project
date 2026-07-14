@@ -357,6 +357,9 @@ def is_school_class_comparison_query(question: str) -> bool:
         return False
     if is_multi_exam_class_analysis_query(q):
         return False
+    # 「群体特征」口径独立路由，不占用班级横向对比
+    if is_group_feature_query(q):
+        return False
     if not extract_school_target(q):
         return False
     # 否定语境：「无各班 / 不要各班级」≠ 要做各班对比
@@ -412,6 +415,46 @@ def is_tier_alert_query(question: str) -> bool:
     return False
 
 
+#: 仅匹配明确「群体特征」口径，避免夺走「各班横向对比」等既有路由。
+_GROUP_FEATURE_HINTS = (
+    "群体特征",
+    "群体对比特征",
+    "对比特征",
+    "按班级群体",
+    "群体特征报告",
+    "群体对比分析",
+)
+
+
+def is_group_feature_query(question: str) -> bool:
+    """按维度做群体特征对比（如按班级群体对比特征）→ group_feature。"""
+    q = (question or "").strip()
+    if not q or is_citywide_analysis_query(q) or is_individual_student_analysis_query(q):
+        return False
+    if is_tier_alert_query(q):
+        return False
+    if any(h in q for h in _GROUP_FEATURE_HINTS):
+        return True
+    # 「按X群体」+ 对比/特征
+    if re.search(r"按.{0,6}群体", q) and any(h in q for h in ("对比", "特征", "分析")):
+        return True
+    return False
+
+
+def infer_group_feature_dimension(question: str) -> str:
+    """从问句推断群体特征聚合维度，默认班级。"""
+    q = (question or "").strip()
+    if any(h in q for h in ("区县", "区域", "城区")):
+        return "district"
+    if "年级" in q and "班级" not in q:
+        return "grade"
+    if any(h in q for h in ("科目", "学科", "各科")) and "班级" not in q:
+        return "subject"
+    if "学校" in q and "班级" not in q and extract_school_target(q) is None:
+        return "school"
+    return "class"
+
+
 def is_school_exam_report_query(question: str) -> bool:
     """学校/班级范围 + 考试 + 分析报告类问题（非全市、非个人学生、非多场综合）。"""
     q = (question or "").strip()
@@ -422,6 +465,8 @@ def is_school_exam_report_query(question: str) -> bool:
     if is_structured_diagnostic_query(q):
         return False
     if is_tier_alert_query(q):
+        return False
+    if is_group_feature_query(q):
         return False
     if not extract_school_target(q):
         return False
@@ -634,10 +679,24 @@ def extract_upstream_participant_count(report_data: dict[str, Any] | None) -> in
     return None
 
 
-_SCORE_COL_HINTS = ("score", "分数", "成绩")
+_SCORE_COL_HINTS = ("score", "分数", "成绩", "得分")
+_SCORE_COL_EXACT = ("score", "分数", "成绩", "得分", "avg_score", "均分")
+_SCORE_COL_SKIP = frozenset(
+    {
+        "exam_score",
+        "full_score",
+        "prev_score",
+        "paper_score",
+        "question_score",
+        "满分",
+        "上次得分",
+        "上次成绩",
+        "上次分数",
+    }
+)
 _FULL_SCORE_COL_HINTS = ("exam_score", "full_score", "满分")
 _DISTRICT_COL_HINTS = ("district", "区县")
-_CLASS_COL_HINTS = ("class", "class_name", "班级")
+_CLASS_COL_HINTS = ("class_name", "班级名称", "班级", "class", "cls")
 _SCHOOL_COL_HINTS = ("school_name", "学校")
 _SUBJECT_COL_HINTS = ("subject", "subject_name", "科目")
 _STUDENT_COL_HINTS = ("student_id", "学号", "学生")
@@ -647,8 +706,31 @@ _PREV_SCORE_COL_HINTS = ("prev_score", "上次得分", "上次成绩", "上次�
 
 def _col_index(cols: list[str], hints: tuple[str, ...]) -> int | None:
     lower = [str(c).lower() for c in cols]
+    for h in hints:
+        hl = h.lower()
+        for i, name in enumerate(lower):
+            if name == hl:
+                return i
     for i, name in enumerate(lower):
-        if any(h in name for h in hints):
+        if any(h.lower() in name for h in hints):
+            return i
+    return None
+
+
+def _score_col_index(cols: list[str]) -> int | None:
+    """优先精确匹配 score/分数，避免命中 exam_score / prev_score。"""
+    lower = [str(c).lower() for c in cols]
+    for exact in ("score", "分数", "成绩", "得分"):
+        if exact in lower:
+            return lower.index(exact)
+    for i, name in enumerate(lower):
+        if name in _SCORE_COL_SKIP:
+            continue
+        if name in ("avg_score", "均分"):
+            return i
+        if any(h in name for h in ("score", "分数", "成绩", "得分")):
+            if any(skip in name for skip in ("exam", "full", "prev", "上次", "满分", "question")):
+                continue
             return i
     return None
 
@@ -667,6 +749,102 @@ def _cell(row: Any, idx: int | None) -> Any:
         return None
 
 
+def _parse_score_rows_from_exec(er: dict[str, Any]) -> list[dict[str, Any]]:
+    cols = list(er.get("columns") or [])
+    raw_rows = list(er.get("rows") or [])
+    if not cols or not raw_rows:
+        return []
+    si = _score_col_index(cols)
+    if si is None:
+        return []
+    fs_i = _col_index(cols, _FULL_SCORE_COL_HINTS)
+    di = _col_index(cols, _DISTRICT_COL_HINTS)
+    ci = _col_index(cols, _CLASS_COL_HINTS)
+    sch_i = _col_index(cols, _SCHOOL_COL_HINTS)
+    sub_i = _col_index(cols, _SUBJECT_COL_HINTS)
+    stu_i = _col_index(cols, _STUDENT_COL_HINTS)
+    name_i = _col_index(cols, _NAME_COL_HINTS)
+    if name_i is None:
+        lower_cols = [str(c).lower() for c in cols]
+        if "name" in lower_cols:
+            name_i = lower_cols.index("name")
+    prev_i = _col_index(cols, _PREV_SCORE_COL_HINTS)
+    parsed: list[dict[str, Any]] = []
+    for row in raw_rows:
+        if isinstance(row, dict):
+            drow = dict(row)
+        else:
+            drow = {str(cols[i]): row[i] for i in range(min(len(cols), len(row)))}
+        score = drow.get("score")
+        if score is None:
+            score = _cell(row, si)
+        if score is None or score == "":
+            continue
+        try:
+            score_f = float(score)
+        except (TypeError, ValueError):
+            continue
+        out: dict[str, Any] = {"score": score_f}
+        field_map = (
+            ("exam_score", fs_i),
+            ("district", di),
+            ("class", ci),
+            ("class_name", ci),
+            ("school_name", sch_i),
+            ("subject", sub_i),
+            ("subject_name", sub_i),
+            ("student_id", stu_i),
+            ("name", name_i),
+            ("prev_score", prev_i),
+        )
+        for key, idx in field_map:
+            val = drow.get(key)
+            if val is None and key == "name":
+                val = drow.get("姓名") or drow.get("student_name")
+            if val is None and key == "class":
+                val = drow.get("班级") or drow.get("班级名称") or drow.get("class_name")
+            if val is None and key == "prev_score":
+                val = drow.get("上次得分") or drow.get("上次成绩")
+            if val is None and idx is not None:
+                val = _cell(row, idx)
+            if val is not None and val != "":
+                out[key] = val
+        if not out.get("name") and out.get("student_id") is not None:
+            out["name"] = str(out["student_id"])
+        if out.get("class") and not out.get("class_name"):
+            out["class_name"] = out["class"]
+        if out.get("class_name") and not out.get("class"):
+            out["class"] = out["class_name"]
+        parsed.append(out)
+    return parsed
+
+
+def _group_feature_row_quality(rows: list[dict[str, Any]], dimension: str) -> tuple[int, int, int]:
+    """(有维度值人数, 有学生标识人数, 总行数) —— 越大越好。"""
+    if not rows:
+        return (0, 0, 0)
+    dim_keys = {
+        "class": ("class", "class_name"),
+        "district": ("district",),
+        "grade": ("grade", "class", "class_name"),
+        "subject": ("subject", "subject_name"),
+        "school": ("school_name", "school"),
+    }.get(dimension, ("class", "class_name"))
+    has_dim = 0
+    has_stu = 0
+    unique_dim: set[str] = set()
+    for r in rows:
+        vals = [str(r.get(k) or "").strip() for k in dim_keys]
+        vals = [v for v in vals if v and not v.startswith("未知")]
+        if vals:
+            has_dim += 1
+            unique_dim.add(vals[0])
+        if r.get("student_id") or r.get("name"):
+            has_stu += 1
+    # 多组优先（unique 组数加权到 has_dim）
+    return (len(unique_dim) * 1000 + has_dim, has_stu, len(rows))
+
+
 def extract_score_rows_from_report_data(
     report_data: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
@@ -679,72 +857,52 @@ def extract_score_rows_from_report_data(
             continue
         cached = st.get("score_rows")
         if isinstance(cached, list) and cached:
-            if len(cached) > len(best):
-                best = [dict(x) for x in cached if isinstance(x, dict)]
-        er = st.get("exec_result") or {}
-        cols = list(er.get("columns") or [])
-        raw_rows = list(er.get("rows") or [])
-        if not cols or not raw_rows:
+            dicts = [dict(x) for x in cached if isinstance(x, dict)]
+            if len(dicts) > len(best):
+                best = dicts
+        er = st.get("exec_result") or st.get("last_exec_result") or {}
+        if not isinstance(er, dict):
             continue
-        si = _col_index(cols, _SCORE_COL_HINTS)
-        if si is None:
-            continue
-        fs_i = _col_index(cols, _FULL_SCORE_COL_HINTS)
-        di = _col_index(cols, _DISTRICT_COL_HINTS)
-        ci = _col_index(cols, _CLASS_COL_HINTS)
-        sch_i = _col_index(cols, _SCHOOL_COL_HINTS)
-        sub_i = _col_index(cols, _SUBJECT_COL_HINTS)
-        stu_i = _col_index(cols, _STUDENT_COL_HINTS)
-        name_i = _col_index(cols, _NAME_COL_HINTS)
-        if name_i is None:
-            lower_cols = [str(c).lower() for c in cols]
-            if "name" in lower_cols:
-                name_i = lower_cols.index("name")
-        prev_i = _col_index(cols, _PREV_SCORE_COL_HINTS)
-        parsed: list[dict[str, Any]] = []
-        for row in raw_rows:
-            if isinstance(row, dict):
-                drow = dict(row)
-            else:
-                drow = {str(cols[i]): row[i] for i in range(min(len(cols), len(row)))}
-            score = drow.get("score")
-            if score is None:
-                score = _cell(row, si)
-            if score is None or score == "":
-                continue
-            try:
-                score_f = float(score)
-            except (TypeError, ValueError):
-                continue
-            out: dict[str, Any] = {"score": score_f}
-            field_map = (
-                ("exam_score", fs_i),
-                ("district", di),
-                ("class", ci),
-                ("class_name", ci),
-                ("school_name", sch_i),
-                ("subject", sub_i),
-                ("subject_name", sub_i),
-                ("student_id", stu_i),
-                ("name", name_i),
-                ("prev_score", prev_i),
-            )
-            for key, idx in field_map:
-                val = drow.get(key)
-                if val is None and key == "name":
-                    val = drow.get("姓名") or drow.get("student_name")
-                if val is None and key == "prev_score":
-                    val = drow.get("上次得分") or drow.get("上次成绩")
-                if val is None and idx is not None:
-                    val = _cell(row, idx)
-                if val is not None and val != "":
-                    out[key] = val
-            if not out.get("name") and out.get("student_id") is not None:
-                out["name"] = str(out["student_id"])
-            parsed.append(out)
+        parsed = _parse_score_rows_from_exec(er)
         if len(parsed) > len(best):
             best = parsed
     return best
+
+
+def resolve_group_feature_score_rows(
+    *,
+    score_rows: list[dict[str, Any]] | None = None,
+    report_data: dict[str, Any] | None = None,
+    last_exec_result: dict[str, Any] | None = None,
+    dimension: str = "class",
+) -> list[dict[str, Any]]:
+    """群体特征专用：优先「带分组维度 + 学生明细」的上游结果，避免吃到最终 KPI 单行。"""
+    candidates: list[list[dict[str, Any]]] = []
+    if score_rows:
+        candidates.append([dict(r) for r in score_rows if isinstance(r, dict)])
+    if isinstance(last_exec_result, dict):
+        parsed = _parse_score_rows_from_exec(last_exec_result)
+        if parsed:
+            candidates.append(parsed)
+    if report_data:
+        for st in report_data.get("sub_tasks") or []:
+            if st.get("sub_task_agent") == "ToolExpert":
+                continue
+            cached = st.get("score_rows")
+            if isinstance(cached, list) and cached:
+                candidates.append([dict(x) for x in cached if isinstance(x, dict)])
+            er = st.get("exec_result") or st.get("last_exec_result") or {}
+            if isinstance(er, dict):
+                parsed = _parse_score_rows_from_exec(er)
+                if parsed:
+                    candidates.append(parsed)
+        # 兼容通用抽取
+        upstream = extract_score_rows_from_report_data(report_data)
+        if upstream:
+            candidates.append(upstream)
+    if not candidates:
+        return []
+    return max(candidates, key=lambda rows: _group_feature_row_quality(rows, dimension))
 
 
 def _score_rows_to_exec_result(score_rows: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1272,6 +1430,9 @@ __all__ = [
     "is_school_exam_report_query",
     "is_structured_diagnostic_query",
     "is_tier_alert_query",
+    "is_group_feature_query",
+    "infer_group_feature_dimension",
+    "resolve_group_feature_score_rows",
     "normalize_fullwidth_parentheses",
     "normalize_student_key",
     "extract_upstream_participant_count",

@@ -14,6 +14,7 @@ from src.agent.education.query_parse import (
     extract_school_target,
     extract_student_target,
     is_citywide_analysis_query,
+    is_group_feature_query,
     is_individual_student_analysis_query,
     is_multi_exam_class_analysis_query,
     is_school_class_comparison_query,
@@ -23,6 +24,7 @@ from src.agent.education.query_parse import (
 from src.agent.education.report_types import ReportType
 from src.agent.expand.planner import (
     build_comprehensive_class_plan_items,
+    build_group_feature_plan_items,
     build_school_class_comparison_plan_items,
     build_school_subject_report_plan_items,
     build_tier_alert_plan_items,
@@ -39,6 +41,8 @@ def _route(question: str) -> str:
         return "multi-exam"
     if is_tier_alert_query(question):
         return "tier-alert"
+    if is_group_feature_query(question):
+        return "group-feature"
     if is_school_class_comparison_query(question):
         return "class-comparison"
     if is_school_exam_report_query(question):
@@ -103,6 +107,11 @@ def _route(question: str) -> str:
             "扬州中学高三(10)班数学临界生预警报告",
             ReportType.TIER_ALERT,
             "tier-alert",
+        ),
+        (
+            "扬州中学连淮扬镇数学考试按班级群体对比特征",
+            ReportType.GROUP_FEATURE,
+            "group-feature",
         ),
         (
             "历次成绩趋势分析",
@@ -220,6 +229,22 @@ def test_tier_alert_plan_tool():
     assert "class_name=高三(10)班" in blob
     assert "subject_name=数学" in blob
     assert "school_name=扬州中学" in blob
+
+
+def test_group_feature_plan_not_class_comparison():
+    q = "扬州中学连淮扬镇数学考试按班级群体对比特征"
+    assert is_group_feature_query(q) is True
+    assert is_school_class_comparison_query(q) is False
+    assert is_school_exam_report_query(q) is False
+    plans = build_group_feature_plan_items(q)
+    assert len(plans) == 2
+    assert "build_group_feature_report_data_tool" in plans[1]["sub_task"]
+    assert "dimension=class" in plans[1]["sub_task"]
+    assert "school_name=扬州中学" in plans[1]["sub_task"]
+    # 既有「各班横向」仍走班级横向对比
+    cmp_q = "扬州中学在连淮扬镇数学考试中各个班级的横向多维对比分析"
+    assert is_group_feature_query(cmp_q) is False
+    assert is_school_class_comparison_query(cmp_q) is True
 
 
 def test_grade_comparison_filters_omit_class_name():

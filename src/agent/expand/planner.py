@@ -128,6 +128,10 @@ PLANNER_DESC = """[你的职责]
   **只拆 2 个子任务**，走分层预警，**禁止**走科目诊断 fetch+sections：
   ["查询该班【科目】每位学生得分（SQL 须含 student_id/姓名、score、exam_score；有上次成绩则带 prev_score）",
    {"task": "调 build_tier_alert_report_data_tool(class_name=【班级】, subject_name=【科目】, render=true) 生成分层预警 HTML（临界生/退步/偏科）；**禁止** build_subject_diagnosis_sections_tool；完成后 terminate", "sub_task_agent": "ToolExpert"}]
+- **学校 + 按班级/区县等群体对比特征**（如「扬州中学连淮扬镇数学考试按班级群体对比特征」）——
+  **只拆 2 个子任务**，走群体特征报告，**禁止**走班级横向对比科目诊断三步：
+  ["查询【XX学校】在【XX考试】【XX科目】每位学生得分（SQL 须含 student_id、class、score、exam_score；**禁止**按单班过滤）",
+   {"task": "调 build_group_feature_report_data_tool(school_name=【XX学校】, subject_name=【XX科目】, exam_name=【XX考试】, dimension=class, render=true) 生成群体特征 HTML；**禁止** build_subject_diagnosis_sections_tool；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 - **单个学生多次考试分析**（如「分析学生001这几次考试的成绩」）：
   只拆 **2 个子任务**，且**只为问题中指定的那一个学生**生成报告：
   ["查询该学生及全班历次考试各科分数与排名（SQL 须含全班数据以便算排名，但不得为其他学生另做报告）",
@@ -453,6 +457,58 @@ def build_tier_alert_plan_items(question: str) -> list[dict[str, str]]:
     ]
 
 
+def build_group_feature_plan_items(question: str) -> list[dict[str, str]]:
+    """群体特征：按维度聚合全校/范围成绩并渲染 group_feature 报告。"""
+    from src.agent.education.orchestrator import _extract_subject
+    from src.agent.education.query_parse import (
+        extract_school_target,
+        infer_group_feature_dimension,
+    )
+
+    school = extract_school_target(question) or ""
+    subject = _plan_subject_name(question) or (_extract_subject(question) or "")
+    exam = _plan_exam_name(question)
+    dimension = infer_group_feature_dimension(question)
+    dim_label = {
+        "class": "班级",
+        "district": "区县",
+        "grade": "年级",
+        "subject": "科目",
+        "school": "学校",
+    }.get(dimension, dimension)
+    school_l = school or "该校"
+    subject_l = f"【{subject}】" if subject else ""
+    exam_l = _plan_label(exam, missing="问题中的考试")
+    scope_args = [f"dimension={dimension}"]
+    if school:
+        scope_args.append(f"school_name={school}")
+    if subject:
+        scope_args.append(f"subject_name={subject}")
+    if exam:
+        scope_args.append(f"exam_name={exam}")
+    tool_args = ", ".join(scope_args) + ", "
+    return [
+        {
+            "sub_task": (
+                f"查询【{school_l}】在【{exam_l}】{subject_l}每位学生得分"
+                f"（最终 SQL 必须是学生明细：含 student_id、class、score、exam_score；"
+                f"按{dim_label}可分组；**禁止**最终只输出校级/班级 KPI 聚合行、"
+                "**禁止**按单班过滤）"
+            ),
+            "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
+        },
+        {
+            "sub_task": (
+                f"调 build_group_feature_report_data_tool({tool_args}render=true) "
+                f"生成按{dim_label}的群体特征 HTML（含均分/及格率对比、特征画像、干预建议）；"
+                "完成后 terminate。"
+                "**禁止** build_subject_diagnosis_sections_tool / build_tier_alert_report_data_tool"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        },
+    ]
+
+
 def should_replace_with_comprehensive_plan(
     question: str,
     plan_items: list[dict[str, str]],
@@ -527,12 +583,28 @@ def should_replace_with_tier_alert_plan(
     return True
 
 
+def should_replace_with_group_feature_plan(
+    question: str,
+    plan_items: list[dict[str, str]],
+) -> bool:
+    """群体特征：强制改走 group_feature 2 步计划。"""
+    from src.agent.education.query_parse import is_group_feature_query
+
+    if not is_group_feature_query(question):
+        return False
+    blob = " ".join(str(it.get("sub_task") or "") for it in plan_items)
+    if "build_group_feature_report_data_tool" in blob:
+        return False
+    return True
+
+
 def coerce_plan_items_if_needed(
     question: str,
     plan_items: list[dict[str, str]],
 ) -> list[dict[str, str]]:
-    """学校报告 / 个人得分 / 多场考试 / 各班对比 / 分层预警类问题修正为标准多步计划。"""
+    """学校报告 / 个人得分 / 多场考试 / 各班对比 / 分层预警 / 群体特征修正为标准多步计划。"""
     from src.agent.education.query_parse import (
+        is_group_feature_query,
         is_multi_exam_class_analysis_query,
         is_school_class_comparison_query,
         is_school_exam_report_query,
@@ -551,6 +623,12 @@ def coerce_plan_items_if_needed(
             len(plan_items),
         )
         return build_tier_alert_plan_items(q)
+    if should_replace_with_group_feature_plan(q, plan_items):
+        logger.info(
+            "planner group-feature coerce: replacing %d plan(s) with group_feature 2-step",
+            len(plan_items),
+        )
+        return build_group_feature_plan_items(q)
     if should_replace_with_comprehensive_plan(q, plan_items):
         logger.info(
             "planner multi-exam coerce: replacing %d plan(s) with comprehensive 2-step",
@@ -569,7 +647,12 @@ def coerce_plan_items_if_needed(
             len(plan_items),
         )
         return build_school_subject_report_plan_items(q)
-    if is_multi_exam_class_analysis_query(q) or is_school_class_comparison_query(q) or is_tier_alert_query(q):
+    if (
+        is_multi_exam_class_analysis_query(q)
+        or is_school_class_comparison_query(q)
+        or is_tier_alert_query(q)
+        or is_group_feature_query(q)
+    ):
         return plan_items
     if not is_school_exam_report_query(q):
         return plan_items

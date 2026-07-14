@@ -2800,6 +2800,150 @@ def build_tier_alert_report_data_tool(
     )
 
 
+
+@tool()
+def build_group_feature_report_data_tool(
+    dimension: str = "class",
+    score_rows: list[dict[str, Any]] | None = None,
+    school_name: str = "",
+    subject_name: str = "",
+    exam_name: str = "",
+    render: bool = True,
+    report_data: dict[str, Any] | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+) -> ToolResult:
+    """组装群体特征报告（按班级/区县等维度聚合对比）并直接渲染 HTML。
+
+    **群体特征报告的关键工具**：上游学生明细 → 按维度聚合 → 特征画像 →
+    ``education/group_feature.html``。有 ``datasource_id`` 时自动回退拉全校明细与
+    各班知识点/小题对比（与班级横向对比同构）。
+
+    LLM 调完只需 ``terminate``，**禁止**再调科目诊断 sections / ``render_html_report``。
+    """
+    from src.agent.education.group_feature import build_group_feature_data
+    from src.agent.education.query_parse import resolve_group_feature_score_rows
+
+    dim = (dimension or "class").strip().lower()
+    if dim not in DIMENSIONS:
+        return ToolResult(
+            content=f"build_group_feature_report_data_tool 失败：不支持维度 `{dimension}`。",
+            data={"error": "invalid dimension"},
+        )
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    rd = report_data if isinstance(report_data, dict) else ctx.get("report_data")
+    rows = resolve_group_feature_score_rows(
+        score_rows=score_rows if score_rows else None,
+        report_data=rd if isinstance(rd, dict) else None,
+        last_exec_result=ctx.get("last_exec_result"),
+        dimension=dim,
+    )
+
+    item_class_rows: list[dict[str, Any]] = []
+    knowledge_class_rows: list[dict[str, Any]] = []
+    unique_dim = {
+        str(r.get("class") or r.get("class_name") or "").strip()
+        for r in rows
+        if (r.get("class") or r.get("class_name"))
+    }
+    unique_dim.discard("")
+    need_fetch = bool(datasource_id) and (
+        len(rows) < 2 or (dim == "class" and len(unique_dim) < 2)
+    )
+    if need_fetch:
+        fetched = _fetch_subject_diagnosis_rows(
+            datasource_id=int(datasource_id),
+            workspace_oid=workspace_oid,
+            user_id=ctx.get("user_id"),
+            school_name=school_name,
+            subject_name=subject_name,
+            exam_name=exam_name,
+            class_name="",
+        )
+        fetched_rows = list(fetched.get("score_rows") or [])
+        if len(fetched_rows) > len(rows):
+            rows = fetched_rows
+        item_class_rows = list(fetched.get("item_class_rows") or [])
+        knowledge_class_rows = list(fetched.get("knowledge_class_rows") or [])
+    elif datasource_id and school_name and dim == "class":
+        try:
+            fetched = _fetch_subject_diagnosis_rows(
+                datasource_id=int(datasource_id),
+                workspace_oid=workspace_oid,
+                user_id=ctx.get("user_id"),
+                school_name=school_name,
+                subject_name=subject_name,
+                exam_name=exam_name,
+                class_name="",
+            )
+            item_class_rows = list(fetched.get("item_class_rows") or [])
+            knowledge_class_rows = list(fetched.get("knowledge_class_rows") or [])
+            if not rows and fetched.get("score_rows"):
+                rows = list(fetched.get("score_rows") or [])
+        except Exception:  # noqa: BLE001
+            pass
+
+    if not rows:
+        return ToolResult(
+            content=(
+                "build_group_feature_report_data_tool 失败：无成绩行可聚合。"
+                "请确认上游 SQL 返回学生明细（含 class/score），勿以校级 KPI 作为最终结果。"
+            ),
+            data={"error": "empty score_rows"},
+        )
+
+    cfg = _get_effective_config()
+    data = build_group_feature_data(
+        rows,
+        dimension=dim,
+        config=cfg,
+        school_name=school_name,
+        subject_name=subject_name,
+        exam_name=exam_name,
+        knowledge_class_rows=knowledge_class_rows or None,
+        item_class_rows=item_class_rows or None,
+    )
+    data["REPORT_TIME"] = _now_str()
+    data["KNOWLEDGE_SECTION_CLASS"] = (
+        "" if data.get("KNOWLEDGE_COMPARE_TABLE") else "edu-section-empty"
+    )
+    data["QUESTION_TYPE_SECTION_CLASS"] = (
+        "" if data.get("QUESTION_TYPE_COMPARE_TABLE") else "edu-section-empty"
+    )
+    data["ITEM_SECTION_CLASS"] = (
+        "" if data.get("ITEM_COMPARE_TABLE") else "edu-section-empty"
+    )
+
+    if not render:
+        return ToolResult(content="群体特征报告 data 已组装。", data=data)
+
+    from src.agent.resource.tool.business import _render_template_html, _sanitize_report_html
+
+    template_name = "education/group_feature.html"
+    title = data.get("REPORT_TITLE") or "群体特征报告"
+    try:
+        raw_html = _render_template_html(template_name, data)
+        safe_html = _sanitize_report_html(raw_html.strip())
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(content=f"群体特征报告渲染失败：{e}", data={"error": str(e)})
+    payload = {
+        "output_type": "html",
+        "title": title,
+        "html": safe_html,
+        "mode": "template",
+        "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
+    }
+    group_n = len(data.get("_groups") or [])
+    return _html_report_tool_result(
+        f"群体特征报告已渲染（维度 {data.get('GROUP_DIMENSION')}，{group_n} 组，{len(rows)} 人）。",
+        payload,
+        report_type=ReportType.GROUP_FEATURE,
+    )
+
+
+
 @tool()
 def build_comprehensive_report_data_tool(
     records: list[dict[str, Any]] | None = None,
@@ -4491,6 +4635,7 @@ EDUCATION_TOOLS = [
     select_report_template_tool,
     build_comprehensive_report_data_tool,
     build_tier_alert_report_data_tool,
+    build_group_feature_report_data_tool,
     build_student_exam_report_data_tool,
     build_student_subject_diagnosis_tool,
     fetch_subject_diagnosis_data_tool,
@@ -4511,6 +4656,7 @@ __all__ = [
     "build_comprehensive_report_data_tool",
     "build_citywide_exam_analysis_report_tool",
     "build_diagnostic_report_data_tool",
+    "build_group_feature_report_data_tool",
     "build_knowledge_tier_sections_tool",
     "build_student_exam_report_data_tool",
     "build_student_subject_diagnosis_tool",

@@ -650,6 +650,70 @@ def test_build_tier_alert_report_data_tool_from_upstream_report_data():
     assert any(s["name"] == "张三" for s in result.data["regression"])
 
 
+def test_build_group_feature_report_data_tool_by_class():
+    from src.agent.education.tools import build_group_feature_report_data_tool
+
+    result = _run(
+        build_group_feature_report_data_tool.execute(
+            dimension="class",
+            score_rows=[
+                {"class": "高三(9)班", "score": 80, "exam_score": 100, "student_id": "a"},
+                {"class": "高三(9)班", "score": 70, "exam_score": 100, "student_id": "b"},
+                {"class": "高三(10)班", "score": 90, "exam_score": 100, "student_id": "c"},
+                {"class": "高三(10)班", "score": 88, "exam_score": 100, "student_id": "d"},
+                {"class": "高三(11)班", "score": 55, "exam_score": 100, "student_id": "e"},
+                {"class": "高三(11)班", "score": 95, "exam_score": 100, "student_id": "f"},
+            ],
+            school_name="扬州中学",
+            subject_name="数学",
+            exam_name="连淮扬镇",
+            render=True,
+        )
+    )
+    assert result.is_final is True
+    html = result.data.get("html") or ""
+    assert "群体特征" in html
+    assert "高三(10)班" in html
+    assert "高三(9)班" in html
+    assert "高三(11)班" in html
+    assert "未知班级" not in html
+    assert "整体概览" in html
+    assert "群体特征画像" in html
+    assert "干预建议" in html
+
+
+def test_resolve_group_feature_prefers_student_rows_over_kpi():
+    from src.agent.education.query_parse import resolve_group_feature_score_rows
+
+    report_data = {
+        "sub_tasks": [
+            {
+                "sub_task_agent": "DataAnalyst",
+                "exec_result": {
+                    "columns": ["student_id", "class", "score", "exam_score"],
+                    "rows": [
+                        ["s1", "高三(9)班", 100, 150],
+                        ["s2", "高三(10)班", 110, 150],
+                        ["s3", "高三(11)班", 90, 150],
+                    ],
+                },
+            },
+            {
+                # 模拟分析师最后又查了校级 KPI —— 旧逻辑会选错
+                "sub_task_agent": "DataAnalyst",
+                "exec_result": {
+                    "columns": ["avg_score"],
+                    "rows": [[104.25]],
+                },
+            },
+        ]
+    }
+    rows = resolve_group_feature_score_rows(report_data=report_data, dimension="class")
+    assert len(rows) == 3
+    classes = {r.get("class") for r in rows}
+    assert classes == {"高三(9)班", "高三(10)班", "高三(11)班"}
+
+
 # ---- Phase 2: trend_line chart + new templates ----------------------------
 
 def test_build_chart_option_tool_trend_line():

@@ -70,6 +70,10 @@ _INTENT_KEYWORDS: list[tuple[ReportType, tuple[str, ...]]] = [
     (ReportType.TIER_ALERT, ("预警", "临界生", "退步生", "偏科", "分层")),
     (ReportType.TREND_TRACKING, ("趋势", "变化", "历次成绩", "历次", "走势", "进退步")),
     (ReportType.STUDENT_PROFILE, ("学生个体", "个人报告", "该生", "这名学生", "这几次考试")),
+    # 群体特征须先于班级横向对比关键词回落（避免「对比」泛化）
+    (ReportType.GROUP_FEATURE, (
+        "群体特征", "群体对比特征", "对比特征", "按班级群体", "群体特征报告", "群体对比分析",
+    )),
     # 各班横向对比须先于科目诊断
     (ReportType.GRADE_COMPARISON, (
         "年级对比", "各班对比", "班级对比", "年级排名", "班级排名",
@@ -94,7 +98,8 @@ class ReportIntentResolver:
     """把自然语言问题映射到 ``ReportSpec``（纯规则，无 LLM）。
 
     优先级与 ``agent_runner`` / Planner 确定性格径对齐：
-    全市 → 个人学生 → 多场综合 → 各班横向 → 结构化诊断 → 学校科目报告 → 关键词回落。
+    全市 → 个人学生 → 多场综合 → 分层预警 → 群体特征 → 各班横向 →
+    结构化诊断 → 学校科目报告 → 关键词回落。
     """
 
     def resolve(self, question: str, audience_hint: str | None = None) -> ReportSpec:
@@ -104,6 +109,7 @@ class ReportIntentResolver:
             is_citywide_analysis_query,
             is_individual_student_analysis_query,
             is_multi_exam_class_analysis_query,
+            is_group_feature_query,
             is_school_class_comparison_query,
             is_school_exam_report_query,
             is_structured_diagnostic_query,
@@ -116,10 +122,12 @@ class ReportIntentResolver:
             report_type = ReportType.STUDENT_PROFILE
         elif is_multi_exam_class_analysis_query(q):
             report_type = ReportType.COMPREHENSIVE
-        elif is_school_class_comparison_query(q):
-            report_type = ReportType.GRADE_COMPARISON
         elif is_tier_alert_query(q):
             report_type = ReportType.TIER_ALERT
+        elif is_group_feature_query(q):
+            report_type = ReportType.GROUP_FEATURE
+        elif is_school_class_comparison_query(q):
+            report_type = ReportType.GRADE_COMPARISON
         elif is_structured_diagnostic_query(q):
             report_type = ReportType.DIAGNOSTIC_REPORT
         elif is_school_exam_report_query(q):
