@@ -1,5 +1,6 @@
 """Alembic migration environment configuration."""
 
+import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
@@ -16,6 +17,12 @@ from datasource.models.permission import DsPermission, DsRule
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
+
+# 生产部署优先用环境变量 DATABASE_URL（由 .env / docker compose env_file 注入），
+# 覆盖 alembic.ini 里写死的占位连接串——否则容器内迁移会连到错误的本地库。
+_env_db_url = os.getenv("DATABASE_URL")
+if _env_db_url:
+    config.set_main_option("sqlalchemy.url", _env_db_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

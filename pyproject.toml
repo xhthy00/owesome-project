@@ -47,7 +47,6 @@ dependencies = [
     "xlrd>=2.0.2",
     "clickhouse-sqlalchemy>=0.3.2",
     "dicttoxml>=1.7.16",
-    "dmpython==2.5.22; platform_system != 'Darwin'",
     "redshift-connector>=2.1.8",
     "elasticsearch[requests] (>=7.10,<8.0)",
     "ldap3>=2.9.1",
@@ -71,6 +70,18 @@ build-backend = "uv_build"
 
 [tool.uv.extra-build-dependencies]
 awesome = ["uv.build"]
+
+[tool.uv]
+# torch 的普通 wheel 在 Linux 上会拉 cuda-toolkit / nvidia-* 等数百 MB 依赖（服务器无 GPU）。
+# 用 unsafe-best-match 让 uv 在清华源与 pytorch CPU index 间优选 CPU 专用 wheel（+cpu，无 nvidia 依赖）。
+index-strategy = "unsafe-best-match"
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

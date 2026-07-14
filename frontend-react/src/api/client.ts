@@ -3,7 +3,9 @@ import { clearAccessToken, getAccessToken } from "@/auth/session";
 /** 与 pages/_app.tsx LayoutWrapper 中 WORKSPACE_OID_KEY 保持一致 */
 const WORKSPACE_OID_STORAGE_KEY = "frontend_react_workspace_oid";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api";
+// 兜底值必须是 /api/v1（与后端 common/router.py 的 /api/v1 前缀一致）。
+// 生产构建不带 .env.local（.dockerignore 排除），走此兜底；.env.local 里也应是 .../api/v1，语义统一。
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1";
 const AUTH_EXPIRED_TIP_KEY = "auth_expired_tip";
 
 function handleUnauthorizedRedirect() {
