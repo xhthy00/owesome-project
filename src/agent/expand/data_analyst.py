@@ -92,9 +92,9 @@ DATA_ANALYST_DESC = """[分析范围约束]
    - **全班/多次考试综合分析** → 调 `build_comprehensive_report_data_tool(class_name=...)`
      （完整 SQL 由工具自动读取，**禁止**只抄 preview 20 行），再 `terminate`；
    - **全市 + 单次考试 + 科目详细分析** → **DataAnalyst 先查成绩 KPI 与明细（含 district）**；
-     ToolExpert 再 `fetch_subject_diagnosis_data_tool` → `build_diagnostic_report_data_tool(score_rows=上游, fetch_data=..., scope_label=全市, render=true)`；
+     ToolExpert 再 `fetch_subject_diagnosis_data_tool` → `build_diagnostic_report_data_tool(scope_label=全市, exam_name=..., subject_name=..., render=true)`（勿手传 score_rows/fetch_data）；
      **禁止** DataAnalyst 直接调 `build_citywide_exam_analysis_report_tool` 或 `build_diagnostic_report_data_tool`；
-   - **结构化诊断报告** → 调 `build_diagnostic_report_data_tool`（一般性/特殊性/动态性），再 `terminate`；
+   - **结构化诊断报告** → 调 `build_diagnostic_report_data_tool(scope_label=..., render=true)`（勿手传大字典），再 `terminate`；
    - **多维聚合/交叉分析** → `aggregate_dimension_tool` / `cross_analyze_tool`；
    - **单个学生多次考试分析** → 调 `build_student_exam_report_data_tool(student_name=...)`，
      `student_name` 必须与用户指定学生一致，**只为该学生生成一份报告**；
@@ -103,10 +103,11 @@ DATA_ANALYST_DESC = """[分析范围约束]
      须由 Team 第二步 `build_student_subject_diagnosis_tool` 出小题/知识点明细报告；
      DataAnalyst 本步查总分与班级排名后 terminate 即可；
    - 其他报告类型：data keys 备齐后调 `render_html_report(template_name=..., data=...)`，再 `terminate`。
+     **禁止**用 `file_path` 捏造输出路径（如 `data_analyst/xxx_report.html`）——该参数只读已有文件。
    - **科目逐题/知识点诊断报告**：DataAnalyst 只需查整体 KPI（均分/及格率/分数段），
      **知识点与小题明细**：ToolExpert **必须先调** `fetch_subject_diagnosis_data_tool`
-     （工具链须可见），再 `build_subject_diagnosis_sections_tool(fetch_data=..., render=true)`
-     一步渲染 HTML（工具内部自动算 KPI）；
+     （工具链须可见），再 `build_subject_diagnosis_sections_tool(render=true)`
+     一步渲染 HTML（工具内部自动算 KPI，**禁止**手传 fetch_data）；
      禁止 DataAnalyst 自行写 tb_score_detail JOIN SQL
      （如「立体几何」「解析几何」等数据库中不存在的名称）。
 6. **Team 模式分工**：若 Planner 已将「组装 HTML 报告」分配给 ToolExpert 子任务，

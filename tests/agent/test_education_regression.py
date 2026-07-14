@@ -443,3 +443,84 @@ def test_build_diagnostic_report_kpi_uses_full_upstream_rows():
     assert "参考人数" in result.data.get("KPI_GRID", "")
     assert ">40<" in result.data.get("KPI_GRID", "")
     assert "<strong>40</strong>" in result.data.get("GENERAL_INSIGHT", "")
+
+
+def test_build_diagnostic_ignores_empty_llm_fetch_and_uses_upstream():
+    """空 fetch_data / item_rows 不得盖掉上游非空小题与成绩。"""
+    from src.agent.education.tools import build_diagnostic_report_data_tool
+
+    fetch_payload = {
+        "item_rows": [
+            {"question_no": 1, "knowledge_name": "函数", "score_rate": 55.0},
+        ],
+        "knowledge_rows": [
+            {"knowledge_name": "函数", "score_rate": 55.0, "question_count": 1},
+        ],
+        "score_rows": [{"score": 88.0, "exam_score": 150.0, "district": "广陵区"}] * 5,
+        "score_result": {
+            "columns": ["score", "exam_score"],
+            "rows": [[88.0, 150.0]] * 5,
+        },
+    }
+    report_data = {
+        "sub_tasks": [
+            {
+                "sub_task_agent": "DataAnalyst",
+                "exec_result": {
+                    "columns": ["score", "exam_score", "district"],
+                    "rows": [[88.0, 150.0, "广陵区"]] * 5,
+                    "row_count": 5,
+                },
+            },
+            {
+                "sub_task_agent": "ToolExpert",
+                "tool_calls": [
+                    {
+                        "tool": "fetch_subject_diagnosis_data_tool",
+                        "success": True,
+                        "data": fetch_payload,
+                    }
+                ],
+            },
+        ]
+    }
+    result = build_diagnostic_report_data_tool._fn(
+        fetch_data={"item_rows": [], "knowledge_rows": [], "score_rows": []},
+        item_rows=[],
+        knowledge_rows=[],
+        score_rows=[],
+        scope_label="全市",
+        exam_name="期末",
+        subject_name="数学",
+        render=False,
+        report_data=report_data,
+        sub_task="调 build_diagnostic_report_data_tool(scope_label=全市, render=true)",
+    )
+    assert "ITEM_TABLE" in result.data
+    assert "函数" in result.data["ITEM_TABLE"]
+    assert "KNOWLEDGE_TABLE" in result.data
+    assert "KPI_GRID" in result.data
+    assert ">5<" in result.data.get("KPI_GRID", "")
+
+
+def test_build_diagnostic_uses_last_fetch_data_ctx():
+    from src.agent.education.tools import build_diagnostic_report_data_tool
+
+    fetch_payload = {
+        "item_rows": [{"question_no": 3, "knowledge_name": "导数", "score_rate": 40.0}],
+        "knowledge_rows": [{"knowledge_name": "导数", "score_rate": 40.0, "question_count": 1}],
+        "score_rows": [{"score": 90.0, "exam_score": 150.0}] * 3,
+        "score_result": {
+            "columns": ["score", "exam_score"],
+            "rows": [[90.0, 150.0]] * 3,
+        },
+    }
+    result = build_diagnostic_report_data_tool._fn(
+        scope_label="全市",
+        subject_name="数学",
+        render=False,
+        tool_runtime_ctx={"last_fetch_data": fetch_payload},
+        sub_task="调 build_diagnostic_report_data_tool(scope_label=全市, render=true)",
+    )
+    assert "导数" in result.data.get("ITEM_TABLE", "")
+    assert "导数" in result.data.get("KNOWLEDGE_TABLE", "")

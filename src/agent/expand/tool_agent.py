@@ -55,10 +55,11 @@ Word/PDF 内容或自然语言报告正文**；必须按以下工具调用流程
    1. **先调** `fetch_subject_diagnosis_data_tool(school_name=..., subject_name=...,
       exam_name=..., class_name=...)` 查询 `tb_score_detail` 小题与知识点（观察返回的
       SQL 执行记录与 item_rows 条数）；
-   2. 调 `build_subject_diagnosis_sections_tool(fetch_data=上一步 fetch 返回的 data,
-      school_name=..., exam_name=..., subject_name=..., class_name=..., render=true)`
-      **一步完成 stats 计算 + 组装 + HTML 渲染并推送前端**（工具内部自动从 fetch_data
-      提取 score_result 并计算 KPI，**无需**先调 compute_score_stats_tool）；
+   2. 调 `build_subject_diagnosis_sections_tool(school_name=..., exam_name=...,
+      subject_name=..., class_name=..., render=true)`
+      **一步完成 stats 计算 + 组装 + HTML 渲染并推送前端**（工具自动从本轮/上游
+      fetch 结果提取 item_rows 并计算 KPI；**禁止**手传 fetch_data / item_rows /
+      knowledge_rows——大字典会截断成空表；**无需**先调 compute_score_stats_tool）；
    3. 调 `terminate(final_answer="科目诊断报告已生成")` 结束。
    **禁止**将 item_rows 原始 list 直接填入 ITEM_TABLE（须为 HTML 表格；若误传 list，
    系统会兜底转表格，但仍应优先走 sections 工具）。
@@ -73,10 +74,13 @@ Word/PDF 内容或自然语言报告正文**；必须按以下工具调用流程
    **全市 + 考试 + 科目结构化诊断报告**（含区县对比、详细小题/知识点）— 3 步分工：
    - **子任务 2（fetch）**：仅 `fetch_subject_diagnosis_data_tool` → `terminate`；
    - **子任务 3（组装）**：**仅** `build_diagnostic_report_data_tool(scope_label=全市, exam_name=..., subject_name=..., render=true)` → `terminate`；
-     **禁止**在子任务 3 再调 `fetch_subject_diagnosis_data_tool`（工具层会拦截；fetch_data/score_rows 自动从上游 report_data 读取）。
+     **禁止**在子任务 3 再调 `fetch_subject_diagnosis_data_tool`（工具自动读取上游成绩与 fetch 数据）；
+     **禁止**手传 `score_rows` / `fetch_data` / `item_rows`（大字典会截断成空表）；
    **禁止**在 fetch 子任务中调 `build_diagnostic_report_data_tool(render=true)`（工具层会拦截）。
    图表字段（形如 `XXX_CHART`）用 `build_chart_option_tool` 生成 JSON 字符串填入；
 3. 调 `render_html_report(template_name=..., data=..., title=...)` 生成 HTML；
+   **禁止**传 `file_path` 捏造输出路径（如 `data_analyst/xxx_report.html`）——
+   `file_path` 只读工作区已有 HTML，学情报告必须走 `template_name` + `data`；
 4. 调 `terminate(final_answer="学情报告已生成")` 结束。
 
 **综合分析报告（多次考试）快捷路径**：当子任务是综合分析 / `education/comprehensive.html` 时，

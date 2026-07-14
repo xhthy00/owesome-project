@@ -611,6 +611,8 @@ def test_select_report_template_tool_phase2_types():
 
 
 def test_student_subject_diagnosis_template_renders():
+    from src.agent.resource.tool.business import _render_template_html
+
     data = {
         "REPORT_TITLE": "STU20240003 数学学情分析报告",
         "REPORT_SUBTITLE": "南京市第一中学 高一(1)班",
@@ -635,15 +637,7 @@ def test_student_subject_diagnosis_template_renders():
         "SUMMARY": "<p>个人诊断</p>",
         "RECOMMENDATIONS": "<p>加强练习</p>",
     }
-    result = _run(
-        render_html_report.execute(
-            datasource_id=1,
-            template_name="education/student_subject_diagnosis.html",
-            data=data,
-            title="单次考试学情",
-        )
-    )
-    html = result.data["html"]
+    html = _render_template_html("education/student_subject_diagnosis.html", data)
     assert "能力画像" in html
     assert "各科目表现" not in html
     assert "历次成绩趋势" not in html
@@ -1094,6 +1088,29 @@ def test_render_html_report_blocks_comprehensive_handfill():
     assert "build_comprehensive_report_data_tool" in result.content
 
 
+@pytest.mark.parametrize(
+    "template_name,expected_tool",
+    [
+        ("education/subject_diagnosis.html", "build_subject_diagnosis_sections_tool"),
+        ("education/diagnostic_report.html", "build_diagnostic_report_data_tool"),
+        ("education/student_exam_analysis.html", "build_student_exam_report_data_tool"),
+        ("education/student_subject_diagnosis.html", "build_student_subject_diagnosis_tool"),
+    ],
+)
+def test_render_html_report_blocks_dedicated_edu_templates(template_name, expected_tool):
+    result = _run(
+        render_html_report.execute(
+            datasource_id=1,
+            template_name=template_name,
+            data={"REPORT_TITLE": "x"},
+            title="blocked",
+        )
+    )
+    assert result.data is not None
+    assert str(result.data.get("error") or "").startswith("use_build_")
+    assert expected_tool in result.content
+
+
 def test_comprehensive_progress_and_archive_are_student_level():
     """第五节 TOP 与第九节档案必须是逐人数据。"""
     records = []
@@ -1400,6 +1417,82 @@ def test_build_subject_diagnosis_sections_auto_fetch_from_report_data():
     assert "小题 1 条" in result.content
     assert "知识点 1 个" in result.content
     assert "INTERVENTION_SECTION" in result.data
+
+
+def test_build_subject_diagnosis_sections_ignores_empty_llm_fetch_data():
+    """LLM 手抄截断成空 fetch_data / item_rows 时，应回退到上游非空数据。"""
+    from src.agent.education import tools as edu_tools
+
+    fetch_payload = {
+        "item_rows": [
+            {"question_no": 1, "knowledge_name": "函数", "score_rate": 55.0},
+        ],
+        "knowledge_rows": [
+            {"knowledge_name": "函数", "score_rate": 55.0, "question_count": 1},
+        ],
+        "score_rows": [{"score": 100.0, "exam_score": 150.0}] * 3,
+        "score_result": {
+            "columns": ["score", "exam_score"],
+            "rows": [[100.0, 150.0]] * 3,
+        },
+    }
+    report_data = {
+        "sub_tasks": [
+            {
+                "tool_calls": [
+                    {
+                        "tool": "fetch_subject_diagnosis_data_tool",
+                        "success": True,
+                        "data": fetch_payload,
+                    }
+                ],
+            }
+        ]
+    }
+    result = _run(
+        edu_tools.build_subject_diagnosis_sections_tool.execute(
+            fetch_data={"item_rows": [], "knowledge_rows": [], "score_rows": []},
+            item_rows=[],
+            knowledge_rows=[],
+            school_name="扬州中学",
+            exam_name="期末",
+            subject_name="数学",
+            class_name="高三(11)班",
+            render=False,
+            report_data=report_data,
+        )
+    )
+    assert "小题 1 条" in result.content
+    assert "知识点 1 个" in result.content
+
+
+def test_build_subject_diagnosis_sections_uses_last_fetch_data_ctx():
+    """同子任务内：未传 fetch_data 时用 tool_runtime_ctx.last_fetch_data。"""
+    from src.agent.education import tools as edu_tools
+
+    fetch_payload = {
+        "item_rows": [{"question_no": 2, "knowledge_name": "导数", "score_rate": 40.0}],
+        "knowledge_rows": [{"knowledge_name": "导数", "score_rate": 40.0, "question_count": 1}],
+        "score_rows": [{"score": 90.0, "exam_score": 150.0}] * 2,
+        "score_result": {
+            "columns": ["score", "exam_score"],
+            "rows": [[90.0, 150.0], [90.0, 150.0]],
+        },
+    }
+    result = _run(
+        edu_tools.build_subject_diagnosis_sections_tool.execute(
+            school_name="扬州中学",
+            subject_name="数学",
+            class_name="高三(11)班",
+            render=True,
+            tool_runtime_ctx={"last_fetch_data": fetch_payload},
+        )
+    )
+    assert result.data["output_type"] == "html"
+    assert "小题 1 条" in result.content
+    html = result.data["html"]
+    assert "导数" in html
+    assert "-%" not in html or "90" in html  # KPI should be filled
 
 
 def test_build_subject_diagnosis_sections_includes_intervention_for_school():

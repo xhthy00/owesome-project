@@ -881,6 +881,58 @@ def find_upstream_fetch_data(report_data: dict[str, Any] | None) -> dict[str, An
     return None
 
 
+def _fetch_bundle_richness(data: dict[str, Any] | None) -> int:
+    """衡量 fetch 返回包是否含可用明细（用于优先生效非空源）。"""
+    if not isinstance(data, dict) or data.get("error"):
+        return -1
+    score_result = data.get("score_result")
+    has_sr = (
+        1
+        if isinstance(score_result, dict)
+        and (score_result.get("rows") or score_result.get("columns"))
+        else 0
+    )
+    return (
+        len(data.get("item_rows") or [])
+        + len(data.get("knowledge_rows") or [])
+        + len(data.get("score_rows") or [])
+        + has_sr
+    )
+
+
+def resolve_subject_diagnosis_fetch_data(
+    fetch_data: dict[str, Any] | None = None,
+    *,
+    report_data: dict[str, Any] | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """解析科目诊断 assemble 用的 fetch 包。
+
+    优先级按「内容最丰富」：显式 fetch_data、同子任务 last_fetch_data、上游 report_data。
+    避免 LLM 传空 dict/空数组盖掉真实上游数据。
+    """
+    candidates: list[dict[str, Any]] = []
+    if isinstance(fetch_data, dict) and not fetch_data.get("error"):
+        candidates.append(fetch_data)
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    last = ctx.get("last_fetch_data")
+    if isinstance(last, dict) and not last.get("error"):
+        candidates.append(last)
+    rd = report_data if isinstance(report_data, dict) else ctx.get("report_data")
+    upstream = find_upstream_fetch_data(rd if isinstance(rd, dict) else None)
+    if isinstance(upstream, dict):
+        candidates.append(upstream)
+
+    best: dict[str, Any] | None = None
+    best_score = -1
+    for cand in candidates:
+        score = _fetch_bundle_richness(cand)
+        if score > best_score:
+            best = cand
+            best_score = score
+    return best if best_score > 0 else None
+
+
 def report_participant_count_conflicts(html: str, expected: int) -> bool:
     """HTML 中是否出现与上游参考人数明显矛盾的数字。"""
     if expected <= 0:
@@ -935,6 +987,7 @@ __all__ = [
     "extract_item_detail_rows_from_report_data",
     "extract_score_rows_from_report_data",
     "find_upstream_fetch_data",
+    "resolve_subject_diagnosis_fetch_data",
     "resolve_comprehensive_table_input",
     "resolve_stats_input",
     "report_matches_school",

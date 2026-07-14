@@ -39,7 +39,8 @@ _DEDUP_EXEMPT_TOOLS = frozenset({TERMINATE_TOOL_NAME})
 _NEXT_TOOL_HINTS: dict[str, str] = {
     "fetch_subject_diagnosis_data_tool": (
         "fetch 子任务：`terminate`。**禁止** `build_diagnostic_report_data_tool(render=true)`；"
-        "组装子任务：改调 `build_diagnostic_report_data_tool(render=true)`，**禁止**再 fetch"
+        "同子任务组装：`build_subject_diagnosis_sections_tool(render=true)`（勿手传 fetch_data）；"
+        "跨子任务组装诊断报告：改调 `build_diagnostic_report_data_tool(render=true)`，**禁止**再 fetch"
     ),
     "build_diagnostic_report_data_tool": "`terminate`（报告已渲染）",
     "build_comprehensive_report_data_tool": "`terminate`（综合报告已渲染，含进步/退步 TOP 与学生档案）",
@@ -49,9 +50,13 @@ _NEXT_TOOL_HINTS: dict[str, str] = {
     "build_chart_option_tool": "`render_html_report` → `terminate`（科目诊断 sections 已含图表则跳过本工具）",
     "select_report_template_tool": (
         "若 comprehensive → `build_comprehensive_report_data_tool(class_name=...)` → `terminate`；"
-        "科目诊断 → `build_subject_diagnosis_sections_tool(fetch_data=..., render=true)` → `terminate`"
+        "科目诊断 → `build_subject_diagnosis_sections_tool(render=true)` → `terminate`"
+        "（勿手传 fetch_data，工具自动读取上游/本轮 fetch）"
     ),
-    "compute_score_stats_tool": "`build_subject_diagnosis_sections_tool(fetch_data=..., render=true)` → `terminate`",
+    "compute_score_stats_tool": (
+        "`build_subject_diagnosis_sections_tool(render=true)` → `terminate`"
+        "（勿手传 fetch_data）"
+    ),
     "list_tables": "`describe_table` / `execute_sql`",
     "describe_table": "`execute_sql` / `sample_rows`",
 }
@@ -61,6 +66,8 @@ _STRIP_TABLE_ARGS_TOOLS = frozenset(
     {
         "build_comprehensive_report_data_tool",
         "build_student_exam_report_data_tool",
+        "build_subject_diagnosis_sections_tool",
+        "build_diagnostic_report_data_tool",
     }
 )
 # records 等由上游注入；report_data / tool_runtime_ctx 必须保留 bindings，禁止 LLM 覆盖。
@@ -71,6 +78,12 @@ _STRIP_TABLE_ARG_KEYS = frozenset(
         "columns",
         "exec_result",
         "score_rows",
+        "fetch_data",
+        "item_rows",
+        "knowledge_rows",
+        "score_result",
+        "stats",
+        "trend_records",
         "report_data",
         "tool_runtime_ctx",
     }

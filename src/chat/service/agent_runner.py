@@ -634,13 +634,19 @@ async def _run_tool_expert_phase(
     # ToolExpert 本阶段通常不再 execute_sql；把上游 DataAnalyst 的完整明细
     # 写入 tool_runtime_ctx，供综合/学生报告工具空参读取（禁止 LLM 手抄 200+ 行）。
     if constraints and isinstance(constraints.report_data, dict):
-        from src.agent.education.query_parse import extract_best_exec_result_from_report_data
+        from src.agent.education.query_parse import (
+            extract_best_exec_result_from_report_data,
+            find_upstream_fetch_data,
+        )
 
         state.tool_runtime_ctx["report_data"] = constraints.report_data
         best_er = extract_best_exec_result_from_report_data(constraints.report_data)
         if best_er:
             state.last_exec_result = best_er
             state.tool_runtime_ctx["last_exec_result"] = best_er
+        upstream_fetch = find_upstream_fetch_data(constraints.report_data)
+        if upstream_fetch:
+            state.tool_runtime_ctx["last_fetch_data"] = upstream_fetch
 
     if llm_client is None:
         llm_client = LangChainLlmClient()
@@ -1014,9 +1020,11 @@ class _RunState:
         self.sub_task_index: int | None = sub_task_index
         self.reports: list[dict[str, Any]] = []
         self.constraints = constraints
-        # 可变运行时上下文：供教育工具读取完整 last_exec_result（避免 LLM 只抄 preview 行）
+        # 可变运行时上下文：供教育工具读取完整 last_exec_result / last_fetch_data
+        #（避免 LLM 只抄 preview 行或把 fetch 大字典塞进下一轮 JSON 导致截断为空）
         self.tool_runtime_ctx: dict[str, Any] = {
             "last_exec_result": None,
+            "last_fetch_data": None,
             "report_data": constraints.report_data if constraints else None,
         }
 
@@ -1151,6 +1159,15 @@ def _on_tool_result(state: _RunState, payload: dict[str, Any]) -> None:
                 "row_count": int(data.get("row_count") or len(rows)),
             }
             state.tool_runtime_ctx["last_exec_result"] = state.last_exec_result
+
+    # 同子任务内 fetch → sections：缓存完整 fetch data，避免 LLM 手抄截断成空表。
+    if (
+        payload.get("tool") == "fetch_subject_diagnosis_data_tool"
+        and success
+        and isinstance(data, dict)
+        and not data.get("error")
+    ):
+        state.tool_runtime_ctx["last_fetch_data"] = data
 
 
 async def _maybe_emit_legacy_sql_result(

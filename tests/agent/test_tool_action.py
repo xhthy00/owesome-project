@@ -298,6 +298,54 @@ def test_sanitize_strips_hand_filled_records():
     assert "report_data" not in out
 
 
+def test_sanitize_strips_empty_fetch_data_from_sections():
+    from src.agent.core.action.tool_action import _sanitize_report_tool_args
+
+    out = _sanitize_report_tool_args(
+        "build_subject_diagnosis_sections_tool",
+        {
+            "school_name": "扬州中学",
+            "subject_name": "数学",
+            "class_name": "高三(11)班",
+            "render": True,
+            "fetch_data": {"item_rows": [], "knowledge_rows": []},
+            "item_rows": [],
+            "stats": {},
+        },
+        sub_task="组装科目诊断报告",
+    )
+    assert out.get("school_name") == "扬州中学"
+    assert out.get("render") is True
+    assert "fetch_data" not in out
+    assert "item_rows" not in out
+    assert "stats" not in out
+
+
+def test_sanitize_strips_score_rows_from_diagnostic():
+    from src.agent.core.action.tool_action import _sanitize_report_tool_args
+
+    out = _sanitize_report_tool_args(
+        "build_diagnostic_report_data_tool",
+        {
+            "scope_label": "全市",
+            "exam_name": "期末",
+            "subject_name": "数学",
+            "render": True,
+            "score_rows": [{"score": 80}] * 5,
+            "fetch_data": {"item_rows": []},
+            "item_rows": [],
+            "trend_records": [],
+        },
+        sub_task="组装全市诊断报告",
+    )
+    assert out.get("scope_label") == "全市"
+    assert out.get("render") is True
+    assert "score_rows" not in out
+    assert "fetch_data" not in out
+    assert "item_rows" not in out
+    assert "trend_records" not in out
+
+
 def test_sanitize_fills_class_name_from_sub_task():
     from src.agent.core.action.tool_action import _sanitize_report_tool_args
 

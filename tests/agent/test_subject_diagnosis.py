@@ -57,6 +57,7 @@ def test_build_diagnosis_recommendations_for_weak_points():
     assert "导数" in html
     assert "第 5 题" in html
     assert "edu-rec-group" in html
+    assert "专题课" in html or "错题" in html
 
 
 def test_build_diagnosis_recommendations_personal_differentiated():
@@ -77,6 +78,38 @@ def test_build_diagnosis_recommendations_personal_differentiated():
     assert "安排专项练习、错题回顾与专题课" not in html
     assert "薄弱知识点专项" in html
     assert "题型突破计划" in html
+
+
+def test_build_diagnosis_recommendations_class_when_all_above_threshold():
+    """整体达标时不应只给「保持现有节奏」，应有 KPI / 相对薄弱建设性建议。"""
+    html = build_diagnosis_recommendations(
+        knowledge_rows=[
+            {"knowledge_name": "集合", "score_rate": 70},
+            {"knowledge_name": "函数", "score_rate": 66},
+            {"knowledge_name": "导数", "score_rate": 64},
+        ],
+        item_rows=[
+            {"question_no": 1, "knowledge_name": "集合", "score_rate": 70, "question_type": "选择"},
+            {"question_no": 8, "knowledge_name": "导数", "score_rate": 62, "question_type": "解答"},
+            {"question_no": 5, "knowledge_name": "函数", "score_rate": 65, "question_type": "填空"},
+            {"question_no": 10, "knowledge_name": "导数", "score_rate": 63, "question_type": "解答"},
+        ],
+        stats={
+            "count": 52,
+            "avg": 100,
+            "pass_rate": 61.54,
+            "excellent_rate": 21.15,
+            "full_score": 150,
+        },
+        weak_threshold=60.0,
+    )
+    assert "保持现有节奏" not in html
+    assert "班级提质目标" in html
+    assert "及格临界" in html or "过关" in html
+    assert "相对巩固知识点" in html or "导数" in html
+    assert "题型突破" in html
+    assert "edu-rec-intro" in html
+    assert "限时" in html or "面批" in html or "专练" in html
 
 
 def test_ability_portrait_insight_points_out_strengths_and_weaknesses():

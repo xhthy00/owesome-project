@@ -367,6 +367,7 @@ class ReportOrchestrator:
             data["RECOMMENDATIONS"] = build_diagnosis_recommendations(
                 knowledge_rows=knowledge_rows,
                 item_rows=item_rows,
+                stats=stats,
             )
             if knowledge_rows:
                 charts["KNOWLEDGE_CHART"] = build_chart_option(

@@ -529,6 +529,20 @@ def test_render_html_report_file_mode_reads_workspace_file(fake_datasource):
     assert "hello" in result.data["html"]
 
 
+def test_render_html_report_missing_file_path_hints_template_mode(fake_datasource):
+    """捏造输出路径时错误应提示改用 template_name + data。"""
+    result = _run(
+        biz.render_html_report.execute(
+            datasource_id=1,
+            file_path="data_analyst/yangzhou_high3_11_math_report.html",
+            title="bad-file-path",
+        )
+    )
+    assert result.data is None
+    assert "文件不存在" in result.content
+    assert "template_name" in result.content
+
+
 def test_render_html_report_file_mode_fallbacks_to_template_dir(fake_datasource, monkeypatch):
     base = Path(__file__).resolve().parents[2]
     template_dir = base / "src" / "agent" / "resource" / "templates"

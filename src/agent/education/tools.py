@@ -751,6 +751,7 @@ def build_subject_diagnosis_sections_tool(
     render: bool = True,
     report_data: dict[str, Any] | None = None,
     sub_task: str = "",
+    tool_runtime_ctx: dict[str, Any] | None = None,
 ) -> ToolResult:
     """组装科目诊断报告中的 ITEM_TABLE / KNOWLEDGE_TABLE / SUMMARY / RECOMMENDATIONS。
 
@@ -763,9 +764,9 @@ def build_subject_diagnosis_sections_tool(
     **无需**再调 ``select_report_template_tool`` / ``build_chart_option_tool`` /
     ``render_html_report``。
 
-    **入参简化**：可直接传 ``fetch_data=fetch_subject_diagnosis_data_tool 返回的 data``，
-    本工具会自动提取 item_rows / knowledge_rows / score_result 并内部计算 stats，
-    **无需**先调 ``compute_score_stats_tool``。
+    **入参简化**：运行时会自动从本轮 ``last_fetch_data`` / 上游 ``report_data``
+    读取 fetch 结果并计算 stats；**禁止**手抄 ``fetch_data`` / ``item_rows``
+   （易 JSON 截断成空表）。只需传 school/exam/subject/class + ``render=true``。
 
     Args:
         item_rows: 小题行，含 question_no / knowledge_name / score_rate 等。
@@ -773,29 +774,33 @@ def build_subject_diagnosis_sections_tool(
         stats: 可选整体 KPI（count/avg/pass_rate/excellent_rate/segments）。
             未传但提供了 score_result/fetch_data 时自动计算。
         score_result: fetch 工具返回的 ``{"columns": [...], "rows": [...]}``。
-        fetch_data: fetch 工具返回的完整 data 字典（优先级最高，自动提取上述字段）。
+        fetch_data: fetch 工具返回的完整 data 字典（通常由运行时自动注入）。
         school_name / exam_name / subject_name / class_name: 用于报告标题与范围。
         weak_threshold: 得分率低于该值视为薄弱知识点（默认 60）。
         render: True（默认）渲染 HTML；False 仅返回 data 字典（调试或手动 render）。
     """
-    from src.agent.education.query_parse import find_upstream_fetch_data
+    from src.agent.education.query_parse import resolve_subject_diagnosis_fetch_data
 
-    if not isinstance(fetch_data, dict) and report_data:
-        fetch_data = find_upstream_fetch_data(report_data)
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    fetch_data = resolve_subject_diagnosis_fetch_data(
+        fetch_data if isinstance(fetch_data, dict) else None,
+        report_data=report_data or ctx.get("report_data"),
+        tool_runtime_ctx=ctx,
+    )
 
-    # fetch_data 优先：自动提取 item_rows / knowledge_rows / score_result
+    # fetch_data 优先：空 list / 空 dict 视为未传，避免 LLM 截断空参盖掉真实数据
     if isinstance(fetch_data, dict):
-        if item_rows is None:
+        if not item_rows:
             item_rows = fetch_data.get("item_rows")
-        if knowledge_rows is None:
+        if not knowledge_rows:
             knowledge_rows = fetch_data.get("knowledge_rows")
-        if score_result is None:
+        if not score_result:
             score_result = fetch_data.get("score_result")
     items = list(item_rows or [])
     knowledge = enrich_knowledge_rows(list(knowledge_rows or []))
 
     # stats 未传但有 score_result/fetch_data 时，内部计算 KPI
-    if stats is None and score_result:
+    if (not stats or not stats.get("count")) and score_result:
         cfg = _get_effective_config()
         bundle_cfg = load_schema_from_config()
         if bundle_cfg is not None:
@@ -822,7 +827,8 @@ def build_subject_diagnosis_sections_tool(
                 _guess_field(cols_s, _FULL_SCORE_FIELD_HINTS) or "exam_score",
             )
             fs_val = resolved_fs
-        stats = _compute_stats(values, cfg, fs_val)
+        if values:
+            stats = _compute_stats(values, cfg, fs_val)
 
     if (stats is None or not stats.get("count")) and isinstance(fetch_data, dict):
         cfg = _get_effective_config()
@@ -830,10 +836,6 @@ def build_subject_diagnosis_sections_tool(
         if bundle_cfg is not None:
             cfg.pass_ratio = bundle_cfg.meta.pass_ratio
             cfg.excellent_ratio = bundle_cfg.meta.excellent_ratio
-        stats_from_fetch = _stats_from_fetch_bundle(fetch_data, cfg)
-        if stats_from_fetch:
-            stats = stats_from_fetch
-
         stats_from_fetch = _stats_from_fetch_bundle(fetch_data, cfg)
         if stats_from_fetch:
             stats = stats_from_fetch
@@ -892,6 +894,7 @@ def build_subject_diagnosis_sections_tool(
         item_rows=items,
         weak_threshold=weak_threshold,
         intervention_insights=intervention_insights or None,
+        stats=stats,
     )
 
     data = {
@@ -1181,6 +1184,7 @@ def build_subject_diagnosis_report_tool(
         item_rows=item_rows,
         weak_threshold=weak_threshold,
         intervention_insights=intervention_insights or None,
+        stats=stats,
     )
 
     section_data: dict[str, Any] = {
@@ -2919,17 +2923,19 @@ def build_diagnostic_report_data_tool(
     render: bool = True,
     report_data: dict[str, Any] | None = None,
     sub_task: str = "",
+    tool_runtime_ctx: dict[str, Any] | None = None,
 ) -> ToolResult:
     """组装结构化诊断报告（一般性/特殊性/动态性）并可选渲染 HTML。
 
     Team 多步路径：DataAnalyst 查数 → fetch → 本工具组装。
-    ``report_data`` / ``sub_task`` 由运行时注入；``score_rows`` 缺省时自动从
-    上游 DataAnalyst 的完整 exec_result 还原（避免 LLM 只传 preview 8 行）。
+    ``report_data`` / ``sub_task`` / ``tool_runtime_ctx`` 由运行时注入；
+    ``score_rows`` / ``fetch_data`` 缺省时自动从上游还原。
+    **禁止**手传大字典（易 JSON 截断成空表）。
     """
     from src.agent.education.query_parse import (
         extract_upstream_participant_count,
-        find_upstream_fetch_data,
         resolve_diagnostic_score_rows,
+        resolve_subject_diagnosis_fetch_data,
         sub_task_primary_tool,
     )
 
@@ -2944,29 +2950,34 @@ def build_diagnostic_report_data_tool(
             data={"error": "render_not_allowed_in_fetch_subtask"},
         )
 
-    if isinstance(fetch_data, dict):
-        pass
-    elif report_data:
-        fetch_data = find_upstream_fetch_data(report_data)
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    fetch_data = resolve_subject_diagnosis_fetch_data(
+        fetch_data if isinstance(fetch_data, dict) else None,
+        report_data=report_data or ctx.get("report_data"),
+        tool_runtime_ctx=ctx,
+    )
 
+    # 空 list / 空 dict 视为未传，避免 LLM 截断空参盖掉真实上游
     if isinstance(fetch_data, dict):
-        if item_rows is None:
+        if not item_rows:
             item_rows = fetch_data.get("item_rows")
-        if knowledge_rows is None:
+        if not knowledge_rows:
             knowledge_rows = fetch_data.get("knowledge_rows")
-        if score_result is None:
+        if not score_result:
             score_result = fetch_data.get("score_result")
 
     rows = resolve_diagnostic_score_rows(
-        score_rows=score_rows,
-        report_data=report_data,
+        score_rows=score_rows if score_rows else None,
+        report_data=report_data or ctx.get("report_data"),
         fetch_data=fetch_data if isinstance(fetch_data, dict) else None,
     )
-    expected_count = extract_upstream_participant_count(report_data)
+    expected_count = extract_upstream_participant_count(
+        report_data or ctx.get("report_data")
+    )
     if expected_count and len(rows) < expected_count:
         upstream_only = resolve_diagnostic_score_rows(
             score_rows=None,
-            report_data=report_data,
+            report_data=report_data or ctx.get("report_data"),
             fetch_data=None,
         )
         if len(upstream_only) >= expected_count:
@@ -2975,7 +2986,7 @@ def build_diagnostic_report_data_tool(
     cfg = _get_effective_config()
     data = _build_diagnostic_data(
         rows,
-        trend_records=trend_records,
+        trend_records=trend_records if trend_records else None,
         config=cfg,
         scope_label=scope_label,
         exam_name=exam_name,

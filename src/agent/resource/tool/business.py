@@ -320,7 +320,67 @@ def _read_report_file(file_path: str) -> str:
         if target.is_file():
             return target.read_text(encoding="utf-8")
 
-    raise ValueError(f"文件不存在: {file_path}")
+    raise ValueError(
+        f"文件不存在: {file_path}。"
+        "file_path 仅用于读取工作区里**已有**的 HTML 文件，不能当作输出路径捏造。"
+        "生成报告请改用 template_name（如 education/class_overview.html）+ data。"
+    )
+
+
+#: 有专用 build_* 工具的学情模板——禁止再用 render_html_report 手填 data（易截断空表）。
+_EDU_TEMPLATE_DEDICATED_BUILDERS: dict[str, tuple[str, str]] = {
+    "comprehensive": (
+        "build_comprehensive_report_data_tool(class_name=...)",
+        "use_build_comprehensive_report_data_tool",
+    ),
+    "subject_diagnosis": (
+        "build_subject_diagnosis_sections_tool(school_name=..., subject_name=..., render=true)",
+        "use_build_subject_diagnosis_sections_tool",
+    ),
+    "diagnostic_report": (
+        "build_diagnostic_report_data_tool(scope_label=..., exam_name=..., subject_name=..., render=true)",
+        "use_build_diagnostic_report_data_tool",
+    ),
+    "student_exam_analysis": (
+        "build_student_exam_report_data_tool(student_name=..., class_name=...)",
+        "use_build_student_exam_report_data_tool",
+    ),
+    "student_subject_diagnosis": (
+        "build_student_subject_diagnosis_tool(student_id=..., subject_name=..., render=true)",
+        "use_build_student_subject_diagnosis_tool",
+    ),
+}
+
+
+def _edu_template_redirect(template: str, html: str = "") -> ToolResult | None:
+    """若命中有专用 builder 的学情模板，返回改道提示；否则 None。"""
+    tpl_norm = (template or "").replace("\\", "/").lower().strip()
+    # 用文件名精确匹配，避免 student_subject_diagnosis 误中 subject_diagnosis
+    stem = Path(tpl_norm).stem
+    for key, (hint_tool, err_code) in _EDU_TEMPLATE_DEDICATED_BUILDERS.items():
+        if stem == key or tpl_norm.endswith(f"/{key}.html") or tpl_norm == f"{key}.html":
+            return ToolResult(
+                content=(
+                    f"该学情报告请改调 `{hint_tool}`："
+                    "工具会自动读取上游 fetch / SQL 明细并渲染。"
+                    f"**禁止**用 render_html_report 手填 `{key}` 模板或自写同结构 HTML"
+                    "（易 JSON 截断导致空 KPI / 空表）。"
+                ),
+                data={"error": err_code},
+            )
+    # comprehensive 也可能被做成纯 inline HTML（无 template_name）
+    if html and "每位学生详细档案" in html and "进步最快" in html:
+        hint_tool, err_code = _EDU_TEMPLATE_DEDICATED_BUILDERS["comprehensive"]
+        return ToolResult(
+            content=(
+                f"综合分析报告请改调 `{hint_tool}`："
+                "工具会自动读取完整 SQL 学生明细并生成进步/退步 TOP5 与每位学生档案。"
+                "**禁止**用 render_html_report 手填 comprehensive 模板或自写 HTML"
+                "（易导致第五节变成班级汇总、第九节学生档案为空）。"
+            ),
+            data={"error": err_code},
+        )
+    return None
 
 
 @tool()
@@ -335,25 +395,18 @@ def render_html_report(
     """生成 HTML 报告载荷（DB-GPT html_interpreter 风格）。
 
     三种模式（优先级从高到低）：
-    1. template_name/template_path + data：读取模板并替换 ``{{KEY}}``；
-    2. file_path：读取工作区内已有 HTML 文件；
+    1. template_name/template_path + data：读取模板并替换 ``{{KEY}}``
+       （仅限无专用 build_* 工具的模板，如 class_overview）；
+    2. file_path：读取工作区内**已有** HTML 文件（禁止捏造输出路径如 data_analyst/xxx.html）；
     3. html：直接使用传入 HTML 字符串。
+
+    综合 / 科目诊断 / 全市诊断 / 学生考试分析等有专用工具的学情模板，
+    **禁止**本工具手填——请改用对应 ``build_*_report*_tool``。
     """
     template = (template_name or "").strip() or (template_path or "").strip()
-    # 综合报告禁止手填 data / inline HTML——LLM 塞不下 50+ 人档案，会留下空表或班级汇总冒充 TOP5
-    tpl_norm = template.replace("\\", "/").lower()
-    if "comprehensive" in tpl_norm or (
-        html and "每位学生详细档案" in html and "进步最快" in html
-    ):
-        return ToolResult(
-            content=(
-                "综合分析报告请改调 `build_comprehensive_report_data_tool(class_name=...)`："
-                "工具会自动读取完整 SQL 学生明细并生成进步/退步 TOP5 与每位学生档案。"
-                "**禁止**用 render_html_report 手填 comprehensive 模板或自写 HTML"
-                "（易导致第五节变成班级汇总、第九节学生档案为空）。"
-            ),
-            data={"error": "use_build_comprehensive_report_data_tool"},
-        )
+    redirected = _edu_template_redirect(template, html)
+    if redirected is not None:
+        return redirected
 
     mode = "inline"
     try:
