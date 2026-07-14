@@ -92,6 +92,10 @@ def build_question_type_table_html(item_rows: list[dict[str, Any]] | None = None
     rows = list(item_rows or [])
     if not rows or not any(r.get("question_type") for r in rows):
         return ""
+    from src.agent.education.subject_diagnosis import collect_class_names
+
+    if len(collect_class_names(rows)) >= 2:
+        return build_question_type_compare_table_html(rows)
     from collections import defaultdict
 
     buckets: dict[str, list[float]] = defaultdict(list)
@@ -112,6 +116,103 @@ def build_question_type_table_html(item_rows: list[dict[str, Any]] | None = None
         "<th>题型</th><th>题数</th><th>平均得分率</th></tr></thead>"
         f"<tbody>{body}</tbody></table>"
     )
+
+
+def build_question_type_compare_table_html(item_rows: list[dict[str, Any]] | None = None) -> str:
+    """班级横向对比：各班题型平均得分率。"""
+    from collections import defaultdict
+
+    from src.agent.education.subject_diagnosis import collect_class_names
+
+    rows = list(item_rows or [])
+    classes = collect_class_names(rows)
+    if len(classes) < 2:
+        return build_question_type_table_html(
+            [{k: v for k, v in r.items() if k not in ("class_name", "class")} for r in rows]
+        )
+    # (question_type, class) → rates；题数按题型下去重 question_no
+    rate_buckets: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    qnos: dict[str, set[Any]] = defaultdict(set)
+    for r in rows:
+        qt = str(r.get("question_type") or "").strip() or "未知"
+        cls = str(r.get("class_name") or r.get("class") or "").strip()
+        if not cls:
+            continue
+        try:
+            rate = float(r["score_rate"]) if r.get("score_rate") is not None else None
+        except (TypeError, ValueError):
+            rate = None
+        if rate is None:
+            continue
+        rate_buckets[qt][cls].append(rate)
+        if r.get("question_no") is not None:
+            qnos[qt].add(r.get("question_no"))
+    if not rate_buckets:
+        return ""
+    class_heads = "".join(f"<th class='num'>{c}得分率</th>" for c in classes)
+    body_parts: list[str] = []
+    for qt in sorted(rate_buckets.keys()):
+        qcount = len(qnos.get(qt) or ())
+        if not qcount:
+            qcount = max((len(rate_buckets[qt][c]) for c in classes), default=0)
+        cells = f"<tr><td>{qt}</td><td class='num'>{qcount}</td>"
+        for c in classes:
+            rates = rate_buckets[qt].get(c) or []
+            cells += (
+                f"<td class='num'>{_fmt(sum(rates) / len(rates))}%</td>"
+                if rates
+                else "<td class='num'>-</td>"
+            )
+        body_parts.append(cells + "</tr>")
+    table = (
+        "<table class='edu-table edu-table--qtype-compare'><thead><tr>"
+        f"<th>题型</th><th class='num'>题数</th>{class_heads}"
+        f"</tr></thead><tbody>{''.join(body_parts)}</tbody></table>"
+    )
+    return f'<div class="edu-table-wrap">{table}</div>'
+
+
+def build_question_type_compare_chart_payload(
+    item_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """供 group_compare_bar：各组=题型，各系列=班级得分率。"""
+    from collections import defaultdict
+
+    from src.agent.education.subject_diagnosis import collect_class_names
+
+    rows = list(item_rows or [])
+    classes = collect_class_names(rows)
+    if len(classes) < 2:
+        return None
+    buckets: dict[str, dict[str, list[float]]] = defaultdict(lambda: defaultdict(list))
+    for r in rows:
+        qt = str(r.get("question_type") or "").strip()
+        cls = str(r.get("class_name") or r.get("class") or "").strip()
+        if not qt or not cls:
+            continue
+        try:
+            rate = float(r["score_rate"]) if r.get("score_rate") is not None else None
+        except (TypeError, ValueError):
+            rate = None
+        if rate is None:
+            continue
+        buckets[qt][cls].append(rate)
+    if not buckets:
+        return None
+    cats = sorted(buckets.keys())
+    metrics = []
+    for c in classes:
+        vals = []
+        for qt in cats:
+            rates = buckets[qt].get(c) or []
+            vals.append(round(sum(rates) / len(rates), 2) if rates else 0)
+        metrics.append({"name": c, "values": vals})
+    return {
+        "groups": cats,
+        "metrics": metrics,
+        "y_name": "得分率(%)",
+        "y_max": 100,
+    }
 
 
 def _qtype_averages(item_rows: list[dict[str, Any]]) -> list[tuple[str, float, int]]:
@@ -289,5 +390,7 @@ __all__ = [
     "build_ability_tier_matrix",
     "build_ability_tier_summary",
     "build_ability_tier_table_html",
+    "build_question_type_compare_chart_payload",
+    "build_question_type_compare_table_html",
     "build_question_type_table_html",
 ]

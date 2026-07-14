@@ -255,9 +255,11 @@ def _trend_line(data: dict[str, Any], title: str) -> dict[str, Any]:
 
 
 def _group_compare_bar(data: dict[str, Any], title: str) -> dict[str, Any]:
-    """分组对比柱图（如男/女生均分、各分组均分）。"""
+    """分组对比柱图（如男/女生均分、各班级得分率）。"""
     groups = data.get("groups") or []
     metrics = data.get("metrics") or []
+    y_name = data.get("y_name") or "分数"
+    y_max = data.get("y_max")
     series = []
     for metric in metrics:
         series.append({
@@ -266,13 +268,16 @@ def _group_compare_bar(data: dict[str, Any], title: str) -> dict[str, Any]:
             "data": list(metric.get("values") or []),
             "label": {"show": True, "position": "top"},
         })
+    y_axis: dict[str, Any] = {"type": "value", "name": y_name}
+    if y_max is not None:
+        y_axis["max"] = y_max
     return {
         "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
         "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
         "legend": {"top": 24},
         "grid": {"left": "8%", "right": "8%", "bottom": "12%", "containLabel": True},
         "xAxis": {"type": "category", "data": groups},
-        "yAxis": {"type": "value", "name": "分数"},
+        "yAxis": y_axis,
         "series": series,
     }
 

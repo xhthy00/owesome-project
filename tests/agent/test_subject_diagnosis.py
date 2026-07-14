@@ -241,6 +241,119 @@ def test_build_item_table_html_student_row_fields():
     assert "5" in html
 
 
+def test_build_item_compare_table_html_per_class_avg():
+    from src.agent.education.subject_diagnosis import build_item_compare_table_html
+
+    html = build_item_compare_table_html(
+        [
+            {
+                "class_name": "高一(1)班",
+                "question_no": 1,
+                "knowledge_name": "集合",
+                "full_score": 5,
+                "avg_score": 3.5,
+                "score_rate": 70,
+                "question_type": "选择",
+            },
+            {
+                "class_name": "高一(2)班",
+                "question_no": 1,
+                "knowledge_name": "集合",
+                "full_score": 5,
+                "avg_score": 4.0,
+                "score_rate": 80,
+                "question_type": "选择",
+            },
+        ]
+    )
+    assert "高一(1)班均分" in html
+    assert "高一(2)班均分" in html
+    assert "3.50" in html
+    assert "4.00" in html
+    assert "得分率" not in html
+    assert "区分度" not in html
+
+
+def test_build_knowledge_compare_table_html_per_class_rate():
+    from src.agent.education.subject_diagnosis import build_knowledge_compare_table_html
+
+    html = build_knowledge_compare_table_html(
+        [
+            {"class_name": "一班", "knowledge_name": "诱导公式", "question_count": 1, "score_rate": 67.0},
+            {"class_name": "二班", "knowledge_name": "诱导公式", "question_count": 1, "score_rate": 72.5},
+        ]
+    )
+    assert "一班得分率" in html
+    assert "二班得分率" in html
+    assert "67.00%" in html
+    assert "72.50%" in html
+    assert "掌握水平" not in html
+
+
+def test_build_question_type_compare_table_html():
+    from src.agent.education.knowledge_tier import build_question_type_compare_table_html
+
+    html = build_question_type_compare_table_html(
+        [
+            {"class_name": "A班", "question_type": "选择", "question_no": 1, "score_rate": 70},
+            {"class_name": "A班", "question_type": "选择", "question_no": 2, "score_rate": 80},
+            {"class_name": "B班", "question_type": "选择", "question_no": 1, "score_rate": 60},
+            {"class_name": "B班", "question_type": "选择", "question_no": 2, "score_rate": 70},
+        ]
+    )
+    assert "A班得分率" in html
+    assert "B班得分率" in html
+    assert "选择" in html
+    assert "75.00%" in html  # A班 (70+80)/2
+    assert "65.00%" in html  # B班
+
+
+def test_apply_grade_compare_skips_student_archive_logic():
+    """横向对比组装：使用各班表且不依赖学生档案。"""
+    from src.agent.education.tools import _apply_grade_compare_section_tables
+
+    data: dict = {}
+    _apply_grade_compare_section_tables(
+        data,
+        items=[{"question_no": 1, "knowledge_name": "集合", "avg_score": 3, "full_score": 5, "score_rate": 60}],
+        knowledge=[{"knowledge_name": "集合", "score_rate": 60, "question_count": 1, "level": "及格"}],
+        item_class_rows=[
+            {
+                "class_name": "1班",
+                "question_no": 1,
+                "knowledge_name": "集合",
+                "avg_score": 3,
+                "full_score": 5,
+                "score_rate": 60,
+                "question_type": "选择",
+            },
+            {
+                "class_name": "2班",
+                "question_no": 1,
+                "knowledge_name": "集合",
+                "avg_score": 4,
+                "full_score": 5,
+                "score_rate": 80,
+                "question_type": "选择",
+            },
+        ],
+        knowledge_class_rows=[
+            {"class_name": "1班", "knowledge_name": "集合", "question_count": 1, "score_rate": 60},
+            {"class_name": "2班", "knowledge_name": "集合", "question_count": 1, "score_rate": 80},
+        ],
+        is_grade_compare=True,
+    )
+    assert "1班均分" in data["ITEM_TABLE"]
+    assert "2班均分" in data["ITEM_TABLE"]
+    assert "得分率" not in data["ITEM_TABLE"]
+    assert "1班得分率" in data["KNOWLEDGE_TABLE"]
+    assert "group_compare_bar" in str(data.get("KNOWLEDGE_CHART") or "") or "1班" in str(
+        data.get("KNOWLEDGE_CHART") or ""
+    )
+    assert data.get("QUESTION_TYPE_TABLE")
+    assert "1班得分率" in data["QUESTION_TYPE_TABLE"]
+
+
 def test_coerce_report_table_fields_from_list():
     from src.agent.education.subject_diagnosis import coerce_report_table_fields
 
@@ -263,3 +376,15 @@ def test_coerce_report_table_fields_from_python_repr_string():
     data = coerce_report_table_fields({"ITEM_TABLE": raw})
     assert "<table" in data["ITEM_TABLE"]
     assert "集合" in data["ITEM_TABLE"]
+
+
+def test_subject_diagnosis_template_hides_empty_student_archive():
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src/agent/resource/templates/education/subject_diagnosis.html"
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "studentArchiveBody" in text
+    assert "sec.style.display = 'none'" in text

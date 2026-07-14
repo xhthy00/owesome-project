@@ -40,6 +40,7 @@ from src.agent.education.knowledge_tier import (
     build_ability_tier_insight,
     build_ability_tier_summary,
     build_ability_tier_table_html as _build_ability_tier_table_html,
+    build_question_type_compare_chart_payload as _build_question_type_compare_chart_payload,
     build_question_type_table_html as _build_question_type_table_html,
 )
 from src.agent.education.stats import (
@@ -60,8 +61,10 @@ from src.agent.education.subject_diagnosis import (
     build_diagnosis_recommendations,
     build_diagnosis_summary,
     build_item_table_html,
+    build_knowledge_compare_chart_payload,
     build_knowledge_table_html,
     build_segment_table_html,
+    collect_class_names,
     enrich_knowledge_rows,
 )
 from src.agent.education.templates import select_report_template as _select_template
@@ -685,6 +688,8 @@ def fetch_subject_diagnosis_data_tool(
     )
     item_rows = bundle["item_rows"]
     knowledge_rows = bundle["knowledge_rows"]
+    item_class_rows = bundle.get("item_class_rows") or []
+    knowledge_class_rows = bundle.get("knowledge_class_rows") or []
     score_values = bundle["score_values"]
     score_rows = bundle.get("score_rows") or []
     warnings = bundle.get("warnings") or []
@@ -712,6 +717,13 @@ def fetch_subject_diagnosis_data_tool(
         f"- 小题明细（tb_score_detail）：{len(item_rows)} 题\n"
         f"- 知识点汇总：{len(knowledge_rows)} 个\n"
         f"- 学生成绩（tb_score）：{len(score_values)} 条\n"
+    )
+    if item_class_rows or knowledge_class_rows:
+        content += (
+            f"- 班级横向对比小题：{len(item_class_rows)} 行\n"
+            f"- 班级横向对比知识点：{len(knowledge_class_rows)} 行\n"
+        )
+    content += (
         f"SQL 执行记录：\n{_format_diagnosis_sql_logs(sql_logs)}\n"
         "下一步：**本步请 terminate**（禁止同子任务渲染报告）。"
         "组装留给后续子任务："
@@ -728,6 +740,8 @@ def fetch_subject_diagnosis_data_tool(
         data={
             "item_rows": item_rows,
             "knowledge_rows": knowledge_rows,
+            "item_class_rows": item_class_rows,
+            "knowledge_class_rows": knowledge_class_rows,
             "score_rows": score_rows,
             "score_result": score_result,
             "warnings": warnings,
@@ -924,8 +938,6 @@ def build_subject_diagnosis_sections_tool(
     )
 
     data = {
-        "ITEM_TABLE": build_item_table_html(items),
-        "KNOWLEDGE_TABLE": build_knowledge_table_html(knowledge),
         "WEAK_KNOWLEDGE_LIST": "、".join(
             str(r.get("knowledge_name") or "")
             for r in knowledge
@@ -936,17 +948,20 @@ def build_subject_diagnosis_sections_tool(
         "INTERVENTION_SECTION": intervention_html,
         "CLASS_COMPARE_TABLE": class_compare_html,
     }
-    if knowledge:
-        data["KNOWLEDGE_CHART"] = _build_chart_option(
-            "knowledge_bar",
-            {
-                "categories": [str(r.get("knowledge_name") or "") for r in knowledge[:12]],
-                "values": [float(r.get("score_rate") or 0) for r in knowledge[:12]],
-            },
-            title="知识点得分率",
-        )
-    else:
-        data["KNOWLEDGE_CHART"] = ""
+    item_class_rows: list[dict[str, Any]] = []
+    knowledge_class_rows: list[dict[str, Any]] = []
+    if isinstance(fetch_data, dict):
+        item_class_rows = list(fetch_data.get("item_class_rows") or [])
+        knowledge_class_rows = list(fetch_data.get("knowledge_class_rows") or [])
+    is_grade_compare = bool(school_name and not class_name)
+    _apply_grade_compare_section_tables(
+        data,
+        items=items,
+        knowledge=knowledge,
+        item_class_rows=item_class_rows,
+        knowledge_class_rows=knowledge_class_rows,
+        is_grade_compare=is_grade_compare,
+    )
     tier = build_ability_tier_summary(knowledge, weak_threshold=weak_threshold)
     tier_table = _build_ability_tier_table_html(knowledge)
     if tier_table:
@@ -962,39 +977,25 @@ def build_subject_diagnosis_sections_tool(
                 },
                 title="能力层级得分率",
             )
-    item_metrics = _compute_item_metrics(items)
-    qtype_table = _build_question_type_table_html(item_metrics)
-    if qtype_table:
-        data["QUESTION_TYPE_TABLE"] = qtype_table
-        from collections import defaultdict
-
-        buckets: dict[str, list[float]] = defaultdict(list)
-        for ir in item_metrics:
-            if ir.get("question_type") and ir.get("score_rate") is not None:
-                buckets[str(ir["question_type"])].append(float(ir["score_rate"]))
-        if buckets:
-            cats = sorted(buckets.keys())
-            vals = [round(sum(buckets[c]) / len(buckets[c]), 2) for c in cats]
-            data["QUESTION_TYPE_CHART"] = _build_chart_option(
-                "question_type_bar",
-                {"categories": cats, "values": vals},
-                title="题型得分率",
-            )
     weak_cnt = sum(1 for r in knowledge if r.get("level") == "需加强")
 
-    archive_html = _subject_diagnosis_student_archive(
-        score_rows=score_rows,
-        item_rows=items,
-        exam_name=exam_name,
-        subject_name=subject_name,
-        school_name=school_name,
-        class_name=class_name,
-        full_score=(stats or {}).get("full_score") if isinstance(stats, dict) else None,
-        weak_threshold=weak_threshold,
-        datasource_id=datasource_id,
-        workspace_oid=workspace_oid,
-    )
-    data["STUDENT_ARCHIVE_TABLE"] = archive_html
+    # 班级横向对比报告不展示「每位学生详细档案与个性化建议」
+    if is_grade_compare:
+        data["STUDENT_ARCHIVE_TABLE"] = ""
+    else:
+        archive_html = _subject_diagnosis_student_archive(
+            score_rows=score_rows,
+            item_rows=items,
+            exam_name=exam_name,
+            subject_name=subject_name,
+            school_name=school_name,
+            class_name=class_name,
+            full_score=(stats or {}).get("full_score") if isinstance(stats, dict) else None,
+            weak_threshold=weak_threshold,
+            datasource_id=datasource_id,
+            workspace_oid=workspace_oid,
+        )
+        data["STUDENT_ARCHIVE_TABLE"] = archive_html
 
     if not render:
         content = (
@@ -1255,8 +1256,6 @@ def build_subject_diagnosis_report_tool(
     )
 
     section_data: dict[str, Any] = {
-        "ITEM_TABLE": build_item_table_html(item_rows),
-        "KNOWLEDGE_TABLE": build_knowledge_table_html(knowledge_enriched),
         "WEAK_KNOWLEDGE_LIST": "、".join(
             str(r.get("knowledge_name") or "")
             for r in knowledge_enriched
@@ -1267,17 +1266,15 @@ def build_subject_diagnosis_report_tool(
         "INTERVENTION_SECTION": intervention_html,
         "CLASS_COMPARE_TABLE": class_compare_html,
     }
-    if knowledge_enriched:
-        section_data["KNOWLEDGE_CHART"] = _build_chart_option(
-            "knowledge_bar",
-            {
-                "categories": [str(r.get("knowledge_name") or "") for r in knowledge_enriched[:12]],
-                "values": [float(r.get("score_rate") or 0) for r in knowledge_enriched[:12]],
-            },
-            title="知识点得分率",
-        )
-    else:
-        section_data["KNOWLEDGE_CHART"] = ""
+    is_grade_compare = bool(school_name and not class_name)
+    _apply_grade_compare_section_tables(
+        section_data,
+        items=item_rows,
+        knowledge=knowledge_enriched,
+        item_class_rows=list(bundle.get("item_class_rows") or []),
+        knowledge_class_rows=list(bundle.get("knowledge_class_rows") or []),
+        is_grade_compare=is_grade_compare,
+    )
 
     segments = _normalize_segments(
         stats.get("segments") or [],
@@ -1336,18 +1333,21 @@ def build_subject_diagnosis_report_tool(
         pass
     report_data.update(section_data)
 
-    report_data["STUDENT_ARCHIVE_TABLE"] = _subject_diagnosis_student_archive(
-        score_rows=score_rows,
-        item_rows=item_rows,
-        exam_name=exam_name,
-        subject_name=subject_name,
-        school_name=school_name,
-        class_name=class_name,
-        full_score=stats.get("full_score") if isinstance(stats, dict) else None,
-        weak_threshold=weak_threshold,
-        datasource_id=datasource_id,
-        workspace_oid=workspace_oid,
-    )
+    if is_grade_compare:
+        report_data["STUDENT_ARCHIVE_TABLE"] = ""
+    else:
+        report_data["STUDENT_ARCHIVE_TABLE"] = _subject_diagnosis_student_archive(
+            score_rows=score_rows,
+            item_rows=item_rows,
+            exam_name=exam_name,
+            subject_name=subject_name,
+            school_name=school_name,
+            class_name=class_name,
+            full_score=stats.get("full_score") if isinstance(stats, dict) else None,
+            weak_threshold=weak_threshold,
+            datasource_id=datasource_id,
+            workspace_oid=workspace_oid,
+        )
 
     if not render:
         return ToolResult(
@@ -1598,6 +1598,58 @@ def _diagnosis_sql_bundle(
     return item_sql, knowledge_sql, score_sql, exam_id_sql
 
 
+def _diagnosis_class_compare_sql(
+    where_clause_detail: str,
+    db_type: str = "pg",
+) -> tuple[str, str]:
+    """各班小题均分 / 知识点得分率 SQL（用于班级横向对比）。"""
+    full_score_expr = "COALESCE(eq.question_score, sd.question_score)"
+    item_rate = _score_rate_sql("AVG(sd.score)", full_score_expr, db_type)
+    item_sql = (
+        "SELECT sc.class AS class_name,\n"
+        "       sd.question_no,\n"
+        "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+        "       eq.question_type AS question_type,\n"
+        f"       {full_score_expr} AS full_score,\n"
+        "       ROUND(AVG(sd.score), 2) AS avg_score,\n"
+        f"       {item_rate} AS score_rate\n"
+        "FROM tb_score_detail sd\n"
+        "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
+        "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
+        "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+        "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
+        "JOIN tb_school sch ON sc.school_id = sch.id\n"
+        "JOIN tb_exam e ON sc.exam_id = e.id"
+        + where_clause_detail
+        + f"\nGROUP BY sc.class, sd.question_no, COALESCE(k.knowledge_name, '未关联知识点'), "
+        f"eq.question_type, {full_score_expr}\n"
+        "ORDER BY sd.question_no, sc.class\nLIMIT 10000"
+    )
+    know_rate = _score_rate_sql(
+        "SUM(sd.score)",
+        f"SUM({full_score_expr})",
+        db_type,
+    )
+    knowledge_sql = (
+        "SELECT sc.class AS class_name,\n"
+        "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+        "       k.ability_level AS ability_level,\n"
+        "       COUNT(DISTINCT sd.question_no) AS question_count,\n"
+        f"       {know_rate} AS score_rate\n"
+        "FROM tb_score_detail sd\n"
+        "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
+        "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
+        "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+        "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
+        "JOIN tb_school sch ON sc.school_id = sch.id\n"
+        "JOIN tb_exam e ON sc.exam_id = e.id"
+        + where_clause_detail
+        + "\nGROUP BY sc.class, COALESCE(k.knowledge_name, '未关联知识点'), k.ability_level\n"
+        "ORDER BY knowledge_name, sc.class\nLIMIT 10000"
+    )
+    return item_sql, knowledge_sql
+
+
 def _rows_to_dicts(result: dict[str, Any] | None) -> list[dict[str, Any]]:
     if not isinstance(result, dict):
         return []
@@ -1650,7 +1702,10 @@ def _fetch_subject_diagnosis_rows(
     student_id: str = "",
     db_type: str = "pg",
 ) -> dict[str, Any]:
-    """查小题/知识点/成绩，带考试名放宽与 exam_id 回退。"""
+    """查小题/知识点/成绩，带考试名放宽与 exam_id 回退。
+
+    全校无班级（横向对比）时额外返回 ``item_class_rows`` / ``knowledge_class_rows``。
+    """
     base_kw = {
         "school_name": school_name,
         "class_name": class_name,
@@ -1666,12 +1721,16 @@ def _fetch_subject_diagnosis_rows(
     warnings: list[str] = []
     errors: list[str] = []
     sql_logs: list[dict[str, Any]] = []
+    last_detail_wc = ""
+    want_class_compare = bool(school_name and not class_name and not student_id)
 
     def run_bundle(
         where_clause_detail: str,
         where_clause_score: str,
         phase: str,
     ) -> tuple[list[dict], list[dict], list[float], float | None, list[str], list[dict[str, Any]]]:
+        nonlocal last_detail_wc
+        last_detail_wc = where_clause_detail
         item_sql, knowledge_sql, score_sql, exam_id_sql = _diagnosis_sql_bundle(
             where_clause_detail,
             where_clause_score,
@@ -1804,9 +1863,51 @@ def _fetch_subject_diagnosis_rows(
                 f"（命中 {len(sv_r)} 条）。建议核查 tb_score.class 实际值。"
             )
 
+    item_class_rows: list[dict[str, Any]] = []
+    knowledge_class_rows: list[dict[str, Any]] = []
+    if want_class_compare and last_detail_wc and (item_rows or knowledge_rows):
+        item_c_sql, know_c_sql = _diagnosis_class_compare_sql(last_detail_wc, db_type)
+        for label, sql in (
+            ("item_by_class", item_c_sql),
+            ("knowledge_by_class", know_c_sql),
+        ):
+            success, msg, result, sql_run = _run_edu_sql(
+                sql,
+                datasource_id=datasource_id,
+                workspace_oid=workspace_oid,
+                user_id=user_id,
+            )
+            row_count = len(result.get("rows") or []) if isinstance(result, dict) else 0
+            sql_logs.append(
+                {
+                    "phase": "class_compare",
+                    "label": label,
+                    "success": success,
+                    "row_count": row_count,
+                    "message": msg if not success else "",
+                    "sql_preview": (sql_run or sql)[:600],
+                }
+            )
+            if not success:
+                errors.append(f"[class_compare/{label}] {msg}")
+                continue
+            if not isinstance(result, dict):
+                continue
+            if label == "item_by_class":
+                item_class_rows = _rows_to_dicts(result)
+            else:
+                knowledge_class_rows = _rows_to_dicts(result)
+        if item_class_rows or knowledge_class_rows:
+            warnings.append(
+                f"已加载班级横向对比明细：小题 {len(item_class_rows)} 行、"
+                f"知识点 {len(knowledge_class_rows)} 行"
+            )
+
     return {
         "item_rows": item_rows,
         "knowledge_rows": knowledge_rows,
+        "item_class_rows": item_class_rows,
+        "knowledge_class_rows": knowledge_class_rows,
         "score_values": score_values,
         "score_rows": score_rows,
         "full_score": full_score,
@@ -1938,6 +2039,80 @@ def _resolve_subject_diagnosis_report_type(*, school_name: str = "", class_name:
     if (school_name or "").strip() and not (class_name or "").strip():
         return ReportType.GRADE_COMPARISON
     return ReportType.SUBJECT_DIAGNOSIS
+
+
+def _apply_grade_compare_section_tables(
+    data: dict[str, Any],
+    *,
+    items: list[dict[str, Any]],
+    knowledge: list[dict[str, Any]],
+    item_class_rows: list[dict[str, Any]] | None = None,
+    knowledge_class_rows: list[dict[str, Any]] | None = None,
+    is_grade_compare: bool = False,
+) -> None:
+    """班级横向对比：小题/知识点/题型改为各班对比表与分组柱图。"""
+    item_cmp = list(item_class_rows or [])
+    know_cmp = list(knowledge_class_rows or [])
+    use_item_cmp = is_grade_compare and len(collect_class_names(item_cmp)) >= 2
+    use_know_cmp = is_grade_compare and len(collect_class_names(know_cmp)) >= 2
+
+    if use_item_cmp:
+        data["ITEM_TABLE"] = build_item_table_html(item_cmp)
+    else:
+        data["ITEM_TABLE"] = build_item_table_html(items)
+
+    if use_know_cmp:
+        data["KNOWLEDGE_TABLE"] = build_knowledge_table_html(know_cmp)
+        chart_payload = build_knowledge_compare_chart_payload(know_cmp)
+        if chart_payload:
+            data["KNOWLEDGE_CHART"] = _build_chart_option(
+                "group_compare_bar",
+                chart_payload,
+                title="各班知识点得分率对比",
+            )
+        else:
+            data["KNOWLEDGE_CHART"] = ""
+    else:
+        data["KNOWLEDGE_TABLE"] = build_knowledge_table_html(knowledge)
+        if knowledge:
+            data["KNOWLEDGE_CHART"] = _build_chart_option(
+                "knowledge_bar",
+                {
+                    "categories": [str(r.get("knowledge_name") or "") for r in knowledge[:12]],
+                    "values": [float(r.get("score_rate") or 0) for r in knowledge[:12]],
+                },
+                title="知识点得分率",
+            )
+        else:
+            data["KNOWLEDGE_CHART"] = ""
+
+    qtype_source = item_cmp if use_item_cmp else _compute_item_metrics(items)
+    qtype_table = _build_question_type_table_html(qtype_source)
+    if qtype_table:
+        data["QUESTION_TYPE_TABLE"] = qtype_table
+        if use_item_cmp:
+            qchart = _build_question_type_compare_chart_payload(item_cmp)
+            if qchart:
+                data["QUESTION_TYPE_CHART"] = _build_chart_option(
+                    "group_compare_bar",
+                    qchart,
+                    title="各班题型得分率对比",
+                )
+        else:
+            from collections import defaultdict
+
+            buckets: dict[str, list[float]] = defaultdict(list)
+            for ir in qtype_source:
+                if ir.get("question_type") and ir.get("score_rate") is not None:
+                    buckets[str(ir["question_type"])].append(float(ir["score_rate"]))
+            if buckets:
+                cats = sorted(buckets.keys())
+                vals = [round(sum(buckets[c]) / len(buckets[c]), 2) for c in cats]
+                data["QUESTION_TYPE_CHART"] = _build_chart_option(
+                    "question_type_bar",
+                    {"categories": cats, "values": vals},
+                    title="题型得分率",
+                )
 
 
 def _subject_diagnosis_student_archive(

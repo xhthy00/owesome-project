@@ -81,9 +81,28 @@ def _wrap_table_html(table_html: str) -> str:
     return f'<div class="edu-table-wrap">{table_html}</div>'
 
 
+def _row_class_name(row: dict[str, Any]) -> str:
+    return str(row.get("class_name") or row.get("class") or "").strip()
+
+
+def collect_class_names(rows: list[dict[str, Any]]) -> list[str]:
+    """按首次出现顺序收集班级名。"""
+    names: list[str] = []
+    seen: set[str] = set()
+    for r in rows:
+        name = _row_class_name(r)
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
+
+
 def build_item_table_html(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "<p class='edu-sub'>暂无小题数据</p>"
+    # 含多班 class_name 时走横向对比表（各班均分）
+    if len(collect_class_names(rows)) >= 2:
+        return build_item_compare_table_html(rows)
     norm = [normalize_item_row(r) for r in rows]
     score_label = "得分" if any("score" in r for r in rows) else "均分"
     extra_cols = any(
@@ -92,7 +111,6 @@ def build_item_table_html(rows: list[dict[str, Any]]) -> str:
         for k in ("question_type", "difficulty", "discrimination")
     )
     extra_head = ""
-    extra_cells = ""
     if extra_cols:
         extra_head = "<th>题型</th><th class='num'>难度</th><th class='num'>区分度</th>"
     body_parts: list[str] = []
@@ -120,9 +138,61 @@ def build_item_table_html(rows: list[dict[str, Any]]) -> str:
     )
 
 
+def build_item_compare_table_html(rows: list[dict[str, Any]]) -> str:
+    """班级横向对比：各班每题均分（不含得分率、区分度）。"""
+    if not rows:
+        return "<p class='edu-sub'>暂无小题数据</p>"
+    classes = collect_class_names(rows)
+    if not classes:
+        return build_item_table_html(
+            [{k: v for k, v in r.items() if k not in ("class_name", "class")} for r in rows]
+        )
+    norm = [normalize_item_row(r) for r in rows]
+    # question_no → meta + class → avg
+    order: list[Any] = []
+    meta: dict[Any, dict[str, Any]] = {}
+    scores: dict[Any, dict[str, float | None]] = {}
+    for r in norm:
+        qno = r.get("question_no")
+        if qno not in meta:
+            order.append(qno)
+            meta[qno] = {
+                "knowledge_name": r.get("knowledge_name") or "-",
+                "full_score": r.get("full_score"),
+                "question_type": r.get("question_type") or "-",
+            }
+            scores[qno] = {}
+        cls = _row_class_name(r)
+        if cls:
+            scores[qno][cls] = _num(r.get("avg_score"))
+    has_qtype = any(str(meta[q].get("question_type") or "") not in ("", "-") for q in order)
+    class_heads = "".join(f"<th class='num'>{c}均分</th>" for c in classes)
+    qtype_head = "<th>题型</th>" if has_qtype else ""
+    body_parts: list[str] = []
+    for qno in order:
+        m = meta[qno]
+        cells = (
+            f"<tr><td>{qno}</td>"
+            f"<td class='edu-cell-text'>{m.get('knowledge_name') or '-'}</td>"
+            f"<td class='num'>{_fmt(m.get('full_score'))}</td>"
+        )
+        if has_qtype:
+            cells += f"<td>{m.get('question_type') or '-'}</td>"
+        for c in classes:
+            cells += f"<td class='num'>{_fmt(scores[qno].get(c))}</td>"
+        body_parts.append(cells + "</tr>")
+    return _wrap_table_html(
+        "<table class='edu-table edu-table--item-compare'><thead><tr>"
+        f"<th>题号</th><th>知识点</th><th class='num'>满分</th>{qtype_head}{class_heads}"
+        f"</tr></thead><tbody>{''.join(body_parts)}</tbody></table>"
+    )
+
+
 def build_knowledge_table_html(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "<p class='edu-sub'>暂无知识点数据</p>"
+    if len(collect_class_names(rows)) >= 2:
+        return build_knowledge_compare_table_html(rows)
     norm = [normalize_knowledge_row(r) for r in rows]
     has_level_col = any(r.get("ability_level") for r in norm)
     level_head = "<th>能力层级</th>" if has_level_col else ""
@@ -145,6 +215,95 @@ def build_knowledge_table_html(rows: list[dict[str, Any]]) -> str:
         f"{level_head}</tr></thead>"
         f"<tbody>{''.join(body_parts)}</tbody></table>"
     )
+
+
+def build_knowledge_compare_table_html(rows: list[dict[str, Any]]) -> str:
+    """班级横向对比：各班知识点得分率。"""
+    if not rows:
+        return "<p class='edu-sub'>暂无知识点数据</p>"
+    classes = collect_class_names(rows)
+    if not classes:
+        return build_knowledge_table_html(
+            [{k: v for k, v in r.items() if k not in ("class_name", "class")} for r in rows]
+        )
+    norm = [normalize_knowledge_row(r) for r in rows]
+    order: list[str] = []
+    meta: dict[str, Any] = {}
+    rates: dict[str, dict[str, float | None]] = {}
+    for r in norm:
+        name = str(r.get("knowledge_name") or "").strip() or "未关联知识点"
+        if name not in meta:
+            order.append(name)
+            meta[name] = r.get("question_count", r.get("question_nos", "-"))
+            rates[name] = {}
+        cls = _row_class_name(r)
+        if cls:
+            rates[name][cls] = _num(r.get("score_rate"))
+            # 涉及题数取各班最大值（题目集合一致时相同）
+            qc = r.get("question_count", r.get("question_nos"))
+            try:
+                qc_n = int(qc) if qc is not None else None
+            except (TypeError, ValueError):
+                qc_n = None
+            if qc_n is not None:
+                try:
+                    cur = int(meta[name]) if meta[name] not in (None, "-") else 0
+                except (TypeError, ValueError):
+                    cur = 0
+                meta[name] = max(cur, qc_n)
+    class_heads = "".join(f"<th class='num'>{c}得分率</th>" for c in classes)
+    body_parts: list[str] = []
+    for name in order:
+        cells = (
+            f"<tr><td class='edu-cell-text'>{name}</td>"
+            f"<td class='num'>{meta.get(name, '-')}</td>"
+        )
+        for c in classes:
+            rate = rates[name].get(c)
+            cells += f"<td class='num'>{_fmt(rate)}%</td>" if rate is not None else "<td class='num'>-</td>"
+        body_parts.append(cells + "</tr>")
+    return _wrap_table_html(
+        "<table class='edu-table edu-table--knowledge-compare'><thead><tr>"
+        f"<th>知识点</th><th class='num'>涉及题数</th>{class_heads}"
+        f"</tr></thead><tbody>{''.join(body_parts)}</tbody></table>"
+    )
+
+
+def build_knowledge_compare_chart_payload(
+    rows: list[dict[str, Any]],
+    *,
+    max_items: int = 12,
+) -> dict[str, Any] | None:
+    """供 group_compare_bar：各组=知识点，各系列=班级得分率。"""
+    classes = collect_class_names(rows)
+    if len(classes) < 2:
+        return None
+    # 按全校均分率升序取前 max_items（薄弱优先）
+    by_kn: dict[str, list[float]] = {}
+    rate_map: dict[str, dict[str, float]] = {}
+    for r in rows:
+        name = str(r.get("knowledge_name") or "").strip() or "未关联知识点"
+        cls = _row_class_name(r)
+        rate = _num(r.get("score_rate"))
+        if not cls or rate is None:
+            continue
+        rate_map.setdefault(name, {})[cls] = rate
+        by_kn.setdefault(name, []).append(rate)
+    if not by_kn:
+        return None
+    ranked = sorted(by_kn.keys(), key=lambda k: sum(by_kn[k]) / len(by_kn[k]))[:max_items]
+    metrics = []
+    for c in classes:
+        metrics.append({
+            "name": c,
+            "values": [round(rate_map.get(kn, {}).get(c, 0), 2) for kn in ranked],
+        })
+    return {
+        "groups": ranked,
+        "metrics": metrics,
+        "y_name": "得分率(%)",
+        "y_max": 100,
+    }
 
 
 def _knowledge_level(rate: float | None) -> str:
@@ -922,10 +1081,14 @@ def enrich_knowledge_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 __all__ = [
     "build_diagnosis_recommendations",
     "build_diagnosis_summary",
+    "build_item_compare_table_html",
     "build_item_table_html",
+    "build_knowledge_compare_chart_payload",
+    "build_knowledge_compare_table_html",
     "build_knowledge_table_html",
     "build_segment_table_html",
     "coerce_report_table_fields",
+    "collect_class_names",
     "enrich_knowledge_rows",
     "identify_weak_items",
     "identify_weak_knowledge",
