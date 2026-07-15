@@ -2,7 +2,7 @@ import { AudioOutlined, BarChartOutlined, FileTextOutlined, FundOutlined, ToolOu
 import { Card, Input, Typography } from "antd";
 import Image from "next/image";
 import { useRouter } from "next/router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import DatasourcePicker from "@/components/chat/DatasourcePicker";
 
 export default function HomePage() {
@@ -10,6 +10,15 @@ export default function HomePage() {
   const [prompt, setPrompt] = useState("");
   const defaultDatasourceId = Number(process.env.NEXT_PUBLIC_DEFAULT_DATASOURCE_ID ?? 1);
   const [selectedDatasourceId, setSelectedDatasourceId] = useState<number>(defaultDatasourceId);
+
+  // 技能市场“在探索广场打开”：把提示词预填到对话框，但不自动提交（用户可继续修改）。
+  useEffect(() => {
+    const prefill = sessionStorage.getItem("prefill_prompt");
+    if (prefill) {
+      setPrompt(prefill);
+      sessionStorage.removeItem("prefill_prompt");
+    }
+  }, []);
   const cards = [
     { title: "销售数据分析", desc: "分析销售CSV数据，生成可视化网页报告", icon: <BarChartOutlined /> },
     { title: "数据库画像与分析报告", desc: "连接数据库后，生成数据库画像并生成可视化网页报告", icon: <FileTextOutlined /> },
