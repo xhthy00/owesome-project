@@ -128,6 +128,12 @@ PLANNER_DESC = """[你的职责]
   **严禁**为班级/全校生成 subject_diagnosis 聚合报告。
 - 个体画像/趋势/预警/群体对比同理，分别用 education/student_exam_analysis.html、
   education/trend_tracking.html、education/tier_alert.html、education/group_feature.html。
+- **班级 + 成绩走势/进退步（趋势跟踪，非综合复盘）**
+  （如「扬州中学高三(10)班数学成绩走势与进退步分析」）——
+  **只拆 2 个子任务**，走 **趋势报告**（`education/trend_tracking.html` / `trend_tracking`）：
+  ["查询该班历次【科目】各场考试均分与个人进退（SQL 须含 exam_name、student_id/姓名、score、exam_score；按考试时间排序；禁止只查一场）",
+   {"task": "用上游多场成绩渲染 education/trend_tracking.html【成绩趋势报告】（均分折线+进退步解读）；**禁止** build_comprehensive_report_data_tool；完成后 terminate", "sub_task_agent": "ToolExpert"}]
+  **区分**：问的是「走势 / 进退步 / 趋势 / 折线」且**未**说「综合分析 / 综合报告 / 所有考试 / 多次考试综合」→ 用本条；不要默认改成综合分析。
 - **班级/学校 + 临界生/分层预警报告**（如「扬州中学高三(10)班数学临界生预警报告」）——
   **只拆 2 个子任务**，走分层预警，**禁止**走科目诊断 fetch+sections：
   ["查询该班【科目】每位学生得分（SQL 须含 student_id/姓名、score、exam_score；有上次成绩则带 prev_score）",
@@ -141,12 +147,13 @@ PLANNER_DESC = """[你的职责]
   ["查询该学生及全班历次考试各科分数与排名（SQL 须含全班数据以便算排名，但不得为其他学生另做报告）",
    {"task": "用 build_student_exam_report_data_tool 组装该学生考试分析 HTML 报告（student_name 必须与问题一致，仅一份报告）", "sub_task_agent": "ToolExpert"}]
   **严禁**为其他学生（如学生009）额外增加子任务或报告。
-- **班级 + 所有/历次/多次考试分析**（如「扬州中学高三(11)班所有数学考试成绩分析」）——
-  **只拆 2 个子任务**，走综合报告（含考试对比/趋势），**禁止**走科目诊断 fetch+sections：
+- **班级 + 所有/历次/多次考试「综合分析」**（如「扬州中学高三(11)班所有数学考试综合分析」）——
+  **只拆 2 个子任务**，走综合报告（9 维复盘），**禁止**走科目诊断 fetch+sections：
   ["查询该班历次考试每位学生【科目】分数（SQL 须含 exam_name、student_id/姓名、score、exam_score；禁止只查 KPI 聚合、禁止只查一场）",
-   {"task": "调 build_comprehensive_report_data_tool(class_name=【班级】) 生成多次考试综合分析 HTML（考试对比/趋势/进退步）；**禁止** build_subject_diagnosis_sections_tool；完成后 terminate", "sub_task_agent": "ToolExpert"}]
+   {"task": "调 build_comprehensive_report_data_tool(class_name=【班级】) 生成多次考试综合分析 HTML；**禁止** build_subject_diagnosis_sections_tool；完成后 terminate", "sub_task_agent": "ToolExpert"}]
+  **勿把**仅含「走势 / 进退步」的问法扩成综合分析；用户要综合复盘时应含「综合分析 / 综合报告」或明确「所有/历次/多次考试」范围。
 - 多次考试综合分析报告（comprehensive，含 9 个维度：整体概览/各科趋势/相关性/
-  分布/进退步/偏科/单科之最/总分轨迹/学生档案）：
+  分布/进退步 TOP/偏科/单科之最/总分轨迹/学生档案）——仅当问题点名综合分析时使用：
   ["查询该班历次考试每位学生分数（SQL 须含 exam_name、student_id/姓名、score；禁止只查班级 KPI 聚合）",
    {"task": "调 build_comprehensive_report_data_tool(class_name=【班级】) 一步生成综合分析 HTML（进步/退步 TOP5 与每位学生档案由工具自动计算）；**禁止** render_html_report / 手填模板；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 - 结构化诊断报告（diagnostic_report，一般性/特殊性/动态性三节）：
@@ -408,7 +415,7 @@ def build_comprehensive_class_plan_items(question: str) -> list[dict[str, str]]:
         {
             "sub_task": (
                 f"调 build_comprehensive_report_data_tool(class_name={class_name}) "
-                "一步生成多次考试综合分析 HTML（含考试对比/趋势/进退步 TOP 与学生档案）；"
+                "一步生成多次考试综合分析 HTML；"
                 "**禁止** build_subject_diagnosis_sections_tool / fetch 渲染；完成后 terminate"
             ),
             "sub_task_agent": _TOOL_EXPERT_AGENT,

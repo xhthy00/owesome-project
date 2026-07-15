@@ -1810,10 +1810,93 @@ def test_diagnosis_where_clause_pair_uses_correct_exam_id_column():
 
 
 def test_unsafe_school_abbreviation_blocks_exact_match():
-    from src.agent.education.tools import _is_unsafe_school_name_filter
+    from src.agent.education.tools import (
+        _is_unsafe_school_name_filter,
+        _keep_school_filter_arg,
+        _looks_like_school_id,
+        _school_scope_predicate,
+    )
 
     assert _is_unsafe_school_name_filter("南京一中") is True
     assert _is_unsafe_school_name_filter("南京市第一中学") is False
+    assert _looks_like_school_id("YZZX") is True
+    assert _looks_like_school_id("SCH001") is True
+    assert _looks_like_school_id("扬州中学") is False
+    assert _looks_like_school_id("南京一中") is False
+    assert _school_scope_predicate("YZZX") == "sc.school_id = 'YZZX'"
+    assert _school_scope_predicate("扬州中学") == "sch.name = '扬州中学'"
+    assert _keep_school_filter_arg("YZZX") == "YZZX"
+    assert _keep_school_filter_arg("扬州中学") == "扬州中学"
+    assert _keep_school_filter_arg("南京一中") == ""
+
+
+def test_diagnosis_where_uses_school_id_for_code_like_school_name():
+    from src.agent.education.tools import _diagnosis_where_parts
+
+    parts = _diagnosis_where_parts(
+        school_name="YZZX",
+        class_name="高三(10)班",
+        subject_name="数学",
+        exam_name="2026年江苏省高三数学第一次模拟考试试卷",
+    )
+    blob = " AND ".join(parts)
+    assert "sc.school_id = 'YZZX'" in blob
+    assert "sch.name = 'YZZX'" not in blob
+    assert "sc.class = '高三(10)班'" in blob
+
+    parts_name = _diagnosis_where_parts(school_name="扬州中学", subject_name="数学")
+    blob_name = " AND ".join(parts_name)
+    assert "sch.name = '扬州中学'" in blob_name
+    assert "sc.school_id" not in blob_name
+
+
+def test_fetch_subject_diagnosis_uses_school_id_predicate(monkeypatch):
+    """权限补全 school_name=YZZX 时不得用 sch.name 精确匹配。"""
+    from src.agent.education import tools as edu_tools
+
+    calls: list[str] = []
+
+    def fake_run(sql, **kwargs):
+        calls.append(sql)
+        if "sc.school_id = 'YZZX'" in sql and "sch.name = 'YZZX'" not in sql:
+            if "sd.question_no" in sql:
+                return True, "", {
+                    "columns": [
+                        "question_no",
+                        "knowledge_name",
+                        "question_type",
+                        "full_score",
+                        "avg_score",
+                        "score_rate",
+                    ],
+                    "rows": [["1", "集合", "选择", 5, 4, 80]],
+                }, sql
+            if "COUNT(DISTINCT" in sql or "knowledge_name" in sql:
+                return True, "", {
+                    "columns": ["knowledge_name", "question_count", "score_rate"],
+                    "rows": [["集合", 1, 80]],
+                }, sql
+            return True, "", {
+                "columns": ["score", "exam_score", "student_id", "class", "school_name", "exam_id"],
+                "rows": [[88, 150, "STU1", "高三(10)班", "扬州中学", "1"]],
+            }, sql
+        return True, "", {"columns": ["score"], "rows": []}, sql
+
+    monkeypatch.setattr(edu_tools, "_run_edu_sql", fake_run)
+    bundle = edu_tools._fetch_subject_diagnosis_rows(
+        datasource_id=1,
+        workspace_oid=1,
+        user_id=1,
+        db_type="pg",
+        school_name="YZZX",
+        class_name="高三(10)班",
+        subject_name="数学",
+        exam_name="2026年江苏省高三数学第一次模拟考试试卷",
+    )
+    assert any("sc.school_id = 'YZZX'" in s for s in calls)
+    assert not any("sch.name = 'YZZX'" in s for s in calls)
+    assert len(bundle["item_rows"]) == 1
+    assert len(bundle["score_values"]) >= 1
 
 
 def test_fetch_student_diagnosis_retries_without_school_abbreviation(monkeypatch):

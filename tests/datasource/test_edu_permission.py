@@ -166,3 +166,32 @@ def test_qualify_student_id_on_detail_only():
     preds = ['"student_id" = \'STU20240002\'']
     qualified = qualify_edu_row_predicates(sql, preds, "pg")
     assert qualified == ['sd."student_id" = \'STU20240002\'']
+
+
+def test_qualify_drops_school_class_on_dimension_only_sql():
+    """只查 tb_exam 等维表时，不得注入裸 school_id/class（否则 column does not exist）。"""
+    from datasource.service.query_permission import (
+        merge_row_predicates_into_sql,
+        qualify_edu_row_predicates,
+    )
+
+    sql = "SELECT * FROM tb_exam LIMIT 3"
+    preds = ['"school_id" = \'YZZX\'', '"class" IN (\'高三(10)班\')']
+    qualified = qualify_edu_row_predicates(sql, preds, "pg")
+    assert qualified == []
+    merged = merge_row_predicates_into_sql(sql, "pg", qualified)
+    assert merged == sql
+    assert "class" not in merged
+    assert "school_id" not in merged
+
+
+def test_qualify_keeps_school_class_on_tb_score_sample():
+    from datasource.service.query_permission import qualify_edu_row_predicates
+
+    sql = 'SELECT * FROM "tb_score" LIMIT 3'
+    preds = ['"school_id" = \'YZZX\'', '"class" IN (\'高三(10)班\')']
+    qualified = qualify_edu_row_predicates(sql, preds, "pg")
+    assert qualified == [
+        'tb_score."school_id" = \'YZZX\'',
+        'tb_score."class" IN (\'高三(10)班\')',
+    ]

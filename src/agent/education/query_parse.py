@@ -647,11 +647,17 @@ def format_scope_constraints(constraints: dict[str, Any] | None) -> str:
     if isinstance(edu, dict) and edu.get("edu_role"):
         role = edu.get("edu_role_label") or edu.get("edu_role")
         parts.append(f"当前用户教育角色={role}")
-        school = edu.get("school_name") or edu.get("school_id")
-        if school:
+        school_name = str(edu.get("school_name") or "").strip()
+        school_id = str(edu.get("school_id") or "").strip()
+        if school_name:
             parts.append(
-                f"权限绑定学校={school}（SQL/工具参数须用 sch.name 或 sc.school_id 过滤该校；"
+                f"权限绑定学校名={school_name}（工具参数 school_name 用此中文全称，对应 sch.name；"
                 "禁止把问题里的「江苏省/南京市」等省市区统考冠名当作学校名）"
+            )
+        elif school_id:
+            parts.append(
+                f"权限绑定学校ID={school_id}（工具参数 school_name 可传此 ID，内部按 sc.school_id 过滤，"
+                "勿当作 sch.name；禁止把问题里的「江苏省/南京市」等省市区统考冠名当作学校名）"
             )
         classes = raw.get("target_classes") or edu.get("class_names")
         if isinstance(classes, list) and classes:
@@ -673,8 +679,11 @@ def format_scope_constraints(constraints: dict[str, Any] | None) -> str:
     if not parts:
         return "（无额外范围约束，按当前子任务描述理解即可）"
     return (
-        "报告/SQL 范围必须与用户数据权限及子任务描述一致（WHERE 须含学校/班级/学生/考试等过滤），"
+        "报告/SQL 范围必须与用户数据权限及子任务描述一致；"
+        "查成绩明细（tb_score / tb_score_detail）时 WHERE 须含学校/班级/学生等过滤，"
         "禁止默认查全量学生、全校或多校合并数据。"
+        "探查维表（tb_exam / tb_knowledge / tb_school 等）无需手写 school_id/class——"
+        "系统仅在成绩表上自动注入行级权限。"
         "范围：" + "；".join(parts)
     )
 
