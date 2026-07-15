@@ -561,7 +561,11 @@ def _exists_score_guard(sd_alias: str, qualified_inner: str, db_type: str) -> st
 
 
 def qualify_edu_row_predicates(sql: str, predicates: list[str], db_type: str) -> list[str]:
-    """为教育权限谓词补全正确表别名，避免 sd.school_id / st.student_id 等错误引用。"""
+    """为教育权限谓词补全正确表别名，避免 sd.school_id / st.student_id 等错误引用。
+
+    若 SQL 未涉及 tb_score / tb_score_detail（如只查 tb_exam），无法安全挂
+    school_id/class：丢弃该谓词，避免把裸列注入维表导致 ``column "class" does not exist``。
+    """
     if not predicates:
         return predicates
 
@@ -573,6 +577,7 @@ def qualify_edu_row_predicates(sql: str, predicates: list[str], db_type: str) ->
 
     for pred in predicates:
         new_pred = pred
+        drop = False
         for field in _EDU_SCOPE_FIELDS:
             if field not in pred:
                 continue
@@ -590,7 +595,12 @@ def qualify_edu_row_predicates(sql: str, predicates: list[str], db_type: str) ->
                 inner = re.sub(pattern, f"sc.{q}{field}{q}", pred)
                 new_pred = _exists_score_guard(detail_aliases[0], inner, db_type)
                 break
-        out.append(new_pred)
+            else:
+                # 无成绩表可挂载：丢弃，勿保留裸 "class"/"school_id"
+                drop = True
+                break
+        if not drop:
+            out.append(new_pred)
     return out
 
 

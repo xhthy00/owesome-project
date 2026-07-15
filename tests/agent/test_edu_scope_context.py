@@ -45,3 +45,36 @@ def test_format_scope_constraints_warns_against_province_as_school():
     assert "南京市第一中学" in text
     assert "江苏省" in text
     assert "禁止" in text
+
+
+def test_format_scope_constraints_school_id_only_distinguishes_from_sch_name():
+    text = format_scope_constraints(
+        {
+            "edu_scope": {
+                "edu_role": "teacher",
+                "edu_role_label": "班级（老师）",
+                "school_id": "YZZX",
+                "class_names": ["高三(10)班"],
+            },
+            "target_classes": ["高三(10)班"],
+            "target_school": "YZZX",
+        }
+    )
+    assert "权限绑定学校ID=YZZX" in text
+    assert "sc.school_id" in text
+    assert "sch.name" in text
+
+
+def test_build_edu_aware_constraints_falls_back_to_school_id():
+    edu = {
+        "edu_role": "teacher",
+        "school_id": "YZZX",
+        "school_name": "",
+        "class_names": ["高三(10)班"],
+    }
+    ctx = build_edu_aware_constraints(
+        "2026年江苏省高三数学第一次模拟考试试卷 成绩分析",
+        edu,
+    )
+    assert ctx["target_school"] == "YZZX"
+    assert ctx["target_classes"] == ["高三(10)班"]

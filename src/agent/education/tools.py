@@ -1424,6 +1424,8 @@ def _esc(value: str) -> str:
 
 
 _SCHOOL_FULL_SUFFIXES = ("中学", "学校", "学院", "大学", "附中", "分校")
+#: school_id 形态（如 YZZX、SCH001），不可当作 sch.name 精确匹配。
+_SCHOOL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 def _is_unsafe_school_name_filter(school_name: str) -> bool:
@@ -1432,6 +1434,42 @@ def _is_unsafe_school_name_filter(school_name: str) -> bool:
     if not n:
         return False
     return not any(n.endswith(s) for s in _SCHOOL_FULL_SUFFIXES)
+
+
+def _looks_like_school_id(value: str) -> bool:
+    """判断是否为学校编号（school_id），而非中文校名。"""
+    n = (value or "").strip()
+    return bool(n and _SCHOOL_ID_RE.fullmatch(n))
+
+
+def _school_scope_predicate(school_name: str) -> str | None:
+    """生成学校范围 WHERE 片段。
+
+    - 规范中文全称 → ``sch.name = ...``
+    - school_id 形态（如 ``YZZX``）→ ``sc.school_id = ...``
+    - 中文简称等不安全值 → 仍尝试 ``sch.name``（由上层按需重试放宽）
+    """
+    n = (school_name or "").strip()
+    if not n:
+        return None
+    if _looks_like_school_id(n):
+        return f"sc.school_id = '{_esc(n)}'"
+    return f"sch.name = '{_esc(n)}'"
+
+
+def _keep_school_filter_arg(school_name: str) -> str:
+    """决定是否把 school_name 传给 WHERE 构造。
+
+    school_id 代码应保留；中文简称交给「查不到再放宽」路径，部分调用方会预先丢弃。
+    """
+    n = (school_name or "").strip()
+    if not n:
+        return ""
+    if _looks_like_school_id(n):
+        return n
+    if _is_unsafe_school_name_filter(n):
+        return ""
+    return n
 
 
 def exam_name_like_candidates(exam_name: str) -> list[str]:
@@ -1473,8 +1511,9 @@ def _diagnosis_where_parts(
         sid = _esc(student_id.strip())
         # 精确 + 模糊：兼容完整学号与短号
         parts.append(f"(sc.student_id = '{sid}' OR sc.student_id LIKE '%{sid}%')")
-    if school_name:
-        parts.append(f"sch.name = '{_esc(school_name)}'")
+    school_pred = _school_scope_predicate(school_name)
+    if school_pred:
+        parts.append(school_pred)
     if class_name:
         from src.agent.education.query_parse import normalize_fullwidth_parentheses
 
@@ -1810,8 +1849,15 @@ def _fetch_subject_diagnosis_rows(
         detail_wc, score_wc, "primary"
     )
 
-    # 学号查询 + 学校简称：sch.name 精确匹配失败时，去掉学校过滤重试
-    if student_id and not item_rows and not score_values and _is_unsafe_school_name_filter(school_name):
+    # 学号查询 + 中文校名简称：sch.name 精确匹配失败时，去掉学校过滤重试
+    # （school_id 形态已在 WHERE 中按 sc.school_id 过滤，无需此放宽）
+    if (
+        student_id
+        and not item_rows
+        and not score_values
+        and _is_unsafe_school_name_filter(school_name)
+        and not _looks_like_school_id(school_name)
+    ):
         relaxed_kw = {**base_kw, "school_name": ""}
         detail_wc_s, score_wc_s = _diagnosis_where_clause_pair(**relaxed_kw)
         item_rows, knowledge_rows, score_values, full_score, exam_ids, score_rows = run_bundle(
@@ -3306,7 +3352,7 @@ def _fetch_class_student_item_rows(
 
     db_type, config, _ds_name = _load_datasource(datasource_id, workspace_oid)
     parts = _diagnosis_where_parts(
-        school_name=school_name if school_name and not _is_unsafe_school_name_filter(school_name) else "",
+        school_name=_keep_school_filter_arg(school_name),
         class_name=class_name,
         subject_name=subject_name,
         student_id=student_id.strip() if student_id else "",
@@ -3428,8 +3474,9 @@ def _resolve_class_name_for_student(
         return ""
     db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
     parts = [f"(sc.student_id = '{_esc(sid)}' OR sc.student_id LIKE '%{_esc(sid)}%')"]
-    if school_name and not _is_unsafe_school_name_filter(school_name):
-        parts.append(f"sch.name = '{_esc(school_name)}'")
+    school_pred = _school_scope_predicate(_keep_school_filter_arg(school_name))
+    if school_pred:
+        parts.append(school_pred)
     sql = (
         "SELECT sc.class AS class_name\n"
         "FROM tb_score sc\n"
@@ -3473,7 +3520,7 @@ def _fetch_class_score_long_table(
 
     db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
     parts = _diagnosis_where_parts(
-        school_name=school_name if school_name and not _is_unsafe_school_name_filter(school_name) else "",
+        school_name=_keep_school_filter_arg(school_name),
         class_name=cls,
         subject_name=subject_name,
         exam_name="",
@@ -4486,8 +4533,9 @@ def build_student_subject_diagnosis_tool(
         )
 
     overview = _pick_student_overview_from_report(report_data, sid, subject_name=subject_name)
+    # 中文简称不宜做 sch.name 精确匹配；school_id（如 YZZX）须保留按 sc.school_id 过滤
     fetch_school = school_name
-    if sid and _is_unsafe_school_name_filter(fetch_school):
+    if sid and _is_unsafe_school_name_filter(school_name) and not _looks_like_school_id(school_name):
         fetch_school = ""
     fetch_class = class_name or str(overview.get("class_name") or "").strip()
 
