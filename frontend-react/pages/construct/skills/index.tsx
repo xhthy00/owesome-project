@@ -126,7 +126,7 @@ export default function ConstructSkillsPage() {
             学情报告技能
           </Typography.Title>
           <Typography.Paragraph style={{ margin: 0, color: "var(--oc-text-soft)", fontSize: 15 }}>
-            选择技能查看详情，复制提示词到对话框即可问数。所有结论由 edu 库实时查询得出。
+            选择技能查看详情，复制提示词到对话框即可问数。
           </Typography.Paragraph>
         </div>
 

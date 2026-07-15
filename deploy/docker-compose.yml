@@ -29,6 +29,8 @@ services:
       timeout: 5s
       start_period: 60s
       retries: 3
+    volumes:
+      - ./education_skills.json:/app/frontend-react/public/education_skills.json:ro
     logging:
       driver: json-file
       options:

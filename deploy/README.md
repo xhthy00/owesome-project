@@ -217,6 +217,27 @@ docker build -t awesome-data:latest -f deploy/Dockerfile .
 cd /data/docker/awesome-data && docker compose up -d   # 用新镜像重建容器
 ```
 
+### 8.1 技能市场配置（education_skills.json）外置
+
+`education_skills.json`（学情报告技能市场的卡片与提示词）已从镜像内置改为**宿主机外置**：通过 compose 的单文件 bind mount，宿主机 `deploy/education_skills.json` 覆盖容器内 `/app/frontend-react/public/education_skills.json`。**改完宿主机这份文件，刷新技能页面即生效，无需重建镜像。**
+
+```bash
+# 首次部署：把源码里的初始文件放到部署目录（与 compose 同目录）
+cp /opt/awesome-data/deploy/education_skills.json /data/docker/awesome-data/education_skills.json
+
+# 日常调整：直接编辑部署目录这份，改完刷新页面即可
+vi /data/docker/awesome-data/education_skills.json
+# 或用 jq 批量改后原位覆写
+jq '.skills[0].prompt = "新提示词"' education_skills.json > education_skills.json.tmp && mv education_skills.json.tmp education_skills.json
+```
+
+原理与注意：
+
+- Next 对 `public/` 文件每次请求从磁盘读（官方文档：`cannot safely cache ... max-age=0`），前端 `fetch("/education_skills.json", { cache: "no-cache" })` 也不缓存，故读时取最新。
+- **inode 陷阱（单文件 bind mount 的经典坑）**：vim、部分 IDE 的「写临时文件 + rename」原子保存会换 inode，容器内挂载点仍指旧 inode → 改动不生效。规避：用**原位覆写**的方式改文件——`sed -i`、`cp` 覆盖、`cat > file`、VS Code（默认原位写）都安全；若不确定，改完执行 `docker compose restart app` 或 `touch` 配合重新挂载即可。
+- 改坏文件（JSON 语法错误）时无后端兜底，前端会直接报「技能配置加载失败」。改完建议先本地校验：`python -c "import json;json.load(open('education_skills.json',encoding='utf-8'))"`。
+- 若改了 compose 的 volume 映射本身，需 `docker compose up -d` 重建容器才生效；只改 JSON 文件内容则无需。
+
 ## 9. 设计要点与已知限制
 
 - **构建与运行解耦**：compose 只 `image: awesome-data:latest`，不含 `build:`。改 compose 不会触发重建；改代码只 rebuild 镜像。部署机可以没有源码，只要有镜像 + compose + .env。
