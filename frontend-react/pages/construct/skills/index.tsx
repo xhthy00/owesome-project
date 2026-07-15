@@ -115,7 +115,10 @@ export default function ConstructSkillsPage() {
   };
 
   return (
-    <div className="dbgpt-ui-font p-6" style={{ background: "var(--oc-bg-base)", minHeight: "100%" }}>
+    <div
+      className="dbgpt-ui-font p-6"
+      style={{ background: "var(--oc-bg-base)", height: "100%", overflowY: "auto" }}
+    >
       <div style={{ maxWidth: 1160, margin: "0 auto" }}>
         {/* 页头 */}
         <div style={{ marginBottom: 28, maxWidth: "60ch" }}>
