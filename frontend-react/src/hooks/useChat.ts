@@ -146,7 +146,15 @@ const appendReportIfNew = (prev: ReportPayload[], report: ReportPayload): Report
 };
 
 const deriveReportsFromRecord = (record: {
-  reports?: Array<{ title?: string; html?: string; mode?: string; sub_task_index?: number }>;
+  reports?: Array<{
+    title?: string;
+    html?: string;
+    mode?: string;
+    sub_task_index?: number;
+    report_type?: string;
+    report_type_label?: string;
+    [key: string]: unknown;
+  }>;
   tool_calls?: Array<{
     sub_task_index?: number;
     data?: {
@@ -264,7 +272,7 @@ export function useChat() {
       let latest = "";
       let latestSql = "";
       const stripBootstrap = (prev: ExecutionStep[]) => prev.filter((s) => s.id !== bootstrapId);
-      const withRun = <T extends { runId?: string }>(item: T): T => ({ ...item, runId });
+      const withRun = <T extends object>(item: T): T & { runId: string } => ({ ...item, runId });
       const writeAssistant = (content: string) => {
         latest = content;
         setMessages((prev) => prev.map((msg) => (msg.id === assistantId ? { ...msg, content } : msg)));
