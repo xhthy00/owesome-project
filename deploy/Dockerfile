@@ -12,6 +12,10 @@ RUN npm config set registry https://registry.npmmirror.com
 # 故必须在构建阶段就给出 BACKEND_URL，否则 rewrites 被烤成空 []，/api 不会被转发。
 # 值用容器内回环：Next 与后端同容器，转发到 127.0.0.1:8000 即后端。
 ENV BACKEND_URL=http://127.0.0.1:8000/api
+# NEXT_PUBLIC_* 是构建期内联进客户端 bundle 的，运行时（supervisord.conf）设的值对已构建产物无效。
+# 显式在构建期注入，使浏览器 fetch 走 /api/v1/* 相对路径（经 Next rewrites 到后端），与后端 /api/v1
+# 前缀一致，不再依赖 client.ts 里 ?? "/api/v1" 的隐式兜底。
+ENV NEXT_PUBLIC_API_BASE_URL=/api/v1
 
 # 先拷 lock 以利用 npm 缓存
 COPY frontend-react/package.json frontend-react/package-lock.json* ./
