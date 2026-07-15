@@ -4,9 +4,8 @@ import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import { login } from "@/api/auth";
 import { setAccessToken } from "@/auth/session";
-import Image from "next/image";
 
-const { Title, Text } = Typography;
+const { Text } = Typography;
 
 type LoginForm = {
   account: string;
@@ -68,130 +67,126 @@ export default function LoginPage() {
         </div>
         
         <div className="relative z-10 min-h-screen flex items-center justify-center p-6">
-          <div className="w-full max-w-[1200px] flex flex-col lg:flex-row items-center gap-12">
+          <div className="w-full max-w-[1200px] flex flex-col lg:flex-row items-center gap-10 lg:gap-14">
             <div className="lg:w-1/2 text-center lg:text-left">
-              <div className="mb-10">
-                <Image
-                  src="/logo-horizontal.svg"
-                  alt="Logo"
-                  width={640}
-                  height={192}
-                  className="drop-shadow-xl"
-                  style={{ filter: "drop-shadow(0 4px 12px rgba(59, 130, 246, 0.3))" }}
-                />
-              </div>
-              
-              <div className="text-white space-y-6">
-                <Title level={1} className="!text-white !text-5xl lg:!text-6xl !leading-tight">
-                  启明数智Agent
-                  <br />
-                  <span className="bg-gradient-to-r from-cyan-300 to-blue-300 bg-clip-text text-transparent">
-                    让洞察更简单
+              <div className="text-white space-y-5 lg:space-y-6">
+                <h1 className="m-0 text-5xl lg:text-6xl font-semibold leading-[1.35] tracking-tight">
+                  <span className="slogan-line block">
+                    学情看得见，
                   </span>
-                </Title>
-                
-                <Text className="!text-white/80 !text-xl leading-relaxed block max-w-lg">
-                  多Agent协同，将复杂的数据转化为直观洞察
+                  <span className="slogan-line mt-3 inline-block pl-[2em]">
+                    考情更清晰
+                  </span>
+                </h1>
+
+                <Text className="!text-white/80 !text-lg lg:!text-xl !leading-relaxed block max-w-lg">
+                  面向学校与班级场景，一键生成学情诊断、考情分析与知识点掌握报告
                 </Text>
-                
-                <div className="flex flex-wrap gap-4 justify-center lg:justify-start mt-8">
+
+                <div className="flex flex-wrap gap-3 justify-center lg:justify-start pt-1">
                   <div className="flex items-center gap-2 bg-white/10 backdrop-blur-md px-4 py-2 rounded-full border border-white/20">
-                    <span className="w-2 h-2 rounded-full bg-green-400"></span>
-                    <span className="text-white/90 text-sm">智能分析</span>
+                    <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                    <span className="text-white/90 text-sm">学情诊断</span>
                   </div>
                   <div className="flex items-center gap-2 bg-white/10 backdrop-blur-md px-4 py-2 rounded-full border border-white/20">
-                    <span className="w-2 h-2 rounded-full bg-blue-400"></span>
-                    <span className="text-white/90 text-sm">安全可靠</span>
+                    <span className="w-2 h-2 rounded-full bg-sky-300"></span>
+                    <span className="text-white/90 text-sm">考情分析</span>
                   </div>
                   <div className="flex items-center gap-2 bg-white/10 backdrop-blur-md px-4 py-2 rounded-full border border-white/20">
-                    <span className="w-2 h-2 rounded-full bg-purple-400"></span>
-                    <span className="text-white/90 text-sm">自主规划</span>
+                    <span className="w-2 h-2 rounded-full bg-amber-300"></span>
+                    <span className="text-white/90 text-sm">知识点掌握</span>
                   </div>
                 </div>
               </div>
             </div>
-            
-            <div className="lg:w-1/2 w-full flex justify-center">
-              <div className="w-full max-w-md">
-                <div className="bg-white/20 backdrop-blur-xl rounded-3xl p-10 shadow-2xl border border-white/30">
-                  <div className="text-center mb-8">
-                    <Title level={2} className="!mb-2 !text-white !text-2xl">
-                      欢迎回来
-                    </Title>
-                    <Text className="!text-white/70">
-                      立即开始您的高效数据之旅
-                    </Text>
-                  </div>
 
-                  {errorMessage && (
-                    <Alert
-                      type="error"
-                      message={errorMessage}
-                      showIcon
-                      className="mb-6 rounded-xl bg-white/10 border border-white/20 text-white backdrop-blur-md"
-                    />
-                  )}
+            <div className="lg:w-1/2 w-full flex justify-center lg:justify-end">
+              <div className="w-full max-w-[420px]">
+                <div className="login-card relative overflow-hidden rounded-[28px] px-9 py-11 sm:px-11 sm:py-12">
+                  <div
+                    className="pointer-events-none absolute inset-0 rounded-[28px]"
+                    style={{
+                      background:
+                        "linear-gradient(160deg, rgba(255,255,255,0.28) 0%, rgba(255,255,255,0.12) 42%, rgba(255,255,255,0.08) 100%)",
+                    }}
+                  />
+                  <div className="pointer-events-none absolute inset-px rounded-[27px] border border-white/35" />
+                  <div className="pointer-events-none absolute inset-x-8 top-0 h-px bg-gradient-to-r from-transparent via-white/70 to-transparent" />
 
-                  <Form<LoginForm>
-                    layout="vertical"
-                    onFinish={handleSubmit}
-                    initialValues={{ account: "admin", password: "" }}
-                    className="space-y-5"
-                  >
-                    <Form.Item
-                      name="account"
-                      label={
-                        <span className="text-white font-medium">
-                          账号
+                  <div className="relative z-10">
+                    <div className="mb-9 text-center">
+                      <h2 className="m-0 text-white text-[20px] sm:text-[22px] font-semibold leading-snug tracking-wide">
+                        <span className="block">扬州市学情/考情分析</span>
+                        <span className="block mt-1.5 text-[18px] sm:text-[20px] font-medium text-white/95">
+                          智能体
                         </span>
-                      }
-                      rules={[{ required: true, message: "请输入账号" }]}
-                    >
-                      <Input
-                        prefix={<UserOutlined className="text-white/50" />}
-                        placeholder="请输入账号"
-                        autoComplete="username"
-                        size="large"
-                        className="!bg-white/10 !border-white/20 !text-white placeholder:!text-white/40 !rounded-xl backdrop-blur-md focus:!border-white/50"
+                      </h2>
+                      <div className="mx-auto mt-4 h-[3px] w-12 rounded-full bg-gradient-to-r from-cyan-200/80 to-white/70" />
+                    </div>
+
+                    {errorMessage && (
+                      <Alert
+                        type="error"
+                        message={errorMessage}
+                        showIcon
+                        className="mb-6 rounded-2xl bg-white/15 border border-white/25 text-white backdrop-blur-md"
                       />
-                    </Form.Item>
-                    
-                    <Form.Item
-                      name="password"
-                      label={
-                        <span className="text-white font-medium">
-                          密码
-                        </span>
-                      }
-                      rules={[{ required: true, message: "请输入密码" }]}
+                    )}
+
+                    <Form<LoginForm>
+                      layout="vertical"
+                      onFinish={handleSubmit}
+                      initialValues={{ account: "", password: "" }}
+                      className="login-form"
+                      requiredMark={false}
                     >
-                      <Input.Password
-                        prefix={<LockOutlined className="text-white/50" />}
-                        placeholder="请输入密码"
-                        autoComplete="current-password"
-                        size="large"
-                        className="!bg-white/10 !border-white/20 !text-white placeholder:!text-white/40 !rounded-xl backdrop-blur-md focus:!border-white/50"
-                      />
-                    </Form.Item>
-                    
-                    <Form.Item className="!mb-0 pt-3">
-                      <Button
-                        type="primary"
-                        htmlType="submit"
-                        block
-                        loading={loading}
-                        size="large"
-                        className="h-14 text-lg font-semibold rounded-xl bg-white !text-blue-600 hover:!bg-white/90 border-0 shadow-xl transition-all duration-300 hover:shadow-2xl hover:scale-[1.02]"
+                      <Form.Item
+                        name="account"
+                        label={<span className="text-white/90 text-sm font-medium tracking-wide">账号</span>}
+                        rules={[{ required: true, message: "请输入账号" }]}
+                        className="!mb-5"
                       >
-                        {loading ? "登录中..." : "登录"}
-                      </Button>
-                    </Form.Item>
-                  </Form>
-                  
-                  <div className="mt-8 pt-6 border-t border-white/20">
-                    <div className="mt-4 text-center">
-                      <Text className="text-white/40 text-xs">
-                        © 2026 扬州运河算力有限公司. All rights reserved.
+                        <Input
+                          prefix={<UserOutlined className="text-white/55" />}
+                          placeholder="请输入账号"
+                          autoComplete="username"
+                          size="large"
+                          className="login-input"
+                        />
+                      </Form.Item>
+
+                      <Form.Item
+                        name="password"
+                        label={<span className="text-white/90 text-sm font-medium tracking-wide">密码</span>}
+                        rules={[{ required: true, message: "请输入密码" }]}
+                        className="!mb-7"
+                      >
+                        <Input.Password
+                          prefix={<LockOutlined className="text-white/55" />}
+                          placeholder="请输入密码"
+                          autoComplete="current-password"
+                          size="large"
+                          className="login-input"
+                        />
+                      </Form.Item>
+
+                      <Form.Item className="!mb-0">
+                        <Button
+                          type="primary"
+                          htmlType="submit"
+                          block
+                          loading={loading}
+                          size="large"
+                          className="login-submit h-[52px] text-[17px] font-semibold rounded-2xl border-0 shadow-[0_10px_28px_rgba(15,60,140,0.22)] transition-all duration-300 hover:-translate-y-0.5 hover:shadow-[0_14px_32px_rgba(15,60,140,0.28)]"
+                        >
+                          {loading ? "登录中..." : "登录"}
+                        </Button>
+                      </Form.Item>
+                    </Form>
+
+                    <div className="mt-9 pt-5 border-t border-white/15 text-center">
+                      <Text className="!text-white/45 text-xs tracking-wide">
+                        © 2026 扬州市电化教育馆 版权所有
                       </Text>
                     </div>
                   </div>
@@ -202,9 +197,86 @@ export default function LoginPage() {
         </div>
         
         <style jsx global>{`
-          @keyframes float {
-            0%, 100% { transform: translateY(0px); }
-            50% { transform: translateY(-20px); }
+          .login-card {
+            backdrop-filter: blur(22px);
+            -webkit-backdrop-filter: blur(22px);
+            background: rgba(255, 255, 255, 0.14);
+            box-shadow:
+              0 24px 60px rgba(15, 45, 110, 0.28),
+              inset 0 1px 0 rgba(255, 255, 255, 0.35);
+          }
+
+          .login-form .ant-form-item-label > label {
+            height: auto;
+          }
+
+          .login-form .ant-form-item-explain-error {
+            color: #fecaca;
+          }
+
+          .login-input.ant-input-affix-wrapper,
+          .login-input.ant-input-affix-wrapper-lg {
+            min-height: 48px;
+            padding: 0 14px;
+            border-radius: 14px !important;
+            background: rgba(255, 255, 255, 0.12) !important;
+            border: 1px solid rgba(255, 255, 255, 0.28) !important;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+            transition: border-color 0.2s ease, background 0.2s ease, box-shadow 0.2s ease;
+          }
+
+          .login-input.ant-input-affix-wrapper:hover,
+          .login-input.ant-input-affix-wrapper-focused,
+          .login-input.ant-input-affix-wrapper:focus-within {
+            background: rgba(255, 255, 255, 0.18) !important;
+            border-color: rgba(255, 255, 255, 0.55) !important;
+            box-shadow:
+              inset 0 1px 0 rgba(255, 255, 255, 0.22),
+              0 0 0 3px rgba(147, 197, 253, 0.22);
+          }
+
+          .login-input .ant-input {
+            background: transparent !important;
+            color: #fff !important;
+            font-size: 15px;
+          }
+
+          .login-input .ant-input::placeholder {
+            color: rgba(255, 255, 255, 0.42) !important;
+          }
+
+          .login-input .ant-input-password-icon,
+          .login-input .anticon {
+            color: rgba(255, 255, 255, 0.55) !important;
+          }
+
+          .login-input .ant-input-password-icon:hover {
+            color: rgba(255, 255, 255, 0.85) !important;
+          }
+
+          .login-submit.ant-btn {
+            background: linear-gradient(180deg, #ffffff 0%, #f3f8ff 100%) !important;
+            color: #1d4ed8 !important;
+          }
+
+          .login-submit.ant-btn:hover,
+          .login-submit.ant-btn:focus {
+            background: linear-gradient(180deg, #ffffff 0%, #e8f1ff 100%) !important;
+            color: #1e40af !important;
+          }
+
+          .slogan-line {
+            background-image: linear-gradient(
+              105deg,
+              #ffffff 0%,
+              #e0f2fe 28%,
+              #7dd3fc 62%,
+              #93c5fd 100%
+            );
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+            color: transparent;
           }
         `}</style>
       </div>
