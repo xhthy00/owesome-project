@@ -1,9 +1,45 @@
-import { AudioOutlined, BarChartOutlined, FileTextOutlined, FundOutlined, ToolOutlined } from "@ant-design/icons";
+import {
+  BarChartOutlined,
+  FundViewOutlined,
+  RadarChartOutlined,
+  AlertOutlined,
+} from "@ant-design/icons";
 import { Card, Input, Typography } from "antd";
 import Image from "next/image";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import DatasourcePicker from "@/components/chat/DatasourcePicker";
+
+/** 提问示例：取自 docs/education_report_prompts.md 附录 D / 标准用户问法 */
+const EXAMPLE_PROMPTS = [
+  {
+    title: "班级总览报告",
+    desc: "人数、均分、及格优秀率、分数段与班级能力画像",
+    prompt:
+      "扬州中学高三(10)班连淮扬镇数学成绩总览，给我一份班级总览报告：人数均分及格优秀、分数段、能力画像和年级位置就行，别做各班对比，也别出临界生名单。",
+    icon: <BarChartOutlined />,
+  },
+  {
+    title: "科目诊断报告",
+    desc: "小题得分率与知识点掌握情况分析",
+    prompt:
+      "请生成【科目诊断报告】：扬州中学高三(10)班，「连淮扬镇」，数学。小题+知识点掌握情况。",
+    icon: <RadarChartOutlined />,
+  },
+  {
+    title: "班级横向对比",
+    desc: "全校各班均分、及格率等多维横向对比",
+    prompt:
+      "扬州中学在连淮扬镇数学考试中各个班级的横向多维对比分析，出班级横向对比报告，不要做成单班总览。",
+    icon: <FundViewOutlined />,
+  },
+  {
+    title: "临界生预警",
+    desc: "临界生、大幅退步与偏科名单预警",
+    prompt: "扬州中学高三(10)班数学临界生预警报告",
+    icon: <AlertOutlined />,
+  },
+] as const;
 
 export default function HomePage() {
   const router = useRouter();
@@ -19,21 +55,15 @@ export default function HomePage() {
       sessionStorage.removeItem("prefill_prompt");
     }
   }, []);
-  const cards = [
-    { title: "销售数据分析", desc: "分析销售CSV数据，生成可视化网页报告", icon: <BarChartOutlined /> },
-    { title: "数据库画像与分析报告", desc: "连接数据库后，生成数据库画像并生成可视化网页报告", icon: <FileTextOutlined /> },
-    { title: "金融财报深度分析", desc: "分析季度报告，生成数据可视化报告", icon: <FundOutlined /> },
-    { title: "创建SQL分析技能", desc: "使用skill-creator创建一个实用的SQL数据分析技能", icon: <ToolOutlined /> }
-  ];
 
   const canSend = !!prompt.trim();
 
-  const handleSend = () => {
-    const value = prompt.trim();
+  const handleSend = (text?: string) => {
+    const value = (text ?? prompt).trim();
     if (!value) return;
     void router.push({
       pathname: "/chat",
-      query: { q: value, ds: selectedDatasourceId }
+      query: { q: value, ds: selectedDatasourceId },
     });
   };
 
@@ -42,12 +72,12 @@ export default function HomePage() {
       <div className="flex flex-1 flex-col items-center overflow-auto bg-white px-8 pb-6 pt-6 dark:bg-[#111217]">
         <Typography.Title
           level={1}
-          className="dbgpt-title-font !mb-4 !flex !items-center !gap-4 !text-4xl md:!text-5xl !text-gray-900 dark:!text-gray-100"
+          className="dbgpt-title-font !mb-4 !flex !items-center !gap-3 !text-3xl md:!text-4xl !text-gray-900 dark:!text-gray-100"
         >
-          <span className="relative inline-flex h-20 w-20 items-center justify-center overflow-hidden rounded-xl border border-gray-100 bg-white shadow-md dark:border-[#33353b] dark:bg-[#1a1b1e]">
-            <Image src="/logo-mark.svg" alt="logo" width={200} height={200} className="rounded-lg" />
+          <span className="relative inline-flex h-14 w-14 items-center justify-center overflow-hidden rounded-xl border border-gray-100 bg-white shadow-md dark:border-[#33353b] dark:bg-[#1a1b1e]">
+            <Image src="/logo-mark.svg" alt="logo" width={140} height={140} className="rounded-lg" />
           </span>
-         启明 AI数据助理
+          学情（考情）AI智能分析助手
         </Typography.Title>
         <Typography.Text className="dbgpt-subtitle-font mb-10 !text-sm md:!text-base !font-light text-gray-400 dark:text-gray-500">
           Agentic Data Driven Decisions
@@ -57,7 +87,7 @@ export default function HomePage() {
           <Input.TextArea
             autoSize={{ minRows: 3, maxRows: 4 }}
             variant="borderless"
-            placeholder="向您的数据库提问，上传CSV，或生成报告..."
+            placeholder="向您关心的成绩提问，生成分析报告"
             className="dbgpt-input-font !text-lg !leading-8"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
@@ -69,16 +99,11 @@ export default function HomePage() {
           />
           <div className="mt-1 flex items-center justify-between text-[#8b97aa]">
             <div className="flex items-center gap-3 text-xs">
-              <span>+</span>
-              <span>⚡</span>
-              <span>▣</span>
-              <span>◱</span>
               <DatasourcePicker value={selectedDatasourceId} onChange={setSelectedDatasourceId} />
             </div>
             <div className="flex items-center gap-3">
-              <AudioOutlined />
               <button
-                onClick={handleSend}
+                onClick={() => handleSend()}
                 disabled={!canSend}
                 className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100 text-[#90a2be] transition-colors enabled:cursor-pointer enabled:hover:bg-blue-500 enabled:hover:text-white disabled:opacity-60 dark:bg-[#2a2b2f]"
               >
@@ -89,12 +114,16 @@ export default function HomePage() {
         </div>
 
         <div className="mt-8 w-full max-w-[860px]">
-          <div className="mb-3 text-center text-xs font-medium text-[#98a4b8]">推荐示例</div>
-          <div className="grid grid-cols-2 gap-[14px]">
-            {cards.map((card, idx) => (
+          <div className="mb-3 text-center text-xs font-medium text-[#98a4b8]">提问示例</div>
+          <div className="grid grid-cols-1 gap-[14px] sm:grid-cols-2">
+            {EXAMPLE_PROMPTS.map((card, idx) => (
               <Card
                 key={card.title}
-                className={`!rounded-[14px] !border ${
+                hoverable
+                onClick={() => {
+                  setPrompt(card.prompt);
+                }}
+                className={`!cursor-pointer !rounded-[14px] !border transition-shadow hover:!shadow-md ${
                   idx === 0
                     ? "!border-blue-200/60 !bg-[#eaf3ff]"
                     : idx === 1
@@ -106,10 +135,10 @@ export default function HomePage() {
                 styles={{ body: { padding: 13 } }}
               >
                 <div className="flex gap-3">
-                  <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-lg bg-white/70 text-[#4978c8]">
+                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/70 text-[#4978c8]">
                     {card.icon}
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <div className="mb-1 text-sm font-semibold text-[#2a3347]">{card.title}</div>
                     <div className="text-xs leading-5 text-[#5f6c84]">{card.desc}</div>
                   </div>
@@ -117,10 +146,6 @@ export default function HomePage() {
               </Card>
             ))}
           </div>
-        </div>
-
-        <div className="mt-7 text-sm text-[#7e8ca3]">
-          <span className="rounded-full bg-white px-3 py-1 shadow-sm">Agentic Data Driven Decisions</span>
         </div>
       </div>
     </div>

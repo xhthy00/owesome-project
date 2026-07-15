@@ -1,4 +1,4 @@
-import { ApartmentOutlined, BellOutlined, LogoutOutlined, UserOutlined } from "@ant-design/icons";
+import { ApartmentOutlined, LogoutOutlined, UserOutlined } from "@ant-design/icons";
 import { App as AntApp, ConfigProvider, Dropdown, Select, theme } from "antd";
 import type { MenuProps } from "antd";
 import type { AppProps } from "next/app";
@@ -25,6 +25,7 @@ function LayoutWrapper({
   const router = useRouter();
   const [workspaceOptions, setWorkspaceOptions] = useState<Array<{ value: number; label: string }>>([]);
   const [workspaceOid, setWorkspaceOid] = useState<number | undefined>(undefined);
+  const [loginAccount, setLoginAccount] = useState("");
   /** 仅在用户切换工作空间时递增，用于强制主内容区 remount，刷新当前页状态与接口数据 */
   const [mainContentKey, setMainContentKey] = useState(0);
   const isBypassLayout =
@@ -68,6 +69,7 @@ function LayoutWrapper({
         if (!active) return;
         const opts = workspaces.map((w) => ({ value: Number(w.id), label: w.name || `工作空间 ${w.id}` }));
         setWorkspaceOptions(opts);
+        setLoginAccount(String(user.account || "").trim());
         const fromStorage = Number(window.localStorage.getItem(WORKSPACE_OID_KEY) || "");
         const hasStorage = Number.isFinite(fromStorage) && opts.some((o) => o.value === fromStorage);
         const preferred = hasStorage ? fromStorage : Number(user.oid);
@@ -82,6 +84,7 @@ function LayoutWrapper({
       .catch(() => {
         if (!active) return;
         setWorkspaceOptions([]);
+        setLoginAccount("");
       });
     return () => {
       active = false;
@@ -111,7 +114,7 @@ function LayoutWrapper({
             </div>
             <div className="relative flex flex-1 flex-col overflow-hidden">
               <div className="flex h-14 shrink-0 items-center justify-between border-b border-gray-200 bg-white/80 px-8 text-sm text-[#3a465d] backdrop-blur dark:border-gray-800 dark:bg-[#111217]/80">
-                <span>启明AI分析助手</span>
+                <span />
                 <div className="flex items-center gap-4 text-[#7d8ba2]">
                   {workspaceOptions.length ? (
                     <div className="flex h-9 items-center gap-2 rounded-full border border-[#d9e2f0] bg-[#f7faff] px-3 pr-2 shadow-sm dark:border-[#2f3a52] dark:bg-[#1a2130]">
@@ -133,15 +136,18 @@ function LayoutWrapper({
                       />
                     </div>
                   ) : null}
-                  <BellOutlined />
-                  <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs dark:bg-gray-800">300</span>
                   <Dropdown menu={{ items: userMenuItems, onClick: onUserMenuClick }} trigger={["click"]} placement="bottomRight">
                     <button
                       type="button"
-                      className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-500 text-[15px] text-white"
+                      className="flex h-9 items-center gap-2 rounded-full border border-[#d9e2f0] bg-[#f7faff] pl-1.5 pr-3 text-[#3a465d] shadow-sm transition-colors hover:bg-[#eef4ff] dark:border-[#2f3a52] dark:bg-[#1a2130] dark:text-gray-200 dark:hover:bg-[#222b3d]"
                       aria-label="用户菜单"
                     >
-                      <UserOutlined />
+                      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-500 text-[15px] text-white">
+                        <UserOutlined />
+                      </span>
+                      {loginAccount ? (
+                        <span className="max-w-[140px] truncate text-sm font-medium">{loginAccount}</span>
+                      ) : null}
                     </button>
                   </Dropdown>
                 </div>

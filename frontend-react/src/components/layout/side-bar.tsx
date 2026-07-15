@@ -179,7 +179,7 @@ export default function SideBar() {
       <div className="dbgpt-ui-font flex items-center justify-between p-2 pb-4">
         <Link href="/" className="flex items-center gap-2">
           <Image src="/logo-mark.svg" alt="logo" width={40} height={40} className="rounded-md" />
-          <span className="text-sm font-semibold tracking-[0.03em] text-[#243149] dark:text-white">启明AI</span>
+          <span className="text-sm font-semibold tracking-[0.03em] text-[#243149] dark:text-white">扬州电教馆</span>
         </Link>
         <Tooltip title="收起侧栏">
           <div
