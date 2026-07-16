@@ -45,6 +45,8 @@ from src.agent.education.subject_diagnosis import (
     build_item_table_html,
     build_knowledge_table_html,
     enrich_knowledge_rows,
+    knowledge_names_subquery_join,
+    knowledge_weighted_join,
 )
 from src.agent.education.templates import select_report_template
 
@@ -554,9 +556,10 @@ class ReportOrchestrator:
         class_expr = f.get("class_name", "sc.class")
         subject_expr = f.get("subject", "sc.subject_name")
         exam_expr = f.get("exam_name", "e.exam_name")
+        kn_join = knowledge_names_subquery_join("pg")
         sql = (
             "SELECT sd.question_no,\n"
-            "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+            "       COALESCE(kn.knowledge_name, '未关联知识点') AS knowledge_name,\n"
             "       eq.question_type AS question_type,\n"
             "       COALESCE(eq.question_score, sd.question_score) AS full_score,\n"
             "       ROUND(AVG(sd.score), 2) AS avg_score,\n"
@@ -564,7 +567,7 @@ class ReportOrchestrator:
             "FROM tb_score_detail sd\n"
             "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
             "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
-            "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+            f"{kn_join}"
             "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
             "JOIN tb_exam e ON sc.exam_id = e.id"
@@ -574,7 +577,7 @@ class ReportOrchestrator:
             sql += f"\nWHERE {where}"
         return (
             sql
-            + "\nGROUP BY sd.question_no, COALESCE(k.knowledge_name, '未关联知识点'), "
+            + "\nGROUP BY sd.question_no, COALESCE(kn.knowledge_name, '未关联知识点'), "
             "eq.question_type, COALESCE(eq.question_score, sd.question_score)\n"
             "ORDER BY sd.question_no\nLIMIT 1000"
         )
@@ -585,15 +588,18 @@ class ReportOrchestrator:
         class_expr = f.get("class_name", "sc.class")
         subject_expr = f.get("subject", "sc.subject_name")
         exam_expr = f.get("exam_name", "e.exam_name")
+        w_join = knowledge_weighted_join()
+        full_score_expr = "COALESCE(eq.question_score, sd.question_score)"
         sql = (
             "SELECT COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
             "       k.ability_level AS ability_level,\n"
             "       COUNT(DISTINCT sd.question_no) AS question_count,\n"
-            "       ROUND(SUM(sd.score)::numeric / NULLIF(SUM(COALESCE(eq.question_score, sd.question_score)), 0) * 100, 2) AS score_rate\n"
+            f"       ROUND(SUM(sd.score * COALESCE(eqk.w_norm, 1))::numeric / "
+            f"NULLIF(SUM({full_score_expr} * COALESCE(eqk.w_norm, 1)), 0) * 100, 2) AS score_rate\n"
             "FROM tb_score_detail sd\n"
             "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
             "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
-            "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+            f"{w_join}"
             "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
             "JOIN tb_exam e ON sc.exam_id = e.id"

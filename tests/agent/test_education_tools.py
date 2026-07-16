@@ -1811,6 +1811,25 @@ def test_diagnosis_where_clause_pair_uses_correct_exam_id_column():
     assert "sc.exam_id IN ('1')" in score_sql
     assert "sc.exam_id IN ('1')" in exam_id_sql
     assert "sd.exam_id" not in score_sql
+    assert "tb_exam_question_knowledge" in item_sql
+    assert "eq.knowledge_id" not in item_sql
+
+
+def test_diagnosis_sql_bundle_uses_weighted_knowledge_join():
+    from src.agent.education.tools import _diagnosis_sql_bundle, _diagnosis_where_clause_pair
+
+    detail_wc, score_wc = _diagnosis_where_clause_pair(
+        school_name="南京市第一中学",
+        subject_name="数学",
+    )
+    item_sql, knowledge_sql, _, _ = _diagnosis_sql_bundle(detail_wc, score_wc, "pg")
+    assert "tb_exam_question_knowledge" in item_sql
+    assert "string_agg" in item_sql
+    assert "kn.knowledge_name" in item_sql
+    assert "tb_exam_question_knowledge" in knowledge_sql
+    assert "w_norm" in knowledge_sql
+    assert "eq.knowledge_id" not in knowledge_sql
+    assert "sd.score * COALESCE(eqk.w_norm, 1)" in knowledge_sql
 
 
 def test_unsafe_school_abbreviation_blocks_exact_match():

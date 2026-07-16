@@ -429,8 +429,8 @@ def test_build_knowledge_class_rows_from_items_unifies_per_question():
     assert sum(q_counts.values()) == 2
 
 
-def test_apply_grade_compare_prefers_item_derived_knowledge():
-    """横向对比：知识点表由小题行推导，修复跨班知识点名不一致。"""
+def test_apply_grade_compare_uses_knowledge_class_sql_rows():
+    """横向对比：知识点表只信加权 SQL 行，不再由小题行反推覆盖。"""
     from src.agent.education.tools import _apply_grade_compare_section_tables
 
     data: dict = {}
@@ -451,7 +451,7 @@ def test_apply_grade_compare_prefers_item_derived_knowledge():
             {
                 "class_name": "2班",
                 "question_no": 3,
-                "knowledge_name": "未关联知识点",
+                "knowledge_name": "函数、导数",
                 "avg_score": 3,
                 "full_score": 5,
                 "score_rate": 60,
@@ -459,14 +459,13 @@ def test_apply_grade_compare_prefers_item_derived_knowledge():
             },
         ],
         knowledge_class_rows=[
-            # SQL 侧会形成膨胀/缺班：故意给错误数据
             {"class_name": "1班", "knowledge_name": "圆的方程", "question_count": 1, "score_rate": 80},
-            {"class_name": "2班", "knowledge_name": "未关联知识点", "question_count": 1, "score_rate": 60},
+            {"class_name": "2班", "knowledge_name": "圆的方程", "question_count": 1, "score_rate": 60},
         ],
         is_grade_compare=True,
     )
     assert "圆的方程" in data["KNOWLEDGE_TABLE"]
-    assert "未关联知识点" not in data["KNOWLEDGE_TABLE"]
+    assert "函数" not in data["KNOWLEDGE_TABLE"]
     assert "60.00%" in data["KNOWLEDGE_TABLE"]
     assert "80.00%" in data["KNOWLEDGE_TABLE"]
 
@@ -569,3 +568,33 @@ def test_subject_diagnosis_template_hides_empty_student_archive():
     text = path.read_text(encoding="utf-8")
     assert "studentArchiveBody" in text
     assert "sec.style.display = 'none'" in text
+
+def test_normalize_link_weights_equal_and_unequal():
+    from src.agent.education.subject_diagnosis import (
+        normalize_link_weights,
+        weighted_score_contributions,
+    )
+
+    assert normalize_link_weights([1.0]) == [1.0]
+    assert normalize_link_weights([1, 1]) == [0.5, 0.5]
+    assert normalize_link_weights([1, 3]) == [0.25, 0.75]
+
+    half = weighted_score_contributions(8.0, 10.0, [1, 1])
+    assert half == [(4.0, 5.0), (4.0, 5.0)]
+    split = weighted_score_contributions(8.0, 10.0, [1, 3])
+    assert split == [(2.0, 2.5), (6.0, 7.5)]
+    # 单链接 weight=1 与整题计入一致
+    single = weighted_score_contributions(8.0, 10.0, [1])
+    assert single == [(8.0, 10.0)]
+
+
+def test_resolve_question_knowledge_map_canonicalizes_multi_name():
+    from src.agent.education.subject_diagnosis import resolve_question_knowledge_map
+
+    mapping = resolve_question_knowledge_map(
+        [
+            {"question_no": 1, "knowledge_name": "导数、函数"},
+            {"question_no": 1, "knowledge_name": "函数、导数"},
+        ]
+    )
+    assert mapping[1] == "函数、导数"

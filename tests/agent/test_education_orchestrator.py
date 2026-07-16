@@ -268,6 +268,8 @@ def test_orchestrator_subject_diagnosis_includes_item_table():
     res = _run(orch.run("南京市第一中学数学科目诊断，细化到每一小题"))
     assert any("tb_score_detail" in s for s in calls)
     assert any("knowledge_name" in s and "GROUP BY" in s for s in calls)
+    assert any("tb_exam_question_knowledge" in s for s in calls)
+    assert any("w_norm" in s for s in calls)
     assert "知识点" in res.html
     assert "函数" in res.html
     assert "需加强" in res.html or "薄弱" in res.html

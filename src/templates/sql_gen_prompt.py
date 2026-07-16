@@ -72,28 +72,40 @@ LIMIT 1000;</suggestion-answer>
   <example>
     <question>南京市第一中学数学每一小题得分率及关联知识点</question>
     <suggestion-answer>SELECT sd.question_no,
-       k.knowledge_name,
+       COALESCE(kn.knowledge_name, '未关联知识点') AS knowledge_name,
        eq.question_score AS full_score,
        ROUND(AVG(sd.score), 2) AS avg_score,
        ROUND(AVG(sd.score)::numeric / NULLIF(eq.question_score, 0) * 100, 2) AS score_rate
 FROM tb_score_detail sd
 JOIN tb_exam_question eq ON sd.question_id = eq.id
-LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id
+LEFT JOIN (
+  SELECT eqk.question_id,
+         string_agg(DISTINCT k.knowledge_name, '、' ORDER BY k.knowledge_name) AS knowledge_name
+  FROM tb_exam_question_knowledge eqk
+  JOIN tb_knowledge k ON k.id = eqk.knowledge_id
+  GROUP BY eqk.question_id
+) kn ON kn.question_id = eq.id
 JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id
 JOIN tb_school sch ON sc.school_id = sch.id
 WHERE sch.name = '南京市第一中学' AND sc.subject_name = '数学'
-GROUP BY sd.question_no, k.knowledge_name, eq.question_score
+GROUP BY sd.question_no, kn.knowledge_name, eq.question_score
 ORDER BY sd.question_no
 LIMIT 1000;</suggestion-answer>
   </example>
   <example>
     <question>南京市第一中学数学知识点薄弱诊断</question>
-    <suggestion-answer>SELECT k.knowledge_name,
-       ROUND(AVG(sd.score)::numeric / NULLIF(eq.question_score, 0) * 100, 2) AS score_rate,
-       COUNT(*) AS answer_cnt
+    <suggestion-answer>SELECT COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,
+       ROUND(SUM(sd.score * COALESCE(eqk.w_norm, 1))::numeric
+             / NULLIF(SUM(eq.question_score * COALESCE(eqk.w_norm, 1)), 0) * 100, 2) AS score_rate,
+       COUNT(DISTINCT sd.question_no) AS question_count
 FROM tb_score_detail sd
 JOIN tb_exam_question eq ON sd.question_id = eq.id
-LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id
+LEFT JOIN (
+  SELECT question_id, knowledge_id,
+         weight / NULLIF(SUM(weight) OVER (PARTITION BY question_id), 0) AS w_norm
+  FROM tb_exam_question_knowledge
+) eqk ON eqk.question_id = eq.id
+LEFT JOIN tb_knowledge k ON k.id = eqk.knowledge_id
 JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id
 JOIN tb_school sch ON sc.school_id = sch.id
 WHERE sch.name = '南京市第一中学' AND sc.subject_name = '数学'
@@ -153,7 +165,7 @@ EDUCATION_TERMINOLOGIES = """<terminologies>
   </terminology>
   <terminology>
     <words><word>知识点</word><word>考点</word><word>题型</word></words>
-    <description>知识点名称取自 tb_knowledge.knowledge_name，必须通过 tb_exam_question.knowledge_id LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id 关联获取；严禁根据题目内容自行编造/猜测知识点名（如「立体几何」「解析几何」等数据库中不存在的名称）</description>
+    <description>知识点名称取自 tb_knowledge.knowledge_name，必须经 tb_exam_question_knowledge（eqk）关联：LEFT JOIN tb_exam_question_knowledge eqk ON eqk.question_id = eq.id LEFT JOIN tb_knowledge k ON k.id = eqk.knowledge_id；一题可挂多个知识点。掌握度按 weight 题内归一化拆分（w_norm = weight/SUM(weight)）。严禁根据题目内容自行编造/猜测知识点名（如「立体几何」「解析几何」等数据库中不存在的名称）</description>
   </terminology>
   <terminology>
     <words><word>满分</word><word>卷面分</word></words>

@@ -9,6 +9,7 @@
     "score": "tb_score",
     "score_detail": "tb_score_detail",
     "exam_question": "tb_exam_question",
+    "exam_question_knowledge": "tb_exam_question_knowledge",
     "knowledge": "tb_knowledge"
   },
   "joins": [
@@ -16,7 +17,8 @@
     "tb_score sc JOIN tb_school sch ON sc.school_id = sch.id",
     "tb_score sc JOIN tb_exam e ON sc.exam_id = e.id",
     "tb_score_detail sd JOIN tb_exam_question eq ON sd.question_id = eq.id",
-    "tb_exam_question eq JOIN tb_knowledge k ON eq.knowledge_id = k.id",
+    "tb_exam_question eq LEFT JOIN tb_exam_question_knowledge eqk ON eqk.question_id = eq.id",
+    "tb_exam_question_knowledge eqk LEFT JOIN tb_knowledge k ON k.id = eqk.knowledge_id",
     "tb_score_detail sd JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id"
   ],
   "fields": {
@@ -49,7 +51,8 @@
     "tb_exam": "考试维度表，exam_score 为该科卷面满分",
     "tb_score": "学生科目成绩事实表（一行=一学生一科目一次考试）",
     "tb_score_detail": "学生小题得分明细（逐题分析用）",
-    "tb_exam_question": "试卷题目与分值（含 question_type 题型）",
+    "tb_exam_question": "试卷题目与分值（含 question_type 题型；knowledge_id 保留兼容，诊断只读关联表）",
+    "tb_exam_question_knowledge": "题目-知识点多对多（weight>0；题内按 SUM(weight) 归一化拆分得分）",
     "tb_knowledge": "知识点维度（含 ability_level 能力层级，无树结构）"
   },
   "dimension_samples": {

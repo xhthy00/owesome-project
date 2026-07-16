@@ -101,15 +101,73 @@ _UNLINKED_KNOWLEDGE = "未关联知识点"
 
 
 def _knowledge_label(name: Any) -> str:
+    """规范知识点展示串：多知识点按顿号拆分后排序去重，与 SQL string_agg ORDER BY 一致。"""
     s = str(name or "").strip()
-    return s or _UNLINKED_KNOWLEDGE
+    if not s:
+        return _UNLINKED_KNOWLEDGE
+    parts = [p.strip() for p in s.replace(",", "、").split("、") if p.strip()]
+    if not parts:
+        return _UNLINKED_KNOWLEDGE
+    if len(parts) == 1:
+        return parts[0]
+    return "、".join(sorted(set(parts)))
+
+
+def normalize_link_weights(weights: list[float]) -> list[float]:
+    """题内权重归一化：w_norm = weight / SUM(weight)。非正总和返回空列表。"""
+    positive = [float(w) for w in weights if w is not None and float(w) > 0]
+    total = sum(positive)
+    if total <= 0:
+        return []
+    return [w / total for w in positive]
+
+
+def weighted_score_contributions(
+    score: float,
+    full_score: float,
+    weights: list[float],
+) -> list[tuple[float, float]]:
+    """按归一化权重拆分题得分/满分，返回 [(score_contrib, full_contrib), ...]。"""
+    norms = normalize_link_weights(weights)
+    return [(score * w, full_score * w) for w in norms]
+
+
+def knowledge_names_subquery_join(db_type: str = "pg") -> str:
+    """小题查询：按 question_id 聚合知识点名串，避免一题多知识点裂行。"""
+    if db_type == "mysql":
+        agg = (
+            "GROUP_CONCAT(DISTINCT k.knowledge_name "
+            "ORDER BY k.knowledge_name SEPARATOR '、')"
+        )
+    else:
+        agg = "string_agg(DISTINCT k.knowledge_name, '、' ORDER BY k.knowledge_name)"
+    return (
+        "LEFT JOIN (\n"
+        "  SELECT eqk.question_id,\n"
+        f"         {agg} AS knowledge_name\n"
+        "  FROM tb_exam_question_knowledge eqk\n"
+        "  JOIN tb_knowledge k ON k.id = eqk.knowledge_id\n"
+        "  GROUP BY eqk.question_id\n"
+        ") kn ON kn.question_id = eq.id\n"
+    )
+
+
+def knowledge_weighted_join() -> str:
+    """知识点掌握查询：关联表 + 题内 weight 归一化为 w_norm。"""
+    return (
+        "LEFT JOIN (\n"
+        "  SELECT question_id, knowledge_id,\n"
+        "         weight / NULLIF(SUM(weight) OVER (PARTITION BY question_id), 0) AS w_norm\n"
+        "  FROM tb_exam_question_knowledge\n"
+        ") eqk ON eqk.question_id = eq.id\n"
+        "LEFT JOIN tb_knowledge k ON k.id = eqk.knowledge_id\n"
+    )
 
 
 def resolve_question_knowledge_map(item_rows: list[dict[str, Any]]) -> dict[Any, str]:
-    """题号 → 全场统一知识点。
+    """题号 → 全场统一知识点展示串（仅展示，不负责权重计分）。
 
-    各班同一题号若因 question_id 关联不一致而挂到不同知识点，
-    取多数票（优先非「未关联知识点」），避免知识点并集膨胀与缺班格。
+    各班同一题号若关联串不一致，取多数票（优先非「未关联知识点」）。
     """
     from collections import Counter, defaultdict
 
@@ -131,7 +189,7 @@ def resolve_question_knowledge_map(item_rows: list[dict[str, Any]]) -> dict[Any,
 def apply_canonical_knowledge_to_item_rows(
     item_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """将各班小题行的知识点统一为「按题号」的规范名称。"""
+    """将各班小题行的知识点统一为「按题号」的规范名称串。"""
     mapping = resolve_question_knowledge_map(item_rows)
     if not mapping:
         return [dict(r) for r in item_rows]
@@ -148,7 +206,10 @@ def apply_canonical_knowledge_to_item_rows(
 def build_knowledge_class_rows_from_items(
     item_rows: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """由小题各班行聚合知识点对比行（一题一知识点，题数与卷面一致）。"""
+    """由小题各班行聚合知识点对比行（仅展示兜底，不可用于权重拆分计分）。
+
+    诊断主路径应使用带 weight 归一化的知识点 SQL；本函数不拆分权重。
+    """
     from collections import defaultdict
 
     rows = [
@@ -1201,6 +1262,10 @@ __all__ = [
     "enrich_knowledge_rows",
     "identify_weak_items",
     "identify_weak_knowledge",
+    "knowledge_names_subquery_join",
+    "knowledge_weighted_join",
     "normalize_item_row",
+    "normalize_link_weights",
     "resolve_question_knowledge_map",
+    "weighted_score_contributions",
 ]

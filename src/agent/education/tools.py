@@ -61,12 +61,13 @@ from src.agent.education.subject_diagnosis import (
     build_diagnosis_recommendations,
     build_diagnosis_summary,
     build_item_table_html,
-    build_knowledge_class_rows_from_items,
     build_knowledge_compare_chart_payload,
     build_knowledge_table_html,
     build_segment_table_html,
     collect_class_names,
     enrich_knowledge_rows,
+    knowledge_names_subquery_join,
+    knowledge_weighted_join,
 )
 from src.agent.education.templates import select_report_template as _select_template
 from src.agent.resource.tool.base import ToolResult
@@ -629,8 +630,9 @@ def fetch_subject_diagnosis_data_tool(
     """直接从数据库查询科目诊断所需的小题明细与知识点汇总（确定性 SQL，无需 LLM 写 JOIN）。
 
     **适用时机**：科目诊断报告中需要「每一小题 + 知识点」和「知识点得分率」时，
-    **优先调用本工具**，而不是自己写 SQL——本工具内部已固定 JOIN ``tb_knowledge``
-    （通过 ``tb_exam_question.knowledge_id`` 关联），确保知识点名称来自数据库而非臆造。
+    **优先调用本工具**，而不是自己写 SQL——本工具内部已固定经
+    ``tb_exam_question_knowledge`` JOIN ``tb_knowledge``（掌握度按 weight 归一化拆分），
+    确保知识点名称来自数据库而非臆造。
 
     **Team 分工**：仅 **fetch 子任务** 调用本工具；**组装子任务**（含
     ``build_diagnostic_report_data_tool``）**禁止**再调本工具——fetch 结果已由
@@ -1137,8 +1139,8 @@ def build_subject_diagnosis_report_tool(
     / ``render_html_report``**，也**无需回填大 data 字典**（回填巨大字典会因 JSON
     过长被截断，触发"必须是 JSON 对象"错误）。
 
-    知识点名称由 ``tb_knowledge.knowledge_name`` 通过 ``tb_exam_question.knowledge_id``
-    LEFT JOIN 确定，**不会臆造**。
+    知识点名称由 ``tb_knowledge.knowledge_name`` 经 ``tb_exam_question_knowledge``
+    LEFT JOIN 确定（掌握度按 weight 归一化拆分），**不会臆造**。
 
     Args:
         datasource_id: 数据源 ID（由 ToolPack bindings 自动注入，LLM 无需填写）。
@@ -1560,11 +1562,15 @@ def _diagnosis_sql_bundle(
 ) -> tuple[str, str, str, str]:
     """返回 (item_sql, knowledge_sql, score_sql, exam_id_sql)。"""
     full_score_expr = "COALESCE(eq.question_score, sd.question_score)"
+    kn_join = knowledge_names_subquery_join(db_type)
+    w_join = knowledge_weighted_join()
+    w_score = f"sd.score * COALESCE(eqk.w_norm, 1)"
+    w_full = f"{full_score_expr} * COALESCE(eqk.w_norm, 1)"
     if student_id:
         item_rate = _score_rate_sql("sd.score", full_score_expr, db_type)
         item_sql = (
             "SELECT sd.question_no,\n"
-            "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+            "       COALESCE(kn.knowledge_name, '未关联知识点') AS knowledge_name,\n"
             "       eq.question_type AS question_type,\n"
             f"       {full_score_expr} AS full_score,\n"
             "       sd.score AS avg_score,\n"
@@ -1572,7 +1578,7 @@ def _diagnosis_sql_bundle(
             "FROM tb_score_detail sd\n"
             "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
             "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
-            "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+            f"{kn_join}"
             "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
             "JOIN tb_exam e ON sc.exam_id = e.id"
@@ -1583,7 +1589,7 @@ def _diagnosis_sql_bundle(
         item_rate = _score_rate_sql("AVG(sd.score)", full_score_expr, db_type)
         item_sql = (
             "SELECT sd.question_no,\n"
-            "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+            "       COALESCE(kn.knowledge_name, '未关联知识点') AS knowledge_name,\n"
             "       eq.question_type AS question_type,\n"
             f"       {full_score_expr} AS full_score,\n"
             "       ROUND(AVG(sd.score), 2) AS avg_score,\n"
@@ -1591,19 +1597,16 @@ def _diagnosis_sql_bundle(
             "FROM tb_score_detail sd\n"
             "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
             "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
-            "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+            f"{kn_join}"
             "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
             "JOIN tb_exam e ON sc.exam_id = e.id"
             + where_clause_detail
-            + f"\nGROUP BY sd.question_no, COALESCE(k.knowledge_name, '未关联知识点'), eq.question_type, {full_score_expr}\n"
+            + f"\nGROUP BY sd.question_no, COALESCE(kn.knowledge_name, '未关联知识点'), "
+            f"eq.question_type, {full_score_expr}\n"
             "ORDER BY sd.question_no\nLIMIT 1000"
         )
-    know_rate = _score_rate_sql(
-        "SUM(sd.score)",
-        f"SUM({full_score_expr})",
-        db_type,
-    )
+    know_rate = _score_rate_sql(f"SUM({w_score})", f"SUM({w_full})", db_type)
     knowledge_sql = (
         "SELECT COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
         "       k.ability_level AS ability_level,\n"
@@ -1612,7 +1615,7 @@ def _diagnosis_sql_bundle(
         "FROM tb_score_detail sd\n"
         "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
         "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
-        "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+        f"{w_join}"
         "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
         "JOIN tb_exam e ON sc.exam_id = e.id"
@@ -1648,11 +1651,15 @@ def _diagnosis_class_compare_sql(
 ) -> tuple[str, str]:
     """各班小题均分 / 知识点得分率 SQL（用于班级横向对比）。"""
     full_score_expr = "COALESCE(eq.question_score, sd.question_score)"
+    kn_join = knowledge_names_subquery_join(db_type)
+    w_join = knowledge_weighted_join()
+    w_score = f"sd.score * COALESCE(eqk.w_norm, 1)"
+    w_full = f"{full_score_expr} * COALESCE(eqk.w_norm, 1)"
     item_rate = _score_rate_sql("AVG(sd.score)", full_score_expr, db_type)
     item_sql = (
         "SELECT sc.class AS class_name,\n"
         "       sd.question_no,\n"
-        "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+        "       COALESCE(kn.knowledge_name, '未关联知识点') AS knowledge_name,\n"
         "       eq.question_type AS question_type,\n"
         f"       {full_score_expr} AS full_score,\n"
         "       ROUND(AVG(sd.score), 2) AS avg_score,\n"
@@ -1660,20 +1667,16 @@ def _diagnosis_class_compare_sql(
         "FROM tb_score_detail sd\n"
         "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
         "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
-        "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+        f"{kn_join}"
         "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
         "JOIN tb_exam e ON sc.exam_id = e.id"
         + where_clause_detail
-        + f"\nGROUP BY sc.class, sd.question_no, COALESCE(k.knowledge_name, '未关联知识点'), "
+        + f"\nGROUP BY sc.class, sd.question_no, COALESCE(kn.knowledge_name, '未关联知识点'), "
         f"eq.question_type, {full_score_expr}\n"
         "ORDER BY sd.question_no, sc.class\nLIMIT 10000"
     )
-    know_rate = _score_rate_sql(
-        "SUM(sd.score)",
-        f"SUM({full_score_expr})",
-        db_type,
-    )
+    know_rate = _score_rate_sql(f"SUM({w_score})", f"SUM({w_full})", db_type)
     knowledge_sql = (
         "SELECT sc.class AS class_name,\n"
         "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
@@ -1682,7 +1685,7 @@ def _diagnosis_class_compare_sql(
         "FROM tb_score_detail sd\n"
         "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
         "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
-        "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+        f"{w_join}"
         "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
         "JOIN tb_exam e ON sc.exam_id = e.id"
@@ -2205,11 +2208,7 @@ def _apply_grade_compare_section_tables(
     item_cmp = list(item_class_rows or [])
     know_cmp = list(knowledge_class_rows or [])
     use_item_cmp = is_grade_compare and len(collect_class_names(item_cmp)) >= 2
-    # 优先由小题行按「题号→唯一知识点」聚合，避免各班关联不一致导致知识点膨胀与缺班格
-    if use_item_cmp:
-        derived = build_knowledge_class_rows_from_items(item_cmp)
-        if len(collect_class_names(derived)) >= 2:
-            know_cmp = derived
+    # 知识点对比只信加权 SQL（know_c_sql）；不可由小题行反推（无法还原 weight）
     use_know_cmp = is_grade_compare and len(collect_class_names(know_cmp)) >= 2
 
     if use_item_cmp:
@@ -3520,18 +3519,19 @@ def _fetch_class_student_item_rows(
 
     full_score_expr = "COALESCE(eq.question_score, sd.question_score)"
     rate = _score_rate_sql("sd.score", full_score_expr, db_type)
+    kn_join = knowledge_names_subquery_join(db_type)
     sql = (
         "SELECT sd.student_id AS student_id,\n"
         "       e.exam_name AS exam_name,\n"
         "       sd.question_no AS question_no,\n"
-        "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+        "       COALESCE(kn.knowledge_name, '未关联知识点') AS knowledge_name,\n"
         f"       {full_score_expr} AS full_score,\n"
         "       sd.score AS score,\n"
         f"       {rate} AS score_rate\n"
         "FROM tb_score_detail sd\n"
         "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
         "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
-        "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+        f"{kn_join}"
         "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
         "JOIN tb_exam e ON sc.exam_id = e.id"
@@ -3572,18 +3572,19 @@ def _fetch_student_item_rows_direct(
     where = " WHERE " + " AND ".join(parts)
     full_score_expr = "COALESCE(eq.question_score, sd.question_score)"
     rate = _score_rate_sql("sd.score", full_score_expr, db_type)
+    kn_join = knowledge_names_subquery_join(db_type)
     sql = (
         "SELECT sd.student_id AS student_id,\n"
         "       COALESCE(e.exam_name, '未知考试') AS exam_name,\n"
         "       sd.question_no AS question_no,\n"
-        "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+        "       COALESCE(kn.knowledge_name, '未关联知识点') AS knowledge_name,\n"
         f"       {full_score_expr} AS full_score,\n"
         "       sd.score AS score,\n"
         f"       {rate} AS score_rate\n"
         "FROM tb_score_detail sd\n"
         "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
         "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
-        "LEFT JOIN tb_knowledge k ON eq.knowledge_id = k.id\n"
+        f"{kn_join}"
         "LEFT JOIN tb_exam e ON sd.exam_id = e.id\n"
         "LEFT JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id"
         + where

@@ -62,7 +62,15 @@ Team 模式 Planner 会拆 3 步查数 + 1 步 ToolExpert 组装；ToolExpert �
 
 ## 外部库 DDL
 
-见 [`docs/education_schema_ddl.sql`](education_schema_ddl.sql)：`tb_school.district`、`tb_exam_question.question_type`、`tb_knowledge.ability_level`。
+见 [`docs/education_schema_ddl.sql`](education_schema_ddl.sql)：`tb_school.district`、`tb_exam_question.question_type`、`tb_knowledge.ability_level`、`tb_exam_question_knowledge`。
+
+### 题目 ↔ 知识点多对多
+
+- 关联表：`tb_exam_question_knowledge(question_id, knowledge_id, weight)`。
+- 诊断 SQL **只读**关联表（不再经 `tb_exam_question.knowledge_id`）；`knowledge_id` 列保留兼容、不删除。
+- **权重拆分**：题内 `w_norm = weight / SUM(weight)`；知识点得分贡献 = 题得分 × `w_norm`，满分同理。
+- **发版前须回填**：将旧 `eq.knowledge_id` 写入关联表（`weight=1`）；未回填时诊断会大量显示「未关联知识点」。
+- 小题展示：一题一行，知识点名为排序后的聚合串（如 `函数、导数`）；掌握度按知识点展开计分。
 
 ## 成绩导入
 
