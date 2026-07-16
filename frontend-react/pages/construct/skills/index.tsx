@@ -6,6 +6,7 @@ import {
   CopyOutlined,
   DashboardOutlined,
   DotChartOutlined,
+  ExportOutlined,
   FundProjectionScreenOutlined,
   IdcardOutlined,
   LineChartOutlined,
@@ -93,13 +94,27 @@ export default function ConstructSkillsPage() {
 
   const handleCopy = async () => {
     if (!active) return;
+    // navigator.clipboard 仅在安全上下文（HTTPS / localhost）可用，
+    // HTTP 部署时不存在，需回退 execCommand。
     try {
-      await navigator.clipboard.writeText(active.prompt);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(active.prompt);
+      } else {
+        _fallbackCopy(active.prompt);
+      }
       setCopied(true);
       message.success("已复制到剪贴板");
       setTimeout(() => setCopied(false), 1600);
     } catch {
-      message.error("复制失败，请手动选择提示词复制");
+      // 部分浏览器 Clipboard API 存在但抛异常（权限拒绝等），也走 fallback
+      try {
+        _fallbackCopy(active.prompt);
+        setCopied(true);
+        message.success("已复制到剪贴板");
+        setTimeout(() => setCopied(false), 1600);
+      } catch {
+        message.error("复制失败，请手动选择提示词复制");
+      }
     }
   };
 
@@ -258,7 +273,7 @@ export default function ConstructSkillsPage() {
               <Button icon={<CopyOutlined />} onClick={handleCopy} style={btnSecondaryStyle}>
                 {copied ? "已复制" : "复制到剪贴板"}
               </Button>
-              <Button type="primary" onClick={handleOpenInExplore}>
+              <Button type="primary" icon={<ExportOutlined />} onClick={handleOpenInExplore} style={btnPrimaryStyle}>
                 在探索广场打开
               </Button>
             </div>
@@ -351,3 +366,22 @@ const promptBoxStyle: React.CSSProperties = {
 const btnSecondaryStyle: React.CSSProperties = {
   borderRadius: 9
 };
+
+const btnPrimaryStyle: React.CSSProperties = {
+  borderRadius: 9
+};
+
+/**
+ * 非安全上下文（HTTP 郞署）下 navigator.clipboard 不可用时的兜底：
+ * 创建临时 textarea → select → execCommand('copy') → 移除。
+ * 仅限同源调用；execCommand 已废弃但仍被所有主流浏览器支持。
+ */
+function _fallbackCopy(text: string) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.cssText = "position:fixed;left:-9999px;top:-9999px";
+  document.body.appendChild(ta);
+  ta.select();
+  document.execCommand("copy");
+  document.body.removeChild(ta);
+}
