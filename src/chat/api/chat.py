@@ -790,7 +790,15 @@ async def chat_stream(
 
     async def event_stream() -> AsyncGenerator[str, None]:
         while True:
-            item = await queue.get()
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=_SSE_KEEPALIVE_INTERVAL)
+            except asyncio.TimeoutError:
+                # 队列进入"静默期"（LLM 往返 / SQL 执行 / 持久化等阶段数十秒无事件）：
+                # 发一行 SSE 注释心跳保活，刷新浏览器↔:3001 之间链路上中间网元
+                # （云 ELB / 企业代理 / 运营商 NAT / Next 代理 body 超时）的空闲计时器，
+                # 避免被按"空闲"掐断导致前端卡死。注释行被前端解析器跳过、不产生事件。
+                yield ": keepalive\n\n"
+                continue
             if item is SENTINEL:
                 break
             event, data = item
@@ -806,6 +814,15 @@ async def chat_stream(
             "X-Trace-Id": trace_id,
         }
     )
+
+
+#: SSE 空闲心跳间隔（秒）。team 流水线在 LLM 调用 / SQL 执行 / 持久化等阶段会有
+#: 数十秒无事件输出的"静默期"；浏览器到 :3001 之间链路上的中间网元（云 ELB /
+#: 企业代理 / 运营商 NAT / Next 代理 body 超时）普遍有 30~60s 空闲超时，会在
+#: 静默期把连接按"空闲"掐断——表现为前端"卡死"、但后端仍在跑且最终落库（刷新即
+#: 看到完整结果）。每 15s 发一行 SSE 注释刷新所有中间网元空闲计时器；注释行被
+#: 前端解析器跳过、不产生事件。本地无中间网元，故不复现。
+_SSE_KEEPALIVE_INTERVAL = 15.0
 
 
 def _sse_event(event: str, data: dict) -> str:
