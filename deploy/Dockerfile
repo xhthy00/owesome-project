@@ -51,6 +51,7 @@ RUN uv sync --frozen --no-dev --no-install-project
 
 # 拷后端源码并安装本包
 COPY src/ ./src/
+COPY config/ ./config/
 RUN uv sync --frozen --no-dev
 
 # 拷 alembic 迁移脚本到运行时（构建阶段不需要）
@@ -85,6 +86,7 @@ ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     PYTHONDONTWRITEBYTECODE=1
 COPY --from=backend-build /app/.venv /app/.venv
 COPY --from=backend-build /app/src ./src
+COPY --from=backend-build /app/config ./config
 COPY --from=backend-build /app/alembic.ini ./alembic.ini
 COPY --from=backend-build /app/alembic ./alembic
 
