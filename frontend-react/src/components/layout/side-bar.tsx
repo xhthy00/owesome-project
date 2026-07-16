@@ -6,7 +6,6 @@ import {
   MenuUnfoldOutlined,
   MessageOutlined,
   PlusOutlined,
-  ReadOutlined,
   RightOutlined,
   SafetyCertificateOutlined,
   ThunderboltOutlined,
@@ -26,7 +25,6 @@ const routes = [
   { key: "datasource", path: "/construct/database", label: "数据源", icon: <DatabaseOutlined /> },
   { key: "score-import", path: "/construct/education/score-import", label: "成绩导入", icon: <UploadOutlined /> },
   { key: "permission", path: "/construct/permission", label: "权限管理", icon: <SafetyCertificateOutlined /> },
-  { key: "knowledge", path: "/construct/knowledge", label: "知识库", icon: <ReadOutlined /> }
 ];
 
 const permissionSubRoutes = [
