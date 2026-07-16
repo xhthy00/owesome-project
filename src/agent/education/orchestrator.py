@@ -101,7 +101,7 @@ class ReportIntentResolver:
     """把自然语言问题映射到 ``ReportSpec``（纯规则，无 LLM）。
 
     优先级与 ``agent_runner`` / Planner 确定性格径对齐：
-    全市 → 个人学生 → 多场综合 → 分层预警 → 群体特征 → 班级总览 → 各班横向 →
+    全市 → 个人学生 → 成绩趋势 → 多场综合 → 分层预警 → 群体特征 → 班级总览 → 各班横向 →
     结构化诊断 → 学校科目报告 → 关键词回落。
     """
 
@@ -118,12 +118,15 @@ class ReportIntentResolver:
             is_school_exam_report_query,
             is_structured_diagnostic_query,
             is_tier_alert_query,
+            is_trend_tracking_query,
         )
 
         if is_citywide_analysis_query(q):
             report_type = ReportType.DIAGNOSTIC_REPORT
         elif is_individual_student_analysis_query(q):
             report_type = ReportType.STUDENT_PROFILE
+        elif is_trend_tracking_query(q):
+            report_type = ReportType.TREND_TRACKING
         elif is_multi_exam_class_analysis_query(q):
             report_type = ReportType.COMPREHENSIVE
         elif is_tier_alert_query(q):

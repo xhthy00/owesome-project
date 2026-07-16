@@ -130,9 +130,9 @@ PLANNER_DESC = """[你的职责]
   education/trend_tracking.html、education/tier_alert.html、education/group_feature.html。
 - **班级 + 成绩走势/进退步（趋势跟踪，非综合复盘）**
   （如「扬州中学高三(10)班数学成绩走势与进退步分析」）——
-  **只拆 2 个子任务**，走 **趋势报告**（`education/trend_tracking.html` / `trend_tracking`）：
+  **只拆 2 个子任务**，走 **趋势报告**（`trend_tracking`）：
   ["查询该班历次【科目】各场考试均分与个人进退（SQL 须含 exam_name、student_id/姓名、score、exam_score；按考试时间排序；禁止只查一场）",
-   {"task": "用上游多场成绩渲染 education/trend_tracking.html【成绩趋势报告】（均分折线+进退步解读）；**禁止** build_comprehensive_report_data_tool；完成后 terminate", "sub_task_agent": "ToolExpert"}]
+   {"task": "调 build_trend_tracking_report_data_tool(class_name=【班级】, subject_name=【科目】, render=true) 生成【成绩趋势报告】（均分折线+明细表+进退步解读）；**禁止** render_html_report 手填 / build_comprehensive_report_data_tool；完成后 terminate", "sub_task_agent": "ToolExpert"}]
   **区分**：问的是「走势 / 进退步 / 趋势 / 折线」且**未**说「综合分析 / 综合报告 / 所有考试 / 多次考试综合」→ 用本条；不要默认改成综合分析。
 - **班级/学校 + 临界生/分层预警报告**（如「扬州中学高三(10)班数学临界生预警报告」）——
   **只拆 2 个子任务**，走分层预警，**禁止**走科目诊断 fetch+sections：
@@ -520,6 +520,62 @@ def build_group_feature_plan_items(question: str) -> list[dict[str, str]]:
     ]
 
 
+def build_trend_tracking_plan_items(question: str) -> list[dict[str, str]]:
+    """班级成绩趋势：查历次明细 + build_trend_tracking_report_data_tool。"""
+    from src.agent.education.orchestrator import _extract_class_name, _extract_subject
+    from src.agent.education.query_parse import extract_school_target
+
+    school = extract_school_target(question) or ""
+    class_name = _extract_class_name(question) or ""
+    subject = _plan_subject_name(question) or (_extract_subject(question) or "")
+    school_l = school or "该校"
+    class_l = class_name or "该班"
+    subject_l = f"【{subject}】" if subject else ""
+    scope_args = []
+    if school:
+        scope_args.append(f"school_name={school}")
+    if class_name:
+        scope_args.append(f"class_name={class_name}")
+    if subject:
+        scope_args.append(f"subject_name={subject}")
+    tool_args = ", ".join(scope_args)
+    if tool_args:
+        tool_args = tool_args + ", "
+    return [
+        {
+            "sub_task": (
+                f"查询【{school_l}】【{class_l}】历次{subject_l}考试每位学生分数"
+                "（SQL 须含 exam_name、student_id/姓名、score、exam_score；"
+                "按考试时间排序；禁止只查一场、禁止只查 KPI 聚合）"
+            ),
+            "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
+        },
+        {
+            "sub_task": (
+                f"调 build_trend_tracking_report_data_tool({tool_args}render=true) "
+                "生成【成绩趋势报告】（均分折线+明细表+进退步解读）；完成后 terminate。"
+                "**禁止** render_html_report 手填 / build_comprehensive_report_data_tool"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        },
+    ]
+
+
+def should_replace_with_trend_tracking_plan(
+    question: str,
+    plan_items: list[dict[str, str]],
+) -> bool:
+    """走势/趋势：强制改走 trend_tracking 2 步计划。"""
+    from src.agent.education.query_parse import is_trend_tracking_query
+
+    if not is_trend_tracking_query(question):
+        return False
+    blob = " ".join(str(it.get("sub_task") or "") for it in plan_items)
+    if "build_trend_tracking_report_data_tool" in blob:
+        return False
+    return True
+
+
 def build_class_overview_plan_items(question: str) -> list[dict[str, str]]:
     """班级成绩总览：查该班学生分数 + 渲染 class_overview。"""
     from src.agent.education.orchestrator import _extract_class_name, _extract_subject
@@ -674,7 +730,7 @@ def coerce_plan_items_if_needed(
     question: str,
     plan_items: list[dict[str, str]],
 ) -> list[dict[str, str]]:
-    """学校报告 / 个人得分 / 多场考试 / 各班对比 / 分层预警 / 群体特征 / 班级总览修正。"""
+    """学校报告 / 个人得分 / 多场考试 / 各班对比 / 分层预警 / 群体特征 / 班级总览 / 趋势修正。"""
     from src.agent.education.query_parse import (
         is_class_overview_query,
         is_group_feature_query,
@@ -682,6 +738,7 @@ def coerce_plan_items_if_needed(
         is_school_class_comparison_query,
         is_school_exam_report_query,
         is_tier_alert_query,
+        is_trend_tracking_query,
     )
 
     q = (question or "").strip()
@@ -690,6 +747,12 @@ def coerce_plan_items_if_needed(
             "planner individual-student coerce: expanding to 2-step student subject diagnosis"
         )
         return build_individual_student_exam_plan_items(q)
+    if should_replace_with_trend_tracking_plan(q, plan_items):
+        logger.info(
+            "planner trend-tracking coerce: replacing %d plan(s) with trend_tracking 2-step",
+            len(plan_items),
+        )
+        return build_trend_tracking_plan_items(q)
     if should_replace_with_tier_alert_plan(q, plan_items):
         logger.info(
             "planner tier-alert coerce: replacing %d plan(s) with tier_alert 2-step",
@@ -732,6 +795,7 @@ def coerce_plan_items_if_needed(
         or is_tier_alert_query(q)
         or is_group_feature_query(q)
         or is_class_overview_query(q)
+        or is_trend_tracking_query(q)
     ):
         return plan_items
     if not is_school_exam_report_query(q):

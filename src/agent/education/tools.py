@@ -3028,6 +3028,148 @@ def build_group_feature_report_data_tool(
 
 
 @tool()
+def build_trend_tracking_report_data_tool(
+    class_name: str = "",
+    school_name: str = "",
+    subject_name: str = "",
+    target_name: str = "",
+    exam_order: list[str] | None = None,
+    records: list[dict[str, Any]] | None = None,
+    rows: list[list[Any]] | None = None,
+    columns: list[str] | None = None,
+    full_score: float | None = None,
+    render: bool = True,
+    report_data: dict[str, Any] | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+) -> ToolResult:
+    """组装成绩趋势报告并直接渲染 HTML（``education/trend_tracking.html``）。
+
+    **成绩趋势 / 走势 / 进退步的关键工具**：从上游多场学生明细生成均分折线、
+    历次 KPI 表与变化解读。LLM 调完只需 ``terminate``，**禁止**再调
+    ``render_html_report`` / ``build_comprehensive_report_data_tool``（易手填空图）。
+
+    入参优先用运行时注入的完整 SQL；有 ``datasource_id`` + ``class_name`` 时
+    可回退拉取该班历次长表。
+    """
+    from src.agent.education.query_parse import resolve_comprehensive_table_input
+    from src.agent.education.trend_tracking import build_trend_tracking_data
+    from src.agent.resource.tool.business import (
+        _render_template_html,
+        _sanitize_report_html,
+    )
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    records, rows, columns, used_upstream = resolve_comprehensive_table_input(
+        records=records,
+        rows=rows,
+        columns=columns,
+        last_exec_result=ctx.get("last_exec_result"),
+        report_data=report_data or ctx.get("report_data"),
+    )
+
+    if not records and not (rows and columns) and datasource_id and class_name:
+        fetched = _fetch_class_score_long_table(
+            datasource_id=int(datasource_id),
+            class_name=class_name,
+            school_name=school_name,
+            subject_name=subject_name,
+            workspace_oid=workspace_oid,
+        )
+        if fetched:
+            rows = list(fetched["rows"])
+            columns = [str(c) for c in fetched["columns"]]
+            used_upstream = True
+
+    if not records and not (rows and columns):
+        return ToolResult(
+            content=(
+                "build_trend_tracking_report_data_tool 失败：未找到上游多场学生成绩明细。"
+                "请只传 class_name（禁止手填 records）；确保 DataAnalyst 已查出历次明细。"
+            ),
+            data={"error": "missing input"},
+        )
+
+    exam_seen: list[str] = []
+    if not records:
+        if not columns:
+            return ToolResult(
+                content="build_trend_tracking_report_data_tool 失败：columns 为空。",
+                data={"error": "empty columns"},
+            )
+        exam_f, stu_f, sub_f, score_f, total_f = _guess_long_table_fields(
+            [str(c) for c in columns],
+            exam_field="exam_name",
+            student_field="student_id",
+            subject_field="subject_name",
+            score_field="score",
+            total_field="total",
+        )
+        records, exam_seen = _aggregate_long_table_records(
+            list(rows or []),
+            [str(c) for c in columns],
+            exam_field=exam_f,
+            student_field=stu_f,
+            subject_field=sub_f,
+            score_field=score_f,
+            total_field=total_f,
+        )
+
+    if not records:
+        return ToolResult(
+            content="build_trend_tracking_report_data_tool 失败：聚合后无有效成绩行。",
+            data={"error": "empty records"},
+        )
+
+    order = list(exam_order or []) or list(exam_seen)
+    data = build_trend_tracking_data(
+        records,
+        order or None,
+        class_name=class_name,
+        school_name=school_name,
+        subject_name=subject_name,
+        target_name=target_name or class_name,
+        full_score=full_score,
+    )
+    if not render:
+        note = "（已用上游全量明细）" if used_upstream else ""
+        return ToolResult(
+            content=f"成绩趋势报告 data 已组装{note}。",
+            data=data,
+        )
+
+    template_name = "education/trend_tracking.html"
+    try:
+        raw_html = _render_template_html(template_name, data)
+        safe_html = _sanitize_report_html(raw_html.strip())
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(
+            content=f"成绩趋势报告渲染失败：{e}",
+            data={"error": str(e)},
+        )
+    payload = {
+        "output_type": "html",
+        "title": data.get("REPORT_TITLE") or "成绩趋势报告",
+        "html": safe_html,
+        "mode": "template",
+        "chunks": [
+            {
+                "output_type": "html",
+                "title": data.get("REPORT_TITLE") or "成绩趋势报告",
+                "content": safe_html,
+            }
+        ],
+    }
+    n = int(data.get("EXAM_COUNT") or 0)
+    return _html_report_tool_result(
+        f"成绩趋势报告已渲染（{data.get('TARGET_NAME') or class_name or '本班'}，{n} 场）。",
+        payload,
+        report_type=ReportType.TREND_TRACKING,
+    )
+
+
+@tool()
 def build_class_overview_report_data_tool(
     class_name: str = "",
     school_name: str = "",
@@ -4797,6 +4939,7 @@ EDUCATION_TOOLS = [
     build_tier_alert_report_data_tool,
     build_group_feature_report_data_tool,
     build_class_overview_report_data_tool,
+    build_trend_tracking_report_data_tool,
     build_student_exam_report_data_tool,
     build_student_subject_diagnosis_tool,
     fetch_subject_diagnosis_data_tool,
@@ -4817,6 +4960,7 @@ __all__ = [
     "build_comprehensive_report_data_tool",
     "build_citywide_exam_analysis_report_tool",
     "build_class_overview_report_data_tool",
+    "build_trend_tracking_report_data_tool",
     "build_diagnostic_report_data_tool",
     "build_group_feature_report_data_tool",
     "build_knowledge_tier_sections_tool",

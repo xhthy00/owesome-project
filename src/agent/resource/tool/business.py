@@ -453,6 +453,10 @@ _EDU_TEMPLATE_DEDICATED_BUILDERS: dict[str, tuple[str, str]] = {
         "build_class_overview_report_data_tool(class_name=..., subject_name=..., render=true)",
         "use_build_class_overview_report_data_tool",
     ),
+    "trend_tracking": (
+        "build_trend_tracking_report_data_tool(class_name=..., subject_name=..., render=true)",
+        "use_build_trend_tracking_report_data_tool",
+    ),
 }
 
 

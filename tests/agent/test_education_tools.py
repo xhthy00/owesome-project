@@ -797,20 +797,24 @@ def test_student_profile_template_renders():
 
 
 def test_trend_tracking_template_renders():
-    data = {
-        "REPORT_TITLE": "张三数学趋势", "REPORT_SUBTITLE": "历次追踪",
-        "REPORT_TIME": "2026-07-01", "TARGET_NAME": "张三", "SUBJECT_NAME": "数学",
-        "TREND_CHART": '{"xAxis":{"type":"category","data":["月考1","期中"]},"yAxis":{"type":"value"},"series":[{"type":"line","data":[78,72]}]}',
-        "TREND_TABLE": "<table class=\"edu-table\"><tr><th>考试</th></tr></table>",
-        "CHANGE_INFO": "<p>退步 6 分</p>",
-        "SUMMARY": "<p>波动</p>", "RECOMMENDATIONS": "<p>加强</p>",
-    }
+    from src.agent.education.tools import build_trend_tracking_report_data_tool
+
     result = _run(
-        render_html_report.execute(
-            datasource_id=1, template_name="education/trend_tracking.html", data=data, title="趋势报告"
+        build_trend_tracking_report_data_tool.execute(
+            class_name="高三(10)班",
+            subject_name="数学",
+            target_name="张三",
+            records=[
+                {"exam": "月考1", "student": "张三", "subjects": {"数学": 78}, "total": 78},
+                {"exam": "期中", "student": "张三", "subjects": {"数学": 72}, "total": 72},
+            ],
+            exam_order=["月考1", "期中"],
+            render=True,
         )
     )
-    assert "张三" in result.data["html"]
+    assert result.data["output_type"] == "html"
+    assert "张三" in result.data["html"] or "高三(10)班" in result.data["html"]
+    assert "trendChartData" in result.data["html"]
 
 
 def test_tier_alert_template_renders():

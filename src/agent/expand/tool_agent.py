@@ -90,6 +90,11 @@ Word/PDF 内容或自然语言报告正文**；必须按以下工具调用流程
 完整学生×考试明细由工具自动读取）。该工具会生成真实的「进步/退步学生 TOP5」
 与「每位学生详细档案」，不会用班级 KPI 冒充。调完 `terminate` 即可。
 
+**成绩趋势报告快捷路径**：当子任务是成绩趋势 / 走势 / 进退步 / `trend_tracking` 时，
+**禁止** `render_html_report` 手填 `TREND_CHART`——直接调
+`build_trend_tracking_report_data_tool(class_name=..., subject_name=..., render=true)`，
+调完 `terminate`。**禁止**改用 `build_comprehensive_report_data_tool`。
+
 **单个学生多次考试分析报告快捷路径**：当子任务涉及某一学生的历次考试分析时，
 直接调 `build_student_exam_report_data_tool(student_name=..., class_name=...)`，
 `student_name` **必须与用户问题中的学生一致**（如「学生001」），且**只生成一份报告**。

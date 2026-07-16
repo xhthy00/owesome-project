@@ -339,10 +339,49 @@ def is_multi_exam_student_analysis_query(question: str) -> bool:
     return False
 
 
+#: 走势/趋势报告口径（优先于「历次考试→综合分析」）
+_TREND_TRACKING_HINTS = (
+    "成绩趋势",
+    "历次成绩趋势",
+    "趋势报告",
+    "成绩走势",
+    "走势与进退步",
+    "进退步分析",
+    "历次趋势",
+    "折线",
+)
+_TREND_TRACKING_BLOCKERS = (
+    "综合分析",
+    "综合报告",
+    "综合复盘",
+)
+
+
+def is_trend_tracking_query(question: str) -> bool:
+    """班级/主体成绩走势、趋势、进退步 → trend_tracking（非综合 9 维）。"""
+    q = (question or "").strip()
+    if not q or is_citywide_analysis_query(q) or is_individual_student_analysis_query(q):
+        return False
+    if any(b in q for b in _TREND_TRACKING_BLOCKERS):
+        return False
+    if any(h in q for h in _TREND_TRACKING_HINTS):
+        return True
+    if "趋势" in q and any(h in q for h in ("成绩", "考试", "班", "均分")):
+        return True
+    if "走势" in q and any(h in q for h in ("成绩", "考试", "班", "均分")):
+        return True
+    if "进退步" in q and ("班" in q or "成绩" in q or "考试" in q):
+        return True
+    return False
+
+
 def is_multi_exam_class_analysis_query(question: str) -> bool:
     """班级范围 + 多场/历次考试综合分析（应走 comprehensive，非单科诊断）。"""
     q = (question or "").strip()
     if not q or is_citywide_analysis_query(q) or is_individual_student_analysis_query(q):
+        return False
+    # 走势/趋势报告独立路由，不占综合
+    if is_trend_tracking_query(q):
         return False
     # 须含班级语境（班 / 高三(11)班 等）
     if "班" not in q and "班级" not in q:
@@ -1499,6 +1538,7 @@ __all__ = [
     "format_scope_constraints",
     "is_citywide_analysis_query",
     "is_multi_exam_class_analysis_query",
+    "is_trend_tracking_query",
     "is_school_class_comparison_query",
     "is_school_exam_report_query",
     "is_structured_diagnostic_query",

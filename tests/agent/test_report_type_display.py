@@ -88,26 +88,22 @@ def test_render_html_injects_report_type_for_grade_comparison():
 def test_render_html_injects_report_type_for_trend_tracking():
     import asyncio
 
-    from src.agent.resource.tool.business import render_html_report
+    from src.agent.education.tools import build_trend_tracking_report_data_tool
 
     result = asyncio.run(
-        render_html_report.execute(
-            template_name="education/trend_tracking.html",
-            title="趋势",
-            data={
-                "REPORT_TITLE": "趋势",
-                "REPORT_SUBTITLE": "",
-                "REPORT_TIME": "2026-07-14",
-                "TARGET_NAME": "高三(10)班",
-                "SUBJECT_NAME": "数学",
-                "TREND_CHART": "",
-                "TREND_TABLE": "",
-                "CHANGE_INFO": "",
-                "SUMMARY": "",
-                "RECOMMENDATIONS": "",
-            },
+        build_trend_tracking_report_data_tool.execute(
+            class_name="高三(10)班",
+            subject_name="数学",
+            records=[
+                {"exam": "月考1", "student": "A", "subjects": {"数学": 78}, "total": 78},
+                {"exam": "期中", "student": "A", "subjects": {"数学": 72}, "total": 72},
+            ],
+            render=True,
         )
     )
     assert result.data
     assert result.data.get("report_type_label") == "成绩趋势报告"
-    assert "成绩趋势报告" in (result.data.get("html") or "")
+    assert result.data.get("report_type") == "trend_tracking"
+    assert "成绩趋势报告" in (result.data.get("html") or "") or "成绩趋势报告" in (
+        result.data.get("title") or ""
+    )

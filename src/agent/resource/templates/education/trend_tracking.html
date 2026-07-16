@@ -51,9 +51,23 @@
       <script type="application/json" id="trendChartData">{{TREND_CHART}}</script>
       <script>
         (function () {
+          var el = document.getElementById('trendChart');
           var raw = (document.getElementById('trendChartData').textContent || '').trim();
-          if (!raw) { return; }
-          try { echarts.init(document.getElementById('trendChart')).setOption(JSON.parse(raw)); } catch (e) {}
+          if (!raw || raw === '{}' || raw === 'null') {
+            if (el) el.innerHTML = '<p class="edu-sub" style="padding:48px 0;text-align:center">暂无趋势图数据</p>';
+            return;
+          }
+          function draw() {
+            if (typeof echarts === 'undefined') {
+              if (el) el.innerHTML = '<p class="edu-sub" style="padding:48px 0;text-align:center">图表库加载失败，请查看下方明细表</p>';
+              return;
+            }
+            try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) {
+              if (el) el.innerHTML = '<p class="edu-sub" style="padding:48px 0;text-align:center">趋势图解析失败</p>';
+            }
+          }
+          if (typeof echarts !== 'undefined') { draw(); }
+          else { setTimeout(draw, 400); }
         })();
       </script>
     </section>
