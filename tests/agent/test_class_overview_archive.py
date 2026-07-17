@@ -138,6 +138,93 @@ def test_describe_score_dispersion_levels():
     assert "方差=标准差" in wide["variance_hint"]
 
 
+def test_enrich_fills_summary_and_recommendations_from_kpis():
+    """占位的总体分析 / 改进建议应被 KPI 实数替换。"""
+    from src.agent.resource.tool.business import _enrich_class_overview_archive
+
+    out = _enrich_class_overview_archive(
+        "education/class_overview.html",
+        {
+            "CLASS_NAME": "高三(10)班",
+            "SUBJECT_NAME": "数学",
+            "EXAM_NAME": "连淮扬镇",
+            "SUMMARY": "<p>班级成绩总览：关注均分、及格率与分数段分布。</p>",
+            "RECOMMENDATIONS": "<p>结合 KPI 与分数段，对薄弱区间安排巩固练习。</p>",
+            "RANK_INFO": {
+                "scope": "扬州中学高三年级 (共 3 个班)",
+                "items": [
+                    {"指标": "均分", "value": 108.5, "rank": 1, "total": 3},
+                ],
+                "summary": "高三(10)班均分位列年级第 1",
+            },
+        },
+        tool_runtime_ctx={
+            "last_exec_result": {
+                "columns": ["student_id", "subject", "score", "exam_score"],
+                "rows": [
+                    ["a", "数学", 145, 150],
+                    ["b", "数学", 72, 150],
+                    ["c", "数学", 108, 150],
+                    ["d", "数学", 55, 150],
+                    ["e", "数学", 120, 150],
+                ],
+            }
+        },
+    )
+    summary = out.get("SUMMARY") or ""
+    rec = out.get("RECOMMENDATIONS") or ""
+    assert "关注均分、及格率" not in summary
+    assert "结合 KPI 与分数段" not in rec
+    assert "高三(10)班" in summary
+    assert "均分" in summary
+    assert "及格率" in summary
+    assert "年级第 1" in summary or "位列年级" in summary
+    assert "<ol>" in rec
+    assert "<li>" in rec
+    assert out.get("TOTAL_COUNT") not in (None, "", "-")
+
+
+def test_build_class_overview_summary_contains_metrics():
+    from src.agent.education.subject_diagnosis import (
+        build_class_overview_recommendations,
+        build_class_overview_summary,
+    )
+
+    stats = {
+        "count": 52,
+        "avg": 108.5,
+        "pass_rate": 75.0,
+        "excellent_rate": 25.0,
+        "good_rate": 40.0,
+        "low_score_rate": 12.0,
+        "max": 145,
+        "min": 55,
+        "stdev": 21.5,
+        "full_score": 150,
+        "segments": [
+            {"label": "0-90", "count": 8, "ratio": 15.4},
+            {"label": "90-120", "count": 28, "ratio": 53.8},
+            {"label": "120-150", "count": 16, "ratio": 30.8},
+        ],
+    }
+    summary = build_class_overview_summary(
+        class_name="高三(10)班",
+        subject_name="数学",
+        stats=stats,
+        stdev_level="适中",
+        rank_summary="均分年级第 1",
+    )
+    assert "52" in summary
+    assert "108.5" in summary
+    assert "75.00%" in summary or "75%" in summary
+    assert "90-120" in summary
+    assert "均分年级第 1" in summary
+
+    rec = build_class_overview_recommendations(stats=stats)
+    assert "<ol>" in rec
+    assert "及格" in rec or "优秀" in rec or "分数段" in rec or "巩固" in rec
+
+
 def test_enrich_fills_ability_portrait_radar():
     from src.agent.resource.tool.business import _enrich_class_overview_archive
 

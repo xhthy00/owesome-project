@@ -353,9 +353,13 @@ def test_select_report_template_tool_unknown_report_type():
 # ---- templates registry ---------------------------------------------------
 
 def test_select_report_template_parent_audience_suffix():
+    # class_overview 尚无 parent 变体文件 → 回退标准模板
     info = select_report_template(ReportType.CLASS_OVERVIEW, Audience.PARENT)
-    # Phase 1 未实现 parent 变体文件，但路径应含 _parent 后缀
-    assert "_parent" in info["template_name"]
+    assert info["template_name"] == "education/class_overview.html"
+
+    # student_profile 家长版使用已有的 student_profile_parent.html
+    info_stu = select_report_template(ReportType.STUDENT_PROFILE, Audience.PARENT)
+    assert info_stu["template_name"] == "education/student_profile_parent.html"
 
 
 # ---- tools: resolve_score_schema ------------------------------------------

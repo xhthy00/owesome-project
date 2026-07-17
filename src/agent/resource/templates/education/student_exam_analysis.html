@@ -48,7 +48,7 @@
     </section>
 
     <section class="edu-card">
-      <h2>一、总体成绩概览</h2>
+      <h2>{{OVERVIEW_SECTION_TITLE}}</h2>
       <div class="insight">{{OVERVIEW_INSIGHT}}</div>
       <h3>（一）历次考试成绩汇总</h3>
       {{SCORE_SUMMARY_TABLE}}
@@ -56,29 +56,59 @@
       {{KEY_METRICS_TABLE}}
       <div id="totalTrend" class="edu-chart"></div>
       <script type="application/json" id="totalTrendData">{{TOTAL_TREND_CHART}}</script>
+      <h3>（三）班级分数段分布</h3>
+      <div id="scoreDist" class="edu-chart"></div>
+      <script type="application/json" id="scoreDistData">{{SCORE_DIST_CHART}}</script>
     </section>
 
     <section class="edu-card">
-      <h2>二、各科目深度分析</h2>
+      <h2>{{SUBJECT_SECTION_TITLE}}</h2>
+      <p class="edu-sub">{{SUBJECT_SECTION_INTRO}}</p>
+      {% if IS_SINGLE_SUBJECT %}
+      <div id="subjectTrendMain" class="edu-chart"></div>
+      <script type="application/json" id="subjectTrendMainData">{{TREND_LINE_CHART}}</script>
+      {% if ABILITY_RADAR_CHART %}
+      <h3>能力 / 知识点雷达</h3>
+      <div id="abilityRadar" class="edu-chart"></div>
+      <script type="application/json" id="abilityRadarData">{{ABILITY_RADAR_CHART}}</script>
+      {% endif %}
+      {% if HEATMAP_CHART %}
+      <h3>热力图</h3>
+      <div id="subjectHeatmap" class="edu-chart"></div>
+      <script type="application/json" id="subjectHeatmapData">{{HEATMAP_CHART}}</script>
+      {% endif %}
+      {% else %}
       <div id="subjectRadar" class="edu-chart"></div>
       <script type="application/json" id="subjectRadarData">{{SUBJECT_RADAR_CHART}}</script>
+      {% endif %}
       {{SUBJECT_ANALYSIS_HTML}}
     </section>
 
     <section class="edu-card">
-      <h2>三、总分与排名综合分析</h2>
+      <h2>{{TREND_SECTION_TITLE}}</h2>
+      {% if not IS_SINGLE_SUBJECT %}
       <h3>（一）总分走势</h3>
       <p>{{TOTAL_TREND_INSIGHT}}</p>
       {{TOTAL_ANALYSIS_TABLE}}
       <div id="trendLine" class="edu-chart"></div>
       <script type="application/json" id="trendLineData">{{TREND_LINE_CHART}}</script>
-      <h3>（二）学科贡献度分析</h3>
+      <h3>（二）相对位置散点</h3>
+      {% else %}
+      <h3>（一）成绩走势说明</h3>
+      <p>{{TOTAL_TREND_INSIGHT}}</p>
+      {{TOTAL_ANALYSIS_TABLE}}
+      <h3>（二）相对位置散点</h3>
+      {% endif %}
+      <div id="scatterPlot" class="edu-chart"></div>
+      <script type="application/json" id="scatterPlotData">{{SCATTER_CHART}}</script>
+      <h3>{% if IS_SINGLE_SUBJECT %}（三）学习建议要点{% else %}（三）学科贡献度分析{% endif %}</h3>
       <p>{{CONTRIBUTION_INSIGHT}}</p>
     </section>
 
     <section class="edu-card">
       <h2>四、知识点得分明细与薄弱点</h2>
       {{KNOWLEDGE_INSIGHT}}
+      <p class="edu-sub"><strong>薄弱知识点清单：</strong>{{WEAK_KNOWLEDGE_LIST}}</p>
       <h3>（一）知识点掌握一览</h3>
       {{KNOWLEDGE_TABLE}}
       <div id="knowledgeBar" class="edu-chart"></div>
@@ -89,7 +119,7 @@
 
     <section class="edu-card">
       <h2>五、与班级水平对比分析</h2>
-      <h3>（一）各科与班级均分差值</h3>
+      <h3>（一）{% if IS_SINGLE_SUBJECT %}与班级均分差值{% else %}各科与班级均分差值{% endif %}</h3>
       {{CLASS_DIFF_TABLE}}
     </section>
 
@@ -113,9 +143,14 @@
         try { echarts.init(document.getElementById(id)).setOption(JSON.parse(raw)); } catch (e) {}
       }
       init('subjectRadar', 'subjectRadarData');
+      init('subjectTrendMain', 'subjectTrendMainData');
+      init('abilityRadar', 'abilityRadarData');
+      init('subjectHeatmap', 'subjectHeatmapData');
       init('trendLine', 'trendLineData');
       init('totalTrend', 'totalTrendData');
       init('knowledgeBar', 'knowledgeBarData');
+      init('scoreDist', 'scoreDistData');
+      init('scatterPlot', 'scatterPlotData');
     })();
   </script>
 </body>

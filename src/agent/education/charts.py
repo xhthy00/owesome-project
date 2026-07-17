@@ -46,6 +46,7 @@ SUPPORTED_CHART_TYPES = (
     "heatmap",
     "ability_radar",
     "question_type_bar",
+    "scatter",
 )
 
 
@@ -391,7 +392,7 @@ def _trajectory_line(data: dict[str, Any], title: str) -> dict[str, Any]:
 
 
 def _heatmap(data: dict[str, Any], title: str) -> dict[str, Any]:
-    """交叉分析热力图：data 含 rows/cols/matrix。"""
+    """交叉分析热力图：data 含 rows/cols/matrix；可选 min/max（默认 0–100）。"""
     rows = data.get("rows") or []
     cols = data.get("cols") or []
     matrix = data.get("matrix") or []
@@ -400,6 +401,14 @@ def _heatmap(data: dict[str, Any], title: str) -> dict[str, Any]:
         for j, val in enumerate(row_vals):
             if val is not None:
                 heat_data.append([j, i, val])
+    try:
+        vmax = float(data.get("max") if data.get("max") is not None else 100)
+    except (TypeError, ValueError):
+        vmax = 100.0
+    try:
+        vmin = float(data.get("min") if data.get("min") is not None else 0)
+    except (TypeError, ValueError):
+        vmin = 0.0
     return {
         "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
         "tooltip": {"position": "top", "trigger": "item"},
@@ -407,15 +416,15 @@ def _heatmap(data: dict[str, Any], title: str) -> dict[str, Any]:
         "xAxis": {"type": "category", "data": cols, "splitArea": {"show": True}},
         "yAxis": {"type": "category", "data": rows, "splitArea": {"show": True}},
         "visualMap": {
-            "min": 0,
-            "max": 100,
+            "min": vmin,
+            "max": vmax,
             "calculable": True,
             "orient": "horizontal",
             "left": "center",
             "bottom": "0%",
         },
         "series": [{
-            "name": "均分",
+            "name": str(data.get("series_name") or "得分率"),
             "type": "heatmap",
             "data": heat_data,
             "label": {"show": True, "fontSize": 11},
@@ -454,6 +463,50 @@ def _question_type_bar(data: dict[str, Any], title: str) -> dict[str, Any]:
     }
 
 
+def _scatter(data: dict[str, Any], title: str) -> dict[str, Any]:
+    """散点图。data: series=[{name, data:[[x,y],...]}], 可选 x_name/y_name。"""
+    series_in = list(data.get("series") or [])
+    series = []
+    for s in series_in:
+        if not isinstance(s, dict):
+            continue
+        series.append(
+            {
+                "name": str(s.get("name") or ""),
+                "type": "scatter",
+                "symbolSize": int(s.get("symbolSize") or 12),
+                "data": list(s.get("data") or []),
+                "emphasis": {"focus": "series"},
+            }
+        )
+    if not series and data.get("points"):
+        series = [
+            {
+                "name": str(data.get("name") or "数据"),
+                "type": "scatter",
+                "symbolSize": 12,
+                "data": [[p.get("x"), p.get("y")] for p in data["points"] if isinstance(p, dict)],
+            }
+        ]
+    return {
+        "title": {"text": title, "left": "center"},
+        "tooltip": {"trigger": "item"},
+        "legend": {"bottom": 0},
+        "grid": {"left": "10%", "right": "8%", "bottom": "14%", "containLabel": True},
+        "xAxis": {
+            "type": "value",
+            "name": str(data.get("x_name") or ""),
+            "scale": True,
+        },
+        "yAxis": {
+            "type": "value",
+            "name": str(data.get("y_name") or ""),
+            "scale": True,
+        },
+        "series": series,
+    }
+
+
 _register_builder("score_distribution", _score_distribution)
 _register_builder("subject_radar", _subject_radar)
 _register_builder("class_compare_bar", _class_compare_bar)
@@ -469,6 +522,7 @@ _register_builder("trajectory_line", _trajectory_line)
 _register_builder("heatmap", _heatmap)
 _register_builder("ability_radar", _ability_radar)
 _register_builder("question_type_bar", _question_type_bar)
+_register_builder("scatter", _scatter)
 
 
 __all__ = ["SUPPORTED_CHART_TYPES", "build_chart_option", "resolve_chart_type"]

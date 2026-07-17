@@ -127,6 +127,206 @@ def _build_weak_item_table(insight: dict[str, Any]) -> str:
     return _table(["考试", "题号", "知识点", "得分率"], rows)
 
 
+def _build_ability_radar_chart(
+    *,
+    student_name: str,
+    subject_name: str,
+    insight: dict[str, Any],
+) -> str:
+    """单科能力/知识点雷达：优先能力层级，否则取知识点得分率作维度。"""
+    knowledge = _knowledge_rows_from_insight(insight)
+    if not knowledge:
+        return ""
+    from src.agent.education.knowledge_tier import ABILITY_LABELS, build_ability_tier_summary
+
+    tier = build_ability_tier_summary(knowledge)
+    by_level = [
+        s
+        for s in (tier.get("by_ability_level") or [])
+        if s.get("ability_level") not in (None, "", "unknown")
+        and s.get("avg_score_rate") is not None
+    ]
+    title_prefix = f"{student_name}" + (f" {subject_name}" if subject_name else "")
+    if len(by_level) >= 3:
+        return build_chart_option(
+            "ability_radar",
+            {
+                "levels": [
+                    ABILITY_LABELS.get(str(s.get("ability_level")), str(s.get("ability_level")))
+                    for s in by_level
+                ],
+                "values": [float(s.get("avg_score_rate") or 0) for s in by_level],
+            },
+            f"{title_prefix} 能力层级雷达",
+        )
+    # 知识点作雷达维度（至少 3 个才有可读性）
+    usable = [
+        r
+        for r in knowledge
+        if str(r.get("knowledge_name") or "") not in ("", "未关联知识点")
+        and r.get("score_rate") is not None
+    ]
+    if len(usable) < 3:
+        return ""
+    # 弱项优先，再补强项，最多 8 维
+    usable.sort(key=lambda r: float(r.get("score_rate") or 0))
+    weak_first = usable[:5]
+    strong = list(reversed(usable[-3:]))
+    picked: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for r in weak_first + strong:
+        name = str(r.get("knowledge_name") or "")
+        if name in seen:
+            continue
+        seen.add(name)
+        picked.append(r)
+        if len(picked) >= 8:
+            break
+    if len(picked) < 3:
+        return ""
+    return build_chart_option(
+        "ability_radar",
+        {
+            "levels": [str(r.get("knowledge_name") or "") for r in picked],
+            "values": [float(r.get("score_rate") or 0) for r in picked],
+        },
+        f"{title_prefix} 知识点掌握雷达",
+    )
+
+
+def _build_knowledge_heatmap_chart(
+    *,
+    student_name: str,
+    subject_name: str,
+    insight: dict[str, Any],
+    exams: list[str],
+) -> str:
+    """知识点×考试得分率热力图；无逐场知识点时退化为知识点×掌握度单列。"""
+    items = [it for it in (insight.get("weak_items") or []) if isinstance(it, dict)]
+    # 聚合 knowledge × exam → score_rate
+    pivot: dict[str, dict[str, float]] = {}
+    exam_labels: list[str] = []
+    for it in items:
+        kn = str(it.get("knowledge_name") or "").strip()
+        if not kn or kn == "未关联知识点":
+            continue
+        exam = str(it.get("exam_name") or "").strip()
+        if not exam:
+            continue
+        short = _short_exam_label(exam)
+        if short not in exam_labels:
+            exam_labels.append(short)
+        rate = it.get("score_rate")
+        if rate is None:
+            continue
+        try:
+            pivot.setdefault(kn, {})[short] = float(rate)
+        except (TypeError, ValueError):
+            continue
+
+    title_prefix = f"{student_name}" + (f" {subject_name}" if subject_name else "")
+    if pivot and exam_labels:
+        # 考试列优先按报告考试顺序
+        preferred = [_short_exam_label(e) for e in exams]
+        ordered_cols = [c for c in preferred if c in exam_labels]
+        ordered_cols.extend([c for c in exam_labels if c not in ordered_cols])
+        ranked = sorted(
+            pivot.keys(),
+            key=lambda k: sum(pivot[k].values()) / max(len(pivot[k]), 1),
+        )[:10]
+        matrix = [[pivot[k].get(c) for c in ordered_cols] for k in ranked]
+        return build_chart_option(
+            "heatmap",
+            {
+                "rows": ranked,
+                "cols": ordered_cols,
+                "matrix": matrix,
+                "min": 0,
+                "max": 100,
+                "series_name": "得分率(%)",
+            },
+            f"{title_prefix} 知识点×考试得分率热力图",
+        )
+
+    # 退路：知识点列表作行，单列得分率
+    knowledge = _knowledge_rows_from_insight(insight)
+    usable = [
+        r
+        for r in knowledge
+        if str(r.get("knowledge_name") or "") not in ("", "未关联知识点")
+        and r.get("score_rate") is not None
+    ]
+    if len(usable) < 2:
+        return ""
+    usable.sort(key=lambda r: float(r.get("score_rate") or 0))
+    top = usable[:12]
+    return build_chart_option(
+        "heatmap",
+        {
+            "rows": [str(r.get("knowledge_name") or "") for r in top],
+            "cols": ["得分率(%)"],
+            "matrix": [[round(float(r.get("score_rate") or 0), 1)] for r in top],
+            "min": 0,
+            "max": 100,
+            "series_name": "得分率(%)",
+        },
+        f"{title_prefix} 知识点得分率热力图",
+    )
+
+
+def _build_exam_position_heatmap(
+    *,
+    student_name: str,
+    subject_name: str,
+    exams: list[str],
+    stu_scores: dict[str, float | None],
+    class_avgs: dict[str, float | None],
+    class_maxes: dict[str, float | None],
+) -> str:
+    """无知识点时：考试×相对位置（该生/班均，归一到百分制）热力图。"""
+    if len(exams) < 2:
+        return ""
+    cols = [_short_exam_label(e) for e in exams]
+    stu_row: list[float | None] = []
+    avg_row: list[float | None] = []
+    rel_row: list[float | None] = []
+    for e in exams:
+        sc = stu_scores.get(e)
+        ca = class_avgs.get(e)
+        cm = class_maxes.get(e)
+        full = cm if cm and cm > 0 else None
+        if full is None and sc is not None:
+            full = max(float(sc), float(ca or 0)) or None
+        if sc is not None and full:
+            stu_row.append(round(100.0 * float(sc) / float(full), 1))
+        else:
+            stu_row.append(None)
+        if ca is not None and full:
+            avg_row.append(round(100.0 * float(ca) / float(full), 1))
+        else:
+            avg_row.append(None)
+        if sc is not None and ca is not None:
+            # 50 为持平，+10 分 → 60；裁剪到 0–100
+            rel_row.append(max(0.0, min(100.0, 50.0 + float(sc) - float(ca))))
+        else:
+            rel_row.append(None)
+    if all(v is None for v in stu_row):
+        return ""
+    title_prefix = f"{student_name}" + (f" {subject_name}" if subject_name else "")
+    return build_chart_option(
+        "heatmap",
+        {
+            "rows": ["该生相对满分%", "班均相对满分%", "相对班均(50=持平)"],
+            "cols": cols,
+            "matrix": [stu_row, avg_row, rel_row],
+            "min": 0,
+            "max": 100,
+            "series_name": "指数",
+        },
+        f"{title_prefix} 历次考试相对位置热力图",
+    )
+
+
 def _build_knowledge_section(
     *,
     student_name: str,
@@ -291,44 +491,81 @@ def build_student_exam_data(
         round(sum(avg_gap_parts) / len(avg_gap_parts), 2) if avg_gap_parts else None
     )
 
-    summary_header = ["考试", *subjects]
-    for sub in subjects:
-        summary_header.extend([f"{sub}排名"])
-    summary_header.extend(["总分", "总分排名"])
-    summary_rows: list[list[str]] = []
-    for e in exams:
-        total_ranks = _ranks(e, lambda r: _record_effective_total(r))
-        cells = [e]
-        for sub in subjects:
-            score = stu_sub_scores[sub].get(e)
-            cells.append(_fmt(score) if score is not None else "-")
-        for sub in subjects:
-            sub_ranks = _ranks(e, lambda r, s=sub: (r.get("subjects") or {}).get(s))
-            cells.append(_rank_label(sub_ranks.get(resolved_name), n_class or 0))
-        total = stu_totals.get(e)
-        cells.extend([
-            _fmt(total) if total is not None else "-",
-            _rank_label(total_ranks.get(resolved_name), n_class or 0),
-        ])
-        summary_rows.append(cells)
-    score_summary_table = _table(summary_header, summary_rows)
+    single_subject = len(subjects) == 1
+    sole_subject = subjects[0] if single_subject else ""
 
-    key_rows: list[list[str]] = []
-    if len(exams) >= 1:
-        for label in ["总分", *subjects]:
-            if label == "总分":
-                vals = [stu_totals.get(e) for e in exams]
-            else:
-                vals = [stu_sub_scores[label].get(e) for e in exams]
-            if not any(v is not None for v in vals):
-                continue
+    if single_subject:
+        # 单科：考试 | 得分 | 班级排名 | 班级均分 | 与均分差（不重复「总分」列）
+        summary_header = ["考试", f"{sole_subject}得分", "班级排名", "班级均分", "与均分差"]
+        summary_rows: list[list[str]] = []
+        for e in exams:
+            sc = stu_sub_scores[sole_subject].get(e)
+            rk = _ranks(
+                e, lambda r, s=sole_subject: (r.get("subjects") or {}).get(s)
+            ).get(resolved_name)
+            ca = _class_avg(e, sole_subject)
+            gap = (sc - ca) if sc is not None and ca is not None else None
+            summary_rows.append([
+                e,
+                _fmt(sc) if sc is not None else "-",
+                _rank_label(rk, n_class or 0),
+                _fmt(ca) if ca is not None else "-",
+                _fmt(gap) if gap is not None else "-",
+            ])
+        score_summary_table = _table(summary_header, summary_rows)
+
+        key_rows: list[list[str]] = []
+        vals = [stu_sub_scores[sole_subject].get(e) for e in exams]
+        if any(v is not None for v in vals):
             delta = (
                 (vals[-1] or 0) - (vals[0] or 0)
                 if vals[0] is not None and vals[-1] is not None
                 else 0
             )
-            key_rows.append([label, *[_fmt(v) for v in vals], _trend_tag(delta)])
-    key_metrics_table = _table(["指标", *exams, "趋势判断"], key_rows) if key_rows else ""
+            key_rows.append([sole_subject, *[_fmt(v) for v in vals], _trend_tag(delta)])
+            # 班级均分对照行
+            avgs = [_class_avg(e, sole_subject) for e in exams]
+            key_rows.append(["班级均分", *[_fmt(v) for v in avgs], "—"])
+        key_metrics_table = _table(["指标", *exams, "趋势判断"], key_rows) if key_rows else ""
+    else:
+        summary_header = ["考试", *subjects]
+        for sub in subjects:
+            summary_header.extend([f"{sub}排名"])
+        summary_header.extend(["总分", "总分排名"])
+        summary_rows = []
+        for e in exams:
+            total_ranks = _ranks(e, lambda r: _record_effective_total(r))
+            cells = [e]
+            for sub in subjects:
+                score = stu_sub_scores[sub].get(e)
+                cells.append(_fmt(score) if score is not None else "-")
+            for sub in subjects:
+                sub_ranks = _ranks(e, lambda r, s=sub: (r.get("subjects") or {}).get(s))
+                cells.append(_rank_label(sub_ranks.get(resolved_name), n_class or 0))
+            total = stu_totals.get(e)
+            cells.extend([
+                _fmt(total) if total is not None else "-",
+                _rank_label(total_ranks.get(resolved_name), n_class or 0),
+            ])
+            summary_rows.append(cells)
+        score_summary_table = _table(summary_header, summary_rows)
+
+        key_rows = []
+        if len(exams) >= 1:
+            for label in ["总分", *subjects]:
+                if label == "总分":
+                    vals = [stu_totals.get(e) for e in exams]
+                else:
+                    vals = [stu_sub_scores[label].get(e) for e in exams]
+                if not any(v is not None for v in vals):
+                    continue
+                delta = (
+                    (vals[-1] or 0) - (vals[0] or 0)
+                    if vals[0] is not None and vals[-1] is not None
+                    else 0
+                )
+                key_rows.append([label, *[_fmt(v) for v in vals], _trend_tag(delta)])
+        key_metrics_table = _table(["指标", *exams, "趋势判断"], key_rows) if key_rows else ""
 
     subject_sections: list[str] = []
     strong_sub, weak_sub = "", ""
@@ -420,10 +657,16 @@ def build_student_exam_data(
             _fmt(cm),
             _fmt(-gap) if gap is not None else "-",
         ])
-    total_analysis_table = _table(
-        ["考试", "总分", "总分排名", "班级均分", "班级最高分", "与第1名差距"],
-        total_rows,
-    )
+    if single_subject:
+        total_analysis_table = _table(
+            ["考试", f"{sole_subject}得分", "班级排名", "班级均分", "班级最高分", "与第1名差距"],
+            total_rows,
+        )
+    else:
+        total_analysis_table = _table(
+            ["考试", "总分", "总分排名", "班级均分", "班级最高分", "与第1名差距"],
+            total_rows,
+        )
 
     first_total = stu_totals.get(exams[0]) if exams else None
     last_total = stu_totals.get(exams[-1]) if exams else None
@@ -493,29 +736,61 @@ def build_student_exam_data(
         )
         for s in subjects
     ]
-    subject_radar = build_chart_option(
-        "subject_radar",
-        {"subjects": subjects, "values": radar_vals},
-        f"{resolved_name} 各科均分雷达图",
-    )
-    trend_series = [{"name": "总分", "values": [stu_totals.get(e, 0) for e in exams]}]
-    for sub in subjects:
-        trend_series.append(
-            {"name": sub, "values": [stu_sub_scores[sub].get(e, 0) for e in exams]}
+    if single_subject:
+        # 单科不渲染「各科雷达」（仅 1 个顶点无意义）；主图用单科趋势
+        subject_radar = ""
+        trend_series = [
+            {
+                "name": sole_subject,
+                "values": [stu_sub_scores[sole_subject].get(e, 0) for e in exams],
+            },
+            {
+                "name": "班级均分",
+                "values": [_class_avg(e, sole_subject) or 0 for e in exams],
+            },
+        ]
+        trend_line = build_chart_option(
+            "trend_line",
+            {"x_labels": exams, "series": trend_series},
+            f"{resolved_name} {sole_subject}成绩趋势（对照班均）",
         )
-    trend_line = build_chart_option(
-        "trend_line",
-        {"x_labels": exams, "series": trend_series},
-        f"{resolved_name} 成绩趋势",
-    )
-    total_trend = build_chart_option(
-        "trend_line",
-        {
-            "x_labels": exams,
-            "series": [{"name": "总分", "values": [stu_totals.get(e, 0) for e in exams]}],
-        },
-        f"{resolved_name} 总分走势",
-    )
+        total_trend = build_chart_option(
+            "trend_line",
+            {
+                "x_labels": exams,
+                "series": [
+                    {
+                        "name": sole_subject,
+                        "values": [stu_sub_scores[sole_subject].get(e, 0) for e in exams],
+                    }
+                ],
+            },
+            f"{resolved_name} {sole_subject}成绩走势",
+        )
+    else:
+        subject_radar = build_chart_option(
+            "subject_radar",
+            {"subjects": subjects, "values": radar_vals},
+            f"{resolved_name} 各科均分雷达图",
+        )
+        trend_series = [{"name": "总分", "values": [stu_totals.get(e, 0) for e in exams]}]
+        for sub in subjects:
+            trend_series.append(
+                {"name": sub, "values": [stu_sub_scores[sub].get(e, 0) for e in exams]}
+            )
+        trend_line = build_chart_option(
+            "trend_line",
+            {"x_labels": exams, "series": trend_series},
+            f"{resolved_name} 成绩趋势",
+        )
+        total_trend = build_chart_option(
+            "trend_line",
+            {
+                "x_labels": exams,
+                "series": [{"name": "总分", "values": [stu_totals.get(e, 0) for e in exams]}],
+            },
+            f"{resolved_name} 总分走势",
+        )
 
     insight = _pick_item_insight(item_insight, student_item_insights, resolved_name)
     if not insight:
@@ -527,31 +802,49 @@ def build_student_exam_data(
         student_name=resolved_name, insight=insight
     )
 
-    overview = (
-        f"{resolved_name}共分析 <strong>{len(exams)}</strong> 次考试"
-        f"（{'、'.join(exams)}）。"
-        + (
-            f"多次均分 <strong>{_fmt(stu_avg)}</strong> 分；"
-            if stu_avg is not None
-            else ""
+    if single_subject:
+        overview = (
+            f"{resolved_name}本报告聚焦 <strong>{sole_subject}</strong>，共分析 "
+            f"<strong>{len(exams)}</strong> 次考试（{'、'.join(exams)}）。"
+            + (
+                f"多次均分 <strong>{_fmt(stu_avg)}</strong> 分；"
+                if stu_avg is not None
+                else ""
+            )
+            + (
+                f"最近一场（{last_exam}）得分 {_fmt(last_tv)}，"
+                f"距班级第1名 {_fmt(last_gap)} 分；"
+                if last_exam and last_tv is not None and last_gap is not None
+                else ""
+            )
+            + f"{trend_narrative}"
         )
-        + (
-            f"最近一场（{last_exam}）得分 {_fmt(last_tv)}，"
-            f"距班级第1名 {_fmt(last_gap)} 分；"
-            if last_exam and last_tv is not None and last_gap is not None
-            else ""
+    else:
+        overview = (
+            f"{resolved_name}共分析 <strong>{len(exams)}</strong> 次考试"
+            f"（{'、'.join(exams)}）。"
+            + (
+                f"多次均分 <strong>{_fmt(stu_avg)}</strong> 分；"
+                if stu_avg is not None
+                else ""
+            )
+            + (
+                f"最近一场（{last_exam}）得分 {_fmt(last_tv)}，"
+                f"距班级第1名 {_fmt(last_gap)} 分；"
+                if last_exam and last_tv is not None and last_gap is not None
+                else ""
+            )
+            + (
+                f"各场相对班级第1名平均差距 {_fmt(avg_gap_to_first)} 分。"
+                if avg_gap_to_first is not None
+                else ""
+            )
+            + (
+                f"{'优势科目为' + strong_sub + '，' if strong_sub else ''}"
+                f"{'需重点提升' + weak_sub + '。' if weak_sub else ''}"
+            )
+            + f"{trend_narrative}"
         )
-        + (
-            f"各场相对班级第1名平均差距 {_fmt(avg_gap_to_first)} 分。"
-            if avg_gap_to_first is not None
-            else ""
-        )
-        + (
-            f"{'优势科目为' + strong_sub + '，' if strong_sub else ''}"
-            f"{'需重点提升' + weak_sub + '。' if weak_sub else ''}"
-        )
-        + f"{trend_narrative}"
-    )
     weak_know_names = [
         str(k.get("knowledge_name") or k)
         for k in (insight.get("weak_knowledge") or [])[:3]
@@ -562,6 +855,11 @@ def build_student_exam_data(
         f"{'明显的偏科特征' if strong_sub and weak_sub else '相对均衡的学科结构'}。"
         f"{contribution_insight}"
     )
+    if single_subject:
+        assessment = (
+            f"{resolved_name} 本报告聚焦 <strong>{sole_subject}</strong> 单科分析。"
+            f"{trend_narrative}"
+        )
     if weak_know_names:
         assessment += f" 知识点层面需优先补强：{'、'.join(weak_know_names)}。"
 
@@ -592,18 +890,174 @@ def build_student_exam_data(
         strategy_items.append("【总分策略】合理分配时间，短板提升优先于优势拓展。")
         recommendations = "<ul>" + "".join(f"<li>{s}</li>" for s in strategy_items) + "</ul>"
 
+    from src.agent.education.config_store import get_config
+    from src.agent.education.stats import compute_score_stats
+
+    cfg = get_config()
+    # 最近一场：班级总分分布
+    score_dist_chart = ""
+    if last_exam:
+        class_totals = [
+            t
+            for r in by_exam.get(last_exam, [])
+            if (t := _record_effective_total(r)) is not None
+        ]
+        if class_totals:
+            full = None
+            for r in by_exam.get(last_exam, []):
+                for raw in (r.get("exam_score"), r.get("full_score")):
+                    if raw is not None:
+                        try:
+                            full = float(raw)
+                            break
+                        except (TypeError, ValueError):
+                            pass
+                if full is not None:
+                    break
+            st = compute_score_stats(class_totals, cfg, full)
+            score_dist_chart = build_chart_option(
+                "score_distribution",
+                {
+                    "segments": st.get("segments") or [],
+                    "pass_rate": st.get("pass_rate"),
+                },
+                (
+                    f"{_short_exam_label(last_exam)} {sole_subject}班级得分分布"
+                    if single_subject
+                    else f"{_short_exam_label(last_exam)} 班级总分分布"
+                )
+                + (f"（{resolved_name} {_fmt(last_total)} 分）" if last_total is not None else ""),
+            )
+
+    # 散点：优先多场「班均 vs 该生」；单场用「成绩-名次」
+    scatter_chart = ""
+    if len(exams) >= 2:
+        vs_avg: list[list[float]] = []
+        for e in exams:
+            stu = stu_totals.get(e)
+            cavg = _class_avg(e)
+            if stu is not None and cavg is not None:
+                vs_avg.append([float(cavg), float(stu)])
+        if vs_avg:
+            scatter_chart = build_chart_option(
+                "scatter",
+                {
+                    "x_name": "班级均分",
+                    "y_name": "该生成绩",
+                    "series": [{"name": "各场考试", "data": vs_avg, "symbolSize": 14}],
+                },
+                f"{resolved_name} 相对班级均分散点（多场）",
+            )
+    elif last_exam and last_total is not None:
+        ranked = sorted(
+            [
+                (str(r.get("student") or ""), float(t))
+                for r in by_exam.get(last_exam, [])
+                if (t := _record_effective_total(r)) is not None
+            ],
+            key=lambda x: x[1],
+            reverse=True,
+        )
+        peer_pts = [[score, float(i + 1)] for i, (_n, score) in enumerate(ranked)]
+        stu_pt = [
+            [score, float(i + 1)]
+            for i, (n, score) in enumerate(ranked)
+            if student_matches(n, resolved_name) or student_matches(n, student_name)
+        ]
+        if peer_pts:
+            scatter_chart = build_chart_option(
+                "scatter",
+                {
+                    "x_name": "成绩",
+                    "y_name": "班内名次（1 最好）",
+                    "series": [
+                        {"name": "同班同学", "data": peer_pts, "symbolSize": 10},
+                        {
+                            "name": resolved_name,
+                            "data": stu_pt
+                            or [[float(last_total), float(last_rank or 1)]],
+                            "symbolSize": 18,
+                        },
+                    ],
+                },
+                f"{_short_exam_label(last_exam)} 成绩-名次散点",
+            )
+
+    # 单科补充：能力雷达 + 热力图（知识点优先，否则相对位置）
+    ability_radar_chart = ""
+    heatmap_chart = ""
+    if single_subject:
+        ability_radar_chart = _build_ability_radar_chart(
+            student_name=resolved_name,
+            subject_name=sole_subject,
+            insight=insight,
+        )
+        heatmap_chart = _build_knowledge_heatmap_chart(
+            student_name=resolved_name,
+            subject_name=sole_subject,
+            insight=insight,
+            exams=exams,
+        )
+        if not heatmap_chart:
+            heatmap_chart = _build_exam_position_heatmap(
+                student_name=resolved_name,
+                subject_name=sole_subject,
+                exams=exams,
+                stu_scores={e: stu_totals.get(e) for e in exams},
+                class_avgs={e: _class_avg(e) for e in exams},
+                class_maxes={e: _class_max(e) for e in exams},
+            )
+
+    weak_list = "、".join(weak_know_names) if weak_know_names else ""
+    if not weak_list:
+        more = [
+            str(k.get("knowledge_name") or k)
+            for k in (insight.get("weak_knowledge") or [])[:8]
+            if str(k.get("knowledge_name") or k) not in ("", "未关联知识点")
+        ]
+        weak_list = "、".join(more)
+
     from src.agent.education.report_types import ReportType, report_type_label
 
-    title_subject = subjects[0] if len(subjects) == 1 else ""
+    title_subject = sole_subject if single_subject else ""
     report_title = (
         f"{resolved_name} {title_subject}学情分析报告"
         if title_subject
         else f"{resolved_name} 学情分析报告"
     )
+    if single_subject:
+        subject_section_title = f"{sole_subject}单科深度分析"
+        subject_section_intro = (
+            f"本报告仅分析 {sole_subject}。"
+            "下方依次展示成绩趋势、能力/知识点雷达、班级分布与相对位置散点。"
+        )
+        overview_section_title = f"一、{sole_subject}成绩概览"
+        trend_section_title = f"三、{sole_subject}走势与班级对比"
+        parent_subject_title = f"{sole_subject}成绩表现"
+        parent_subject_intro = (
+            f"下图展示孩子在{sole_subject}科目的历次成绩走势，可对照班级均分看进退步；"
+            "随后用雷达、热力图、分布与散点帮助直观定位强弱。"
+        )
+        contribution_insight_out = (
+            f"{sole_subject}为本次分析科目；建议结合知识点薄弱清单与错题逐项过关。"
+        )
+    else:
+        subject_section_title = "二、各科目深度分析"
+        subject_section_intro = "下图为各科均分雷达图，越靠外圈表示该科表现越好。"
+        overview_section_title = "一、总体成绩概览"
+        trend_section_title = "三、总分与排名综合分析"
+        parent_subject_title = "各科表现一览"
+        parent_subject_intro = "下图展示孩子在各科目的得分情况，越靠外圈表示该科表现越好。"
+        contribution_insight_out = contribution_insight
+
     return {
         "REPORT_TITLE": report_title,
         "REPORT_TYPE": report_type_label(ReportType.STUDENT_PROFILE),
-        "REPORT_SUBTITLE": f"{exam_label} · 趋势与对比",
+        "REPORT_SUBTITLE": (
+            f"{exam_label} · {sole_subject}单科"
+            if single_subject
+            else f"{exam_label} · 趋势与对比"
+        ),
         "REPORT_TIME": __import__("datetime").datetime.now().strftime("%Y-%m-%d %H:%M"),
         "COVER_META": (
             f"分析对象：{resolved_name} | 考试范围：{'、'.join(exams)}（共{len(exams)}次）"
@@ -615,10 +1069,16 @@ def build_student_exam_data(
             )
             + (f" | 班级：{class_name}" if class_name else "")
             + (f" | 班级人数：{n_class}人" if n_class else "")
+            + (
+                f" | 分析科目：{sole_subject}"
+                if single_subject
+                else (f" | 科目数：{len(subjects)}" if subjects else "")
+            )
         ),
         "STUDENT_NAME": resolved_name,
         "CLASS_NAME": class_name or "-",
         "EXAM_NAME": exam_label,
+        "SUBJECT_NAME": sole_subject if single_subject else ("、".join(subjects) if subjects else ""),
         "EXAM_COUNT": str(len(exams)),
         "MULTI_EXAM_AVG": _fmt(stu_avg) if stu_avg is not None else "-",
         "GAP_TO_FIRST": _fmt(last_gap) if last_gap is not None else "-",
@@ -628,12 +1088,17 @@ def build_student_exam_data(
         "SUBJECT_ANALYSIS_HTML": subject_analysis_html,
         "TOTAL_ANALYSIS_TABLE": total_analysis_table,
         "TOTAL_TREND_INSIGHT": trend_narrative,
-        "CONTRIBUTION_INSIGHT": contribution_insight,
+        "CONTRIBUTION_INSIGHT": contribution_insight_out,
         "CLASS_DIFF_TABLE": class_diff_table,
         "KNOWLEDGE_INSIGHT": kn_insight,
         "KNOWLEDGE_TABLE": kn_table,
         "WEAK_ITEM_TABLE": kn_weak_table,
         "KNOWLEDGE_CHART": kn_chart,
+        "WEAK_KNOWLEDGE_LIST": weak_list or "暂无",
+        "SCORE_DIST_CHART": score_dist_chart,
+        "SCATTER_CHART": scatter_chart,
+        "ABILITY_RADAR_CHART": ability_radar_chart,
+        "HEATMAP_CHART": heatmap_chart,
         "ASSESSMENT": assessment,
         "RECOMMENDATIONS": recommendations,
         "SUBJECT_RADAR_CHART": subject_radar,
@@ -643,7 +1108,15 @@ def build_student_exam_data(
         "CLASS_RANK": _rank_label(last_rank, n_class or 0),
         "GRADE_RANK": _rank_label(last_rank, n_class or 0),
         "SUBJECT_TABLE": score_summary_table,
-        "SUMMARY": f"<p>{assessment}</p><p>{contribution_insight}</p>",
+        "SUMMARY": f"<p>{assessment}</p><p>{contribution_insight_out}</p>",
+        # 单科 / 多科布局开关（模板用）
+        "IS_SINGLE_SUBJECT": "1" if single_subject else "",
+        "OVERVIEW_SECTION_TITLE": overview_section_title,
+        "SUBJECT_SECTION_TITLE": subject_section_title,
+        "SUBJECT_SECTION_INTRO": subject_section_intro,
+        "TREND_SECTION_TITLE": trend_section_title,
+        "PARENT_SUBJECT_TITLE": parent_subject_title,
+        "PARENT_SUBJECT_INTRO": parent_subject_intro,
     }
 
 

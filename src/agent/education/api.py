@@ -11,7 +11,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
 from fastapi.responses import FileResponse
@@ -110,11 +110,16 @@ def _build_orchestrator(
     db_type, config, _ds_name = _load_datasource(datasource_id, workspace_oid)
 
     async def execute_sql(sql: str) -> dict:
-        success, _msg, result, _sql_run = execute_sql_with_permission_by_user_id(
+        success, msg, result, _sql_run = execute_sql_with_permission_by_user_id(
             user_id, datasource_id, workspace_oid, sql
         )
-        if not success or not isinstance(result, dict):
-            return {"columns": [], "rows": [], "row_count": 0}
+        # 失败必须抛出，否则编排层会当成「0 行成绩」生成空壳报告。
+        if not success:
+            raise RuntimeError(msg or "SQL 执行失败")
+        if not isinstance(result, dict):
+            raise RuntimeError("SQL 执行结果格式异常")
+        if result.get("error"):
+            raise RuntimeError(str(result.get("error")))
         return {
             "columns": result.get("columns") or [],
             "rows": result.get("rows") or [],
@@ -138,7 +143,13 @@ def _build_orchestrator(
         # 最终兜底：空宽表映射
         return ScoreSchemaMapping(mode="wide", table="", subject_columns={}, fields={})
 
-    return ReportOrchestrator(execute_sql=execute_sql, resolve_schema=resolve_schema)
+    return ReportOrchestrator(
+        execute_sql=execute_sql,
+        resolve_schema=resolve_schema,
+        datasource_id=datasource_id,
+        workspace_oid=workspace_oid,
+        user_id=user_id,
+    )
 
 
 @router.post("/batch-report")
@@ -199,6 +210,257 @@ async def diagnostic_report(
             "error": res.error,
         }
     )
+
+
+# ---- 分析工具：按 ReportSpec 生成报告 --------------------------------------
+
+#: Phase 1 MVP 允许的报告类型（分析工具菜单）
+_GENERATE_REPORT_ALLOWED_TYPES = frozenset(
+    {
+        "class_overview",
+        "grade_comparison",
+        "subject_diagnosis",
+        "student_profile",
+    }
+)
+
+
+class GenerateReportRequest(BaseModel):
+    """分析工具：结构化参数生成单份报告。"""
+
+    datasource_id: int = Field(..., description="数据源 ID")
+    report_type: str = Field(..., description="报告类型，如 class_overview")
+    audience: Optional[str] = Field(None, description="报告受众")
+    filters: dict[str, str] = Field(default_factory=dict, description="筛选条件")
+    include_charts: bool = Field(True, description="是否嵌入图表")
+    workspace_oid: Optional[int] = Field(None, description="工作区 OID，鉴权用")
+
+
+@router.post("/generate-report")
+async def generate_report(
+    req: GenerateReportRequest,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    """按报告类型与 filters 确定性生成 HTML 报告（不经聊天 / LLM）。"""
+    from src.agent.education.report_types import (
+        Audience,
+        ReportSpec,
+        ReportType,
+        report_type_label,
+    )
+    from src.common.core.database import get_db_session
+
+    rt_raw = (req.report_type or "").strip()
+    if rt_raw not in _GENERATE_REPORT_ALLOWED_TYPES:
+        raise BadRequestException(
+            f"不支持的报告类型: {rt_raw}；当前仅支持: {', '.join(sorted(_GENERATE_REPORT_ALLOWED_TYPES))}"
+        )
+    try:
+        report_type = ReportType(rt_raw)
+    except ValueError as exc:
+        raise BadRequestException(f"无效的报告类型: {rt_raw}") from exc
+
+    audience = Audience.DEFAULT
+    if req.audience:
+        try:
+            audience = Audience(req.audience.strip())
+        except ValueError as exc:
+            raise BadRequestException(f"无效的受众: {req.audience}") from exc
+
+    filters = {str(k): str(v) for k, v in (req.filters or {}).items() if v is not None and str(v).strip()}
+    spec = ReportSpec(
+        report_type=report_type,
+        audience=audience,
+        filters=filters,
+        include_charts=bool(req.include_charts),
+    )
+
+    with get_db_session() as session:
+        assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
+    ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
+    orch = _build_orchestrator(req.datasource_id, ws_oid, user_id=int(current_user.id))
+    res = await orch.run_spec(spec)
+    title = orch._title(spec)
+    err = res.error
+    # 查无成绩时给出可操作提示，避免前端只看到全 0 / 「-」的空壳报告
+    if not err and int((res.stats or {}).get("count") or 0) == 0:
+        bits = [f"{k}={v}" for k, v in sorted(filters.items())]
+        hint = "、".join(bits) if bits else "（未填写筛选条件）"
+        err = (
+            f"未查到成绩数据（筛选：{hint}）。"
+            "请核对班级/学校/考试/科目名称是否与库内一致；"
+            "也可先在聊天里用自然语言查出准确名称后再填到分析工具。"
+        )
+    return success_response(
+        {
+            "title": title,
+            "html": res.html,
+            "report_type": res.spec.report_type.value,
+            "report_type_label": report_type_label(res.spec.report_type),
+            "error": err,
+        }
+    )
+
+
+@router.get("/meta/options")
+async def list_meta_options(
+    datasource_id: int,
+    school_name: Optional[str] = None,
+    exam_name: Optional[str] = None,
+    class_name: Optional[str] = None,
+    subject: Optional[str] = None,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    """分析工具下拉：从数据源拉取学校/考试/班级/科目可选值（带教育权限）。"""
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.common.core.database import get_db_session
+    from src.system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
+        user = get_user_by_id(session, int(current_user.id))
+        edu_scope = parse_edu_scope(user)
+
+    orch = _build_orchestrator(datasource_id, workspace_oid, user_id=int(current_user.id))
+    options = await _load_meta_options(
+        orch,
+        school_name=(school_name or "").strip() or None,
+        exam_name=(exam_name or "").strip() or None,
+        class_name=(class_name or "").strip() or None,
+        subject=(subject or "").strip() or None,
+        edu_scope=edu_scope,
+    )
+    return success_response(options)
+
+
+def _sql_quote(val: str) -> str:
+    return (val or "").replace("'", "''")
+
+
+async def _distinct_col(execute_sql, sql: str) -> list[str]:
+    try:
+        result = await execute_sql(sql)
+    except Exception:
+        return []
+    rows = result.get("rows") or []
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, (list, tuple)) or not row:
+            continue
+        v = str(row[0] if row[0] is not None else "").strip()
+        if not v or v in seen:
+            continue
+        seen.add(v)
+        out.append(v)
+    return out
+
+
+async def _load_meta_options(
+    orch: ReportOrchestrator,
+    *,
+    school_name: str | None,
+    exam_name: str | None,
+    class_name: str | None,
+    subject: str | None,
+    edu_scope: Any = None,
+) -> dict[str, list[str]]:
+    """按 edu schema 查 DISTINCT；SQL 经权限执行，并按 edu_scope 再收敛选项。"""
+    from datasource.service.edu_permission import EduScope
+
+    execute = orch._execute_sql
+    mapping = await orch._resolve_schema()
+    empty = {"schools": [], "exams": [], "classes": [], "subjects": []}
+    if getattr(mapping, "source", None) != "config_edu":
+        return empty
+
+    scope = edu_scope if isinstance(edu_scope, EduScope) else EduScope()
+
+    def _filters(*, exclude: set[str]) -> list[str]:
+        parts: list[str] = []
+        if school_name and "school" not in exclude:
+            parts.append(f"sch.name LIKE '%{_sql_quote(school_name)}%'")
+        if exam_name and "exam" not in exclude:
+            parts.append(f"e.exam_name LIKE '%{_sql_quote(exam_name)}%'")
+        if class_name and "class" not in exclude:
+            parts.append(f"sc.class LIKE '%{_sql_quote(class_name)}%'")
+        if subject and "subject" not in exclude:
+            parts.append(f"sc.subject_name LIKE '%{_sql_quote(subject)}%'")
+        return parts
+
+    def _where(parts: list[str], extra: str) -> str:
+        all_parts = [*parts, extra]
+        return " WHERE " + " AND ".join(all_parts)
+
+    # 必须经 tb_score，才能挂上 school_id / class 教育权限谓词
+    score_from = (
+        "FROM tb_score sc "
+        "JOIN tb_school sch ON sc.school_id = sch.id "
+        "JOIN tb_exam e ON sc.exam_id = e.id"
+    )
+
+    schools = await _distinct_col(
+        execute,
+        "SELECT DISTINCT sch.name AS v "
+        f"{score_from}"
+        + _where(
+            _filters(exclude={"school"}),
+            "sch.name IS NOT NULL AND CAST(sch.name AS TEXT) <> ''",
+        )
+        + " ORDER BY v LIMIT 500",
+    )
+    exams = await _distinct_col(
+        execute,
+        "SELECT DISTINCT e.exam_name AS v "
+        f"{score_from}"
+        + _where(
+            _filters(exclude={"exam"}),
+            "e.exam_name IS NOT NULL AND CAST(e.exam_name AS TEXT) <> ''",
+        )
+        + " ORDER BY v LIMIT 500",
+    )
+    classes = await _distinct_col(
+        execute,
+        "SELECT DISTINCT sc.class AS v "
+        f"{score_from}"
+        + _where(
+            _filters(exclude={"class"}),
+            "sc.class IS NOT NULL AND CAST(sc.class AS TEXT) <> ''",
+        )
+        + " ORDER BY v LIMIT 500",
+    )
+    subjects = await _distinct_col(
+        execute,
+        "SELECT DISTINCT sc.subject_name AS v "
+        f"{score_from}"
+        + _where(
+            _filters(exclude={"subject"}),
+            "sc.subject_name IS NOT NULL AND CAST(sc.subject_name AS TEXT) <> ''",
+        )
+        + " ORDER BY v LIMIT 500",
+    )
+
+    # 按账号 edu_scope 再收敛（双保险：名称配置 / 班级名单）
+    if scope.school_name:
+        sn = scope.school_name.strip()
+        schools = [s for s in schools if s == sn or sn in s or s in sn]
+        if not schools and sn:
+            schools = [sn]
+    if scope.class_names:
+        allowed = {c.strip() for c in scope.class_names if c and str(c).strip()}
+        if allowed:
+            classes = [c for c in classes if c in allowed]
+            if not classes:
+                classes = sorted(allowed)
+
+    return {
+        "schools": schools,
+        "exams": exams,
+        "classes": classes,
+        "subjects": subjects,
+    }
 
 
 @router.get("/dimensions")

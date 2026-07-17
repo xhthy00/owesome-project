@@ -1,5 +1,6 @@
 import {
   DownOutlined,
+  BarChartOutlined,
   DatabaseOutlined,
   GlobalOutlined,
   MenuFoldOutlined,
@@ -22,6 +23,7 @@ import { Conversation, listConversations } from "@/api/adapter/chatAdapter";
 const routes = [
   { key: "explore", path: "/", label: "探索广场", icon: <GlobalOutlined /> },
   { key: "skills", path: "/construct/skills", label: "技能", icon: <ThunderboltOutlined /> },
+  { key: "analysis", path: "/construct/analysis", label: "分析工具", icon: <BarChartOutlined /> },
   { key: "datasource", path: "/construct/database", label: "数据源", icon: <DatabaseOutlined /> },
   { key: "score-import", path: "/construct/education/score-import", label: "成绩导入", icon: <UploadOutlined /> },
   { key: "permission", path: "/construct/permission", label: "权限管理", icon: <SafetyCertificateOutlined /> },

@@ -28,6 +28,7 @@ import {
   extractRecommendationsText,
   hasRecommendationsSection
 } from "@/utils/reportRecommendations";
+import { exportReportAsWord } from "@/utils/exportReportWord";
 
 type Props = {
   steps: ExecutionStep[];
@@ -333,70 +334,22 @@ export default function ChatExecutionPanel({
   };
   const reportIframeRef = useRef<HTMLIFrameElement | null>(null);
   const [exportingPdf, setExportingPdf] = useState(false);
-  const sanitizeFileName = (name: string) =>
-    (name || "report").replace(/[\\/:*?"<>|]+/g, "_").trim() || "report";
-  const exportReportWord = () => {
-    if (!safeReportHtml.trim()) {
-      message.error("暂无报告内容");
-      return;
-    }
+  const [exportingWord, setExportingWord] = useState(false);
+  const exportReportWord = async () => {
+    setExportingWord(true);
     try {
-      const iframe = reportIframeRef.current;
-      const doc = iframe?.contentDocument;
-      let bodyHtml = safeReportHtml;
-      let styles = "";
-      if (doc?.body) {
-        bodyHtml = doc.body.innerHTML || bodyHtml;
-        styles = Array.from(doc.querySelectorAll("style"))
-          .map((el) => el.outerHTML)
-          .join("\n");
-      }
-      // 若 srcDoc 是完整 HTML，去掉外壳只留 body，避免套娃
-      const bodyMatch = bodyHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-      if (bodyMatch) {
-        bodyHtml = bodyMatch[1];
-      }
-      const title = sanitizeFileName(safeReportTitle);
-      const content = `<!DOCTYPE html>
-<html xmlns:o="urn:schemas-microsoft-com:office:office"
- xmlns:w="urn:schemas-microsoft-com:office:word"
- xmlns="http://www.w3.org/TR/REC-html40">
-<head>
-<meta charset="utf-8">
-<title>${title}</title>
-<!--[if gte mso 9]>
-<xml>
-  <w:WordDocument>
-    <w:View>Print</w:View>
-    <w:Zoom>90</w:Zoom>
-    <w:DoNotOptimizeForBrowser/>
-  </w:WordDocument>
-</xml>
-<![endif]-->
-<style>
-  body { font-family: "Microsoft YaHei", SimSun, sans-serif; }
-  table { border-collapse: collapse; width: 100%; }
-  th, td { border: 1px solid #ccc; padding: 4px 8px; }
-  img { max-width: 100%; }
-</style>
-${styles}
-</head>
-<body>${bodyHtml}</body>
-</html>`;
-      const blob = new Blob(["\ufeff", content], {
-        type: "application/msword;charset=utf-8"
+      await exportReportAsWord({
+        title: safeReportTitle || "report",
+        html: safeReportHtml,
+        iframe: reportIframeRef.current
       });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${title}.doc`;
-      a.click();
-      URL.revokeObjectURL(url);
       message.success("Word 已导出");
     } catch (e) {
-      message.error("Word 导出失败");
+      message.error(e instanceof Error ? e.message : "Word 导出失败");
       // eslint-disable-next-line no-console
       console.error(e);
+    } finally {
+      setExportingWord(false);
     }
   };
   const exportReportPdf = async () => {
@@ -702,11 +655,12 @@ ${styles}
                               <span>{exportingPdf ? "导出中…" : "PDF"}</span>
                             </button>
                             <button
-                              onClick={exportReportWord}
-                              className="inline-flex h-6 items-center gap-1 rounded-md border border-[#d9e2ef] bg-white px-2 text-[11px] text-[#475467] transition-colors hover:border-[#c5d4e8] dark:border-[#334155] dark:bg-[#0f172a] dark:text-[#cbd5e1]"
+                              onClick={() => void exportReportWord()}
+                              disabled={exportingWord}
+                              className="inline-flex h-6 items-center gap-1 rounded-md border border-[#d9e2ef] bg-white px-2 text-[11px] text-[#475467] transition-colors hover:border-[#c5d4e8] disabled:opacity-50 dark:border-[#334155] dark:bg-[#0f172a] dark:text-[#cbd5e1]"
                             >
                               <FileWordOutlined />
-                              <span>Word</span>
+                              <span>{exportingWord ? "导出中…" : "Word"}</span>
                             </button>
                           </>
                         ) : (

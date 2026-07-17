@@ -31,6 +31,43 @@ export interface ScoreImportResponse {
   data: ScoreImportResult | null;
 }
 
+export interface GenerateReportRequest {
+  datasource_id: number;
+  report_type: string;
+  audience?: string;
+  filters?: Record<string, string>;
+  include_charts?: boolean;
+}
+
+export interface GenerateReportResult {
+  title: string;
+  html: string;
+  report_type: string;
+  report_type_label: string;
+  error: string | null;
+}
+
+export interface GenerateReportResponse {
+  ok: boolean;
+  message: string;
+  data: GenerateReportResult | null;
+}
+
+export interface MetaOptions {
+  schools: string[];
+  exams: string[];
+  classes: string[];
+  subjects: string[];
+}
+
+export interface MetaOptionsQuery {
+  datasource_id: number;
+  school_name?: string;
+  exam_name?: string;
+  class_name?: string;
+  subject?: string;
+}
+
 async function authHeaders(): Promise<HeadersInit> {
   const token = getAccessToken();
   const wsOid =
@@ -79,6 +116,59 @@ export const educationApi = {
       ok: (payload.code ?? 200) === 200,
       message: payload.message || "",
       data: payload.data ?? null
+    };
+  },
+
+  async generateReport(payload: GenerateReportRequest): Promise<GenerateReportResponse> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/generate-report`, {
+      method: "POST",
+      headers: {
+        ...(await authHeaders()),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+    if (resp.status === 401) {
+      throw new Error("Unauthorized");
+    }
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: GenerateReportResult;
+    };
+    return {
+      ok: (body.code ?? 200) === 200,
+      message: body.message || "",
+      data: body.data ?? null
+    };
+  },
+
+  async listMetaOptions(query: MetaOptionsQuery): Promise<MetaOptions> {
+    const params = new URLSearchParams();
+    params.set("datasource_id", String(query.datasource_id));
+    if (query.school_name) params.set("school_name", query.school_name);
+    if (query.exam_name) params.set("exam_name", query.exam_name);
+    if (query.class_name) params.set("class_name", query.class_name);
+    if (query.subject) params.set("subject", query.subject);
+    const resp = await fetch(`${getApiBaseUrl()}/education/meta/options?${params.toString()}`, {
+      headers: await authHeaders()
+    });
+    if (resp.status === 401) {
+      throw new Error("Unauthorized");
+    }
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: MetaOptions;
+    };
+    if ((body.code ?? 200) !== 200 || !body.data) {
+      throw new Error(body.message || "加载筛选项失败");
+    }
+    return {
+      schools: body.data.schools || [],
+      exams: body.data.exams || [],
+      classes: body.data.classes || [],
+      subjects: body.data.subjects || []
     };
   }
 };

@@ -270,10 +270,17 @@ class ReportOrchestrator:
         execute_sql: ExecuteSqlFn,
         resolve_schema: ResolveSchemaFn,
         config: EducationConfig | None = None,
+        *,
+        datasource_id: int | None = None,
+        workspace_oid: int | None = None,
+        user_id: int | None = None,
     ) -> None:
         self._execute_sql = execute_sql
         self._resolve_schema = resolve_schema
         self._config = config or load_config()
+        self._datasource_id = datasource_id
+        self._workspace_oid = workspace_oid
+        self._user_id = user_id
         self.intent_resolver = ReportIntentResolver()
 
     async def run(
@@ -287,6 +294,10 @@ class ReportOrchestrator:
         # 忽略问题里出现的其它班级，复用 locked_tables 的"约束优先"哲学。
         if locked_class:
             spec.filters["class_name"] = locked_class
+        return await self.run_spec(spec)
+
+    async def run_spec(self, spec: ReportSpec) -> ReportResult:
+        """按已构造的 ``ReportSpec`` 生成报告（跳过自然语言意图解析）。"""
         template_info = select_report_template(spec.report_type, spec.audience)
         template_name = template_info["template_name"]
         data_keys = list(template_info["data_keys"])
@@ -405,93 +416,821 @@ class ReportOrchestrator:
                 _fill_class_overview_ability_portrait(data, rows)
             except Exception:
                 pass
+        if spec.report_type == ReportType.CLASS_OVERVIEW:
+            from src.agent.education.subject_diagnosis import (
+                build_class_overview_recommendations,
+                build_class_overview_summary,
+            )
+
+            tip = str(data.get("DISPERSION_TIP") or "")
+            data["SUMMARY"] = build_class_overview_summary(
+                class_name=class_name or "",
+                subject_name=subject or "",
+                exam_name=exam_name or "",
+                stats=stats,
+                stdev_level=str(data.get("STDEV_LEVEL") or ""),
+            )
+            data["RECOMMENDATIONS"] = build_class_overview_recommendations(
+                stats=stats,
+                dispersion_tip=tip,
+            )
         if spec.report_type == ReportType.DIAGNOSTIC_REPORT:
-            score_rows = [
+            self._fill_diagnostic(data, rows, cfg, spec, scope_label, exam_name, subject, school_name, class_name)
+            return data
+        if spec.report_type == ReportType.GRADE_COMPARISON:
+            self._fill_grade_comparison(data, rows, stats, cfg, spec)
+        if spec.report_type == ReportType.STUDENT_PROFILE:
+            await self._fill_student_profile(data, rows, spec)
+        if spec.report_type == ReportType.TREND_TRACKING:
+            self._fill_trend_tracking(data, rows, spec, cfg)
+        if spec.report_type == ReportType.TIER_ALERT:
+            self._fill_tier_alert(data, rows, spec, cfg)
+        if spec.report_type == ReportType.GROUP_FEATURE:
+            self._fill_group_feature(data, rows, spec, cfg)
+        if spec.report_type == ReportType.COMPREHENSIVE:
+            self._fill_comprehensive(data, rows, spec, cfg)
+        if spec.report_type == ReportType.CLASS_OVERVIEW and mapping.source == "config_edu":
+            await self._fill_class_overview_rank(data, rows, spec, mapping, cfg)
+        if spec.report_type == ReportType.SUBJECT_DIAGNOSIS and mapping.source == "config_edu":
+            await self._fill_subject_diagnosis(
+                data,
+                rows,
+                stats,
+                charts,
+                cfg,
+                spec,
+                mapping,
+                school_name=school_name,
+                class_name=class_name,
+                exam_name=exam_name or "",
+                subject=subject or "",
+                full_score=full_score,
+            )
+        return data
+
+    async def _fill_subject_diagnosis(
+        self,
+        data: dict[str, Any],
+        rows: list[dict[str, Any]],
+        stats: dict[str, Any],
+        charts: dict[str, str],
+        cfg: EducationConfig,
+        spec: ReportSpec,
+        mapping: ScoreSchemaMapping,
+        *,
+        school_name: str,
+        class_name: str,
+        exam_name: str,
+        subject: str,
+        full_score: float | None,
+    ) -> None:
+        """科目诊断：对齐聊天路径的小题/知识点查询 + 逐人小题建议。"""
+        from collections import defaultdict
+
+        from src.agent.education.knowledge_tier import ABILITY_LABELS
+
+        item_rows: list[dict[str, Any]] = []
+        knowledge_rows: list[dict[str, Any]] = []
+        score_rows_for_archive: list[dict[str, Any]] = [
+            {
+                "student_id": r.get("student_id") or r.get("student_name"),
+                "subject": r.get("subject") or subject,
+                "score": r.get("score"),
+                "exam_name": r.get("exam_name") or exam_name,
+                "exam_score": r.get("exam_score"),
+                "exam_id": r.get("exam_id"),
+            }
+            for r in rows
+        ]
+        weak_threshold = float(getattr(cfg, "weak_knowledge_threshold", 60.0) or 60.0)
+        used_chat_fetch = False
+
+        if self._datasource_id is not None:
+            try:
+                from src.agent.education.tools import _fetch_subject_diagnosis_rows
+                from src.agent.resource.tool.business import _load_datasource
+
+                db_type, _, _ = _load_datasource(self._datasource_id, self._workspace_oid)
+                bundle = await asyncio.to_thread(
+                    _fetch_subject_diagnosis_rows,
+                    datasource_id=int(self._datasource_id),
+                    workspace_oid=self._workspace_oid,
+                    user_id=self._user_id,
+                    school_name=school_name,
+                    subject_name=subject,
+                    exam_name=exam_name,
+                    class_name=class_name,
+                    db_type=db_type or "pg",
+                )
+                item_rows = list(bundle.get("item_rows") or [])
+                knowledge_rows = list(bundle.get("knowledge_rows") or [])
+                if bundle.get("score_rows"):
+                    score_rows_for_archive = list(bundle["score_rows"])
+                used_chat_fetch = True
+                fetch_scores = [
+                    float(r["score"])
+                    for r in score_rows_for_archive
+                    if isinstance(r, dict) and r.get("score") is not None
+                ]
+                if fetch_scores:
+                    fs = full_score
+                    for r in score_rows_for_archive:
+                        if isinstance(r, dict) and r.get("exam_score") is not None:
+                            try:
+                                fs = float(r["exam_score"])
+                                break
+                            except (TypeError, ValueError):
+                                pass
+                    stats.update(compute_score_stats(fetch_scores, cfg, fs))
+                    data["TOTAL_COUNT"] = str(stats.get("count") or 0)
+                    data["AVG_SCORE"] = _fmt(stats.get("avg"))
+                    data["PASS_RATE"] = _fmt_pct(stats.get("pass_rate"))
+                    data["EXCELLENT_RATE"] = _fmt_pct(stats.get("excellent_rate"))
+                    data["GOOD_RATE"] = _fmt_pct(stats.get("good_rate"))
+                    data["LOW_SCORE_RATE"] = _fmt_pct(stats.get("low_score_rate"))
+                    data["MAX_SCORE"] = _fmt(stats.get("max"))
+                    data["MIN_SCORE"] = _fmt(stats.get("min"))
+                    data["STDEV"] = _fmt(stats.get("stdev"))
+                    data["SEGMENT_TABLE"] = _segment_table(
+                        stats.get("segments", []), full_score=stats.get("full_score")
+                    )
+                    data.update(
+                        _dispersion_fields(
+                            stats.get("stdev"),
+                            full_score=stats.get("full_score"),
+                            variance=stats.get("variance"),
+                        )
+                    )
+                    if spec.include_charts:
+                        charts["SCORE_DIST_CHART"] = build_chart_option(
+                            "score_distribution",
+                            {
+                                "segments": stats.get("segments", []),
+                                "pass_rate": stats.get("pass_rate"),
+                            },
+                            title="分数段分布",
+                        )
+                        data["SCORE_DIST_CHART"] = charts.get("SCORE_DIST_CHART", "")
+            except Exception as e:  # noqa: BLE001
+                logger.warning("科目诊断 fetch 失败，回退编排 SQL: %s", e)
+                used_chat_fetch = False
+                item_rows = []
+                knowledge_rows = []
+
+        if not item_rows and not knowledge_rows:
+            item_rows = await self._fetch_item_rows(spec, mapping)
+            knowledge_rows = await self._fetch_knowledge_rows(spec, mapping)
+
+        item_rows = compute_item_metrics(item_rows)
+        knowledge_rows = enrich_knowledge_rows(knowledge_rows)
+        data["ITEM_TABLE"] = build_item_table_html(item_rows)
+        data["KNOWLEDGE_TABLE"] = build_knowledge_table_html(knowledge_rows)
+        weak = [
+            str(r.get("knowledge_name") or "")
+            for r in knowledge_rows
+            if r.get("level") == "需加强"
+        ]
+        data["WEAK_KNOWLEDGE_LIST"] = "、".join(weak[:8])
+        data["SUMMARY"] = build_diagnosis_summary(
+            school_name=school_name,
+            exam_name=exam_name,
+            subject_name=subject,
+            stats=stats,
+            item_rows=item_rows,
+            knowledge_rows=knowledge_rows,
+        )
+        data["RECOMMENDATIONS"] = build_diagnosis_recommendations(
+            knowledge_rows=knowledge_rows,
+            item_rows=item_rows,
+            stats=stats,
+        )
+        if knowledge_rows and spec.include_charts:
+            charts["KNOWLEDGE_CHART"] = build_chart_option(
+                "knowledge_bar",
+                {
+                    "categories": [str(r.get("knowledge_name") or "") for r in knowledge_rows[:12]],
+                    "values": [float(r.get("score_rate") or 0) for r in knowledge_rows[:12]],
+                },
+                title="知识点得分率",
+            )
+            data["KNOWLEDGE_CHART"] = charts.get("KNOWLEDGE_CHART", "")
+        tier = build_ability_tier_summary(knowledge_rows, weak_threshold=weak_threshold)
+        tier_table = build_ability_tier_table_html(knowledge_rows)
+        if tier_table:
+            data["ABILITY_TIER_TABLE"] = tier_table
+            levels = [s.get("ability_level") for s in tier.get("by_ability_level") or []]
+            values = [float(s.get("avg_score_rate") or 0) for s in tier.get("by_ability_level") or []]
+            data["ABILITY_TIER_CHART"] = build_chart_option(
+                "ability_radar",
+                {"levels": [ABILITY_LABELS.get(str(l), str(l)) for l in levels], "values": values},
+                title="能力层级得分率",
+            )
+        qtype_table = build_question_type_table_html(item_rows)
+        if qtype_table:
+            data["QUESTION_TYPE_TABLE"] = qtype_table
+            buckets: dict[str, list[float]] = defaultdict(list)
+            for ir in item_rows:
+                if ir.get("question_type") and ir.get("score_rate") is not None:
+                    buckets[str(ir["question_type"])].append(float(ir["score_rate"]))
+            if buckets:
+                cats = sorted(buckets.keys())
+                vals = [round(sum(buckets[c]) / len(buckets[c]), 2) for c in cats]
+                data["QUESTION_TYPE_CHART"] = build_chart_option(
+                    "question_type_bar",
+                    {"categories": cats, "values": vals},
+                    title="题型得分率",
+                )
+
+        # 学生档案：与聊天一致，结合逐人小题明细给建议
+        try:
+            if self._datasource_id is not None:
+                from src.agent.education.tools import _subject_diagnosis_student_archive
+
+                archive = await asyncio.to_thread(
+                    _subject_diagnosis_student_archive,
+                    score_rows=score_rows_for_archive,
+                    item_rows=item_rows,
+                    exam_name=exam_name,
+                    subject_name=subject,
+                    school_name=school_name,
+                    class_name=class_name,
+                    full_score=stats.get("full_score") or full_score,
+                    weak_threshold=weak_threshold,
+                    datasource_id=int(self._datasource_id),
+                    workspace_oid=self._workspace_oid,
+                )
+            else:
+                from src.agent.education.comprehensive import build_student_archive_from_score_rows
+
+                archive = build_student_archive_from_score_rows(
+                    score_rows_for_archive,
+                    exam_name=exam_name,
+                    full_score=full_score,
+                    single_subject=True,
+                )
+            if archive:
+                data["STUDENT_ARCHIVE_TABLE"] = archive
+        except Exception as e:  # noqa: BLE001
+            logger.warning("科目诊断学生档案组装失败: %s", e)
+
+        if used_chat_fetch and not item_rows and not knowledge_rows:
+            data.setdefault(
+                "SUMMARY",
+                "<p>已查到总分 KPI，但小题/知识点明细为空；请确认已导入 tb_score_detail。</p>",
+            )
+
+    def _fill_grade_comparison(
+        self,
+        data: dict[str, Any],
+        rows: list[dict[str, Any]],
+        stats: dict[str, Any],
+        cfg: EducationConfig,
+        spec: ReportSpec,
+    ) -> None:
+        """填充班级横向对比模板字段：均分柱图 + 排名表 + 摘要。"""
+        from src.agent.education.aggregation import aggregate_by
+        from src.agent.education.dimension_parse import parse_grade_from_class
+        from src.agent.education.school_intervention import build_class_compare_table_html
+
+        school_name = spec.filters.get("school_name", "")
+        subject = spec.filters.get("subject", "")
+        exam_name = spec.filters.get("exam_name", "")
+
+        class_agg = aggregate_by("class", rows, cfg)
+        # 去掉「未知班级」噪声
+        class_agg = [
+            g for g in class_agg
+            if str(g.get("dimension_value") or "").strip() not in ("", "未知班级")
+        ]
+        ranked = compute_rankings(
+            [
+                {
+                    "name": str(g.get("dimension_value") or ""),
+                    "value": float(g.get("avg") or 0),
+                    "count": g.get("count"),
+                    "avg": g.get("avg"),
+                    "pass_rate": g.get("pass_rate"),
+                    "excellent_rate": g.get("excellent_rate"),
+                    "stdev": g.get("stdev"),
+                    "dimension_value": g.get("dimension_value"),
+                }
+                for g in class_agg
+            ],
+            value_key="value",
+            name_key="name",
+        )
+
+        # 年级名：从班级名推断，否则用学校名
+        grade_name = ""
+        for g in class_agg:
+            grade_name = parse_grade_from_class(str(g.get("dimension_value") or "")) or ""
+            if grade_name:
+                break
+        data["GRADE_NAME"] = grade_name or school_name or "年级"
+
+        if not ranked:
+            data["CLASS_COMPARE_CHART"] = ""
+            data["CLASS_RANKING_TABLE"] = "<p>未查到可对比的班级成绩数据。</p>"
+            data["DISPERSION_INFO"] = "<p>无班级数据，无法分析均衡度。</p>"
+            data["SUMMARY"] = (
+                f"<p>{school_name or '本校'}{subject or ''}{exam_name or '本次考试'}"
+                "暂无各班成绩，请检查筛选条件或数据权限。</p>"
+            )
+            data["RECOMMENDATIONS"] = "<p>确认学校、考试、科目后重新生成；或换有数据的考试场次。</p>"
+            return
+
+        # 柱图：按均分升序（横向柱图 y 轴自下而上）
+        chart_items = sorted(ranked, key=lambda x: float(x.get("value") or 0))
+        data["CLASS_COMPARE_CHART"] = build_chart_option(
+            "class_compare_bar",
+            {
+                "classes": [str(x.get("name") or "") for x in chart_items],
+                "values": [round(float(x.get("value") or 0), 2) for x in chart_items],
+            },
+            title=f"{subject or '全科'}各班均分对比",
+        )
+
+        # 排名明细表（含校级基准）
+        table_agg = [
+            {
+                "dimension_value": r.get("name"),
+                "count": r.get("count"),
+                "avg": r.get("avg"),
+                "pass_rate": r.get("pass_rate"),
+                "excellent_rate": r.get("excellent_rate"),
+            }
+            for r in ranked
+        ]
+        data["CLASS_RANKING_TABLE"] = build_class_compare_table_html(
+            table_agg,
+            school_stats=stats,
+        ) or self._grade_ranking_table_html(ranked)
+
+        top = ranked[0]
+        bottom = ranked[-1]
+        gap = float(top.get("value") or 0) - float(bottom.get("value") or 0)
+        data["DISPERSION_INFO"] = (
+            f"<p>共 <strong>{len(ranked)}</strong> 个班级参与对比；"
+            f"最高均分 <strong>{_fmt(top.get('value'))}</strong>"
+            f"（{top.get('name')}），"
+            f"最低均分 <strong>{_fmt(bottom.get('value'))}</strong>"
+            f"（{bottom.get('name')}），"
+            f"班际分差 <strong>{_fmt(gap)}</strong> 分。</p>"
+            f"<p>{data.get('DISPERSION_TIP') or ''}</p>"
+        )
+        data["SUMMARY"] = (
+            f"<p>{school_name or '本校'}{exam_name or '本次考试'}{subject or '全科'}："
+            f"<strong>{top.get('name')}</strong> 均分领先"
+            f"（{_fmt(top.get('value'))}），"
+            f"<strong>{bottom.get('name')}</strong> 相对偏低"
+            f"（{_fmt(bottom.get('value'))}）；班际分差 {_fmt(gap)} 分。</p>"
+        )
+        data["RECOMMENDATIONS"] = (
+            "<ul>"
+            f"<li>关注均分末位班级（{bottom.get('name')}）的低分段与及格率提升。</li>"
+            f"<li>组织领先班级（{top.get('name')}）经验分享，缩小班际差距。</li>"
+            "<li>结合各班及格率/优秀率结构，安排分层辅导与临界生盯梢。</li>"
+            "</ul>"
+        )
+
+    @staticmethod
+    def _grade_ranking_table_html(ranked: list[dict[str, Any]]) -> str:
+        rows = []
+        for r in ranked:
+            rows.append(
+                "<tr>"
+                f"<td>{r.get('rank') or '-'}</td>"
+                f"<td>{r.get('name') or '-'}</td>"
+                f"<td class='num'>{r.get('count') if r.get('count') is not None else '-'}</td>"
+                f"<td class='num'>{_fmt(r.get('value'))}</td>"
+                f"<td class='num'>{_fmt_pct(r.get('pass_rate'))}</td>"
+                f"<td class='num'>{_fmt_pct(r.get('excellent_rate'))}</td>"
+                "</tr>"
+            )
+        inner = (
+            "<table class='edu-table'><thead><tr>"
+            "<th>排名</th><th>班级</th><th class='num'>人数</th>"
+            "<th class='num'>均分</th><th class='num'>及格率</th><th class='num'>优秀率</th>"
+            "</tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table>"
+        )
+        return f'<div class="edu-table-wrap">{inner}</div>'
+
+    def _fill_diagnostic(
+        self,
+        data: dict[str, Any],
+        rows: list[dict[str, Any]],
+        cfg: EducationConfig,
+        spec: ReportSpec,
+        scope_label: str,
+        exam_name: str,
+        subject: str,
+        school_name: str,
+        class_name: str,
+    ) -> None:
+        from src.agent.education.aggregation import prepare_score_rows_for_kpi
+
+        score_rows = [
+            {
+                "score": r.get("score"),
+                "exam_score": r.get("exam_score"),
+                "class": r.get("class") or class_name,
+                "class_name": r.get("class") or class_name,
+                "school_name": r.get("school_name") or school_name,
+                "district": r.get("district"),
+                "subject": r.get("subject") or subject,
+                "student_id": r.get("student_id"),
+                "student_name": r.get("student_name"),
+                "exam_name": r.get("exam_name") or exam_name,
+            }
+            for r in rows
+        ]
+        kpi_rows = prepare_score_rows_for_kpi(score_rows)
+        trend_records = _exam_avg_trend_records(score_rows)
+        diag = build_diagnostic_data(
+            kpi_rows or score_rows,
+            trend_records=trend_records or None,
+            config=cfg,
+            scope_label=scope_label,
+            exam_name=exam_name or "",
+            subject_name=subject or "",
+        )
+        diag["REPORT_TIME"] = _now_str()
+        data.update(diag)
+
+    async def _fill_student_profile(
+        self,
+        data: dict[str, Any],
+        rows: list[dict[str, Any]],
+        spec: ReportSpec,
+    ) -> None:
+        """学生画像：全科多场 + 小题知识点洞察（对齐聊天 build_student_exam_report_data_tool）。"""
+        from src.agent.education.comprehensive import aggregate_student_item_insights
+        from src.agent.education.query_parse import student_matches
+        from src.agent.education.student_exam import build_student_exam_data
+        from src.agent.education.tools import (
+            _aggregate_long_table_records,
+            _fetch_class_score_long_table,
+            _fetch_student_item_rows_direct,
+            _guess_long_table_fields,
+        )
+
+        student = str(spec.filters.get("student_name") or "").strip()
+        class_name = str(spec.filters.get("class_name") or "").strip()
+        school_name = str(spec.filters.get("school_name") or "").strip()
+        subject_hint = str(spec.filters.get("subject") or "").strip()
+
+        records, exam_order = _score_dicts_to_records(rows)
+        # 有数据源时拉全班全科历次（不限 subject），支撑雷达图
+        if self._datasource_id is not None:
+            try:
+                fetched = await asyncio.to_thread(
+                    _fetch_class_score_long_table,
+                    datasource_id=int(self._datasource_id),
+                    class_name=class_name,
+                    student_name=student,
+                    school_name=school_name,
+                    # 表单选了科目 → 单科；未选 → 全科多科雷达
+                    subject_name=subject_hint,
+                    workspace_oid=self._workspace_oid,
+                )
+                if fetched and fetched.get("rows") and fetched.get("columns"):
+                    cols = [str(c) for c in fetched["columns"]]
+                    ef, sf, subf, scf, tf = _guess_long_table_fields(
+                        cols,
+                        exam_field="exam_name",
+                        student_field="student_id",
+                        subject_field="subject_name",
+                        score_field="score",
+                        total_field="total",
+                    )
+                    records, exam_order = _aggregate_long_table_records(
+                        list(fetched["rows"]),
+                        cols,
+                        exam_field=ef,
+                        student_field=sf,
+                        subject_field=subf,
+                        score_field=scf,
+                        total_field=tf,
+                    )
+                    if not class_name and fetched.get("class_name"):
+                        class_name = str(fetched["class_name"])
+            except Exception as e:  # noqa: BLE001
+                logger.warning("学生画像拉全班成绩失败，回退编排 SQL: %s", e)
+
+        if not records:
+            data["SUMMARY"] = "<p>未检索到该生可用的成绩明细，请确认班级与学号/姓名。</p>"
+            return
+
+        student_item_insights: dict[str, dict[str, Any]] = {}
+        if self._datasource_id is not None and student:
+            try:
+                detail_rows = await asyncio.to_thread(
+                    _fetch_student_item_rows_direct,
+                    datasource_id=int(self._datasource_id),
+                    student_id=student,
+                    subject_name=subject_hint,
+                    workspace_oid=self._workspace_oid,
+                )
+                if not detail_rows and subject_hint:
+                    detail_rows = await asyncio.to_thread(
+                        _fetch_student_item_rows_direct,
+                        datasource_id=int(self._datasource_id),
+                        student_id=student,
+                        subject_name="",
+                        workspace_oid=self._workspace_oid,
+                    )
+                if detail_rows:
+                    # 仅保留目标学生
+                    detail_rows = [
+                        r
+                        for r in detail_rows
+                        if student_matches(str(r.get("student_id") or ""), student)
+                        or not r.get("student_id")
+                    ] or detail_rows
+                    student_item_insights = aggregate_student_item_insights(detail_rows)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("学生画像小题明细拉取失败: %s", e)
+
+        filled = build_student_exam_data(
+            records,
+            student_name=student,
+            exam_order=exam_order,
+            class_name=class_name,
+            student_item_insights=student_item_insights or None,
+        )
+        if subject_hint:
+            filled.setdefault("SUBJECT_NAME", subject_hint)
+        # 无薄弱清单时给占位，避免模板空白刺眼
+        if not str(filled.get("WEAK_KNOWLEDGE_LIST") or "").strip():
+            filled["WEAK_KNOWLEDGE_LIST"] = "暂无（请确认已导入小题明细与知识点关联）"
+        data.update(filled)
+
+    def _fill_trend_tracking(
+        self,
+        data: dict[str, Any],
+        rows: list[dict[str, Any]],
+        spec: ReportSpec,
+        cfg: EducationConfig,
+    ) -> None:
+        from src.agent.education.trend_tracking import build_trend_tracking_data
+
+        records, exam_order = _score_dicts_to_records(rows)
+        if not records:
+            data["SUMMARY"] = "<p>未检索到可用于趋势分析的成绩明细。</p>"
+            return
+        filled = build_trend_tracking_data(
+            records,
+            exam_order,
+            class_name=str(spec.filters.get("class_name") or ""),
+            school_name=str(spec.filters.get("school_name") or ""),
+            subject_name=str(spec.filters.get("subject") or ""),
+            target_name=str(
+                spec.filters.get("class_name")
+                or spec.filters.get("school_name")
+                or "跟踪对象"
+            ),
+            config=cfg,
+        )
+        data.update(filled)
+
+    def _fill_tier_alert(
+        self,
+        data: dict[str, Any],
+        rows: list[dict[str, Any]],
+        spec: ReportSpec,
+        cfg: EducationConfig,
+    ) -> None:
+        from dataclasses import replace
+
+        from src.agent.education.aggregation import prepare_score_rows_for_kpi
+        from src.agent.education.tools import (
+            _build_tier_alert_template_data,
+            _score_rows_to_at_risk_students,
+        )
+
+        subject = str(spec.filters.get("subject") or "")
+        # 保留多科目行（不去重掉科目），便于偏科识别；仅收敛多场
+        from src.agent.education.aggregation import narrow_score_rows_to_primary_exam
+
+        narrowed, _ = narrow_score_rows_to_primary_exam(
+            [
                 {
                     "score": r.get("score"),
                     "exam_score": r.get("exam_score"),
-                    "class": r.get("class") or class_name,
-                    "class_name": r.get("class") or class_name,
-                    "school_name": r.get("school_name") or school_name,
-                    "district": r.get("district"),
                     "subject": r.get("subject") or subject,
+                    "name": r.get("student_name") or r.get("student_id"),
                     "student_id": r.get("student_id"),
+                    "student_name": r.get("student_name"),
+                    "exam_name": r.get("exam_name"),
                 }
                 for r in rows
             ]
-            diag = build_diagnostic_data(
-                score_rows,
-                config=cfg,
-                scope_label=scope_label,
-                exam_name=exam_name or "",
-                subject_name=subject or "",
-            )
-            diag["REPORT_TIME"] = _now_str()
-            data.update(diag)
-            return data
-        if spec.report_type == ReportType.SUBJECT_DIAGNOSIS and mapping.source == "config_edu":
-            item_rows = compute_item_metrics(await self._fetch_item_rows(spec, mapping))
-            knowledge_rows = enrich_knowledge_rows(await self._fetch_knowledge_rows(spec, mapping))
-            data["ITEM_TABLE"] = build_item_table_html(item_rows)
-            data["KNOWLEDGE_TABLE"] = build_knowledge_table_html(knowledge_rows)
-            weak = [
-                str(r.get("knowledge_name") or "")
-                for r in knowledge_rows
-                if r.get("level") == "需加强"
+        )
+        # 若无多科，退回 KPI 口径（学生去重）
+        kpi_rows = narrowed if narrowed else prepare_score_rows_for_kpi(
+            [
+                {
+                    "score": r.get("score"),
+                    "exam_score": r.get("exam_score"),
+                    "subject": r.get("subject") or subject,
+                    "name": r.get("student_name") or r.get("student_id"),
+                    "student_id": r.get("student_id"),
+                    "exam_name": r.get("exam_name"),
+                }
+                for r in rows
             ]
-            data["WEAK_KNOWLEDGE_LIST"] = "、".join(weak[:8])
-            data["SUMMARY"] = build_diagnosis_summary(
-                school_name=school_name,
-                exam_name=exam_name or "",
-                subject_name=subject or "",
-                stats=stats,
-                item_rows=item_rows,
-                knowledge_rows=knowledge_rows,
+        )
+        students = _score_rows_to_at_risk_students(kpi_rows, default_subject=subject)
+
+        fs = None
+        for r in rows:
+            if r.get("exam_score") is not None:
+                try:
+                    fs = float(r["exam_score"])
+                    break
+                except (TypeError, ValueError):
+                    pass
+        local_cfg = replace(cfg)
+        if fs is not None and fs > 0:
+            local_cfg.pass_threshold = fs * float(cfg.pass_ratio)
+        at_risk = identify_at_risk_students(students, local_cfg)
+        filled = _build_tier_alert_template_data(
+            at_risk,
+            class_name=str(spec.filters.get("class_name") or ""),
+            school_name=str(spec.filters.get("school_name") or ""),
+            subject_name=subject,
+            exam_name=str(spec.filters.get("exam_name") or ""),
+            pass_line=local_cfg.pass_threshold,
+        )
+        data.update(filled)
+
+    def _fill_group_feature(
+        self,
+        data: dict[str, Any],
+        rows: list[dict[str, Any]],
+        spec: ReportSpec,
+        cfg: EducationConfig,
+    ) -> None:
+        from src.agent.education.group_feature import build_group_feature_data
+
+        filled = build_group_feature_data(
+            [
+                {
+                    "score": r.get("score"),
+                    "exam_score": r.get("exam_score"),
+                    "class": r.get("class"),
+                    "class_name": r.get("class"),
+                    "school_name": r.get("school_name"),
+                    "district": r.get("district"),
+                    "subject": r.get("subject"),
+                    "grade": r.get("grade"),
+                }
+                for r in rows
+            ],
+            dimension=str(spec.filters.get("dimension") or "class"),
+            config=cfg,
+            school_name=str(spec.filters.get("school_name") or ""),
+            subject_name=str(spec.filters.get("subject") or ""),
+            exam_name=str(spec.filters.get("exam_name") or ""),
+        )
+        data.update(filled)
+
+    def _fill_comprehensive(
+        self,
+        data: dict[str, Any],
+        rows: list[dict[str, Any]],
+        spec: ReportSpec,
+        cfg: EducationConfig,
+    ) -> None:
+        from src.agent.education.comprehensive import build_comprehensive_data
+
+        records, exam_order = _score_dicts_to_records(rows)
+        if not records:
+            data["SUMMARY"] = "<p>未检索到可用于综合分析的多场成绩明细。</p>"
+            return
+        filled = build_comprehensive_data(
+            records,
+            exam_order,
+            class_name=str(spec.filters.get("class_name") or ""),
+            config=cfg,
+        )
+        data.update(filled)
+
+    async def _fill_class_overview_rank(
+        self,
+        data: dict[str, Any],
+        class_rows: list[dict[str, Any]],
+        spec: ReportSpec,
+        mapping: ScoreSchemaMapping,
+        cfg: EducationConfig,
+    ) -> None:
+        """用同校同年级各班 KPI 填充 RANK_INFO。"""
+        from src.agent.education.aggregation import aggregate_by, prepare_score_rows_for_kpi
+        from src.agent.education.dimension_parse import parse_grade_from_class
+        from src.agent.resource.tool.business import _format_rank_info_html
+
+        class_name = str(spec.filters.get("class_name") or "").strip()
+        school_name = str(spec.filters.get("school_name") or "").strip()
+        if not class_name and not school_name:
+            return
+
+        # 去掉本班过滤，拉同校对照
+        peer_filters = dict(spec.filters)
+        peer_filters.pop("class_name", None)
+        peer_spec = ReportSpec(
+            report_type=spec.report_type,
+            audience=spec.audience,
+            filters=peer_filters,
+            include_charts=False,
+        )
+        try:
+            peer_raw = await self._fetch_score_rows(peer_spec, mapping)
+        except Exception:
+            peer_raw = []
+        peer_rows = prepare_score_rows_for_kpi(
+            [
+                {
+                    "score": r.get("score"),
+                    "exam_score": r.get("exam_score"),
+                    "class": r.get("class"),
+                    "class_name": r.get("class"),
+                    "school_name": r.get("school_name"),
+                    "subject": r.get("subject"),
+                    "student_id": r.get("student_id"),
+                    "exam_name": r.get("exam_name"),
+                }
+                for r in (peer_raw or class_rows)
+            ]
+        )
+        class_agg = aggregate_by("class", peer_rows, cfg)
+        class_agg = [
+            g
+            for g in class_agg
+            if str(g.get("dimension_value") or "").strip() not in ("", "未知班级")
+        ]
+        if len(class_agg) < 2:
+            return
+
+        # 尽量限定同年级
+        my_grade = parse_grade_from_class(class_name) if class_name else ""
+        if my_grade:
+            same = [
+                g
+                for g in class_agg
+                if parse_grade_from_class(str(g.get("dimension_value") or "")) == my_grade
+            ]
+            if len(same) >= 2:
+                class_agg = same
+
+        target = class_name
+        if not target and class_rows:
+            target = str(class_rows[0].get("class") or "").strip()
+        if not target:
+            return
+
+        def _rank_of(metric: str, *, higher_better: bool = True) -> dict[str, Any] | None:
+            ranked = sorted(
+                class_agg,
+                key=lambda g: float(g.get(metric) or 0),
+                reverse=higher_better,
             )
-            data["RECOMMENDATIONS"] = build_diagnosis_recommendations(
-                knowledge_rows=knowledge_rows,
-                item_rows=item_rows,
-                stats=stats,
-            )
-            if knowledge_rows:
-                charts["KNOWLEDGE_CHART"] = build_chart_option(
-                    "knowledge_bar",
-                    {
-                        "categories": [str(r.get("knowledge_name") or "") for r in knowledge_rows[:12]],
-                        "values": [float(r.get("score_rate") or 0) for r in knowledge_rows[:12]],
-                    },
-                    title="知识点得分率",
-                )
-                data["KNOWLEDGE_CHART"] = charts.get("KNOWLEDGE_CHART", "")
-            tier = build_ability_tier_summary(knowledge_rows)
-            tier_table = build_ability_tier_table_html(knowledge_rows)
-            if tier_table:
-                data["ABILITY_TIER_TABLE"] = tier_table
-                levels = [s.get("ability_level") for s in tier.get("by_ability_level") or []]
-                values = [float(s.get("avg_score_rate") or 0) for s in tier.get("by_ability_level") or []]
-                from src.agent.education.knowledge_tier import ABILITY_LABELS
-                data["ABILITY_TIER_CHART"] = build_chart_option(
-                    "ability_radar",
-                    {"levels": [ABILITY_LABELS.get(str(l), str(l)) for l in levels], "values": values},
-                    title="能力层级得分率",
-                )
-            qtype_table = build_question_type_table_html(item_rows)
-            if qtype_table:
-                data["QUESTION_TYPE_TABLE"] = qtype_table
-                from collections import defaultdict
-                buckets: dict[str, list[float]] = defaultdict(list)
-                for ir in item_rows:
-                    if ir.get("question_type") and ir.get("score_rate") is not None:
-                        buckets[str(ir["question_type"])].append(float(ir["score_rate"]))
-                if buckets:
-                    cats = sorted(buckets.keys())
-                    vals = [round(sum(buckets[c]) / len(buckets[c]), 2) for c in cats]
-                    data["QUESTION_TYPE_CHART"] = build_chart_option(
-                        "question_type_bar",
-                        {"categories": cats, "values": vals},
-                        title="题型得分率",
-                    )
-        return data
+            total = len(ranked)
+            cohort = sum(float(g.get(metric) or 0) for g in ranked) / total if total else 0
+            for i, g in enumerate(ranked):
+                if str(g.get("dimension_value") or "") == target:
+                    val = g.get(metric)
+                    return {
+                        "指标": {"avg": "均分", "pass_rate": "及格率", "excellent_rate": "优秀率"}.get(
+                            metric, metric
+                        ),
+                        "value": (
+                            f"{float(val):.2f}%"
+                            if metric.endswith("rate") and val is not None
+                            else (round(float(val), 2) if val is not None else "-")
+                        ),
+                        "rank": i + 1,
+                        "total": total,
+                        "cohort_avg": (
+                            f"{cohort:.2f}%"
+                            if metric.endswith("rate")
+                            else round(cohort, 2)
+                        ),
+                    }
+            return None
+
+        items = [x for x in (_rank_of("avg"), _rank_of("pass_rate"), _rank_of("excellent_rate")) if x]
+        if not items:
+            return
+        grade_label = my_grade or "年级"
+        scope = f"{school_name or ''}{grade_label} (共 {items[0]['total']} 个班)".strip()
+        top = items[0]
+        summary = (
+            f"{target} 在均分上位列{grade_label}第 {top['rank']} / 共 {top['total']} 班"
+        )
+        data["RANK_INFO"] = _format_rank_info_html(
+            {"scope": scope, "items": items, "summary": summary}
+        )
 
     async def _fetch_score_rows(
         self,
@@ -536,19 +1275,39 @@ class ReportOrchestrator:
         class_expr = f.get("class_name", "sc.class")
         school_expr = f.get("school_name", "sch.name")
         exam_expr = f.get("exam_name", "e.exam_name")
+        # tb_student 无姓名列（id 即学号），学生标识统一用 student_id
         sql = (
             f"SELECT {score_expr} AS score, {full_expr} AS exam_score,\n"
             f"       {class_expr} AS class, {school_expr} AS school_name,\n"
             f"       sch.district AS district, {subject_expr} AS subject,\n"
-            f"       sc.student_id AS student_id\n"
+            f"       sc.student_id AS student_id,\n"
+            f"       sc.student_id AS student_name,\n"
+            f"       {exam_expr} AS exam_name\n"
             "FROM tb_score sc\n"
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
             "JOIN tb_exam e ON sc.exam_id = e.id"
         )
-        where = _filters_to_where(spec.filters, school_expr, class_expr, subject_expr, exam_expr)
+        # 多场考试类报告：不按单场 exam 过滤，便于趋势/综合/学生画像/诊断动态性
+        filters = dict(spec.filters)
+        if spec.report_type in (
+            ReportType.STUDENT_PROFILE,
+            ReportType.TREND_TRACKING,
+            ReportType.COMPREHENSIVE,
+            ReportType.DIAGNOSTIC_REPORT,
+        ):
+            filters.pop("exam_name", None)
+        where = _filters_to_where(filters, school_expr, class_expr, subject_expr, exam_expr)
         if where:
             sql += f"\nWHERE {where}"
-        return sql + "\nLIMIT 1000"
+        limit = 5000 if spec.report_type in (
+            ReportType.STUDENT_PROFILE,
+            ReportType.TREND_TRACKING,
+            ReportType.COMPREHENSIVE,
+            ReportType.GRADE_COMPARISON,
+            ReportType.GROUP_FEATURE,
+            ReportType.DIAGNOSTIC_REPORT,
+        ) else 1000
+        return sql + f"\nLIMIT {limit}"
 
     def _build_item_diagnosis_sql(self, spec: ReportSpec, mapping: ScoreSchemaMapping) -> str:
         f = mapping.fields
@@ -706,11 +1465,12 @@ def _filters_to_where(
 ) -> str:
     parts: list[str] = []
     if filters.get("school_name"):
-        parts.append(f"{school_expr} = '{_sql_escape(filters['school_name'])}'")
+        parts.append(f"{school_expr} LIKE '%{_sql_escape(filters['school_name'])}%'")
     if filters.get("class_name"):
-        parts.append(f"{class_expr} = '{_sql_escape(filters['class_name'])}'")
+        # 班级名在库内写法不一（高一1班 / 高一(1)班），用模糊匹配降低空结果
+        parts.append(f"{class_expr} LIKE '%{_sql_escape(filters['class_name'])}%'")
     if filters.get("subject"):
-        parts.append(f"{subject_expr} = '{_sql_escape(filters['subject'])}'")
+        parts.append(f"{subject_expr} LIKE '%{_sql_escape(filters['subject'])}%'")
     if filters.get("exam_name"):
         parts.append(f"{exam_expr} LIKE '%{_sql_escape(filters['exam_name'])}%'")
     if filters.get("district"):
@@ -743,6 +1503,77 @@ def _segment_table(segments: list[dict[str, Any]], *, full_score: float | None =
     from src.agent.education.subject_diagnosis import build_segment_table_html
 
     return build_segment_table_html(segments, full_score=full_score)
+
+
+def _score_dicts_to_records(
+    rows: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """成绩扁平行 → ``{exam, student, subjects, total}`` records + exam_order。"""
+    agg: dict[tuple[str, str], dict[str, Any]] = {}
+    exam_seen: list[str] = []
+    exam_set: set[str] = set()
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        exam = str(r.get("exam_name") or r.get("exam") or "").strip()
+        student = str(
+            r.get("student_name") or r.get("student") or r.get("student_id") or ""
+        ).strip()
+        subject = str(r.get("subject") or r.get("subject_name") or "").strip()
+        if not exam or not student:
+            continue
+        if exam not in exam_set:
+            exam_set.add(exam)
+            exam_seen.append(exam)
+        key = (exam, student)
+        slot = agg.setdefault(
+            key, {"exam": exam, "student": student, "subjects": {}, "total": 0.0}
+        )
+        score_raw = r.get("score")
+        if subject and score_raw is not None:
+            try:
+                slot["subjects"][subject] = float(score_raw)
+            except (TypeError, ValueError):
+                pass
+        elif score_raw is not None and not subject:
+            try:
+                sv = float(score_raw)
+                slot["subjects"].setdefault("成绩", sv)
+                slot["total"] = sv
+            except (TypeError, ValueError):
+                pass
+    for slot in agg.values():
+        subs = slot.get("subjects") or {}
+        if subs:
+            slot["total"] = sum(float(v) for v in subs.values())
+    return list(agg.values()), exam_seen
+
+
+def _exam_avg_trend_records(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按考试聚合均分，供诊断报告 GENERAL_TREND_CHART。"""
+    buckets: dict[str, list[float]] = {}
+    order: list[str] = []
+    for r in rows:
+        if not isinstance(r, dict) or r.get("score") is None:
+            continue
+        exam = str(r.get("exam_name") or r.get("exam") or "").strip()
+        if not exam:
+            continue
+        try:
+            score = float(r["score"])
+        except (TypeError, ValueError):
+            continue
+        if exam not in buckets:
+            buckets[exam] = []
+            order.append(exam)
+        buckets[exam].append(score)
+    out: list[dict[str, Any]] = []
+    for exam in order:
+        vals = buckets.get(exam) or []
+        if not vals:
+            continue
+        out.append({"exam": exam, "avg": round(sum(vals) / len(vals), 2)})
+    return out
 
 
 __all__ = ["ReportIntentResolver", "ReportOrchestrator", "ReportResult"]

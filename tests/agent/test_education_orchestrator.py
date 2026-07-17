@@ -185,6 +185,316 @@ def test_orchestrator_execute_sql_failure_does_not_raise():
     assert res.error == "db down"
 
 
+def test_orchestrator_run_spec_skips_intent_and_uses_filters():
+    """run_spec 直接使用 ReportSpec，不经自然语言意图解析。"""
+    from src.agent.education.report_types import ReportSpec
+
+    captured = {}
+
+    async def fake_execute(sql):
+        captured["sql"] = sql
+        return {"columns": ["score"], "rows": [[85], [72], [60]], "row_count": 3}
+
+    async def fake_schema():
+        return _wide_mapping()
+
+    orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
+    spec = ReportSpec(
+        report_type=ReportType.CLASS_OVERVIEW,
+        audience=Audience.HEAD_TEACHER,
+        filters={"class_name": "高一(3)班", "exam_name": "期末"},
+    )
+    res = _run(orch.run_spec(spec))
+    assert res.error is None
+    assert res.template_name == "education/class_overview.html"
+    assert res.spec.report_type == ReportType.CLASS_OVERVIEW
+    assert "高一(3)班" in res.html
+    assert "高一(3)班" in captured["sql"]
+
+
+def test_orchestrator_run_delegates_to_run_spec_same_result():
+    """run() 委托 run_spec 后，与直接构造同语义 spec 的结果一致。"""
+    from src.agent.education.report_types import ReportSpec
+
+    async def fake_execute(sql):
+        return {"columns": ["score"], "rows": [[80], [70]], "row_count": 2}
+
+    async def fake_schema():
+        return _wide_mapping()
+
+    orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
+    via_run = _run(orch.run("生成初三1班期中成绩分析报告", audience_hint="head_teacher"))
+    spec = ReportSpec(
+        report_type=ReportType.CLASS_OVERVIEW,
+        audience=Audience.HEAD_TEACHER,
+        filters={"class_name": "初三1班", "exam_name": "期中"},
+    )
+    via_spec = _run(orch.run_spec(spec))
+    assert via_run.error is None and via_spec.error is None
+    assert via_run.template_name == via_spec.template_name
+    assert via_run.stats["count"] == via_spec.stats["count"]
+    assert via_run.spec.report_type == via_spec.spec.report_type
+
+
+def test_orchestrator_grade_comparison_fills_chart_and_table():
+    """班级横向对比必须填充 CLASS_COMPARE_CHART / CLASS_RANKING_TABLE。"""
+    from src.agent.education.report_types import ReportSpec
+
+    async def fake_execute(sql):
+        return {
+            "columns": ["score", "exam_score", "class", "school_name", "district", "subject", "student_id"],
+            "rows": [
+                [90, 150, "高三(1)班", "扬州中学", "广陵区", "数学", "s1"],
+                [80, 150, "高三(1)班", "扬州中学", "广陵区", "数学", "s2"],
+                [70, 150, "高三(2)班", "扬州中学", "广陵区", "数学", "s3"],
+                [60, 150, "高三(2)班", "扬州中学", "广陵区", "数学", "s4"],
+                [95, 150, "高三(3)班", "扬州中学", "广陵区", "数学", "s5"],
+            ],
+            "row_count": 5,
+        }
+
+    async def fake_schema():
+        return _config_edu_mapping()
+
+    orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
+    spec = ReportSpec(
+        report_type=ReportType.GRADE_COMPARISON,
+        audience=Audience.GRADE_HEAD,
+        filters={
+            "school_name": "扬州中学",
+            "exam_name": "统一考试",
+            "subject": "数学",
+        },
+    )
+    res = _run(orch.run_spec(spec))
+    assert res.error is None
+    assert res.template_name == "education/grade_comparison.html"
+    assert "classCompareData" in res.html or "高三" in res.html
+    assert "CLASS_COMPARE_CHART" not in res.html  # placeholder replaced
+    assert "各班级均分对比" in res.html
+    assert "高三(1)班" in res.html
+    assert "高三(3)班" in res.html
+
+
+def _multi_exam_score_rows():
+    """两场考试 × 两名学生 × 数学，供学生画像/趋势/综合。"""
+    return {
+        "columns": [
+            "score", "exam_score", "class", "school_name", "district",
+            "subject", "student_id", "student_name", "exam_name",
+        ],
+        "rows": [
+            [90, 150, "高一(1)班", "扬州中学", "广陵区", "数学", "s1", "张三", "期中"],
+            [80, 150, "高一(1)班", "扬州中学", "广陵区", "数学", "s2", "李四", "期中"],
+            [100, 150, "高一(1)班", "扬州中学", "广陵区", "数学", "s1", "张三", "期末"],
+            [70, 150, "高一(1)班", "扬州中学", "广陵区", "数学", "s2", "李四", "期末"],
+            [85, 150, "高一(1)班", "扬州中学", "广陵区", "语文", "s1", "张三", "期中"],
+            [75, 150, "高一(1)班", "扬州中学", "广陵区", "语文", "s2", "李四", "期中"],
+            [88, 150, "高一(1)班", "扬州中学", "广陵区", "语文", "s1", "张三", "期末"],
+            [65, 150, "高一(1)班", "扬州中学", "广陵区", "语文", "s2", "李四", "期末"],
+        ],
+        "row_count": 8,
+    }
+
+
+def test_orchestrator_student_profile_fills_tables():
+    from src.agent.education.report_types import ReportSpec
+
+    async def fake_execute(sql):
+        return _multi_exam_score_rows()
+
+    async def fake_schema():
+        return _config_edu_mapping()
+
+    orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
+    spec = ReportSpec(
+        report_type=ReportType.STUDENT_PROFILE,
+        filters={
+            "student_name": "张三",
+            "class_name": "高一(1)班",
+            "subject": "数学",
+        },
+    )
+    res = _run(orch.run_spec(spec))
+    assert res.error is None
+    assert "张三" in res.html
+    assert "SCORE_SUMMARY_TABLE" not in res.html
+    assert "期中" in res.html or "期末" in res.html
+    assert "ASSESSMENT" not in res.html
+
+
+def test_orchestrator_trend_tracking_fills_chart():
+    from src.agent.education.report_types import ReportSpec
+
+    async def fake_execute(sql):
+        return _multi_exam_score_rows()
+
+    async def fake_schema():
+        return _config_edu_mapping()
+
+    orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
+    spec = ReportSpec(
+        report_type=ReportType.TREND_TRACKING,
+        filters={"class_name": "高一(1)班", "subject": "数学", "school_name": "扬州中学"},
+    )
+    res = _run(orch.run_spec(spec))
+    assert res.error is None
+    assert "TREND_CHART" not in res.html
+    assert "期中" in res.html or "期末" in res.html
+
+
+def test_orchestrator_tier_alert_fills_counts():
+    from src.agent.education.report_types import ReportSpec
+
+    async def fake_execute(sql):
+        return {
+            "columns": [
+                "score", "exam_score", "class", "school_name", "district",
+                "subject", "student_id", "student_name", "exam_name",
+            ],
+            "rows": [
+                [58, 100, "高一(1)班", "扬州中学", "", "数学", "s1", "甲", "期中"],
+                [62, 100, "高一(1)班", "扬州中学", "", "数学", "s2", "乙", "期中"],
+                [90, 100, "高一(1)班", "扬州中学", "", "数学", "s3", "丙", "期中"],
+                [40, 100, "高一(1)班", "扬州中学", "", "语文", "s3", "丙", "期中"],
+            ],
+            "row_count": 4,
+        }
+
+    async def fake_schema():
+        return _config_edu_mapping()
+
+    orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
+    spec = ReportSpec(
+        report_type=ReportType.TIER_ALERT,
+        filters={"class_name": "高一(1)班", "exam_name": "期中"},
+    )
+    res = _run(orch.run_spec(spec))
+    assert res.error is None
+    assert "CRITICAL_COUNT" not in res.html
+    assert "临界生" in res.html
+
+
+def test_orchestrator_group_feature_fills_table():
+    from src.agent.education.report_types import ReportSpec
+
+    async def fake_execute(sql):
+        return {
+            "columns": [
+                "score", "exam_score", "class", "school_name", "district",
+                "subject", "student_id", "student_name", "exam_name",
+            ],
+            "rows": [
+                [90, 150, "高三(1)班", "扬州中学", "广陵区", "数学", "s1", "a", "统一"],
+                [70, 150, "高三(2)班", "扬州中学", "广陵区", "数学", "s2", "b", "统一"],
+                [95, 150, "高三(3)班", "扬州中学", "广陵区", "数学", "s3", "c", "统一"],
+            ],
+            "row_count": 3,
+        }
+
+    async def fake_schema():
+        return _config_edu_mapping()
+
+    orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
+    spec = ReportSpec(
+        report_type=ReportType.GROUP_FEATURE,
+        filters={"school_name": "扬州中学", "subject": "数学", "exam_name": "统一"},
+    )
+    res = _run(orch.run_spec(spec))
+    assert res.error is None
+    assert "GROUP_TABLE" not in res.html
+    assert "高三(1)班" in res.html
+
+
+def test_orchestrator_comprehensive_fills_overview():
+    from src.agent.education.report_types import ReportSpec
+
+    async def fake_execute(sql):
+        return _multi_exam_score_rows()
+
+    async def fake_schema():
+        return _config_edu_mapping()
+
+    orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
+    spec = ReportSpec(
+        report_type=ReportType.COMPREHENSIVE,
+        filters={"class_name": "高一(1)班"},
+    )
+    res = _run(orch.run_spec(spec))
+    assert res.error is None
+    assert "期中" in res.html or "期末" in res.html
+
+
+def test_orchestrator_class_overview_rank_info():
+    from src.agent.education.report_types import ReportSpec
+
+    async def fake_execute(sql):
+        return {
+            "columns": [
+                "score", "exam_score", "class", "school_name", "district",
+                "subject", "student_id", "student_name", "exam_name",
+            ],
+            "rows": [
+                [90, 150, "高三(1)班", "扬州中学", "", "数学", "s1", "a", "统一"],
+                [80, 150, "高三(1)班", "扬州中学", "", "数学", "s2", "b", "统一"],
+                [70, 150, "高三(2)班", "扬州中学", "", "数学", "s3", "c", "统一"],
+                [60, 150, "高三(2)班", "扬州中学", "", "数学", "s4", "d", "统一"],
+                [95, 150, "高三(3)班", "扬州中学", "", "数学", "s5", "e", "统一"],
+            ],
+            "row_count": 5,
+        }
+
+    async def fake_schema():
+        return _config_edu_mapping()
+
+    orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
+    spec = ReportSpec(
+        report_type=ReportType.CLASS_OVERVIEW,
+        filters={
+            "class_name": "高三(1)班",
+            "school_name": "扬州中学",
+            "subject": "数学",
+            "exam_name": "统一",
+        },
+    )
+    res = _run(orch.run_spec(spec))
+    assert res.error is None
+    assert "RANK_INFO" not in res.html
+    assert "年级" in res.html or "对比范围" in res.html or "均分" in res.html
+
+
+def test_orchestrator_config_edu_sql_includes_exam_name_and_student():
+    captured = {}
+
+    async def fake_execute(sql):
+        captured["sql"] = sql
+        return {
+            "columns": ["score", "exam_score"],
+            "rows": [[120, 150]],
+            "row_count": 1,
+        }
+
+    async def fake_schema():
+        return _config_edu_mapping()
+
+    from src.agent.education.report_types import ReportSpec
+
+    orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
+    _run(
+        orch.run_spec(
+            ReportSpec(
+                report_type=ReportType.STUDENT_PROFILE,
+                filters={"class_name": "高一(1)班", "student_name": "张三"},
+            )
+        )
+    )
+    sql = captured["sql"]
+    assert "exam_name" in sql
+    assert "student_id AS student_name" in sql or "student_name" in sql
+    assert "st.name" not in sql
+    assert "LIMIT 5000" in sql
+
+
 def test_orchestrator_locked_class_overrides_question_class():
     """Phase 4 权限联动：班主任只能看本班，问题里写别班也被锁定到本班。"""
     captured = {}

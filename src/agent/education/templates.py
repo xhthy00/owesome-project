@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from src.agent.education.report_types import Audience, ReportType, report_type_label
 
 #: 模板相对路径（相对 ``src/agent/resource/templates/``）。
@@ -78,6 +80,7 @@ _REQUIRED_KEYS: dict[ReportType, list[str]] = {
         "SUBJECT_ANALYSIS_HTML", "TOTAL_ANALYSIS_TABLE", "TOTAL_TREND_INSIGHT",
         "CONTRIBUTION_INSIGHT", "CLASS_DIFF_TABLE", "ASSESSMENT", "RECOMMENDATIONS",
         "SUBJECT_RADAR_CHART", "TREND_LINE_CHART", "TOTAL_TREND_CHART",
+        "SCORE_DIST_CHART", "SCATTER_CHART",
         # 兼容旧字段
         "TOTAL_SCORE", "CLASS_RANK", "GRADE_RANK", "SUBJECT_TABLE", "SUMMARY",
         "FULL_SCORE", "ITEM_TABLE", "KNOWLEDGE_TABLE", "WEAK_KNOWLEDGE_LIST",
@@ -189,20 +192,40 @@ def select_report_template(
 
     若该报告类型模板尚未实现，``template_name`` 为空串，``data_keys`` 为空列表
     ——Agent 应据此回退到通用 ``score_analysis_report`` 或 inline html。
+
+    受众变体（如 ``*_parent.html``）文件不存在时回退到标准模板，避免渲染报错。
     """
     base = _TEMPLATE_PATH.get(report_type, "")
     suffix = _AUDIENCE_SUFFIX.get(audience, "")
+    candidate = base
     if base and suffix:
         # audience 变体：class_overview_parent.html
         stem, _, ext = base.rpartition(".")
-        candidate = f"{stem}{suffix}.{ext}" if stem else base
-    else:
-        candidate = base
+        variant = f"{stem}{suffix}.{ext}" if stem else base
+        if _template_exists(variant):
+            candidate = variant
+        elif (
+            report_type == ReportType.STUDENT_PROFILE
+            and audience == Audience.PARENT
+            and _template_exists("education/student_profile_parent.html")
+        ):
+            # 历史命名：家长版在 student_profile_parent.html，而非
+            # student_exam_analysis_parent.html
+            candidate = "education/student_profile_parent.html"
+        else:
+            candidate = base
 
     return {
         "template_name": candidate,
         "data_keys": list(_REQUIRED_KEYS.get(report_type, [])),
     }
+
+
+def _template_exists(relative_path: str) -> bool:
+    if not relative_path:
+        return False
+    root = Path(__file__).resolve().parents[1] / "resource" / "templates"
+    return (root / relative_path).is_file()
 
 
 __all__ = [

@@ -685,11 +685,122 @@ def _enrich_class_overview_archive(
         report_data=report_data,
         tool_runtime_ctx=tool_runtime_ctx,
     )
+    # coerce 前先抽出排名摘要，供总体分析引用
+    if not out.get("_RANK_SUMMARY"):
+        rs = _extract_rank_summary_text(out.get("RANK_INFO"))
+        if rs:
+            out["_RANK_SUMMARY"] = rs
     _coerce_class_overview_structured_fields(out)
+    _fill_class_overview_narrative(out)
 
     # 班级总览不再展示「每位学生详细档案与个性化建议」
     out["STUDENT_ARCHIVE_TABLE"] = ""
     return out
+
+
+_PLACEHOLDER_SUMMARY_HINTS = (
+    "班级成绩总览：关注均分",
+    "由 ReportOrchestrator 自动生成",
+)
+_PLACEHOLDER_REC_HINTS = (
+    "结合 KPI 与分数段",
+)
+
+
+def _is_placeholder_narrative(val: Any, *, kind: str) -> bool:
+    s = str(val or "").strip()
+    if not s:
+        return True
+    hints = _PLACEHOLDER_SUMMARY_HINTS if kind == "summary" else _PLACEHOLDER_REC_HINTS
+    return any(h in s for h in hints)
+
+
+def _stats_dict_from_class_overview(out: dict[str, Any]) -> dict[str, Any]:
+    cached = out.get("_stats")
+    if isinstance(cached, dict) and (cached.get("count") or cached.get("avg") is not None):
+        return cached
+    full = out.get("_FULL_SCORE") or out.get("FULL_SCORE")
+    try:
+        full_f = float(full) if full is not None and not _is_blank_metric(full) else None
+    except (TypeError, ValueError):
+        full_f = None
+    count_raw = out.get("TOTAL_COUNT")
+    try:
+        count = int(float(str(count_raw).strip())) if not _is_blank_metric(count_raw) else 0
+    except (TypeError, ValueError):
+        count = 0
+    return {
+        "count": count,
+        "avg": _metric_float(out.get("AVG_SCORE")),
+        "pass_rate": _metric_float(out.get("PASS_RATE")),
+        "excellent_rate": _metric_float(out.get("EXCELLENT_RATE")),
+        "good_rate": _metric_float(out.get("GOOD_RATE")),
+        "low_score_rate": _metric_float(out.get("LOW_SCORE_RATE")),
+        "max": _metric_float(out.get("MAX_SCORE")),
+        "min": _metric_float(out.get("MIN_SCORE")),
+        "stdev": _metric_float(out.get("STDEV")),
+        "full_score": full_f or 100.0,
+        "segments": [],
+    }
+
+
+def _extract_rank_summary_text(rank_info: Any) -> str:
+    if isinstance(rank_info, dict):
+        s = str(rank_info.get("summary") or "").strip()
+        return s if s and "{" not in s else ""
+    if not isinstance(rank_info, str):
+        return ""
+    raw = rank_info.strip()
+    if not raw or raw.startswith("<"):
+        return ""
+    parsed = _parse_structured_blob(raw)
+    if isinstance(parsed, dict):
+        s = str(parsed.get("summary") or "").strip()
+        return s if s and "{" not in s else ""
+    if "{" in raw or "'" in raw[:2]:
+        return ""
+    return raw[:200]
+
+
+def _fill_class_overview_narrative(out: dict[str, Any]) -> None:
+    """用 KPI / 分数段 / 离散度替换占位的总体分析与改进建议。"""
+    need_summary = _is_placeholder_narrative(out.get("SUMMARY"), kind="summary")
+    need_rec = _is_placeholder_narrative(out.get("RECOMMENDATIONS"), kind="recommendations")
+    if not need_summary and not need_rec:
+        return
+    try:
+        from src.agent.education.subject_diagnosis import (
+            build_class_overview_recommendations,
+            build_class_overview_summary,
+        )
+    except Exception:
+        return
+
+    stats = _stats_dict_from_class_overview(out)
+    if not stats.get("count") and stats.get("avg") is None and stats.get("pass_rate") is None:
+        return
+
+    # RANK_INFO 可能已被转成 HTML；优先用 coerce 前抽出的摘要
+    rank_summary = str(out.get("_RANK_SUMMARY") or "").strip()
+    if not rank_summary:
+        rank_summary = _extract_rank_summary_text(out.get("RANK_INFO"))
+    tip = str(out.get("DISPERSION_TIP") or "").strip()
+    level = str(out.get("STDEV_LEVEL") or "").strip()
+
+    if need_summary:
+        out["SUMMARY"] = build_class_overview_summary(
+            class_name=str(out.get("CLASS_NAME") or ""),
+            subject_name=str(out.get("SUBJECT_NAME") or ""),
+            exam_name=str(out.get("EXAM_NAME") or ""),
+            stats=stats,
+            stdev_level=level,
+            rank_summary=rank_summary,
+        )
+    if need_rec:
+        out["RECOMMENDATIONS"] = build_class_overview_recommendations(
+            stats=stats,
+            dispersion_tip=tip,
+        )
 
 
 def _collect_class_overview_rows(
@@ -845,6 +956,7 @@ def _fill_class_overview_kpis_from_rows(out: dict[str, Any], rows: list[dict[str
             out[key] = val
 
     segments = stats.get("segments") or []
+    out["_stats"] = stats
     # 有成绩行时始终按正确满分重算图/表（覆盖 LLM 满分 100 的全 0 表）
     out["SCORE_DIST_CHART"] = build_chart_option(
         "score_distribution",

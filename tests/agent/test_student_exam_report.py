@@ -195,6 +195,82 @@ def test_build_student_exam_data_rich_sections():
     assert "五、总体结论" not in data["ASSESSMENT"]  # assessment is content not header
     assert data["TOTAL_TREND_CHART"]
     assert data["CLASS_DIFF_TABLE"]
+    assert not data["IS_SINGLE_SUBJECT"]
+    assert data["OVERVIEW_SECTION_TITLE"] == "一、总体成绩概览"
+    assert data["SUBJECT_RADAR_CHART"]
+
+
+def test_build_student_exam_single_subject_layout():
+    """仅一科时关闭各科雷达，改用单科表头与趋势/分布/散点/热力图。"""
+    exams = ["一模", "二模"]
+    records = []
+    for exam, score in zip(exams, [132.0, 127.0]):
+        for sid, sc in [("学生001", score), ("学生009", score - 20)]:
+            records.append({
+                "exam": exam,
+                "student": sid,
+                "subjects": {"数学": sc},
+                "total": sc,
+            })
+    data = build_student_exam_data(
+        records, "学生001", exam_order=exams, class_name="高三(10)班"
+    )
+    assert data["IS_SINGLE_SUBJECT"] == "1"
+    assert "数学" in data["REPORT_TITLE"]
+    assert "单科" in data["REPORT_SUBTITLE"]
+    assert data["SUBJECT_NAME"] == "数学"
+    assert not data["SUBJECT_RADAR_CHART"]
+    assert data["TREND_LINE_CHART"]
+    assert data["SCORE_DIST_CHART"]
+    assert data["SCATTER_CHART"]
+    assert data["HEATMAP_CHART"]  # 无知识点时退化为相对位置热力图
+    assert "总分" not in data["SCORE_SUMMARY_TABLE"]
+    assert "数学得分" in data["SCORE_SUMMARY_TABLE"]
+    assert data["PARENT_SUBJECT_TITLE"] == "数学成绩表现"
+    assert "各科" not in data["SUBJECT_SECTION_TITLE"]
+
+
+def test_build_student_exam_single_subject_charts_with_knowledge():
+    """单科有知识点时生成能力雷达与知识点热力图。"""
+    exams = ["一模", "二模"]
+    records = []
+    for exam, score in zip(exams, [132.0, 127.0]):
+        for sid, sc in [("学生001", score), ("学生009", score - 20)]:
+            records.append({
+                "exam": exam,
+                "student": sid,
+                "subjects": {"数学": sc},
+                "total": sc,
+            })
+    insight = {
+        "weak_items": [
+            {"exam_name": "一模", "question_no": 12, "knowledge_name": "导数", "score_rate": 25.0},
+            {"exam_name": "二模", "question_no": 15, "knowledge_name": "导数", "score_rate": 40.0},
+            {"exam_name": "一模", "question_no": 8, "knowledge_name": "数列", "score_rate": 50.0},
+            {"exam_name": "二模", "question_no": 9, "knowledge_name": "数列", "score_rate": 55.0},
+            {"exam_name": "一模", "question_no": 3, "knowledge_name": "集合", "score_rate": 90.0},
+            {"exam_name": "二模", "question_no": 4, "knowledge_name": "集合", "score_rate": 88.0},
+        ],
+        "weak_knowledge": [
+            {"knowledge_name": "导数", "score_rate": 32.0, "question_count": 2},
+            {"knowledge_name": "数列", "score_rate": 52.0, "question_count": 2},
+        ],
+        "strong_knowledge": [
+            {"knowledge_name": "集合", "score_rate": 89.0, "question_count": 2},
+        ],
+        "knowledge_rows": [
+            {"knowledge_name": "导数", "score_rate": 32.0, "question_count": 2},
+            {"knowledge_name": "数列", "score_rate": 52.0, "question_count": 2},
+            {"knowledge_name": "集合", "score_rate": 89.0, "question_count": 2},
+        ],
+    }
+    data = build_student_exam_data(
+        records, "学生001", exam_order=exams, class_name="高三(10)班", item_insight=insight
+    )
+    assert data["ABILITY_RADAR_CHART"]
+    assert "heatmap" in data["HEATMAP_CHART"] or "导数" in data["HEATMAP_CHART"]
+    assert data["SCORE_DIST_CHART"]
+    assert data["SCATTER_CHART"]
 
 
 def test_build_student_exam_only_one_student_in_title():

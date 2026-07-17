@@ -958,6 +958,153 @@ def _build_class_kpi_items(stats: dict[str, Any] | None) -> list[dict[str, Any]]
     return items[:4]
 
 
+def build_class_overview_summary(
+    *,
+    class_name: str = "",
+    subject_name: str = "",
+    exam_name: str = "",
+    stats: dict[str, Any] | None = None,
+    stdev_level: str = "",
+    rank_summary: str = "",
+) -> str:
+    """根据班级 KPI / 分数段 / 离散度生成「总体分析」正文（HTML 段落）。"""
+    stats = stats or {}
+    count = int(stats.get("count") or 0)
+    avg = _num(stats.get("avg"))
+    pass_rate = _num(stats.get("pass_rate"))
+    excellent_rate = _num(stats.get("excellent_rate"))
+    good_rate = _num(stats.get("good_rate"))
+    low_rate = _num(stats.get("low_score_rate"))
+    max_s = _num(stats.get("max"))
+    min_s = _num(stats.get("min"))
+    full = _num(stats.get("full_score")) or 100.0
+    stdev = _num(stats.get("stdev"))
+    segments = stats.get("segments") or []
+
+    scope_bits = [p for p in (class_name, subject_name, exam_name) if p]
+    scope = " · ".join(scope_bits) if scope_bits else "本班"
+
+    if not count and avg is None and pass_rate is None:
+        return f"<p>{scope}暂无足够成绩明细，无法生成量化总体分析。</p>"
+
+    parts: list[str] = []
+    head = f"<p><strong>{scope}</strong>共 <strong>{count}</strong> 人参考"
+    if avg is not None:
+        head += f"，均分 <strong>{_fmt(avg)}</strong>（满分 {_fmt(full)}）"
+    if pass_rate is not None:
+        head += f"，及格率 <strong>{_fmt(pass_rate)}%</strong>"
+    if excellent_rate is not None:
+        head += f"，优秀率 <strong>{_fmt(excellent_rate)}%</strong>"
+    if good_rate is not None:
+        head += f"，良好率 {_fmt(good_rate)}%"
+    head += "。</p>"
+    parts.append(head)
+
+    if max_s is not None or min_s is not None or stdev is not None:
+        range_bits: list[str] = []
+        if max_s is not None and min_s is not None:
+            range_bits.append(f"最高分 {_fmt(max_s)}、最低分 {_fmt(min_s)}")
+        elif max_s is not None:
+            range_bits.append(f"最高分 {_fmt(max_s)}")
+        elif min_s is not None:
+            range_bits.append(f"最低分 {_fmt(min_s)}")
+        if stdev is not None:
+            level = stdev_level or "适中"
+            range_bits.append(f"标准差 {_fmt(stdev)}（{level}）")
+        parts.append(f"<p>{'，'.join(range_bits)}。</p>")
+
+    # 分数段：点出占比最高段与低分段
+    top_seg = None
+    low_segs: list[dict[str, Any]] = []
+    for s in segments:
+        if not isinstance(s, dict):
+            continue
+        ratio = _num(s.get("ratio")) or 0
+        label = str(s.get("label") or "")
+        if top_seg is None or ratio > (_num(top_seg.get("ratio")) or 0):
+            top_seg = s
+        lowish = (
+            "低" in label
+            or "不及格" in label
+            or label.startswith("0-")
+            or (("-" in label) and "60" in label.split("-", 1)[0])
+        )
+        if ratio >= 10 and lowish:
+            low_segs.append(s)
+    seg_bits: list[str] = []
+    if top_seg and (_num(top_seg.get("ratio")) or 0) > 0:
+        seg_bits.append(
+            f"人数最多的分数段为「{top_seg.get('label')}」"
+            f"（{top_seg.get('count', 0)} 人，占比 {_fmt(top_seg.get('ratio'))}%）"
+        )
+    if low_segs:
+        low = low_segs[0]
+        seg_bits.append(
+            f"低分段「{low.get('label')}」仍有 {low.get('count', 0)} 人"
+            f"（{_fmt(low.get('ratio'))}%）需关注"
+        )
+    elif low_rate is not None and low_rate >= 10:
+        seg_bits.append(f"低分率 {_fmt(low_rate)}%，需安排分层巩固")
+    if seg_bits:
+        parts.append(f"<p>{'；'.join(seg_bits)}。</p>")
+
+    if rank_summary:
+        rs = rank_summary.strip()
+        if rs and not rs.startswith("<") and "{" not in rs:
+            parts.append(f"<p>年级位置：{rs}</p>")
+
+    # 一句定性判断
+    verdict = ""
+    if pass_rate is not None and pass_rate < 60:
+        verdict = "整体过关压力较大，应优先稳住及格带。"
+    elif pass_rate is not None and pass_rate < 80 and (
+        excellent_rate is None or excellent_rate < 20
+    ):
+        verdict = "过关基本面尚可，但优秀层偏薄，提质与培优需并进。"
+    elif excellent_rate is not None and excellent_rate >= 30 and (
+        pass_rate is None or pass_rate >= 80
+    ):
+        verdict = "班级高分段表现较好，可在巩固基础上拉开优秀层厚度。"
+    elif pass_rate is not None and pass_rate >= 85:
+        verdict = "整体达标情况较好，重点转为防回落与临界生盯防。"
+    if verdict:
+        parts.append(f"<p>{verdict}</p>")
+
+    return "".join(parts)
+
+
+def build_class_overview_recommendations(
+    *,
+    stats: dict[str, Any] | None = None,
+    dispersion_tip: str = "",
+) -> str:
+    """根据班级 KPI / 分数段生成「改进建议」有序列表。"""
+    items = _build_class_kpi_items(stats)
+    if not items and dispersion_tip:
+        tip = dispersion_tip.strip()
+        if tip and "分化" in tip:
+            items = [{
+                "priority": 2,
+                "title": "缩小成绩分化",
+                "desc": "针对两端学生分层辅导：低分段基础通关，高分段限时综合；两周后复查标准差变化。",
+                "metric": "",
+            }]
+    if not items:
+        return (
+            "<ol>"
+            "<li><strong>巩固与防回落</strong>："
+            "结合分数段盯防临界生，每周保留 1 次综合过关练 + 1 次错题回流。</li>"
+            "</ol>"
+        )
+    lis = "".join(
+        f"<li><strong>{it.get('title') or '建议'}</strong>：{it.get('desc') or ''}"
+        + (f"（{it['metric']}）" if it.get("metric") else "")
+        + "</li>"
+        for it in items
+    )
+    return f"<ol>{lis}</ol>"
+
+
 def build_diagnosis_recommendations(
     knowledge_rows: list[dict[str, Any]] | None = None,
     item_rows: list[dict[str, Any]] | None = None,
@@ -1248,6 +1395,8 @@ def enrich_knowledge_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 __all__ = [
     "apply_canonical_knowledge_to_item_rows",
+    "build_class_overview_recommendations",
+    "build_class_overview_summary",
     "build_diagnosis_recommendations",
     "build_diagnosis_summary",
     "build_item_compare_table_html",
