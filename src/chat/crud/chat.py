@@ -236,7 +236,8 @@ def update_conversation_record(
     exec_result: Optional[Any] = None,
     chart_type: Optional[str] = None,
     chart_config: Optional[dict] = None,
-    is_success: Optional[bool] = None
+    is_success: Optional[bool] = None,
+    reports: Optional[List[Any]] = None,
 ) -> Optional[ConversationRecord]:
     """Update a conversation record."""
     record = get_record_by_id(session, record_id, user_id)
@@ -260,6 +261,8 @@ def update_conversation_record(
         record.chart_config = json.dumps(chart_config, ensure_ascii=False)
     if is_success is not None:
         record.is_success = is_success
+    if reports is not None:
+        record.reports = json.dumps(reports, ensure_ascii=False)
 
     record.finish_time = datetime.now()
     session.add(record)

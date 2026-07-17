@@ -1,10 +1,12 @@
 import {
+  AuditOutlined,
   BarChartOutlined,
   CodeOutlined,
   CopyOutlined,
   DesktopOutlined,
   DownloadOutlined,
   DownOutlined,
+  EditOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
   ExpandOutlined,
@@ -12,15 +14,20 @@ import {
   LineChartOutlined,
   PieChartOutlined,
   TableOutlined,
-  FilePdfOutlined
+  FilePdfOutlined,
+  FileWordOutlined
 } from "@ant-design/icons";
-import { Pagination, message, Modal } from "antd";
+import { Input, Pagination, message, Modal } from "antd";
 import React, { useRef } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { ExecutionStep, QueryResult, ReportPayload, formatReportDisplayTitle } from "@/hooks/useChat";
 import G2Chart, { G2ChartType } from "@/components/chat/G2Chart";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import {
+  extractRecommendationsText,
+  hasRecommendationsSection
+} from "@/utils/reportRecommendations";
 
 type Props = {
   steps: ExecutionStep[];
@@ -30,6 +37,10 @@ type Props = {
   queryResults?: QueryResult[];
   selectedStepId?: string;
   onSelectStep?: (stepId: string) => void;
+  onPatchReport?: (
+    report: ReportPayload,
+    patch: { recommendationsText?: string; reviewStatus?: "pending" | "approved" }
+  ) => Promise<ReportPayload>;
 };
 
 function normalizeToText(value: unknown): string {
@@ -80,7 +91,8 @@ export default function ChatExecutionPanel({
   reports = [],
   queryResults = [],
   selectedStepId,
-  onSelectStep
+  onSelectStep,
+  onPatchReport
 }: Props) {
   const [activeTab, setActiveTab] = useState<"steps" | "summary">("steps");
   const [summaryThinkExpanded, setSummaryThinkExpanded] = useState(false);
@@ -93,6 +105,10 @@ export default function ChatExecutionPanel({
   const [selectedQueryIndex, setSelectedQueryIndex] = useState(-1);
   const [showChartLabel, setShowChartLabel] = useState(false);
   const [dataPage, setDataPage] = useState(1);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editText, setEditText] = useState("");
+  const [editSaving, setEditSaving] = useState(false);
+  const [reviewSaving, setReviewSaving] = useState(false);
   const pageSize = 20;
   const flowAgents = ["Planner", "DataAnalyst", "Charter", "Summarizer"] as const;
   const flowAgentLabelMap: Record<(typeof flowAgents)[number], string> = {
@@ -175,6 +191,69 @@ export default function ChatExecutionPanel({
     () => formatReportDisplayTitle(activeReport?.title || "Report", activeReport?.reportTypeLabel),
     [activeReport?.title, activeReport?.reportTypeLabel]
   );
+  const reportApproved = activeReport?.reviewStatus === "approved";
+  const reportCanEdit = Boolean(activeReport?.html) && !reportApproved;
+  const reportHasRecommendations = useMemo(
+    () => (activeReport?.html ? hasRecommendationsSection(activeReport.html) : false),
+    [activeReport?.html]
+  );
+
+  const openEditRecommendations = () => {
+    if (!activeReport) return;
+    if (reportApproved) {
+      message.warning("报告已审核，不可再编辑");
+      return;
+    }
+    if (!reportHasRecommendations) {
+      message.warning("本报告无可编辑的建议区");
+      return;
+    }
+    setEditText(extractRecommendationsText(activeReport.html) || "");
+    setEditOpen(true);
+  };
+
+  const saveEditRecommendations = async () => {
+    if (!activeReport || !onPatchReport) {
+      message.error("无法保存：缺少报告更新接口");
+      return;
+    }
+    setEditSaving(true);
+    try {
+      await onPatchReport(activeReport, { recommendationsText: editText });
+      message.success("建议已更新");
+      setEditOpen(false);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "保存失败");
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  const confirmReviewReport = () => {
+    if (!activeReport) return;
+    Modal.confirm({
+      title: "确认审核",
+      content: "审核通过后将开放导出，且不可再编辑建议。是否确认？",
+      okText: "确认审核",
+      cancelText: "取消",
+      onOk: async () => {
+        if (!onPatchReport) {
+          message.error("无法审核：缺少报告更新接口");
+          return;
+        }
+        setReviewSaving(true);
+        try {
+          await onPatchReport(activeReport, { reviewStatus: "approved" });
+          message.success("已审核通过");
+        } catch (err) {
+          message.error(err instanceof Error ? err.message : "审核失败");
+          throw err;
+        } finally {
+          setReviewSaving(false);
+        }
+      }
+    });
+  };
   const activeQuery = useMemo(() => {
     if (!scopedQueryResults.length) return undefined;
     if (selectedQueryIndex < 0 || selectedQueryIndex >= scopedQueryResults.length) {
@@ -226,14 +305,8 @@ export default function ChatExecutionPanel({
       return prev;
     });
   }, [scopedReports]);
-  // 切换到另一轮对话且该轮有报告时，自动切到摘要以便回看历史报告
-  const prevRunIdRef = useRef<string | undefined>(undefined);
+  // 本轮有报告时切到摘要（含报告刚到达、或切换历史轮次）
   useEffect(() => {
-    if (!selectedRunId || prevRunIdRef.current === selectedRunId) {
-      prevRunIdRef.current = selectedRunId;
-      return;
-    }
-    prevRunIdRef.current = selectedRunId;
     if (scopedReports.length) setActiveTab("summary");
   }, [selectedRunId, scopedReports.length]);
   const isToolResultStep = selectedStepTitleText.startsWith("工具结果:");
@@ -260,6 +333,72 @@ export default function ChatExecutionPanel({
   };
   const reportIframeRef = useRef<HTMLIFrameElement | null>(null);
   const [exportingPdf, setExportingPdf] = useState(false);
+  const sanitizeFileName = (name: string) =>
+    (name || "report").replace(/[\\/:*?"<>|]+/g, "_").trim() || "report";
+  const exportReportWord = () => {
+    if (!safeReportHtml.trim()) {
+      message.error("暂无报告内容");
+      return;
+    }
+    try {
+      const iframe = reportIframeRef.current;
+      const doc = iframe?.contentDocument;
+      let bodyHtml = safeReportHtml;
+      let styles = "";
+      if (doc?.body) {
+        bodyHtml = doc.body.innerHTML || bodyHtml;
+        styles = Array.from(doc.querySelectorAll("style"))
+          .map((el) => el.outerHTML)
+          .join("\n");
+      }
+      // 若 srcDoc 是完整 HTML，去掉外壳只留 body，避免套娃
+      const bodyMatch = bodyHtml.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+      if (bodyMatch) {
+        bodyHtml = bodyMatch[1];
+      }
+      const title = sanitizeFileName(safeReportTitle);
+      const content = `<!DOCTYPE html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:w="urn:schemas-microsoft-com:office:word"
+ xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="utf-8">
+<title>${title}</title>
+<!--[if gte mso 9]>
+<xml>
+  <w:WordDocument>
+    <w:View>Print</w:View>
+    <w:Zoom>90</w:Zoom>
+    <w:DoNotOptimizeForBrowser/>
+  </w:WordDocument>
+</xml>
+<![endif]-->
+<style>
+  body { font-family: "Microsoft YaHei", SimSun, sans-serif; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #ccc; padding: 4px 8px; }
+  img { max-width: 100%; }
+</style>
+${styles}
+</head>
+<body>${bodyHtml}</body>
+</html>`;
+      const blob = new Blob(["\ufeff", content], {
+        type: "application/msword;charset=utf-8"
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${title}.doc`;
+      a.click();
+      URL.revokeObjectURL(url);
+      message.success("Word 已导出");
+    } catch (e) {
+      message.error("Word 导出失败");
+      // eslint-disable-next-line no-console
+      console.error(e);
+    }
+  };
   const exportReportPdf = async () => {
     const iframe = reportIframeRef.current;
     const doc = iframe?.contentDocument;
@@ -538,28 +677,58 @@ export default function ChatExecutionPanel({
                             ))}
                           </select>
                         ) : null}
-                        <button
-                          onClick={copyReportHtml}
-                          className="inline-flex h-6 items-center gap-1 rounded-md border border-[#d9e2ef] bg-white px-2 text-[11px] text-[#475467] transition-colors hover:border-[#c5d4e8] dark:border-[#334155] dark:bg-[#0f172a] dark:text-[#cbd5e1]"
-                        >
-                          <CopyOutlined />
-                          <span>复制HTML</span>
-                        </button>
-                        <button
-                          onClick={downloadReportHtml}
-                          className="inline-flex h-6 items-center gap-1 rounded-md border border-[#d9e2ef] bg-white px-2 text-[11px] text-[#475467] transition-colors hover:border-[#c5d4e8] dark:border-[#334155] dark:bg-[#0f172a] dark:text-[#cbd5e1]"
-                        >
-                          <DownloadOutlined />
-                          <span>下载</span>
-                        </button>
-                        <button
-                          onClick={exportReportPdf}
-                          disabled={exportingPdf}
-                          className="inline-flex h-6 items-center gap-1 rounded-md border border-[#d9e2ef] bg-white px-2 text-[11px] text-[#475467] transition-colors hover:border-[#c5d4e8] disabled:opacity-50 dark:border-[#334155] dark:bg-[#0f172a] dark:text-[#cbd5e1]"
-                        >
-                          <FilePdfOutlined />
-                          <span>{exportingPdf ? "导出中…" : "PDF"}</span>
-                        </button>
+                        {reportApproved ? (
+                          <>
+                            <button
+                              onClick={copyReportHtml}
+                              className="inline-flex h-6 items-center gap-1 rounded-md border border-[#d9e2ef] bg-white px-2 text-[11px] text-[#475467] transition-colors hover:border-[#c5d4e8] dark:border-[#334155] dark:bg-[#0f172a] dark:text-[#cbd5e1]"
+                            >
+                              <CopyOutlined />
+                              <span>复制HTML</span>
+                            </button>
+                            <button
+                              onClick={downloadReportHtml}
+                              className="inline-flex h-6 items-center gap-1 rounded-md border border-[#d9e2ef] bg-white px-2 text-[11px] text-[#475467] transition-colors hover:border-[#c5d4e8] dark:border-[#334155] dark:bg-[#0f172a] dark:text-[#cbd5e1]"
+                            >
+                              <DownloadOutlined />
+                              <span>下载</span>
+                            </button>
+                            <button
+                              onClick={exportReportPdf}
+                              disabled={exportingPdf}
+                              className="inline-flex h-6 items-center gap-1 rounded-md border border-[#d9e2ef] bg-white px-2 text-[11px] text-[#475467] transition-colors hover:border-[#c5d4e8] disabled:opacity-50 dark:border-[#334155] dark:bg-[#0f172a] dark:text-[#cbd5e1]"
+                            >
+                              <FilePdfOutlined />
+                              <span>{exportingPdf ? "导出中…" : "PDF"}</span>
+                            </button>
+                            <button
+                              onClick={exportReportWord}
+                              className="inline-flex h-6 items-center gap-1 rounded-md border border-[#d9e2ef] bg-white px-2 text-[11px] text-[#475467] transition-colors hover:border-[#c5d4e8] dark:border-[#334155] dark:bg-[#0f172a] dark:text-[#cbd5e1]"
+                            >
+                              <FileWordOutlined />
+                              <span>Word</span>
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={openEditRecommendations}
+                              disabled={!reportCanEdit || !reportHasRecommendations}
+                              className="inline-flex h-6 items-center gap-1 rounded-md border border-[#d9e2ef] bg-white px-2 text-[11px] text-[#475467] transition-colors hover:border-[#c5d4e8] disabled:opacity-50 dark:border-[#334155] dark:bg-[#0f172a] dark:text-[#cbd5e1]"
+                            >
+                              <EditOutlined />
+                              <span>编辑</span>
+                            </button>
+                            <button
+                              onClick={confirmReviewReport}
+                              disabled={reviewSaving || !onPatchReport}
+                              className="inline-flex h-6 items-center gap-1 rounded-md border border-[#d9e2ef] bg-white px-2 text-[11px] text-[#475467] transition-colors hover:border-[#c5d4e8] disabled:opacity-50 dark:border-[#334155] dark:bg-[#0f172a] dark:text-[#cbd5e1]"
+                            >
+                              <AuditOutlined />
+                              <span>{reviewSaving ? "审核中…" : "审核"}</span>
+                            </button>
+                          </>
+                        )}
                         <button
                           onClick={() => setShowReportDialog(true)}
                           className="inline-flex h-6 items-center gap-1 rounded-md border border-[#d9e2ef] bg-white px-2 text-[11px] text-[#3b82f6] transition-colors hover:border-[#93c5fd] dark:border-[#334155] dark:bg-[#0f172a]"
@@ -772,6 +941,25 @@ export default function ChatExecutionPanel({
           srcDoc={safeReportHtml}
           sandbox="allow-scripts allow-same-origin"
           referrerPolicy="no-referrer"
+        />
+      </Modal>
+      <Modal
+        title="编辑备考/教学建议"
+        open={editOpen}
+        onCancel={() => setEditOpen(false)}
+        onOk={() => void saveEditRecommendations()}
+        okText="确认修改"
+        cancelText="取消"
+        confirmLoading={editSaving}
+        destroyOnClose
+        width={640}
+      >
+        <p className="mb-2 text-xs text-[#667085]">仅修改报告中的建议正文，不影响图表与结论。</p>
+        <Input.TextArea
+          value={editText}
+          onChange={(e) => setEditText(e.target.value)}
+          rows={12}
+          placeholder="请输入建议内容"
         />
       </Modal>
     </div>

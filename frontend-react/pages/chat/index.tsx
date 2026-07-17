@@ -23,6 +23,7 @@ export default function ChatPage() {
     stop,
     loadConversation,
     clearConversation,
+    patchReport,
     datasourceId,
     setDatasourceId
   } = useChat();
@@ -155,6 +156,7 @@ export default function ChatPage() {
                     queryResults={queryResults}
                     selectedStepId={selectedStepId}
                     onSelectStep={setSelectedStepId}
+                    onPatchReport={patchReport}
                   />
                 </div>
               </div>

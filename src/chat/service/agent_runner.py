@@ -1446,6 +1446,7 @@ async def _maybe_emit_report(
         "html": html,
         "mode": str(data.get("mode") or "inline"),
         "agent": payload.get("agent"),
+        "review_status": "pending",
     }
     if data.get("report_type"):
         report_payload["report_type"] = str(data.get("report_type"))

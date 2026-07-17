@@ -77,6 +77,10 @@ export type ConversationRecord = {
     html?: string;
     mode?: string;
     sub_task_index?: number;
+    report_type?: string;
+    report_type_label?: string;
+    review_status?: "pending" | "approved";
+    recommendations_text?: string;
   }>;
   plan_states?: Array<{
     index: number;
@@ -158,6 +162,43 @@ export async function listConversations(limit = 50) {
 
 export async function getConversationDetail(conversationId: number) {
   return apiRequest<ConversationDetail>(`/chat/conversations/${conversationId}`);
+}
+
+export async function updateReportReview(payload: {
+  conversationId: number;
+  recordId: number;
+  reportIndex: number;
+  recommendations_text?: string;
+  review_status?: "pending" | "approved";
+}) {
+  const { conversationId, recordId, reportIndex, ...body } = payload;
+  return apiRequest<{
+    record_id: number;
+    report_index: number;
+    report: {
+      title?: string;
+      html?: string;
+      review_status?: string;
+      recommendations_text?: string;
+    };
+  }>(`/chat/conversations/${conversationId}/records/${recordId}/reports/${reportIndex}`, {
+    method: "PATCH",
+    body: JSON.stringify(body)
+  });
+}
+
+export async function replaceRecordReports(payload: {
+  conversationId: number;
+  recordId: number;
+  reports: Array<Record<string, unknown>>;
+}) {
+  return apiRequest<{ record_id: number; reports: Array<Record<string, unknown>> }>(
+    `/chat/conversations/${payload.conversationId}/records/${payload.recordId}/reports`,
+    {
+      method: "PUT",
+      body: JSON.stringify({ reports: payload.reports })
+    }
+  );
 }
 
 export async function sendMessageStream(
