@@ -370,7 +370,8 @@ class ReportOrchestrator:
 
         class_name = spec.filters.get("class_name", "")
         subject = spec.filters.get("subject", "")
-        exam_name = spec.filters.get("exam_name", "")
+        exam_name_raw = spec.filters.get("exam_name", "")
+        exam_name = _format_exam_label(exam_name_raw) or exam_name_raw
         school_name = spec.filters.get("school_name", "")
         scope_label = school_name or class_name or spec.filters.get("scope") or "全年级"
         # 组装通用字段；具体模板未用到的 key 由 Jinja2/regex 兜底为空。
@@ -829,6 +830,11 @@ class ReportOrchestrator:
         class_name: str,
     ) -> None:
         from src.agent.education.aggregation import prepare_score_rows_for_kpi
+        from src.agent.education.diagnostic_report import (
+            _exam_avg_trend_from_rows,
+            _student_progress_from_rows,
+            build_diagnostic_data,
+        )
 
         score_rows = [
             {
@@ -841,15 +847,19 @@ class ReportOrchestrator:
                 "subject": r.get("subject") or subject,
                 "student_id": r.get("student_id"),
                 "student_name": r.get("student_name"),
-                "exam_name": r.get("exam_name") or exam_name,
+                # 勿用多选考试展示名回填，否则会污染跨场分组
+                "exam_name": str(r.get("exam_name") or "").strip(),
             }
             for r in rows
         ]
+        # S1/S2 用单场 KPI 口径，避免人次膨胀；S3 动态性必须用全量多场
         kpi_rows = prepare_score_rows_for_kpi(score_rows)
-        trend_records = _exam_avg_trend_records(score_rows)
+        exam_trend = _exam_avg_trend_from_rows(score_rows)
+        progress = _student_progress_from_rows(score_rows)
         diag = build_diagnostic_data(
             kpi_rows or score_rows,
-            trend_records=trend_records or None,
+            trend_records=exam_trend or None,
+            progress_records=progress or None,
             config=cfg,
             scope_label=scope_label,
             exam_name=exam_name or "",
@@ -1287,7 +1297,8 @@ class ReportOrchestrator:
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
             "JOIN tb_exam e ON sc.exam_id = e.id"
         )
-        # 多场考试类报告：不按单场 exam 过滤，便于趋势/综合/学生画像/诊断动态性
+        # 多场考试类报告：未指定考试时不按单场过滤，便于趋势/综合/学生画像/诊断动态性；
+        # 若表单已选考试（含多选 ``a;;b``），则按所选过滤。
         filters = dict(spec.filters)
         if spec.report_type in (
             ReportType.STUDENT_PROFILE,
@@ -1295,7 +1306,8 @@ class ReportOrchestrator:
             ReportType.COMPREHENSIVE,
             ReportType.DIAGNOSTIC_REPORT,
         ):
-            filters.pop("exam_name", None)
+            if not str(filters.get("exam_name") or "").strip():
+                filters.pop("exam_name", None)
         where = _filters_to_where(filters, school_expr, class_expr, subject_expr, exam_expr)
         if where:
             sql += f"\nWHERE {where}"
@@ -1456,6 +1468,21 @@ def _sql_escape(val: str) -> str:
     return (val or "").replace("'", "''")
 
 
+def _split_exam_filter(raw: str) -> list[str]:
+    """支持单场或 ``a;;b;;c`` 多场（分析工具多选考试）。"""
+    text = (raw or "").strip()
+    if not text:
+        return []
+    if ";;" in text:
+        return [p.strip() for p in text.split(";;") if p.strip()]
+    return [text]
+
+
+def _format_exam_label(raw: str) -> str:
+    names = _split_exam_filter(raw)
+    return "、".join(names) if names else ""
+
+
 def _filters_to_where(
     filters: dict[str, str],
     school_expr: str,
@@ -1472,7 +1499,14 @@ def _filters_to_where(
     if filters.get("subject"):
         parts.append(f"{subject_expr} LIKE '%{_sql_escape(filters['subject'])}%'")
     if filters.get("exam_name"):
-        parts.append(f"{exam_expr} LIKE '%{_sql_escape(filters['exam_name'])}%'")
+        exam_names = _split_exam_filter(filters["exam_name"])
+        if len(exam_names) > 1:
+            ors = " OR ".join(
+                f"{exam_expr} LIKE '%{_sql_escape(n)}%'" for n in exam_names
+            )
+            parts.append(f"({ors})")
+        elif exam_names:
+            parts.append(f"{exam_expr} LIKE '%{_sql_escape(exam_names[0])}%'")
     if filters.get("district"):
         parts.append(f"sch.district = '{_sql_escape(filters['district'])}'")
     return " AND ".join(parts)

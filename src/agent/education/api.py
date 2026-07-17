@@ -86,14 +86,23 @@ async def reset_report_config() -> dict:
 
 
 class BatchReportRequest(BaseModel):
-    """按班级列表批量生成报告。"""
+    """按班级列表批量生成报告。
+
+    - 传 ``report_type``：走分析工具确定性 ``run_spec``（推荐）
+    - 仅传 ``question``：兼容旧 NLP 意图解析路径（``{class}`` 占位）
+    """
 
     datasource_id: int = Field(..., description="数据源 ID")
-    question: str = Field(
-        ..., min_length=1, description="报告问题模板，如「生成{class}期中成绩分析报告」"
+    question: Optional[str] = Field(
+        None, description="报告问题模板，如「生成{class}期中成绩分析报告」（兼容旧路径）"
+    )
+    report_type: Optional[str] = Field(None, description="报告类型，如 class_overview")
+    filters: dict[str, str] = Field(
+        default_factory=dict, description="公共筛选（班级由 class_names 逐个覆盖）"
     )
     class_names: list[str] = Field(..., min_length=1, description="班级名列表")
     audience: Optional[str] = Field(None, description="报告受众")
+    include_charts: bool = Field(True, description="是否嵌入图表")
     workspace_oid: Optional[int] = Field(None, description="工作区 OID，鉴权用")
 
 
@@ -158,26 +167,77 @@ async def batch_report(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    """按班级列表批量生成报告，返回每班的渲染摘要（不含全量 HTML，避免响应过大）。"""
+    """按班级列表批量生成报告，返回每班摘要（不含全量 HTML，避免响应过大）。"""
+    from src.agent.education.report_types import Audience, ReportSpec, ReportType
     from src.common.core.database import get_db_session
+
+    rt_raw = (req.report_type or "").strip()
+    question = (req.question or "").strip()
+    if not rt_raw and not question:
+        raise BadRequestException("请提供 report_type 或 question")
+    if rt_raw and rt_raw not in _GENERATE_REPORT_ALLOWED_TYPES:
+        raise BadRequestException(
+            f"不支持的报告类型: {rt_raw}；当前支持: {', '.join(sorted(_GENERATE_REPORT_ALLOWED_TYPES))}"
+        )
 
     with get_db_session() as session:
         assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
     ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
     orch = _build_orchestrator(req.datasource_id, ws_oid, user_id=int(current_user.id))
+
+    audience = Audience.DEFAULT
+    if req.audience:
+        try:
+            audience = Audience(req.audience.strip())
+        except ValueError as exc:
+            raise BadRequestException(f"无效的受众: {req.audience}") from exc
+
+    base_filters = {
+        str(k): str(v)
+        for k, v in (req.filters or {}).items()
+        if v is not None and str(v).strip()
+    }
     results = []
     for cls in req.class_names:
-        question = req.question.replace("{class}", cls)
-        res = await orch.run(question, audience_hint=req.audience)
-        results.append(
-            {
-                "class_name": cls,
-                "template_name": res.template_name,
-                "html_length": len(res.html),
-                "report_type": res.spec.report_type.value,
-                "error": res.error,
-            }
-        )
+        cls_name = str(cls or "").strip()
+        if not cls_name:
+            continue
+        if rt_raw:
+            try:
+                report_type = ReportType(rt_raw)
+            except ValueError as exc:
+                raise BadRequestException(f"无效的报告类型: {rt_raw}") from exc
+            filters = {**base_filters, "class_name": cls_name}
+            spec = ReportSpec(
+                report_type=report_type,
+                audience=audience,
+                filters=filters,
+                include_charts=bool(req.include_charts),
+            )
+            res = await orch.run_spec(spec)
+            results.append(
+                {
+                    "class_name": cls_name,
+                    "template_name": res.template_name,
+                    "html_length": len(res.html or ""),
+                    "report_type": res.spec.report_type.value,
+                    "title": orch._title(spec),
+                    "error": res.error,
+                }
+            )
+        else:
+            q = question.replace("{class}", cls_name)
+            res = await orch.run(q, audience_hint=req.audience)
+            results.append(
+                {
+                    "class_name": cls_name,
+                    "template_name": res.template_name,
+                    "html_length": len(res.html or ""),
+                    "report_type": res.spec.report_type.value,
+                    "title": orch._title(res.spec),
+                    "error": res.error,
+                }
+            )
     return success_response({"items": results}, message=f"已批量生成 {len(results)} 份报告")
 
 
@@ -214,13 +274,18 @@ async def diagnostic_report(
 
 # ---- 分析工具：按 ReportSpec 生成报告 --------------------------------------
 
-#: Phase 1 MVP 允许的报告类型（分析工具菜单）
+#: 分析工具允许的全部 9 类报告
 _GENERATE_REPORT_ALLOWED_TYPES = frozenset(
     {
         "class_overview",
         "grade_comparison",
         "subject_diagnosis",
         "student_profile",
+        "trend_tracking",
+        "tier_alert",
+        "group_feature",
+        "comprehensive",
+        "diagnostic_report",
     }
 )
 
@@ -301,6 +366,96 @@ async def generate_report(
             "error": err,
         }
     )
+
+
+class SaveReportHistoryRequest(BaseModel):
+    """将分析工具生成的报告写入会话任务历史（轻量 Conversation + reports）。"""
+
+    datasource_id: int = Field(..., description="数据源 ID")
+    title: str = Field(..., min_length=1, description="报告标题")
+    html: str = Field(..., min_length=1, description="报告 HTML")
+    report_type: Optional[str] = Field(None, description="报告类型")
+    report_type_label: Optional[str] = Field(None, description="报告类型中文名")
+    question: Optional[str] = Field(None, description="写入 record 的问题摘要")
+    workspace_oid: Optional[int] = Field(None, description="工作区 OID")
+
+
+@router.post("/save-report-history")
+async def save_report_history(
+    req: SaveReportHistoryRequest,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    """分析工具「保存到任务历史」：新建会话并写入一条带 reports 的记录。
+
+    不改动聊天路径写入 reports 的既有逻辑，仅复用 chat CRUD。
+    """
+    from src.chat.crud import chat as chat_crud
+    from src.agent.education.report_types import report_type_label
+    from src.agent.resource.tool.business import _load_datasource
+    from src.common.core.database import get_db_session
+
+    title = (req.title or "").strip()
+    html = (req.html or "").strip()
+    if not title or not html:
+        raise BadRequestException("title 与 html 不能为空")
+
+    ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
+    with get_db_session() as session:
+        ds = assert_datasource_accessible(session, current_user, req.datasource_id, ws_oid)
+        try:
+            _db_type, _cfg, ds_name = _load_datasource(req.datasource_id, ws_oid)
+        except Exception:
+            ds_name = getattr(ds, "name", None) or f"数据源 #{req.datasource_id}"
+            _db_type = getattr(ds, "type", "") or ""
+
+        rt = (req.report_type or "").strip()
+        rt_label = (req.report_type_label or "").strip() or (
+            report_type_label(rt) if rt else "学情报告"
+        )
+        conv_title = f"[分析工具] {title}"[:64]
+        question = (req.question or "").strip() or f"分析工具生成：{title}"
+
+        conversation = chat_crud.create_conversation(
+            session=session,
+            user_id=int(current_user.id),
+            title=conv_title,
+            datasource_id=req.datasource_id,
+            datasource_name=str(ds_name or ""),
+            db_type=str(_db_type or ""),
+            oid=int(ws_oid),
+        )
+        report_item: dict[str, Any] = {
+            "title": title,
+            "html": html,
+            "mode": "inline",
+            "agent": "analysis_tool",
+            "review_status": "pending",
+        }
+        if rt:
+            report_item["report_type"] = rt
+        if rt_label:
+            report_item["report_type_label"] = rt_label
+
+        record = chat_crud.create_conversation_record(
+            session=session,
+            conversation_id=int(conversation.id),
+            user_id=int(current_user.id),
+            question=question,
+            is_success=True,
+            agent_mode="analysis_tool",
+            summary=f"已保存报告：{title}",
+            reports=[report_item],
+            workspace_oid=int(ws_oid),
+        )
+        return success_response(
+            {
+                "conversation_id": int(conversation.id),
+                "record_id": int(record.id),
+                "title": conv_title,
+            },
+            message="已保存到任务历史",
+        )
 
 
 @router.get("/meta/options")

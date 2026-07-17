@@ -223,7 +223,7 @@ def test_generate_report_rejects_unsupported_type(monkeypatch):
         "/api/v1/education/generate-report",
         json={
             "datasource_id": 1,
-            "report_type": "diagnostic_report",
+            "report_type": "not_a_real_type",
             "filters": {},
         },
     )
@@ -231,6 +231,104 @@ def test_generate_report_rejects_unsupported_type(monkeypatch):
     body = r.json()
     assert body["code"] == 400
     assert "不支持" in (body.get("message") or "")
+
+
+def test_generate_report_allows_phase2_types(monkeypatch):
+    """Phase2：9 类均在白名单内（此处抽测 trend / diagnostic）。"""
+    client = _auth_client(monkeypatch)
+    for rt in ("trend_tracking", "diagnostic_report", "tier_alert"):
+        r = client.post(
+            "/api/v1/education/generate-report",
+            json={
+                "datasource_id": 1,
+                "report_type": rt,
+                "filters": {"class_name": "初三1班"},
+                "include_charts": False,
+            },
+        )
+        assert r.status_code == 200, rt
+        body = r.json()
+        assert body["code"] == 200, (rt, body.get("message"))
+        assert body["data"]["report_type"] == rt
+
+
+def test_batch_report_with_report_type(monkeypatch):
+    """Phase2：batch-report 支持 report_type + class_names 确定性路径。"""
+    client = _auth_client(monkeypatch)
+    r = client.post(
+        "/api/v1/education/batch-report",
+        json={
+            "datasource_id": 1,
+            "report_type": "class_overview",
+            "class_names": ["初三1班", "初三2班"],
+            "filters": {"exam_name": "期中"},
+            "include_charts": False,
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["code"] == 200, body.get("message")
+    items = body["data"]["items"]
+    assert len(items) == 2
+    assert {i["class_name"] for i in items} == {"初三1班", "初三2班"}
+    assert all(i["report_type"] == "class_overview" for i in items)
+
+
+def test_save_report_history(monkeypatch):
+    """Phase2：保存到任务历史，写入 Conversation + reports。"""
+    from types import SimpleNamespace
+
+    client = _auth_client(monkeypatch)
+
+    created = {}
+
+    def fake_create_conversation(session, **kwargs):
+        created["conversation"] = kwargs
+        return SimpleNamespace(id=101)
+
+    def fake_create_record(session, **kwargs):
+        created["record"] = kwargs
+        return SimpleNamespace(id=202)
+
+    monkeypatch.setattr(
+        "src.chat.crud.chat.create_conversation",
+        fake_create_conversation,
+    )
+    monkeypatch.setattr(
+        "src.chat.crud.chat.create_conversation_record",
+        fake_create_record,
+    )
+    # get_db_session context manager
+    class _Sess:
+        def __enter__(self):
+            return SimpleNamespace()
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(
+        "src.common.core.database.get_db_session",
+        lambda: _Sess(),
+    )
+
+    r = client.post(
+        "/api/v1/education/save-report-history",
+        json={
+            "datasource_id": 1,
+            "title": "初三1班学情报告",
+            "html": "<div class='edu-container'>ok</div>",
+            "report_type": "class_overview",
+            "report_type_label": "班级总览报告",
+            "question": "分析工具测试",
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["code"] == 200, body.get("message")
+    assert body["data"]["conversation_id"] == 101
+    assert body["data"]["record_id"] == 202
+    assert created["record"]["reports"][0]["title"] == "初三1班学情报告"
+    assert created["record"]["agent_mode"] == "analysis_tool"
 
 
 def test_generate_report_empty_rows_returns_actionable_error(monkeypatch):

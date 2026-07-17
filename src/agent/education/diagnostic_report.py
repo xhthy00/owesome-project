@@ -27,6 +27,101 @@ def _fmt(v: Any) -> str:
     return str(v)
 
 
+def _exam_avg_trend_from_rows(score_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按考试聚合均分：``[{exam, avg}, ...]``。"""
+    buckets: dict[str, list[float]] = {}
+    order: list[str] = []
+    for r in score_rows:
+        if not isinstance(r, dict) or r.get("score") is None:
+            continue
+        exam = str(r.get("exam_name") or r.get("exam") or "").strip()
+        if not exam:
+            continue
+        try:
+            score = float(r["score"])
+        except (TypeError, ValueError):
+            continue
+        if exam not in buckets:
+            buckets[exam] = []
+            order.append(exam)
+        buckets[exam].append(score)
+    out: list[dict[str, Any]] = []
+    for exam in order:
+        vals = buckets.get(exam) or []
+        if vals:
+            out.append({"exam": exam, "avg": round(sum(vals) / len(vals), 2)})
+    return out
+
+
+def _student_progress_from_rows(score_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """多场成绩 → 学生进退步：``[{name, student, delta}, ...]``（末场−首场）。"""
+    exam_order: list[str] = []
+    exam_seen: set[str] = set()
+    # student -> exam -> subject -> score；无科目时 subject=""
+    by_stu: dict[str, dict[str, dict[str, float]]] = {}
+    for r in score_rows:
+        if not isinstance(r, dict) or r.get("score") is None:
+            continue
+        exam = str(r.get("exam_name") or r.get("exam") or "").strip()
+        stu = str(
+            r.get("student_name")
+            or r.get("student")
+            or r.get("student_id")
+            or r.get("name")
+            or ""
+        ).strip()
+        if not exam or not stu:
+            continue
+        try:
+            score = float(r["score"])
+        except (TypeError, ValueError):
+            continue
+        if exam not in exam_seen:
+            exam_seen.add(exam)
+            exam_order.append(exam)
+        subj = str(r.get("subject") or r.get("subject_name") or "").strip() or "_"
+        by_stu.setdefault(stu, {}).setdefault(exam, {})[subj] = score
+
+    if len(exam_order) < 2:
+        return []
+
+    out: list[dict[str, Any]] = []
+    for stu, exams in by_stu.items():
+        totals = {
+            e: sum(subs.values())
+            for e, subs in exams.items()
+            if subs
+        }
+        present = [e for e in exam_order if e in totals]
+        if len(present) < 2:
+            continue
+        first, last = present[0], present[-1]
+        delta = float(totals[last]) - float(totals[first])
+        out.append({
+            "name": stu,
+            "student": stu,
+            "delta": round(delta, 2),
+            "first_exam": first,
+            "last_exam": last,
+            "first_score": round(float(totals[first]), 2),
+            "last_score": round(float(totals[last]), 2),
+        })
+    return out
+
+
+def _is_exam_avg_trend(records: list[dict[str, Any]] | None) -> bool:
+    if not records:
+        return False
+    sample = records[0]
+    return "avg" in sample and "exam" in sample and sample.get("delta") is None
+
+
+def _is_progress_delta(records: list[dict[str, Any]] | None) -> bool:
+    if not records:
+        return False
+    return any(r.get("delta") is not None for r in records)
+
+
 def _kpi_card(label: str, value: str, hint: str = "") -> str:
     hint_html = f'<div class="hint" style="margin-top:6px;font-size:11.5px;line-height:1.45;color:rgba(0,0,0,0.45)">{hint}</div>' if hint else ""
     return (
@@ -57,12 +152,19 @@ def build_diagnostic_data(
     score_rows: list[dict[str, Any]],
     *,
     trend_records: list[dict[str, Any]] | None = None,
+    progress_records: list[dict[str, Any]] | None = None,
     config: EducationConfig | None = None,
     scope_label: str = "",
     exam_name: str = "",
     subject_name: str = "",
 ) -> dict[str, Any]:
-    """从成绩行组装 diagnostic_report 模板 data。"""
+    """从成绩行组装 diagnostic_report 模板 data。
+
+    - ``trend_records``：考试均分走势 ``[{exam, avg}, ...]``，供一般性趋势图；
+      若未传或形态不对，从 ``score_rows`` 自动聚合。
+    - ``progress_records``：学生进退步 ``[{name, delta}, ...]``，供 S3 动态性；
+      若未传，从 ``score_rows`` 按首末场自动计算。
+    """
     if config is None:
         from src.agent.education.config_store import get_config
         config = get_config()
@@ -74,6 +176,19 @@ def build_diagnostic_data(
             full_score = float(r["exam_score"])
             break
     overall = compute_score_stats(scores, config, full_score)
+
+    # 考试均分趋势（一般性图）
+    exam_trend = list(trend_records or []) if _is_exam_avg_trend(trend_records) else []
+    if not exam_trend:
+        exam_trend = _exam_avg_trend_from_rows(score_rows)
+
+    # 学生进退步（S3）
+    progress = list(progress_records or [])
+    if not progress and _is_progress_delta(trend_records):
+        # 兼容旧调用：把带 delta 的 trend_records 当进退步
+        progress = list(trend_records or [])
+    if not progress:
+        progress = _student_progress_from_rows(score_rows)
 
     # S1 一般性
     grade_agg = aggregate_by("grade", score_rows, config)
@@ -117,12 +232,9 @@ def build_diagnostic_data(
         )
 
     general_trend_chart = ""
-    if trend_records and len(trend_records) >= 2:
-        exams = []
-        avgs = []
-        for rec in trend_records:
-            exams.append(str(rec.get("exam") or ""))
-            avgs.append(float(rec.get("avg") or 0))
+    if exam_trend and len(exam_trend) >= 2:
+        exams = [str(rec.get("exam") or "") for rec in exam_trend]
+        avgs = [float(rec.get("avg") or 0) for rec in exam_trend]
         general_trend_chart = build_chart_option(
             "trend_line",
             {"x_labels": exams, "series": [{"name": "均分", "values": avgs}]},
@@ -153,30 +265,66 @@ def build_diagnostic_data(
     ]
     segment_table = _table(["分数段", "人数", "占比"], segment_rows) if segment_rows else ""
 
-    # S3 动态性
+    # S3 动态性：需要 ≥2 场考试 + 可对齐的学生进退步
     dynamic_insight = "<p>暂无多次考试数据，动态性分析略。</p>"
     progress_table = ""
     trend_line_chart = ""
-    if trend_records and len(trend_records) >= 2:
+    exam_count = len(exam_trend)
+    deltas: list[dict[str, Any]] = []
+    if exam_count >= 2 and progress:
         deltas = [
-            {"name": str(r.get("student") or ""), "delta": float(r.get("delta") or 0)}
-            for r in trend_records if r.get("delta") is not None
+            {
+                "name": str(r.get("name") or r.get("student") or ""),
+                "delta": float(r.get("delta") or 0),
+            }
+            for r in progress
+            if (r.get("name") or r.get("student")) and r.get("delta") is not None
         ]
         if deltas:
             pr = compute_top_progress_regress(deltas, top_n=5)
             dist = compute_trend_distribution(deltas)
+            # S2「退步生」与 S3「退步」统一为跨场末场−首场口径（|Δ|>5）
+            at_risk = {
+                **at_risk,
+                "regression": [
+                    {
+                        "name": str(d.get("name") or ""),
+                        "delta": d.get("delta"),
+                        "reason": (
+                            f"跨场退步（末场−首场）：{_fmt(d.get('delta'))} 分"
+                        ),
+                    }
+                    for d in (dist.get("regress") or [])
+                ],
+            }
             dynamic_insight = (
-                f"<p>进步 {len(dist.get('progress') or [])} 人，"
+                f"<p>共 <strong>{exam_count}</strong> 场考试；"
+                f"进步 {len(dist.get('progress') or [])} 人，"
                 f"退步 {len(dist.get('regress') or [])} 人，"
                 f"稳定 {len(dist.get('stable') or [])} 人。</p>"
             )
-            prog_rows = [[str(p.get("name")), f"+{_fmt(p.get('delta'))}"] for p in pr.get("progress") or []]
-            progress_table = _table(["学生", "变化"], prog_rows) if prog_rows else ""
+            prog_rows = [
+                [str(p.get("name")), f"+{_fmt(p.get('delta'))}"]
+                for p in (pr.get("progress") or [])
+            ]
+            reg_rows = [
+                [str(p.get("name")), _fmt(p.get("delta"))]
+                for p in (pr.get("regress") or [])
+            ]
+            table_rows = prog_rows + reg_rows
+            progress_table = (
+                _table(["学生", "变化（末场−首场）"], table_rows) if table_rows else ""
+            )
             trend_line_chart = build_chart_option(
                 "progress_regress_bar",
                 {"items": pr.get("chart_items") or []},
                 title="进退步分布",
             )
+    elif exam_count >= 2:
+        dynamic_insight = (
+            f"<p>已覆盖 <strong>{exam_count}</strong> 场考试均分走势；"
+            "但缺少可跨场对齐的学生成绩，个体进退步名单暂略。</p>"
+        )
 
     disp = describe_score_dispersion(
         overall.get("stdev"),
@@ -241,4 +389,8 @@ def build_diagnostic_data(
     }
 
 
-__all__ = ["build_diagnostic_data"]
+__all__ = [
+    "build_diagnostic_data",
+    "_exam_avg_trend_from_rows",
+    "_student_progress_from_rows",
+]

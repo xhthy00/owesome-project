@@ -11,6 +11,7 @@ import {
   FilePdfOutlined,
   FileWordOutlined,
   FundProjectionScreenOutlined,
+  HistoryOutlined,
   IdcardOutlined,
   LineChartOutlined,
   ThunderboltOutlined
@@ -25,21 +26,24 @@ import {
   Modal,
   Select,
   Space,
+  Table,
   Typography,
   message
 } from "antd";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/router";
 import { datasourceApi, type DatasourceItem } from "@/api/datasource";
 import {
   educationApi,
+  type BatchReportItem,
   type GenerateReportResult,
   type MetaOptions
 } from "@/api/education";
 import { exportReportAsWord, sanitizeFileName } from "@/utils/exportReportWord";
 
-/** 分析工具已开放的报告类型（与 Orchestrator 专用填充对齐） */
-const MVP_TYPES = new Set([
+/** 分析工具已开放的全部 9 类报告 */
+const OPEN_REPORT_TYPES = new Set([
   "class_overview",
   "grade_comparison",
   "subject_diagnosis",
@@ -90,7 +94,8 @@ type FormValues = {
   datasource_id: number;
   audience: string;
   class_name?: string;
-  exam_name?: string;
+  /** 单选为 string；区域诊断等多场为 string[] */
+  exam_name?: string | string[];
   subject?: string;
   school_name?: string;
   student_name?: string;
@@ -100,6 +105,8 @@ type FormValues = {
 function fieldsForType(reportType: string): {
   class_name?: boolean;
   exam_name?: boolean;
+  /** 考试可多选（区域结构化诊断等） */
+  exam_multi?: boolean;
   subject?: boolean;
   school_name?: boolean;
   student_name?: boolean;
@@ -122,13 +129,24 @@ function fieldsForType(reportType: string): {
     case "comprehensive":
       return { class_name: true, subject: true, school_name: true };
     case "diagnostic_report":
-      return { school_name: true, exam_name: true, subject: true };
+      return { school_name: true, exam_name: true, exam_multi: true, subject: true };
     default:
       return { class_name: true, exam_name: true };
   }
 }
 
+/** 多选考试用 ;; 序列化，与后端 _split_exam_filter 对齐 */
+function serializeExamFilter(exam: string | string[] | undefined): string | undefined {
+  if (Array.isArray(exam)) {
+    const parts = exam.map((s) => String(s || "").trim()).filter(Boolean);
+    return parts.length ? parts.join(";;") : undefined;
+  }
+  const s = String(exam || "").trim();
+  return s || undefined;
+}
+
 export default function AnalysisToolPage() {
+  const router = useRouter();
   const [skills, setSkills] = useState<SkillItem[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(true);
   const [selected, setSelected] = useState<SkillItem | null>(null);
@@ -137,7 +155,12 @@ export default function AnalysisToolPage() {
   const [result, setResult] = useState<GenerateReportResult | null>(null);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [exportingWord, setExportingWord] = useState(false);
+  const [savingHistory, setSavingHistory] = useState(false);
   const [showExpand, setShowExpand] = useState(false);
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchClasses, setBatchClasses] = useState<string[]>([]);
+  const [batchLoading, setBatchLoading] = useState(false);
+  const [batchItems, setBatchItems] = useState<BatchReportItem[]>([]);
   const [metaLoading, setMetaLoading] = useState(false);
   const [meta, setMeta] = useState<MetaOptions>({
     schools: [],
@@ -146,6 +169,7 @@ export default function AnalysisToolPage() {
     subjects: []
   });
   const reportIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const deepLinkApplied = useRef(false);
   const [form] = Form.useForm<FormValues>();
 
   const datasourceId = Form.useWatch("datasource_id", form);
@@ -203,7 +227,9 @@ export default function AnalysisToolPage() {
       .listMetaOptions({
         datasource_id: datasourceId,
         school_name: schoolName || undefined,
-        exam_name: examName || undefined,
+        exam_name: Array.isArray(examName)
+          ? examName[0] || undefined
+          : examName || undefined,
         class_name: className || undefined,
         subject: subjectName || undefined
       })
@@ -231,12 +257,13 @@ export default function AnalysisToolPage() {
   );
 
   const selectSkill = (skill: SkillItem) => {
-    if (!MVP_TYPES.has(skill.report_type)) {
-      message.info("该报告类型即将开放");
+    if (!OPEN_REPORT_TYPES.has(skill.report_type)) {
+      message.info("该报告类型暂未开放");
       return;
     }
     setSelected(skill);
     setResult(null);
+    setBatchItems([]);
     form.setFieldsValue({
       audience: skill.audience_default || "default",
       include_charts: true,
@@ -248,6 +275,18 @@ export default function AnalysisToolPage() {
     });
   };
 
+  // 技能页「一键生成」：?report_type=xxx 自动进入对应表单
+  useEffect(() => {
+    if (deepLinkApplied.current || skillsLoading || skills.length === 0) return;
+    const raw = router.query.report_type;
+    const rt = typeof raw === "string" ? raw.trim() : Array.isArray(raw) ? raw[0] : "";
+    if (!rt) return;
+    const skill = skills.find((s) => s.report_type === rt);
+    if (!skill) return;
+    deepLinkApplied.current = true;
+    selectSkill(skill);
+  }, [skills, skillsLoading, router.query.report_type]);
+
   const onGenerate = async (values: FormValues) => {
     if (!selected) return;
     setGenerating(true);
@@ -255,7 +294,8 @@ export default function AnalysisToolPage() {
     try {
       const filters: Record<string, string> = {};
       if (values.class_name?.trim()) filters.class_name = values.class_name.trim();
-      if (values.exam_name?.trim()) filters.exam_name = values.exam_name.trim();
+      const examFilter = serializeExamFilter(values.exam_name);
+      if (examFilter) filters.exam_name = examFilter;
       if (values.subject?.trim()) filters.subject = values.subject.trim();
       if (values.school_name?.trim()) filters.school_name = values.school_name.trim();
       if (values.student_name?.trim()) filters.student_name = values.student_name.trim();
@@ -282,6 +322,96 @@ export default function AnalysisToolPage() {
       message.error(err instanceof Error ? err.message : "生成失败");
     } finally {
       setGenerating(false);
+    }
+  };
+
+  const buildFiltersFromForm = (): Record<string, string> => {
+    const values = form.getFieldsValue();
+    const filters: Record<string, string> = {};
+    if (values.class_name?.trim()) filters.class_name = values.class_name.trim();
+    const examFilter = serializeExamFilter(values.exam_name);
+    if (examFilter) filters.exam_name = examFilter;
+    if (values.subject?.trim()) filters.subject = values.subject.trim();
+    if (values.school_name?.trim()) filters.school_name = values.school_name.trim();
+    if (values.student_name?.trim()) filters.student_name = values.student_name.trim();
+    return filters;
+  };
+
+  const onSaveHistory = async () => {
+    if (!result?.html || result.error || !selected) {
+      message.error("请先成功生成报告");
+      return;
+    }
+    const dsId = form.getFieldValue("datasource_id");
+    if (!dsId) {
+      message.error("请选择数据源");
+      return;
+    }
+    setSavingHistory(true);
+    try {
+      const filters = buildFiltersFromForm();
+      const filterHint = Object.entries(filters)
+        .map(([k, v]) => `${k}=${v}`)
+        .join("，");
+      const res = await educationApi.saveReportHistory({
+        datasource_id: dsId,
+        title: result.title || selected.name,
+        html: result.html,
+        report_type: result.report_type,
+        report_type_label: result.report_type_label,
+        question: `分析工具 · ${selected.name}${filterHint ? `（${filterHint}）` : ""}`
+      });
+      if (!res.ok || !res.data) {
+        message.error(res.message || "保存失败");
+        return;
+      }
+      message.success("已保存到任务历史，可在对话历史中查看");
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "保存失败");
+    } finally {
+      setSavingHistory(false);
+    }
+  };
+
+  const onBatchGenerate = async () => {
+    if (!selected) return;
+    if (batchClasses.length === 0) {
+      message.warning("请至少选择一个班级");
+      return;
+    }
+    const dsId = form.getFieldValue("datasource_id");
+    if (!dsId) {
+      message.error("请选择数据源");
+      return;
+    }
+    setBatchLoading(true);
+    setBatchItems([]);
+    try {
+      const filters = buildFiltersFromForm();
+      delete filters.class_name;
+      const res = await educationApi.batchReport({
+        datasource_id: dsId,
+        report_type: selected.report_type,
+        class_names: batchClasses,
+        audience: form.getFieldValue("audience"),
+        filters,
+        include_charts: form.getFieldValue("include_charts") !== false
+      });
+      if (!res.ok || !res.data) {
+        message.error(res.message || "批量生成失败");
+        return;
+      }
+      setBatchItems(res.data.items || []);
+      const failed = (res.data.items || []).filter((i) => i.error).length;
+      if (failed > 0) {
+        message.warning(`批量完成：成功 ${(res.data.items || []).length - failed}，失败 ${failed}`);
+      } else {
+        message.success(res.message || "批量生成完成");
+      }
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "批量生成失败");
+    } finally {
+      setBatchLoading(false);
     }
   };
 
@@ -382,7 +512,7 @@ export default function AnalysisToolPage() {
           {skillsLoading
             ? null
             : skills.map((skill) => {
-                const enabled = MVP_TYPES.has(skill.report_type);
+                const enabled = OPEN_REPORT_TYPES.has(skill.report_type);
                 return (
                   <Card
                     key={skill.id}
@@ -425,11 +555,6 @@ export default function AnalysisToolPage() {
                     >
                       {skill.desc}
                     </Typography.Paragraph>
-                    {!enabled ? (
-                      <Typography.Text className="mt-2 block text-[12px] text-[#94a3b8]">
-                        即将开放
-                      </Typography.Text>
-                    ) : null}
                   </Card>
                 );
               })}
@@ -522,14 +647,26 @@ export default function AnalysisToolPage() {
                   </Form.Item>
                 ) : null}
                 {fieldFlags.exam_name ? (
-                  <Form.Item name="exam_name" label="考试">
+                  <Form.Item
+                    name="exam_name"
+                    label="考试"
+                    extra={
+                      fieldFlags.exam_multi
+                        ? "可多选；不选则包含全部考试（用于动态性对比）"
+                        : undefined
+                    }
+                  >
                     <Select
+                      mode={fieldFlags.exam_multi ? "multiple" : undefined}
                       allowClear
                       showSearch
                       loading={metaLoading}
                       options={toSelectOptions(meta.exams)}
-                      placeholder="选择考试"
+                      placeholder={
+                        fieldFlags.exam_multi ? "选择一场或多场考试" : "选择考试"
+                      }
                       optionFilterProp="label"
+                      maxTagCount="responsive"
                     />
                   </Form.Item>
                 ) : null}
@@ -565,9 +702,23 @@ export default function AnalysisToolPage() {
                 <Form.Item name="include_charts" valuePropName="checked">
                   <Checkbox>包含图表</Checkbox>
                 </Form.Item>
-                <Button type="primary" htmlType="submit" loading={generating} block>
-                  生成报告
-                </Button>
+                <Space direction="vertical" style={{ width: "100%" }} size="small">
+                  <Button type="primary" htmlType="submit" loading={generating} block>
+                    生成报告
+                  </Button>
+                  {fieldFlags.class_name ? (
+                    <Button
+                      block
+                      onClick={() => {
+                        setBatchClasses([]);
+                        setBatchItems([]);
+                        setBatchOpen(true);
+                      }}
+                    >
+                      批量（多班级）
+                    </Button>
+                  ) : null}
+                </Space>
               </Form>
             </Card>
 
@@ -581,6 +732,13 @@ export default function AnalysisToolPage() {
                   styles={{ body: { padding: 12 } }}
                   extra={
                     <Space wrap size="small">
+                      <Button
+                        icon={<HistoryOutlined />}
+                        loading={savingHistory}
+                        onClick={() => void onSaveHistory()}
+                      >
+                        保存到任务历史
+                      </Button>
                       <Button icon={<DownloadOutlined />} onClick={exportHtml}>
                         下载 HTML
                       </Button>
@@ -657,6 +815,13 @@ export default function AnalysisToolPage() {
             onCancel={() => setShowExpand(false)}
             footer={
               <Space wrap>
+                <Button
+                  icon={<HistoryOutlined />}
+                  loading={savingHistory}
+                  onClick={() => void onSaveHistory()}
+                >
+                  保存到任务历史
+                </Button>
                 <Button icon={<DownloadOutlined />} onClick={exportHtml}>
                   下载 HTML
                 </Button>
@@ -688,6 +853,57 @@ export default function AnalysisToolPage() {
                 sandbox="allow-scripts allow-same-origin"
                 referrerPolicy="no-referrer"
                 style={{ width: "100%", height: "75vh", border: 0 }}
+              />
+            ) : null}
+          </Modal>
+
+          <Modal
+            title={`批量生成 · ${selected.name}`}
+            open={batchOpen}
+            onCancel={() => setBatchOpen(false)}
+            okText="开始批量"
+            confirmLoading={batchLoading}
+            onOk={() => void onBatchGenerate()}
+            width={720}
+            destroyOnClose={false}
+          >
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
+              选择多个班级，将按当前表单中的考试/科目/受众等条件逐班生成（不含 HTML
+              预览，仅返回摘要）。
+            </Typography.Paragraph>
+            <Select
+              mode="multiple"
+              allowClear
+              showSearch
+              style={{ width: "100%" }}
+              placeholder="选择班级"
+              loading={metaLoading}
+              options={toSelectOptions(meta.classes)}
+              value={batchClasses}
+              onChange={(vals) => setBatchClasses(vals)}
+              optionFilterProp="label"
+            />
+            {batchItems.length > 0 ? (
+              <Table
+                style={{ marginTop: 16 }}
+                size="small"
+                pagination={false}
+                rowKey={(r) => `${r.class_name}-${r.report_type}`}
+                dataSource={batchItems}
+                columns={[
+                  { title: "班级", dataIndex: "class_name", key: "class_name" },
+                  { title: "标题", dataIndex: "title", key: "title", ellipsis: true },
+                  {
+                    title: "结果",
+                    key: "status",
+                    render: (_: unknown, row: BatchReportItem) =>
+                      row.error ? (
+                        <Typography.Text type="danger">{row.error}</Typography.Text>
+                      ) : (
+                        <Typography.Text type="success">成功（{row.html_length} 字）</Typography.Text>
+                      )
+                  }
+                ]}
               />
             ) : null}
           </Modal>

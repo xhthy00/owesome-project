@@ -68,6 +68,52 @@ export interface MetaOptionsQuery {
   subject?: string;
 }
 
+export interface BatchReportRequest {
+  datasource_id: number;
+  class_names: string[];
+  report_type?: string;
+  question?: string;
+  filters?: Record<string, string>;
+  audience?: string;
+  include_charts?: boolean;
+}
+
+export interface BatchReportItem {
+  class_name: string;
+  template_name?: string;
+  html_length: number;
+  report_type: string;
+  title?: string;
+  error: string | null;
+}
+
+export interface BatchReportResponse {
+  ok: boolean;
+  message: string;
+  data: { items: BatchReportItem[] } | null;
+}
+
+export interface SaveReportHistoryRequest {
+  datasource_id: number;
+  title: string;
+  html: string;
+  report_type?: string;
+  report_type_label?: string;
+  question?: string;
+}
+
+export interface SaveReportHistoryResult {
+  conversation_id: number;
+  record_id: number;
+  title: string;
+}
+
+export interface SaveReportHistoryResponse {
+  ok: boolean;
+  message: string;
+  data: SaveReportHistoryResult | null;
+}
+
 async function authHeaders(): Promise<HeadersInit> {
   const token = getAccessToken();
   const wsOid =
@@ -169,6 +215,54 @@ export const educationApi = {
       exams: body.data.exams || [],
       classes: body.data.classes || [],
       subjects: body.data.subjects || []
+    };
+  },
+
+  async batchReport(payload: BatchReportRequest): Promise<BatchReportResponse> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/batch-report`, {
+      method: "POST",
+      headers: {
+        ...(await authHeaders()),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+    if (resp.status === 401) {
+      throw new Error("Unauthorized");
+    }
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: { items: BatchReportItem[] };
+    };
+    return {
+      ok: (body.code ?? 200) === 200,
+      message: body.message || "",
+      data: body.data ?? null
+    };
+  },
+
+  async saveReportHistory(payload: SaveReportHistoryRequest): Promise<SaveReportHistoryResponse> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/save-report-history`, {
+      method: "POST",
+      headers: {
+        ...(await authHeaders()),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+    if (resp.status === 401) {
+      throw new Error("Unauthorized");
+    }
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: SaveReportHistoryResult;
+    };
+    return {
+      ok: (body.code ?? 200) === 200,
+      message: body.message || "",
+      data: body.data ?? null
     };
   }
 };

@@ -129,6 +129,14 @@ export default function ConstructSkillsPage() {
     void router.push("/");
   };
 
+  const handleOpenInAnalysis = () => {
+    if (!active) return;
+    void router.push({
+      pathname: "/construct/analysis",
+      query: { report_type: active.report_type }
+    });
+  };
+
   return (
     <div
       className="dbgpt-ui-font p-6"
@@ -272,6 +280,9 @@ export default function ConstructSkillsPage() {
             >
               <Button icon={<CopyOutlined />} onClick={handleCopy} style={btnSecondaryStyle}>
                 {copied ? "已复制" : "复制到剪贴板"}
+              </Button>
+              <Button icon={<ThunderboltOutlined />} onClick={handleOpenInAnalysis} style={btnSecondaryStyle}>
+                一键生成报告
               </Button>
               <Button type="primary" icon={<ExportOutlined />} onClick={handleOpenInExplore} style={btnPrimaryStyle}>
                 在探索广场打开
