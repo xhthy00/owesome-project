@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
-import { createConversation, getConversationDetail, sendMessageStream } from "@/api/adapter/chatAdapter";
+import { createConversation, getConversationDetail, sendMessageStream, updateReportReview, replaceRecordReports } from "@/api/adapter/chatAdapter";
 import { genUUID } from "@/utils/uuid";
+import { replaceRecommendationsHtml } from "@/utils/reportRecommendations";
 
 export type Message = {
   id: string;
@@ -31,6 +32,12 @@ export type ReportPayload = {
   reportTypeLabel?: string;
   /** 关联多轮对话中的某次运行，用于点击历史步骤时回显对应报告 */
   runId?: string;
+  /** 落库后的 conversation record id，用于编辑/审核持久化 */
+  recordId?: number;
+  /** 该 record.reports 数组中的下标 */
+  reportIndex?: number;
+  /** pending=未审核；approved=已审核（不可再编辑） */
+  reviewStatus?: "pending" | "approved";
 };
 
 export type QueryResult = {
@@ -114,6 +121,7 @@ export const extractReportFromToolData = (
       html,
       mode: data.mode ? asText(data.mode) : undefined,
       subTaskIndex,
+      reviewStatus: "pending",
       ...typeMeta
     };
   }
@@ -133,6 +141,7 @@ export const extractReportFromToolData = (
       html: chunkHtml,
       mode: data.mode ? asText(data.mode) : undefined,
       subTaskIndex,
+      reviewStatus: "pending",
       ...typeMeta
     };
   }
@@ -146,6 +155,7 @@ const appendReportIfNew = (prev: ReportPayload[], report: ReportPayload): Report
 };
 
 const deriveReportsFromRecord = (record: {
+  id?: number;
   reports?: Array<{
     title?: string;
     html?: string;
@@ -153,6 +163,7 @@ const deriveReportsFromRecord = (record: {
     sub_task_index?: number;
     report_type?: string;
     report_type_label?: string;
+    review_status?: string;
     [key: string]: unknown;
   }>;
   tool_calls?: Array<{
@@ -168,16 +179,19 @@ const deriveReportsFromRecord = (record: {
 }): ReportPayload[] => {
   const reports: ReportPayload[] = [];
   if (Array.isArray(record.reports)) {
-    record.reports.forEach((r) => {
+    record.reports.forEach((r, idx) => {
       const html = asText(r?.html).trim();
       if (!html) return;
+      const status = r?.review_status === "approved" ? "approved" : "pending";
       reports.push({
         title: asText(r?.title) || "Report",
         html,
         mode: r?.mode ? asText(r.mode) : undefined,
         subTaskIndex: r?.sub_task_index,
         reportType: r?.report_type ? asText(r.report_type) : undefined,
-        reportTypeLabel: r?.report_type_label ? asText(r.report_type_label) : undefined
+        reportTypeLabel: r?.report_type_label ? asText(r.report_type_label) : undefined,
+        reportIndex: idx,
+        reviewStatus: status
       });
     });
   }
@@ -418,7 +432,8 @@ export function useChat() {
                 mode: mode ? asText(mode) : undefined,
                 subTaskIndex: sub_task_index,
                 reportType: report_type ? asText(report_type) : undefined,
-                reportTypeLabel: typeLabel
+                reportTypeLabel: typeLabel,
+                reviewStatus: "pending"
               });
               setReports((prev) => appendReportIfNew(prev, report));
               setExecutionSteps((prev) => [
@@ -587,6 +602,22 @@ export function useChat() {
             },
             onDone: async (recordId) => {
               setLoading(false);
+              // 注意：不要把报告 runId 改成 record-*，否则与当前步骤的流式 runId 对不上，
+              // 摘要区 scopedReports 会被滤空，必须刷新后才能看到。
+              if (recordId > 0) {
+                setReports((prev) => {
+                  let idx = 0;
+                  return prev.map((r) => {
+                    if (r.runId !== runId) return r;
+                    return {
+                      ...r,
+                      recordId,
+                      reportIndex: idx++,
+                      reviewStatus: r.reviewStatus || "pending"
+                    };
+                  });
+                });
+              }
               if (recordId > 0 && convId) {
                 try {
                   const detail = await getConversationDetail(convId);
@@ -594,13 +625,60 @@ export function useChat() {
                     detail.records?.find((r) => r.id === recordId) ??
                     detail.records?.[detail.records.length - 1];
                   if (record) {
-                    const derived = deriveReportsFromRecord(record).map((r) => withRun(r));
+                    const derived = deriveReportsFromRecord(record).map((r, i) =>
+                      withRun({
+                        ...r,
+                        recordId: record.id,
+                        reportIndex: r.reportIndex ?? i,
+                        // 保留当前会话 runId，便于右侧摘要立即可见
+                        reviewStatus: r.reviewStatus || "pending"
+                      })
+                    );
                     if (derived.length) {
                       setReports((prev) => {
-                        let next = [...prev];
-                        for (const r of derived) {
-                          next = appendReportIfNew(next, r);
+                        const byKey = new Map(
+                          prev
+                            .filter(
+                              (r) =>
+                                r.runId === runId ||
+                                r.recordId === recordId ||
+                                r.runId === `record-${recordId}`
+                            )
+                            .map((r) => [`${r.title}::${r.subTaskIndex ?? ""}`, r])
+                        );
+                        let next = prev.filter(
+                          (r) =>
+                            r.runId !== runId &&
+                            r.recordId !== recordId &&
+                            r.runId !== `record-${recordId}`
+                        );
+                        const mergedForPersist: ReportPayload[] = [];
+                        for (const d of derived) {
+                          const local = byKey.get(`${d.title}::${d.subTaskIndex ?? ""}`);
+                          const merged: ReportPayload = {
+                            ...d,
+                            html: local?.html || d.html,
+                            reviewStatus: local?.reviewStatus || d.reviewStatus || "pending",
+                            recordId: record.id,
+                            reportIndex: d.reportIndex,
+                            runId
+                          };
+                          mergedForPersist.push(merged);
+                          next = appendReportIfNew(next, merged);
                         }
+                        void replaceRecordReports({
+                          conversationId: convId,
+                          recordId: record.id,
+                          reports: mergedForPersist.map((r) => ({
+                            title: r.title,
+                            html: r.html,
+                            mode: r.mode,
+                            sub_task_index: r.subTaskIndex,
+                            report_type: r.reportType,
+                            report_type_label: r.reportTypeLabel,
+                            review_status: r.reviewStatus || "pending"
+                          }))
+                        }).catch(() => undefined);
                         return next;
                       });
                     }
@@ -655,8 +733,14 @@ export function useChat() {
         nextSummary = asText(record.summary);
         nextSummaryByRunId[recordRunId] = asText(record.summary);
       }
-      deriveReportsFromRecord(record).forEach((r) => {
-        nextReports.push({ ...r, runId: recordRunId });
+      deriveReportsFromRecord(record).forEach((r, idx) => {
+        nextReports.push({
+          ...r,
+          runId: recordRunId,
+          recordId: record.id,
+          reportIndex: r.reportIndex ?? idx,
+          reviewStatus: r.reviewStatus || "pending"
+        });
       });
       const sqlText = asText(record.sql);
       const execColumns = Array.isArray(record.exec_result?.columns)
@@ -762,6 +846,53 @@ export function useChat() {
     setLoading(false);
   }, []);
 
+  const patchReport = useCallback(
+    async (
+      target: ReportPayload,
+      patch: { recommendationsText?: string; reviewStatus?: "pending" | "approved" }
+    ): Promise<ReportPayload> => {
+      let nextHtml = target.html;
+      if (patch.recommendationsText != null) {
+        nextHtml = replaceRecommendationsHtml(target.html, patch.recommendationsText);
+      }
+      const next: ReportPayload = {
+        ...target,
+        html: nextHtml,
+        reviewStatus: patch.reviewStatus ?? target.reviewStatus ?? "pending"
+      };
+
+      const cid = conversationId;
+      const rid = target.recordId;
+      const ridx = target.reportIndex;
+      if (cid && rid != null && ridx != null) {
+        const resp = await updateReportReview({
+          conversationId: cid,
+          recordId: rid,
+          reportIndex: ridx,
+          recommendations_text: patch.recommendationsText,
+          review_status: patch.reviewStatus
+        });
+        if (resp?.report?.html) {
+          next.html = asText(resp.report.html);
+        }
+        if (resp?.report?.review_status === "approved" || resp?.report?.review_status === "pending") {
+          next.reviewStatus = resp.report.review_status;
+        }
+      }
+
+      setReports((prev) =>
+        prev.map((r) => {
+          const same =
+            (rid != null && r.recordId === rid && r.reportIndex === ridx) ||
+            (r.html === target.html && (r.runId ?? "") === (target.runId ?? "") && r.title === target.title);
+          return same ? { ...r, ...next } : r;
+        })
+      );
+      return next;
+    },
+    [conversationId]
+  );
+
   return {
     messages,
     executionSteps,
@@ -774,6 +905,8 @@ export function useChat() {
     stop,
     loadConversation,
     clearConversation,
+    patchReport,
+    conversationId,
     reportAudience,
     setReportAudience,
     datasourceId,

@@ -60,6 +60,21 @@ class ConversationRecordUpdate(BaseModel):
     is_success: Optional[bool] = Field(None, description="Whether execution was successful")
 
 
+class ReportReviewUpdate(BaseModel):
+    """编辑建议 / 审核报告。"""
+    recommendations_text: Optional[str] = Field(
+        None, description="建议区纯文本；提供时回写 HTML 建议区块"
+    )
+    review_status: Optional[Literal["pending", "approved"]] = Field(
+        None, description="审核状态；approved 后不可再编辑"
+    )
+
+
+class RecordReportsReplace(BaseModel):
+    """整表替换某条 record 的 reports（用于流结束后同步前端已编辑内容）。"""
+    reports: List[Dict[str, Any]] = Field(default_factory=list)
+
+
 class ConversationRecordResponse(BaseModel):
     """Conversation record response."""
     id: int

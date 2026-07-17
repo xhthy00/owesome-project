@@ -18,6 +18,8 @@ from chat.schemas import (
     ConversationRecordResponse,
     ConversationResponse,
     ConversationUpdate,
+    ReportReviewUpdate,
+    RecordReportsReplace,
     SQLFormatRequest,
     SQLValidationRequest,
 )
@@ -26,6 +28,7 @@ from common.core.database import get_session
 from common.core.trace import new_trace_id, set_trace_id
 from common.exceptions.base import NotFoundException
 from common.schemas.response import success_response
+from fastapi import HTTPException
 from system.api.system import get_current_user
 from system.schemas import UserResponse
 from system.workspace_scope import assert_datasource_accessible, get_workspace_oid
@@ -199,6 +202,140 @@ def delete_conversation(
         raise NotFoundException("Conversation not found")
 
     return success_response(message="Conversation deleted successfully")
+
+
+@router.patch(
+    "/conversations/{conversation_id}/records/{record_id}/reports/{report_index}",
+    summary="Update report recommendations or review status",
+)
+def update_report_review(
+    conversation_id: int,
+    record_id: int,
+    report_index: int,
+    request: ReportReviewUpdate,
+    session: Session = Depends(get_session),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+):
+    """编辑报告建议区或审核通过。审核通过后不可再改建议。"""
+    conversation = chat_crud.get_conversation_by_id(
+        session=session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+        oid=workspace_oid,
+    )
+    if not conversation:
+        raise NotFoundException("Conversation not found")
+
+    record = chat_crud.get_record_by_id(session, record_id, current_user.id)
+    if not record or int(record.conversation_id) != int(conversation_id):
+        raise NotFoundException("Conversation record not found")
+
+    try:
+        reports = json.loads(record.reports) if record.reports else []
+    except (TypeError, ValueError):
+        reports = []
+    if not isinstance(reports, list) or report_index < 0 or report_index >= len(reports):
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    item = reports[report_index]
+    if not isinstance(item, dict):
+        raise HTTPException(status_code=400, detail="Invalid report payload")
+
+    current_status = str(item.get("review_status") or "pending")
+    if current_status == "approved" and request.recommendations_text is not None:
+        raise HTTPException(status_code=400, detail="报告已审核，不可再编辑建议")
+
+    from src.agent.education.report_edit import (
+        has_recommendations_section,
+        replace_recommendations_html,
+    )
+
+    html = str(item.get("html") or "")
+    if request.recommendations_text is not None:
+        if not has_recommendations_section(html):
+            raise HTTPException(status_code=400, detail="本报告无可编辑的建议区")
+        item["html"] = replace_recommendations_html(html, request.recommendations_text)
+        item["recommendations_text"] = request.recommendations_text
+
+    if request.review_status is not None:
+        if request.review_status == "approved" and current_status == "approved":
+            pass
+        elif request.review_status == "pending" and current_status == "approved":
+            raise HTTPException(status_code=400, detail="报告已审核，不可回退")
+        else:
+            item["review_status"] = request.review_status
+
+    if "review_status" not in item:
+        item["review_status"] = "pending"
+
+    reports[report_index] = item
+    updated = chat_crud.update_conversation_record(
+        session=session,
+        record_id=record_id,
+        user_id=current_user.id,
+        reports=reports,
+    )
+    if not updated:
+        raise NotFoundException("Conversation record not found")
+
+    return success_response(
+        data={
+            "record_id": record_id,
+            "report_index": report_index,
+            "report": item,
+        },
+        message="Report updated successfully",
+    )
+
+
+@router.put(
+    "/conversations/{conversation_id}/records/{record_id}/reports",
+    summary="Replace all reports on a conversation record",
+)
+def replace_record_reports(
+    conversation_id: int,
+    record_id: int,
+    request: RecordReportsReplace,
+    session: Session = Depends(get_session),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+):
+    conversation = chat_crud.get_conversation_by_id(
+        session=session,
+        conversation_id=conversation_id,
+        user_id=current_user.id,
+        oid=workspace_oid,
+    )
+    if not conversation:
+        raise NotFoundException("Conversation not found")
+
+    record = chat_crud.get_record_by_id(session, record_id, current_user.id)
+    if not record or int(record.conversation_id) != int(conversation_id):
+        raise NotFoundException("Conversation record not found")
+
+    cleaned: list[dict] = []
+    for item in request.reports or []:
+        if not isinstance(item, dict):
+            continue
+        row = dict(item)
+        if "review_status" not in row:
+            row["review_status"] = "pending"
+        cleaned.append(row)
+
+    updated = chat_crud.update_conversation_record(
+        session=session,
+        record_id=record_id,
+        user_id=current_user.id,
+        reports=cleaned,
+    )
+    if not updated:
+        raise NotFoundException("Conversation record not found")
+
+    return success_response(
+        data={"record_id": record_id, "reports": cleaned},
+        message="Reports replaced successfully",
+    )
 
 
 # ============== SQL Generation & Execution ==============
@@ -790,7 +927,15 @@ async def chat_stream(
 
     async def event_stream() -> AsyncGenerator[str, None]:
         while True:
-            item = await queue.get()
+            try:
+                item = await asyncio.wait_for(queue.get(), timeout=_SSE_KEEPALIVE_INTERVAL)
+            except asyncio.TimeoutError:
+                # 队列进入"静默期"（LLM 往返 / SQL 执行 / 持久化等阶段数十秒无事件）：
+                # 发一行 SSE 注释心跳保活，刷新浏览器↔:3001 之间链路上中间网元
+                # （云 ELB / 企业代理 / 运营商 NAT / Next 代理 body 超时）的空闲计时器，
+                # 避免被按"空闲"掐断导致前端卡死。注释行被前端解析器跳过、不产生事件。
+                yield ": keepalive\n\n"
+                continue
             if item is SENTINEL:
                 break
             event, data = item
@@ -806,6 +951,15 @@ async def chat_stream(
             "X-Trace-Id": trace_id,
         }
     )
+
+
+#: SSE 空闲心跳间隔（秒）。team 流水线在 LLM 调用 / SQL 执行 / 持久化等阶段会有
+#: 数十秒无事件输出的"静默期"；浏览器到 :3001 之间链路上的中间网元（云 ELB /
+#: 企业代理 / 运营商 NAT / Next 代理 body 超时）普遍有 30~60s 空闲超时，会在
+#: 静默期把连接按"空闲"掐断——表现为前端"卡死"、但后端仍在跑且最终落库（刷新即
+#: 看到完整结果）。每 15s 发一行 SSE 注释刷新所有中间网元空闲计时器；注释行被
+#: 前端解析器跳过、不产生事件。本地无中间网元，故不复现。
+_SSE_KEEPALIVE_INTERVAL = 15.0
 
 
 def _sse_event(event: str, data: dict) -> str:
