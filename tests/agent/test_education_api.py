@@ -331,6 +331,96 @@ def test_save_report_history(monkeypatch):
     assert created["record"]["agent_mode"] == "analysis_tool"
 
 
+def test_list_report_history(monkeypatch):
+    """Phase3：报告历史列表复用 analysis_tool 记录。"""
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    client = _auth_client(monkeypatch)
+
+    class _Sess:
+        def __enter__(self):
+            return SimpleNamespace()
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("src.common.core.database.get_db_session", lambda: _Sess())
+
+    rec = SimpleNamespace(
+        id=11,
+        conversation_id=22,
+        question="分析工具 · 班级总览",
+        summary="已保存报告",
+        agent_mode="analysis_tool",
+        create_time=datetime(2026, 7, 17, 20, 0, 0),
+        reports='[{"title":"初三1班报告","html":"<p>x</p>","report_type":"class_overview","report_type_label":"班级总览报告"}]',
+    )
+    conv = SimpleNamespace(
+        id=22,
+        title="[分析工具] 初三1班报告",
+        datasource_id=1,
+        datasource_name="学情分析",
+    )
+    monkeypatch.setattr(
+        "src.chat.crud.chat.list_analysis_tool_records",
+        lambda **kwargs: [(rec, conv)],
+    )
+
+    r = client.get("/api/v1/education/report-history?limit=20")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["code"] == 200, body.get("message")
+    assert body["data"]["total"] == 1
+    item = body["data"]["items"][0]
+    assert item["record_id"] == 11
+    assert item["title"] == "初三1班报告"
+    assert item["report_type"] == "class_overview"
+    assert "html" not in item
+    assert item["html_length"] == len("<p>x</p>")
+
+
+def test_get_report_history_detail(monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    client = _auth_client(monkeypatch)
+
+    class _Sess:
+        def __enter__(self):
+            return SimpleNamespace()
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("src.common.core.database.get_db_session", lambda: _Sess())
+
+    rec = SimpleNamespace(
+        id=11,
+        conversation_id=22,
+        question="q",
+        summary="s",
+        agent_mode="analysis_tool",
+        create_time=datetime(2026, 7, 17, 20, 0, 0),
+        reports='[{"title":"T","html":"<div>hi</div>","report_type":"class_overview","report_type_label":"班级总览报告"}]',
+    )
+    conv = SimpleNamespace(
+        id=22,
+        title="[分析工具] T",
+        datasource_id=1,
+        datasource_name="学情分析",
+    )
+    monkeypatch.setattr("src.chat.crud.chat.get_record_by_id", lambda *a, **k: rec)
+    monkeypatch.setattr("src.chat.crud.chat.get_conversation_by_id", lambda *a, **k: conv)
+
+    r = client.get("/api/v1/education/report-history/11")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["code"] == 200
+    assert body["data"]["html"] == "<div>hi</div>"
+    assert body["data"]["title"] == "T"
+
+
 def test_generate_report_empty_rows_returns_actionable_error(monkeypatch):
     """查不到成绩时不应只返回空壳 HTML，应给出可操作的 error。"""
     from common.middlewares.exception import register_exception_handlers

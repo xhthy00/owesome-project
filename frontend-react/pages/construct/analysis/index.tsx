@@ -32,6 +32,7 @@ import {
 } from "antd";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/router";
 import { datasourceApi, type DatasourceItem } from "@/api/datasource";
 import {
@@ -365,7 +366,7 @@ export default function AnalysisToolPage() {
         message.error(res.message || "保存失败");
         return;
       }
-      message.success("已保存到任务历史，可在对话历史中查看");
+      message.success("已保存到报告历史");
     } catch (err) {
       message.error(err instanceof Error ? err.message : "保存失败");
     } finally {
@@ -503,12 +504,17 @@ export default function AnalysisToolPage() {
 
   return (
     <div className="dbgpt-ui-font flex h-[calc(100vh-3.5rem)] min-h-0 flex-col overflow-hidden px-4 pb-3 pt-3">
-      <Typography.Title level={4} style={{ margin: "0 0 12px" }}>
-        分析工具
-      </Typography.Title>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <Typography.Title level={4} style={{ margin: 0 }}>
+          分析工具
+        </Typography.Title>
+        <Link href="/construct/analysis/history">
+          <Button icon={<HistoryOutlined />}>报告历史</Button>
+        </Link>
+      </div>
 
       {!selected ? (
-        <div className="grid flex-1 grid-cols-1 content-start gap-3 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid flex-1 grid-cols-1 content-start gap-3 overflow-y-auto px-1 pb-2 pt-1 sm:grid-cols-2 lg:grid-cols-3">
           {skillsLoading
             ? null
             : skills.map((skill) => {
@@ -518,7 +524,7 @@ export default function AnalysisToolPage() {
                     key={skill.id}
                     variant="borderless"
                     className={[
-                      "h-full overflow-hidden rounded-2xl border border-[#e2e8f0]",
+                      "h-full rounded-2xl border border-[#e2e8f0]",
                       "bg-gradient-to-br from-white via-[#fafcff] to-[#f1f6ff]",
                       "shadow-[0_2px_14px_rgba(15,23,42,0.06)] transition-all duration-200",
                       "dark:border-[#334155] dark:from-[#141923] dark:via-[#11161f] dark:to-[#0f141c]",
@@ -530,7 +536,8 @@ export default function AnalysisToolPage() {
                       header: {
                         borderBottom: "1px solid rgba(226, 232, 240, 0.9)",
                         padding: "12px 14px",
-                        minHeight: 52
+                        minHeight: 52,
+                        borderRadius: "16px 16px 0 0"
                       },
                       body: { padding: "12px 14px 14px" }
                     }}

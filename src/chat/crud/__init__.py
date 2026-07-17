@@ -11,6 +11,7 @@ from src.chat.crud.chat import (
     get_record_by_id,
     update_conversation_record,
     get_recent_questions,
+    list_analysis_tool_records,
 )
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     "get_record_by_id",
     "update_conversation_record",
     "get_recent_questions",
+    "list_analysis_tool_records",
 ]

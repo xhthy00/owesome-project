@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
@@ -456,6 +457,119 @@ async def save_report_history(
             },
             message="已保存到任务历史",
         )
+
+
+def _parse_json_safe(value: Any, default: Any = None) -> Any:
+    if value in (None, ""):
+        return default
+    if isinstance(value, (dict, list)):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _report_history_item(
+    record: Any,
+    conversation: Any,
+    *,
+    include_html: bool = False,
+) -> dict[str, Any]:
+    reports = _parse_json_safe(getattr(record, "reports", None), []) or []
+    first = reports[0] if isinstance(reports, list) and reports and isinstance(reports[0], dict) else {}
+    title = str(first.get("title") or conversation.title or "").strip()
+    html = str(first.get("html") or "") if include_html else ""
+    item: dict[str, Any] = {
+        "conversation_id": int(conversation.id),
+        "record_id": int(record.id),
+        "title": title,
+        "conversation_title": str(conversation.title or ""),
+        "report_type": str(first.get("report_type") or ""),
+        "report_type_label": str(first.get("report_type_label") or ""),
+        "datasource_id": conversation.datasource_id,
+        "datasource_name": str(conversation.datasource_name or ""),
+        "question": str(record.question or ""),
+        "summary": str(getattr(record, "summary", None) or ""),
+        "create_time": record.create_time.isoformat(sep=" ", timespec="seconds")
+        if getattr(record, "create_time", None)
+        else None,
+        "html_length": len(str(first.get("html") or "")),
+    }
+    if include_html:
+        item["html"] = html
+    return item
+
+
+@router.get("/report-history")
+async def list_report_history(
+    limit: int = 50,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    """分析工具报告历史列表（复用 ConversationRecord，不建新表）。"""
+    from src.chat.crud import chat as chat_crud
+    from src.common.core.database import get_db_session
+
+    lim = max(1, min(int(limit or 50), 200))
+    with get_db_session() as session:
+        pairs = chat_crud.list_analysis_tool_records(
+            session=session,
+            user_id=int(current_user.id),
+            oid=int(workspace_oid),
+            limit=lim,
+        )
+        items = [_report_history_item(rec, conv, include_html=False) for rec, conv in pairs]
+    return success_response({"total": len(items), "items": items})
+
+
+@router.get("/report-history/{record_id}")
+async def get_report_history_detail(
+    record_id: int,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    """报告历史详情（含 HTML）。"""
+    from common.exceptions.base import NotFoundException
+    from src.chat.crud import chat as chat_crud
+    from src.common.core.database import get_db_session
+
+    with get_db_session() as session:
+        record = chat_crud.get_record_by_id(session, int(record_id), int(current_user.id))
+        if not record or record.agent_mode != "analysis_tool":
+            raise NotFoundException("报告记录不存在")
+        conversation = chat_crud.get_conversation_by_id(
+            session,
+            int(record.conversation_id),
+            int(current_user.id),
+            int(workspace_oid),
+        )
+        if not conversation:
+            raise NotFoundException("报告会话不存在")
+        return success_response(_report_history_item(record, conversation, include_html=True))
+
+
+@router.delete("/report-history/{conversation_id}")
+async def delete_report_history(
+    conversation_id: int,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    """软删除报告历史对应会话。"""
+    from common.exceptions.base import NotFoundException
+    from src.chat.crud import chat as chat_crud
+    from src.common.core.database import get_db_session
+
+    with get_db_session() as session:
+        ok = chat_crud.delete_conversation(
+            session=session,
+            conversation_id=int(conversation_id),
+            user_id=int(current_user.id),
+            oid=int(workspace_oid),
+        )
+        if not ok:
+            raise NotFoundException("报告会话不存在")
+    return success_response({"conversation_id": int(conversation_id)}, message="已删除")
 
 
 @router.get("/meta/options")

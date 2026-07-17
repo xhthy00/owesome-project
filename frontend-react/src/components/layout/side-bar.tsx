@@ -3,6 +3,7 @@ import {
   BarChartOutlined,
   DatabaseOutlined,
   GlobalOutlined,
+  HistoryOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MessageOutlined,
@@ -24,6 +25,7 @@ const routes = [
   { key: "explore", path: "/", label: "探索广场", icon: <GlobalOutlined /> },
   { key: "skills", path: "/construct/skills", label: "技能", icon: <ThunderboltOutlined /> },
   { key: "analysis", path: "/construct/analysis", label: "分析工具", icon: <BarChartOutlined /> },
+  { key: "report-history", path: "/construct/analysis/history", label: "报告历史", icon: <HistoryOutlined /> },
   { key: "datasource", path: "/construct/database", label: "数据源", icon: <DatabaseOutlined /> },
   { key: "score-import", path: "/construct/education/score-import", label: "成绩导入", icon: <UploadOutlined /> },
   { key: "permission", path: "/construct/permission", label: "权限管理", icon: <SafetyCertificateOutlined /> },
@@ -143,7 +145,10 @@ export default function SideBar() {
           </div>
           <div className="mt-2 flex flex-col items-center gap-4">
             {routes.map((item) => {
-              const active = pathname === item.path || pathname.startsWith(item.path + "/");
+              const active =
+                item.key === "analysis"
+                  ? pathname === "/construct/analysis"
+                  : pathname === item.path || pathname.startsWith(item.path + "/");
               return (
                 <Link key={item.key} href={item.path} className="h-12 flex items-center">
                   <Tooltip title={item.label} placement="right">
@@ -200,7 +205,10 @@ export default function SideBar() {
 
       <div className="flex flex-col gap-1">
         {routes.map((item) => {
-          const active = pathname === item.path || pathname.startsWith(item.path + "/");
+          const active =
+            item.key === "analysis"
+              ? pathname === "/construct/analysis"
+              : pathname === item.path || pathname.startsWith(item.path + "/");
           const isPermissionRoot = item.key === "permission";
           return (
             <div key={item.key}>

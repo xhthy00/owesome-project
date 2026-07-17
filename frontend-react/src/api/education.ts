@@ -114,6 +114,34 @@ export interface SaveReportHistoryResponse {
   data: SaveReportHistoryResult | null;
 }
 
+export interface ReportHistoryItem {
+  conversation_id: number;
+  record_id: number;
+  title: string;
+  conversation_title: string;
+  report_type: string;
+  report_type_label: string;
+  datasource_id: number | null;
+  datasource_name: string;
+  question: string;
+  summary: string;
+  create_time: string | null;
+  html_length: number;
+  html?: string;
+}
+
+export interface ReportHistoryListResponse {
+  ok: boolean;
+  message: string;
+  data: { total: number; items: ReportHistoryItem[] } | null;
+}
+
+export interface ReportHistoryDetailResponse {
+  ok: boolean;
+  message: string;
+  data: ReportHistoryItem | null;
+}
+
 async function authHeaders(): Promise<HeadersInit> {
   const token = getAccessToken();
   const wsOid =
@@ -263,6 +291,59 @@ export const educationApi = {
       ok: (body.code ?? 200) === 200,
       message: body.message || "",
       data: body.data ?? null
+    };
+  },
+
+  async listReportHistory(limit = 50): Promise<ReportHistoryListResponse> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/report-history?limit=${limit}`, {
+      headers: await authHeaders()
+    });
+    if (resp.status === 401) {
+      throw new Error("Unauthorized");
+    }
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: { total: number; items: ReportHistoryItem[] };
+    };
+    return {
+      ok: (body.code ?? 200) === 200,
+      message: body.message || "",
+      data: body.data ?? null
+    };
+  },
+
+  async getReportHistoryDetail(recordId: number): Promise<ReportHistoryDetailResponse> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/report-history/${recordId}`, {
+      headers: await authHeaders()
+    });
+    if (resp.status === 401) {
+      throw new Error("Unauthorized");
+    }
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: ReportHistoryItem;
+    };
+    return {
+      ok: (body.code ?? 200) === 200,
+      message: body.message || "",
+      data: body.data ?? null
+    };
+  },
+
+  async deleteReportHistory(conversationId: number): Promise<{ ok: boolean; message: string }> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/report-history/${conversationId}`, {
+      method: "DELETE",
+      headers: await authHeaders()
+    });
+    if (resp.status === 401) {
+      throw new Error("Unauthorized");
+    }
+    const body = (await resp.json()) as { code?: number; message?: string };
+    return {
+      ok: (body.code ?? 200) === 200,
+      message: body.message || ""
     };
   }
 };

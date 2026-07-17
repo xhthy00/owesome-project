@@ -9,6 +9,9 @@ from sqlmodel import Session, select
 
 from src.chat.models.conversation import Conversation, ConversationRecord
 
+#: 分析工具「保存到报告历史」写入的会话标题前缀；此类会话不进入聊天历史列表。
+ANALYSIS_REPORT_TITLE_PREFIX = "[分析工具]"
+
 
 def create_conversation(
     session: Session,
@@ -52,20 +55,31 @@ def get_conversation_by_id(
 
 
 def list_conversations(session: Session, user_id: int, oid: int, limit: int = 50) -> List[Conversation]:
-    """List user's conversations in a workspace."""
+    """List user's conversations in a workspace.
+
+    排除分析工具报告历史会话（标题前缀 ``[分析工具]`` 或含 analysis_tool 记录），
+    避免与侧栏「历史会话」混在一起。
+    """
+    analysis_conv_ids = (
+        select(ConversationRecord.conversation_id)
+        .where(ConversationRecord.agent_mode == "analysis_tool")
+        .distinct()
+    )
     statement = (
         select(Conversation)
         .where(
             and_(
                 Conversation.user_id == user_id,
                 Conversation.oid == oid,
-                Conversation.is_deleted == False
+                Conversation.is_deleted == False,  # noqa: E712
+                ~Conversation.title.like(f"{ANALYSIS_REPORT_TITLE_PREFIX}%"),
+                ~Conversation.id.in_(analysis_conv_ids),
             )
         )
         .order_by(desc(Conversation.update_time))
         .limit(limit)
     )
-    return session.exec(statement).all()
+    return list(session.exec(statement).all())
 
 
 def update_conversation(
@@ -287,3 +301,28 @@ def get_recent_questions(session: Session, datasource_id: int, user_id: int, lim
     )
     results = session.exec(statement).all()
     return list(results)
+
+def list_analysis_tool_records(
+    session: Session,
+    user_id: int,
+    oid: int,
+    limit: int = 50,
+) -> list[tuple[ConversationRecord, Conversation]]:
+    """列出分析工具保存的报告记录（agent_mode=analysis_tool）。"""
+    statement = (
+        select(ConversationRecord, Conversation)
+        .join(Conversation, Conversation.id == ConversationRecord.conversation_id)
+        .where(
+            and_(
+                ConversationRecord.user_id == user_id,
+                Conversation.user_id == user_id,
+                Conversation.oid == oid,
+                Conversation.is_deleted == False,  # noqa: E712
+                ConversationRecord.agent_mode == "analysis_tool",
+            )
+        )
+        .order_by(desc(ConversationRecord.create_time))
+        .limit(limit)
+    )
+    rows = session.exec(statement).all()
+    return list(rows)
