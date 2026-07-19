@@ -20,6 +20,7 @@ export interface CurrentUser {
   language: string;
   origin: number;
   create_time: number;
+  is_platform_admin: boolean;
 }
 
 export async function login(payload: LoginPayload) {

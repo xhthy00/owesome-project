@@ -1,14 +1,15 @@
 """Central router aggregation."""
 
-from system.api.system import router as system_router
-from system.api.permission import router as permission_router
-from system.api.edu_permission import router as edu_permission_router
-from system.api.workspace import router as workspace_router
-from system.api.user import router as user_router
+from audit.api.audit import router as audit_router
+from chat.api.chat import router as chat_router
 from datasource.api.datasource import router as datasource_router
 from datasource.api.permission import router as ds_permission_router
-from chat.api.chat import router as chat_router
 from src.agent.education.api import router as education_router
+from system.api.edu_permission import router as edu_permission_router
+from system.api.permission import router as permission_router
+from system.api.system import router as system_router
+from system.api.user import router as user_router
+from system.api.workspace import router as workspace_router
 
 
 def get_all_routers() -> list:
@@ -23,6 +24,7 @@ def get_all_routers() -> list:
         ds_permission_router,
         chat_router,
         education_router,
+        audit_router,
     ]
 
 

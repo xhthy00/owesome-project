@@ -10,9 +10,11 @@ import {
   PlusOutlined,
   RightOutlined,
   SafetyCertificateOutlined,
+  SettingOutlined,
   ThunderboltOutlined,
   UploadOutlined
 } from "@ant-design/icons";
+import { getCurrentUser, type CurrentUser } from "@/api/auth";
 import { Tooltip } from "antd";
 import Image from "next/image";
 import Link from "next/link";
@@ -29,6 +31,7 @@ const routes = [
   { key: "datasource", path: "/construct/database", label: "数据源", icon: <DatabaseOutlined /> },
   { key: "score-import", path: "/construct/education/score-import", label: "成绩导入", icon: <UploadOutlined /> },
   { key: "permission", path: "/construct/permission", label: "权限管理", icon: <SafetyCertificateOutlined /> },
+  { key: "system", path: "/system", label: "日志管理", icon: <SettingOutlined /> },
 ];
 
 const permissionSubRoutes = [
@@ -39,6 +42,12 @@ const permissionSubRoutes = [
   { key: "permission-members", path: "/construct/permission/members", label: "成员管理" }
 ];
 
+const systemSubRoutes = [
+  { key: "system-log-access", path: "/system/log/access", label: "访问日志" },
+  { key: "system-log-operation", path: "/system/log/operation", label: "操作日志" },
+  { key: "system-log-login", path: "/system/log/login", label: "登录日志" }
+];
+
 export default function SideBar() {
   const { isMenuExpand, setIsMenuExpand } = useContext(ChatContext);
   const router = useRouter();
@@ -46,6 +55,22 @@ export default function SideBar() {
   const [historyList, setHistoryList] = useState<Conversation[]>([]);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [permissionExpanded, setPermissionExpanded] = useState(false);
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [systemExpanded, setSystemExpanded] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void getCurrentUser()
+      .then((u) => {
+        if (active) setCurrentUser(u);
+      })
+      .catch(() => {
+        /* ignore */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -124,6 +149,8 @@ export default function SideBar() {
     });
   }, [groupedHistory]);
 
+  const visibleRoutes = routes;
+
   if (!isMenuExpand) {
     return (
       <div className="flex h-screen flex-col justify-between bg-[#d7dfed] pt-4 dark:bg-[#232734]">
@@ -144,7 +171,7 @@ export default function SideBar() {
             </Tooltip>
           </div>
           <div className="mt-2 flex flex-col items-center gap-4">
-            {routes.map((item) => {
+            {visibleRoutes.map((item) => {
               const active =
                 item.key === "analysis"
                   ? pathname === "/construct/analysis"
@@ -204,12 +231,13 @@ export default function SideBar() {
       </Link>
 
       <div className="flex flex-col gap-1">
-        {routes.map((item) => {
+        {visibleRoutes.map((item) => {
           const active =
             item.key === "analysis"
               ? pathname === "/construct/analysis"
               : pathname === item.path || pathname.startsWith(item.path + "/");
           const isPermissionRoot = item.key === "permission";
+          const isSystemRoot = item.key === "system";
           return (
             <div key={item.key}>
               <button
@@ -217,6 +245,8 @@ export default function SideBar() {
                 onClick={() => {
                   if (isPermissionRoot) {
                     setPermissionExpanded((prev) => !prev);
+                  } else if (isSystemRoot) {
+                    setSystemExpanded((prev) => !prev);
                   } else {
                     void router.push(item.path);
                   }
@@ -227,10 +257,10 @@ export default function SideBar() {
               >
                 <div className="mr-3">{item.icon}</div>
                 <span className="dbgpt-ui-font text-sm">{item.label}</span>
-                {isPermissionRoot ? (
+                {isPermissionRoot || isSystemRoot ? (
                   <DownOutlined
                     className={`ml-auto text-xs transition-transform ${
-                      permissionExpanded ? "rotate-0" : "-rotate-90"
+                      (isPermissionRoot ? permissionExpanded : systemExpanded) ? "rotate-0" : "-rotate-90"
                     }`}
                   />
                 ) : null}
@@ -238,6 +268,26 @@ export default function SideBar() {
               {isPermissionRoot && permissionExpanded ? (
                 <div className="ml-11 mt-1 flex flex-col gap-1">
                   {permissionSubRoutes.map((sub) => {
+                    const subActive = pathname === sub.path || pathname.startsWith(sub.path + "/");
+                    return (
+                      <Link
+                        key={sub.key}
+                        href={sub.path}
+                        className={`flex h-10 items-center rounded-lg px-3 text-sm transition-colors ${
+                          subActive
+                            ? "bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400"
+                            : "text-[#3d4a64] hover:bg-blue-50/50 dark:text-gray-400 dark:hover:bg-blue-900/10"
+                        }`}
+                      >
+                        {sub.label}
+                      </Link>
+                    );
+                  })}
+                </div>
+              ) : null}
+              {isSystemRoot && systemExpanded ? (
+                <div className="ml-11 mt-1 flex flex-col gap-1">
+                  {systemSubRoutes.map((sub) => {
                     const subActive = pathname === sub.path || pathname.startsWith(sub.path + "/");
                     return (
                       <Link

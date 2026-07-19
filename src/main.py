@@ -3,13 +3,13 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from agent.resource.manager import install_default_resources
 from common.core.config import get_settings
 from common.core.database import init_db
-from common.core.trace import install_trace_log_factory
+from common.core.trace import install_trace_log_factory, new_trace_id, trace_scope
 from common.middlewares.exception import register_exception_handlers
 from common.router import register_routers
 
@@ -51,6 +51,21 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+
+@app.middleware("http")
+async def trace_id_middleware(request: Request, call_next):
+    """每个 HTTP 请求进入时生成/绑定 trace_id，供日志与审计使用。
+
+    trace_scope 通过 contextvars 传播；FastAPI 的 async 端点以及
+    asyncio.to_thread 创建的后台线程都会自动继承该上下文。
+    """
+    with trace_scope(new_trace_id()) as tid:
+        response = await call_next(request)
+        # 把当前请求的 trace_id 暴露给前端，便于问题排查
+        response.headers["x-trace-id"] = tid
+        return response
+
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -58,6 +73,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["x-trace-id"],
 )
 
 # Register exception handlers
