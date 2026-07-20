@@ -14,6 +14,7 @@ import {
   ThunderboltOutlined,
   UploadOutlined
 } from "@ant-design/icons";
+import { permissionApi } from "@/api/permission";
 import { getCurrentUser, type CurrentUser } from "@/api/auth";
 import { Tooltip } from "antd";
 import Image from "next/image";
@@ -37,9 +38,8 @@ const routes = [
 const permissionSubRoutes = [
   { key: "permission-config", path: "/construct/permission/config", label: "权限配置" },
   { key: "permission-edu", path: "/construct/permission/edu", label: "教育权限" },
-  { key: "permission-users", path: "/construct/permission/users", label: "用户管理" },
-  { key: "permission-workspaces", path: "/construct/permission/workspaces", label: "工作空间" },
-  { key: "permission-members", path: "/construct/permission/members", label: "成员管理" }
+  { key: "permission-members", path: "/construct/permission/members", label: "成员管理" },
+  { key: "permission-menu", path: "/construct/permission/menu", label: "菜单权限管理" }
 ];
 
 const systemSubRoutes = [
@@ -57,12 +57,22 @@ export default function SideBar() {
   const [permissionExpanded, setPermissionExpanded] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [systemExpanded, setSystemExpanded] = useState(false);
+  const [menuVisibility, setMenuVisibility] = useState<Record<string, boolean>>({});
+  const isPlatformAdmin = useMemo(() => currentUser?.account === "admin" && currentUser?.id === 1, [currentUser]);
 
   useEffect(() => {
     let active = true;
     void getCurrentUser()
       .then((u) => {
         if (active) setCurrentUser(u);
+      })
+      .catch(() => {
+        /* ignore */
+      });
+    void permissionApi
+      .getMenuVisibility()
+      .then((map) => {
+        if (active) setMenuVisibility(map ?? {});
       })
       .catch(() => {
         /* ignore */
@@ -149,7 +159,10 @@ export default function SideBar() {
     });
   }, [groupedHistory]);
 
-  const visibleRoutes = routes;
+  const visibleRoutes = useMemo(() => {
+    if (isPlatformAdmin) return routes;
+    return routes.filter((item) => menuVisibility[item.key] !== false);
+  }, [isPlatformAdmin, menuVisibility]);
 
   if (!isMenuExpand) {
     return (

@@ -70,6 +70,10 @@ export interface EduEffectiveResult {
   merged_sql?: string;
 }
 
+export interface MenuVisibilityMap {
+  [menuKey: string]: boolean;
+}
+
 export const permissionApi = {
   listRoles: () => apiRequest<RoleItem[]>("/permission/roles"),
   listUserRoleGrants: () => apiRequest<UserRoleGrant[]>("/permission/grants/user-role"),
@@ -111,5 +115,11 @@ export const permissionApi = {
     apiRequest<EduEffectiveResult>("/permission/edu/effective", {
       method: "POST",
       body: JSON.stringify(payload)
+    }),
+  getMenuVisibility: () => apiRequest<MenuVisibilityMap>("/permission/menu-visibility"),
+  setMenuVisibility: (menuKey: string, visible: boolean) =>
+    apiRequest<void>("/permission/menu-visibility", {
+      method: "POST",
+      body: JSON.stringify({ menu_key: menuKey, visible })
     })
 };

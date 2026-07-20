@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Dict, List
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from common.core.database import get_session
@@ -13,7 +14,8 @@ from common.schemas.response import success_response
 from datasource.models.datasource import CoreDatasource
 from datasource.models.permission import DsPermission
 from system.api.auth_deps import get_current_user
-from system.authz import can_manage_data_permissions
+from system.authz import can_manage_data_permissions, is_platform_admin
+from system.crud.crud_menu_visible import get_visibility_map, set_visibility
 from system.models.user import SysUser
 from system.models.workspace import SysUserWorkspace
 
@@ -152,3 +154,31 @@ def create_data_rule(
     session.commit()
     session.refresh(item)
     return success_response(data={"id": item.id}, message="Rule created")
+
+
+class MenuVisibilityPayload(BaseModel):
+    menu_key: str
+    visible: bool
+
+
+@router.get("/menu-visibility")
+def list_menu_visibility(
+    session: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    """Return current menu visibility map. Missing keys default to visible."""
+    _ = current_user
+    return success_response(data=get_visibility_map(session))
+
+
+@router.post("/menu-visibility")
+def save_menu_visibility(
+    payload: MenuVisibilityPayload,
+    session: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    """Upsert visibility for a menu key. Only platform admins can modify."""
+    if not is_platform_admin(current_user):
+        raise ForbiddenException("仅系统管理员可修改菜单可见性")
+    set_visibility(session, payload.menu_key, payload.visible)
+    return success_response(message="保存成功")
