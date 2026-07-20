@@ -1,28 +1,33 @@
 """Alembic migration environment configuration."""
 
-import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 
 from alembic import context
+from audit.models import AuditAccessLog, AuditLoginLog, AuditOperationLog  # noqa: F401
 
 # Import SQLModel models to ensure they are registered with metadata
+from common.core.config import get_settings
 from common.core.database import Base  # Base from our database module
-from system.models.user import SysUser
-from system.models.workspace import SysWorkspace, SysUserWorkspace
-from datasource.models.datasource import CoreDatasource, CoreTable, CoreField, DsRecommendedProblem
-from datasource.models.permission import DsPermission, DsRule
+from datasource.models.datasource import (  # noqa: F401
+    CoreDatasource,
+    CoreField,
+    CoreTable,
+    DsRecommendedProblem,
+)
+from datasource.models.permission import DsPermission, DsRule  # noqa: F401
+from system.models.user import SysUser  # noqa: F401
+from system.models.workspace import SysUserWorkspace, SysWorkspace  # noqa: F401
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
 config = context.config
 
-# 生产部署优先用环境变量 DATABASE_URL（由 .env / docker compose env_file 注入），
-# 覆盖 alembic.ini 里写死的占位连接串——否则容器内迁移会连到错误的本地库。
-_env_db_url = os.getenv("DATABASE_URL")
-if _env_db_url:
-    config.set_main_option("sqlalchemy.url", _env_db_url)
+# 用项目统一的 Settings 读取 .env，覆盖 alembic.ini 里写死的占位连接串。
+_db_url = get_settings().database_url
+if _db_url:
+    config.set_main_option("sqlalchemy.url", _db_url)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

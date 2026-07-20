@@ -314,7 +314,7 @@ def test_import_scores_rejects_on_constraint_check(monkeypatch):
 
 def _auth_client(monkeypatch) -> TestClient:
     from src.agent.resource.tool import business as biz
-    from system.api.system import get_current_user
+    from system.api.auth_deps import get_current_user
     from system.schemas import UserResponse
     from system.workspace_scope import get_workspace_oid
 

@@ -9,7 +9,7 @@ from common.core.database import get_session
 from common.exceptions.base import ForbiddenException, NotFoundException
 from datasource.crud import crud_datasource
 from datasource.models.datasource import CoreDatasource
-from system.api.system import get_current_user
+from system.api.auth_deps import get_current_user
 from system.models.workspace import SysUserWorkspace
 from system.schemas import UserResponse
 

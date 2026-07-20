@@ -14,15 +14,13 @@ from __future__ import annotations
 import json
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from audit.service.decorators import audit_access
 from common.exceptions.base import BadRequestException
 from common.schemas.response import error_response, success_response
-from system.api.system import get_current_user
-from system.schemas import UserResponse
-from system.workspace_scope import assert_datasource_accessible, get_workspace_oid
 from src.agent.education import config_store
 from src.agent.education.orchestrator import ReportOrchestrator
 from src.agent.education.schema_mapping import (
@@ -31,6 +29,9 @@ from src.agent.education.schema_mapping import (
     infer_wide_mapping,
     load_schema_from_config,
 )
+from system.api.auth_deps import get_current_user
+from system.schemas import UserResponse
+from system.workspace_scope import assert_datasource_accessible, get_workspace_oid
 
 router = APIRouter(prefix="/education", tags=["education"])
 
@@ -115,7 +116,9 @@ def _build_orchestrator(
     """用真实数据源回调构造 ReportOrchestrator。"""
     from src.agent.resource.tool.business import _load_datasource
     from src.datasource.db.db import get_schema_info
-    from src.datasource.service.execute_with_permission import execute_sql_with_permission_by_user_id
+    from src.datasource.service.execute_with_permission import (
+        execute_sql_with_permission_by_user_id,
+    )
 
     db_type, config, _ds_name = _load_datasource(datasource_id, workspace_oid)
 
@@ -163,8 +166,10 @@ def _build_orchestrator(
 
 
 @router.post("/batch-report")
+@audit_access(datasource_id_arg="req.datasource_id", query_arg="req.question")
 async def batch_report(
     req: BatchReportRequest,
+    request: Request,
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
@@ -250,8 +255,10 @@ class DiagnosticReportRequest(BaseModel):
 
 
 @router.post("/diagnostic-report")
+@audit_access(datasource_id_arg="req.datasource_id", query_arg="req.question")
 async def diagnostic_report(
     req: DiagnosticReportRequest,
+    request: Request,
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
@@ -303,8 +310,10 @@ class GenerateReportRequest(BaseModel):
 
 
 @router.post("/generate-report")
+@audit_access(datasource_id_arg="req.datasource_id", query_arg="req.report_type")
 async def generate_report(
     req: GenerateReportRequest,
+    request: Request,
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
@@ -391,9 +400,9 @@ async def save_report_history(
 
     不改动聊天路径写入 reports 的既有逻辑，仅复用 chat CRUD。
     """
-    from src.chat.crud import chat as chat_crud
     from src.agent.education.report_types import report_type_label
     from src.agent.resource.tool.business import _load_datasource
+    from src.chat.crud import chat as chat_crud
     from src.common.core.database import get_db_session
 
     title = (req.title or "").strip()
@@ -787,10 +796,10 @@ async def preview_score_import(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.agent.education.score_import import import_result_to_dict, preview_import
     from src.agent.resource.tool.business import _load_datasource
     from src.common.core.database import get_db_session
-    from src.agent.education.score_import import import_result_to_dict, preview_import
-    from datasource.service.edu_permission import parse_edu_scope
     from system.crud.crud_user import get_user_by_id
 
     t = _parse_import_type(import_type)
@@ -822,10 +831,10 @@ async def execute_score_import(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.agent.education.score_import import import_result_to_dict, import_scores
     from src.agent.resource.tool.business import _load_datasource
     from src.common.core.database import get_db_session
-    from src.agent.education.score_import import import_result_to_dict, import_scores
-    from datasource.service.edu_permission import parse_edu_scope
     from system.crud.crud_user import get_user_by_id
 
     t = _parse_import_type(import_type)

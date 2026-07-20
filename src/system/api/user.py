@@ -2,9 +2,10 @@
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
+from audit.service.decorators import audit_operation
 from common.core.database import get_session
 from common.core.security import get_password_hash
 from common.exceptions.base import BadRequestException, ForbiddenException, NotFoundException
@@ -17,7 +18,7 @@ from datasource.service.edu_permission import (
     parse_edu_scope,
     validate_edu_scope,
 )
-from system.api.system import get_current_user
+from system.api.auth_deps import get_current_user
 from system.authz import can_manage_data_permissions
 from system.models.user import SysUser
 from system.schemas import EduScopePayload
@@ -63,7 +64,9 @@ def pager_users(
 
 
 @router.post("")
+@audit_operation(operation_type="create", resource_type="user", detail_arg="payload")
 def create_user(
+    request: Request,
     payload: dict,
     session: Session = Depends(get_session),
     current_user=Depends(get_current_user),
@@ -95,7 +98,9 @@ def create_user(
 
 
 @router.put("")
+@audit_operation(operation_type="update", resource_type="user", detail_arg="payload")
 def update_user(
+    request: Request,
     payload: dict,
     session: Session = Depends(get_session),
     current_user=Depends(get_current_user),
@@ -117,7 +122,9 @@ def update_user(
 
 
 @router.delete("/{user_id}")
+@audit_operation(operation_type="delete", resource_type="user", resource_id_arg="user_id")
 def delete_user(
+    request: Request,
     user_id: int,
     session: Session = Depends(get_session),
     current_user=Depends(get_current_user),
@@ -132,7 +139,9 @@ def delete_user(
 
 
 @router.patch("/status")
+@audit_operation(operation_type="patch", resource_type="user", detail_arg="payload")
 def update_user_status(
+    request: Request,
     payload: dict,
     session: Session = Depends(get_session),
     current_user=Depends(get_current_user),
@@ -148,7 +157,9 @@ def update_user_status(
 
 
 @router.patch("/pwd/{user_id}")
+@audit_operation(operation_type="patch", resource_type="user", resource_id_arg="user_id")
 def reset_user_pwd(
+    request: Request,
     user_id: int,
     payload: dict,
     session: Session = Depends(get_session),

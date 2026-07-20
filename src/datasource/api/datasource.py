@@ -1,22 +1,24 @@
 """Datasource API routes."""
 
+import json
+import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
-from common.core.database import get_session
+from audit.service.writer import log_operation
+from common.core.database import SessionLocal, get_session
 from common.exceptions.base import NotFoundException
 from common.schemas.response import success_response
+from common.utils.aes import decrypt_conf
+from datasource.crud import crud_datasource
+from datasource.models.datasource import CoreField, CoreTable
 from datasource.schemas import (
-    ConnectionTestResult,
     DatasourceCreate,
     DatasourceUpdate,
 )
-from datasource.crud import crud_datasource
-from common.utils.aes import decrypt_conf
-from datasource.models.datasource import CoreTable, CoreField
-from system.api.system import get_current_user
+from system.api.auth_deps import get_current_user
 from system.schemas import UserResponse
 from system.workspace_scope import (
     assert_datasource_accessible,
@@ -25,6 +27,17 @@ from system.workspace_scope import (
 )
 
 router = APIRouter(prefix="/datasource", tags=["datasource"])
+
+
+def _client_ip(request: Request) -> Optional[str]:
+    """优先从 XFF/X-Real-IP 取真实客户端 IP，回退 request.client.host。"""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    real = request.headers.get("x-real-ip")
+    if real:
+        return real.strip()
+    return request.client.host if request.client else None
 
 
 @router.get("")
@@ -188,33 +201,59 @@ def delete_datasource(
 @router.post("/{datasource_id}/test-connection")
 def test_connection(
     datasource_id: int,
+    request: Request,
     session: Session = Depends(get_session),
     workspace_oid: int = Depends(get_workspace_oid),
     current_user: UserResponse = Depends(get_current_user),
 ):
-    """Test datasource connection."""
+    """Test datasource connection and record operation log with real result."""
     ds = assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
 
     config = decrypt_conf(ds.configuration) if ds.configuration else {}
 
+    start = time.time()
+    success = True
+    error_msg: Optional[str] = None
+    result_data = None
     try:
         from datasource.db.db import test_db_connection
-        success, message, version = test_db_connection(ds.type, config)
-        return success_response(
-            data={
-                "success": success,
-                "message": message,
-                "version": version,
-            }
-        )
+        ok, message, version = test_db_connection(ds.type, config)
+        success = ok
+        if not ok:
+            error_msg = message
+        result_data = {
+            "success": success,
+            "message": message,
+            "version": version,
+        }
     except Exception as e:
-        return success_response(
-            data={
-                "success": False,
-                "message": str(e),
-                "version": None,
-            }
-        )
+        success = False
+        error_msg = str(e)
+        result_data = {
+            "success": False,
+            "message": error_msg,
+            "version": None,
+        }
+
+    log_operation(
+        session_factory=SessionLocal,
+        operation_type="test",
+        resource_type="datasource",
+        resource_id=str(datasource_id),
+        request_method=request.method,
+        request_path=request.url.path,
+        detail=json.dumps(result_data, ensure_ascii=False),
+        user_id=current_user.id,
+        user_account=current_user.account,
+        workspace_oid=current_user.oid,
+        ip=_client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+        success=success,
+        error_msg=error_msg,
+        elapsed_ms=int((time.time() - start) * 1000),
+    )
+
+    return success_response(data=result_data)
 
 
 @router.get("/{datasource_id}/tables")

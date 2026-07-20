@@ -82,7 +82,7 @@ def test_config_update_affects_compute_score_stats_tool():
 def test_batch_report_endpoint_generates_per_class(monkeypatch):
     """mock 数据源底层，验证批量端点按班级列表逐个生成。"""
     from src.agent.resource.tool import business as biz
-    from system.api.system import get_current_user
+    from system.api.auth_deps import get_current_user
     from system.schemas import UserResponse
     from system.workspace_scope import get_workspace_oid
 

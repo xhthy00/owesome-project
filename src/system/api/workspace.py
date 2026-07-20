@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from common.core.database import get_session
 from common.exceptions.base import BadRequestException, NotFoundException
 from common.schemas.response import success_response
-from system.api.system import get_current_user
+from system.api.auth_deps import get_current_user
 from system.models.user import SysUser
 from system.models.workspace import SysUserWorkspace, SysWorkspace
 from system.schemas import UserResponse

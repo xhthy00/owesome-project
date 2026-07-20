@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.chat.api.chat import router as chat_router
-from system.api.system import get_current_user
+from system.api.auth_deps import get_current_user
 
 
 def _build_app() -> FastAPI:

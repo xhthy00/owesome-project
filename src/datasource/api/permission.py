@@ -12,7 +12,7 @@ from common.schemas.response import success_response
 from datasource.crud import crud_datasource
 from datasource.models.datasource import CoreTable
 from datasource.models.permission import DsPermission, DsRule
-from system.api.system import get_current_user
+from system.api.auth_deps import get_current_user
 from system.authz import can_manage_data_permissions
 from system.workspace_scope import get_workspace_oid
 

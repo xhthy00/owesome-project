@@ -6,10 +6,11 @@ import logging
 import time
 from typing import AsyncGenerator, Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from audit.service.decorators import audit_access
 from chat.crud import chat as chat_crud
 from chat.schemas import (
     ChatRequest,
@@ -18,8 +19,8 @@ from chat.schemas import (
     ConversationRecordResponse,
     ConversationResponse,
     ConversationUpdate,
-    ReportReviewUpdate,
     RecordReportsReplace,
+    ReportReviewUpdate,
     SQLFormatRequest,
     SQLValidationRequest,
 )
@@ -28,8 +29,7 @@ from common.core.database import get_session
 from common.core.trace import new_trace_id, set_trace_id
 from common.exceptions.base import NotFoundException
 from common.schemas.response import success_response
-from fastapi import HTTPException
-from system.api.system import get_current_user
+from system.api.auth_deps import get_current_user
 from system.schemas import UserResponse
 from system.workspace_scope import assert_datasource_accessible, get_workspace_oid
 
@@ -42,7 +42,7 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 @router.post("/conversations", summary="Create conversation")
 def create_conversation(
-    request: ConversationCreate,
+    chat_request: ConversationCreate,
     session: Session = Depends(get_session),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
@@ -51,8 +51,8 @@ def create_conversation(
     conversation = chat_crud.create_conversation(
         session=session,
         user_id=current_user.id,
-        title=request.title,
-        datasource_id=request.datasource_id,
+        title=chat_request.title,
+        datasource_id=chat_request.datasource_id,
         oid=workspace_oid,
     )
     return success_response(
@@ -161,7 +161,7 @@ def get_conversation(
 @router.put("/conversations/{conversation_id}", summary="Update conversation")
 def update_conversation(
     conversation_id: int,
-    request: ConversationUpdate,
+    chat_request: ConversationUpdate,
     session: Session = Depends(get_session),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
@@ -172,8 +172,8 @@ def update_conversation(
         conversation_id=conversation_id,
         user_id=current_user.id,
         oid=workspace_oid,
-        title=request.title,
-        datasource_id=request.datasource_id
+        title=chat_request.title,
+        datasource_id=chat_request.datasource_id
     )
     if not conversation:
         raise NotFoundException("Conversation not found")
@@ -212,7 +212,7 @@ def update_report_review(
     conversation_id: int,
     record_id: int,
     report_index: int,
-    request: ReportReviewUpdate,
+    chat_request: ReportReviewUpdate,
     session: Session = Depends(get_session),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
@@ -243,7 +243,7 @@ def update_report_review(
         raise HTTPException(status_code=400, detail="Invalid report payload")
 
     current_status = str(item.get("review_status") or "pending")
-    if current_status == "approved" and request.recommendations_text is not None:
+    if current_status == "approved" and chat_request.recommendations_text is not None:
         raise HTTPException(status_code=400, detail="报告已审核，不可再编辑建议")
 
     from src.agent.education.report_edit import (
@@ -252,19 +252,19 @@ def update_report_review(
     )
 
     html = str(item.get("html") or "")
-    if request.recommendations_text is not None:
+    if chat_request.recommendations_text is not None:
         if not has_recommendations_section(html):
             raise HTTPException(status_code=400, detail="本报告无可编辑的建议区")
-        item["html"] = replace_recommendations_html(html, request.recommendations_text)
-        item["recommendations_text"] = request.recommendations_text
+        item["html"] = replace_recommendations_html(html, chat_request.recommendations_text)
+        item["recommendations_text"] = chat_request.recommendations_text
 
-    if request.review_status is not None:
-        if request.review_status == "approved" and current_status == "approved":
+    if chat_request.review_status is not None:
+        if chat_request.review_status == "approved" and current_status == "approved":
             pass
-        elif request.review_status == "pending" and current_status == "approved":
+        elif chat_request.review_status == "pending" and current_status == "approved":
             raise HTTPException(status_code=400, detail="报告已审核，不可回退")
         else:
-            item["review_status"] = request.review_status
+            item["review_status"] = chat_request.review_status
 
     if "review_status" not in item:
         item["review_status"] = "pending"
@@ -296,7 +296,7 @@ def update_report_review(
 def replace_record_reports(
     conversation_id: int,
     record_id: int,
-    request: RecordReportsReplace,
+    chat_request: RecordReportsReplace,
     session: Session = Depends(get_session),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
@@ -315,7 +315,7 @@ def replace_record_reports(
         raise NotFoundException("Conversation record not found")
 
     cleaned: list[dict] = []
-    for item in request.reports or []:
+    for item in chat_request.reports or []:
         if not isinstance(item, dict):
             continue
         row = dict(item)
@@ -341,8 +341,10 @@ def replace_record_reports(
 # ============== SQL Generation & Execution ==============
 
 @router.post("/generate-sql")
+@audit_access(datasource_id_arg="chat_request.datasource_id", query_arg="chat_request.question")
 def generate_sql(
-    request: ChatRequest,
+    chat_request: ChatRequest,
+    http_request: Request,
     session: Session = Depends(get_session),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
@@ -357,13 +359,13 @@ def generate_sql(
     4. Validates the generated SQL
     5. Returns the result with chart type and tables info
     """
-    assert_datasource_accessible(session, current_user, request.datasource_id, workspace_oid)
+    assert_datasource_accessible(session, current_user, chat_request.datasource_id, workspace_oid)
 
     generator = SQLGenerator()
 
     result = generator.generate_sql(
-        question=request.question,
-        datasource_id=request.datasource_id,
+        question=chat_request.question,
+        datasource_id=chat_request.datasource_id,
         session=session,
         need_title=True,
         user_id=current_user.id,
@@ -398,8 +400,10 @@ def generate_sql(
 
 
 @router.post("/execute-sql", summary="Generate and execute SQL")
+@audit_access(datasource_id_arg="chat_request.datasource_id", query_arg="chat_request.question")
 def execute_sql(
-    request: ChatRequest,
+    chat_request: ChatRequest,
+    http_request: Request,
     session: Session = Depends(get_session),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
@@ -421,15 +425,15 @@ def execute_sql(
         validate_sql_column_permissions,
     )
 
-    datasource = assert_datasource_accessible(session, current_user, request.datasource_id, workspace_oid)
+    datasource = assert_datasource_accessible(session, current_user, chat_request.datasource_id, workspace_oid)
 
     config = decrypt_conf(datasource.configuration) if datasource.configuration else {}
 
     # Generate SQL
     generator = SQLGenerator()
     result = generator.generate_sql(
-        question=request.question,
-        datasource_id=request.datasource_id,
+        question=chat_request.question,
+        datasource_id=chat_request.datasource_id,
         session=session,
         need_title=False,
         user_id=current_user.id,
@@ -442,8 +446,8 @@ def execute_sql(
         record_id = _persist_record(
             session=session,
             current_user_id=current_user.id,
-            request=request,
-            question=request.question,
+            chat_request=chat_request,
+            question=chat_request.question,
             sql=result.get("sql", ""),
             sql_error=result.get("error", ""),
             exec_result=None,
@@ -495,8 +499,8 @@ def execute_sql(
         record_id = _persist_record(
             session=session,
             current_user_id=current_user.id,
-            request=request,
-            question=request.question,
+            chat_request=chat_request,
+            question=chat_request.question,
             sql=sql_exec,
             sql_error=col_perm_err,
             exec_result=None,
@@ -549,8 +553,8 @@ def execute_sql(
     record_id = _persist_record(
         session=session,
         current_user_id=current_user.id,
-        request=request,
-        question=request.question,
+        chat_request=chat_request,
+        question=chat_request.question,
         sql=sql_exec,
         sql_error=None if success else message,
         exec_result=exec_result if success else None,
@@ -595,7 +599,7 @@ def execute_sql(
 def _persist_record(
     session: Session,
     current_user_id: int,
-    request: ChatRequest,
+    chat_request: ChatRequest,
     question: str,
     sql: Optional[str],
     sql_error: Optional[str],
@@ -614,12 +618,12 @@ def _persist_record(
     reports: Optional[list[dict]] = None,
 ) -> int:
     """Persist a conversation record. Returns record_id (0 if no conversation)."""
-    if not request.conversation_id:
+    if not chat_request.conversation_id:
         return 0
     try:
         record = chat_crud.create_conversation_record(
             session=session,
-            conversation_id=request.conversation_id,
+            conversation_id=chat_request.conversation_id,
             user_id=current_user_id,
             question=question,
             sql=sql,
@@ -647,8 +651,10 @@ def _persist_record(
 # ============== Streaming Chat ==============
 
 @router.post("/chat-stream", summary="Chat with streaming output")
+@audit_access(datasource_id_arg="chat_request.datasource_id", query_arg="chat_request.question")
 async def chat_stream(
-    request: ChatRequest,
+    chat_request: ChatRequest,
+    http_request: Request,
     session: Session = Depends(get_session),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
@@ -656,7 +662,7 @@ async def chat_stream(
     """
     Chat endpoint with Server-Sent Events (SSE) streaming output.
 
-    Backends (switched by ``request.agent_mode``):
+    Backends (switched by ``chat_request.agent_mode``):
       - "agent"  (default): ReAct DataAnalystAgent with tools
       - "team"            : DataAnalyst → Charter → Summarizer 线性 DAG
       - "legacy"          : single-shot SQLGenerator pipeline
@@ -681,23 +687,23 @@ async def chat_stream(
     """
     trace_id = new_trace_id()
     set_trace_id(trace_id)
-    if request.datasource_id:
-        assert_datasource_accessible(session, current_user, request.datasource_id, workspace_oid)
+    if chat_request.datasource_id:
+        assert_datasource_accessible(session, current_user, chat_request.datasource_id, workspace_oid)
 
     logger.info(
         "chat_stream start mode=%s ds=%s conv=%s user=%s q_len=%d",
-        request.agent_mode,
-        request.datasource_id,
-        request.conversation_id,
+        chat_request.agent_mode,
+        chat_request.datasource_id,
+        chat_request.conversation_id,
         current_user.id,
-        len(request.question or ""),
+        len(chat_request.question or ""),
     )
 
     current_user_id = current_user.id
 
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_event_loop()
-    SENTINEL = object()
+    sentinel = object()
 
     def push(event: str, data: dict) -> None:
         loop.call_soon_threadsafe(queue.put_nowait, (event, data))
@@ -721,10 +727,10 @@ async def chat_stream(
 
             runner = run_team_stream if team else run_agent_stream
             record_id = await runner(
-                request=request,
+                request=chat_request,
                 current_user_id=current_user_id,
                 emit=emit_async,
-                enable_tool_agent=request.enable_tool_agent,
+                enable_tool_agent=chat_request.enable_tool_agent,
                 workspace_oid=workspace_oid,
             )
         except Exception as e:  # noqa: BLE001
@@ -732,7 +738,7 @@ async def chat_stream(
             await emit_async("error", {"error": str(e)})
         finally:
             await emit_async("done", {"record_id": record_id})
-            queue.put_nowait(SENTINEL)
+            queue.put_nowait(sentinel)
 
     def run_legacy_pipeline() -> None:
         from src.common.core.database import get_db_session
@@ -768,14 +774,14 @@ async def chat_stream(
                     build_education_prompt_extras,
                     is_education_question,
                 )
-                if is_education_question(request.question):
+                if is_education_question(chat_request.question):
                     term, training = build_education_prompt_extras()
                     gen_kwargs["terminologies"] = term
                     gen_kwargs["data_training"] = training
 
                 result = generator.generate_sql(
-                    question=request.question,
-                    datasource_id=request.datasource_id,
+                    question=chat_request.question,
+                    datasource_id=chat_request.datasource_id,
                     session=session,
                     need_title=False,
                     step_callback=on_step,
@@ -791,8 +797,8 @@ async def chat_stream(
                     record_id = _persist_record(
                         session=session,
                         current_user_id=current_user_id,
-                        request=request,
-                        question=request.question,
+                        chat_request=chat_request,
+                        question=chat_request.question,
                         sql=result.get("sql", ""),
                         sql_error=result.get("error", ""),
                         exec_result=None,
@@ -806,7 +812,7 @@ async def chat_stream(
                     push("error", {"error": result["error"]})
                     return
 
-                datasource = crud_datasource.get_datasource_by_id(session, request.datasource_id)
+                datasource = crud_datasource.get_datasource_by_id(session, chat_request.datasource_id)
                 if not datasource:
                     push("error", {"error": "Datasource not found"})
                     return
@@ -848,8 +854,8 @@ async def chat_stream(
                     record_id = _persist_record(
                         session=session,
                         current_user_id=current_user_id,
-                        request=request,
-                        question=request.question,
+                        chat_request=chat_request,
+                        question=chat_request.question,
                         sql=sql_exec,
                         sql_error=col_perm_err,
                         exec_result=None,
@@ -895,8 +901,8 @@ async def chat_stream(
                 record_id = _persist_record(
                     session=session,
                     current_user_id=current_user_id,
-                    request=request,
-                    question=request.question,
+                    chat_request=chat_request,
+                    question=chat_request.question,
                     sql=sql_exec,
                     sql_error=None if success else message,
                     exec_result=exec_result if success else None,
@@ -918,12 +924,12 @@ async def chat_stream(
             push("error", {"error": str(e)})
         finally:
             push("done", {"record_id": record_id})
-            loop.call_soon_threadsafe(queue.put_nowait, SENTINEL)
+            loop.call_soon_threadsafe(queue.put_nowait, sentinel)
 
-    if request.agent_mode == "legacy":
+    if chat_request.agent_mode == "legacy":
         asyncio.create_task(asyncio.to_thread(run_legacy_pipeline))
     else:
-        asyncio.create_task(run_agent_branch(team=request.agent_mode == "team"))
+        asyncio.create_task(run_agent_branch(team=chat_request.agent_mode == "team"))
 
     async def event_stream() -> AsyncGenerator[str, None]:
         while True:
@@ -936,7 +942,7 @@ async def chat_stream(
                 # 避免被按"空闲"掐断导致前端卡死。注释行被前端解析器跳过、不产生事件。
                 yield ": keepalive\n\n"
                 continue
-            if item is SENTINEL:
+            if item is sentinel:
                 break
             event, data = item
             yield _sse_event(event, data)
@@ -974,7 +980,7 @@ def _sse_event(event: str, data: dict) -> str:
 
 @router.post("/validate-sql")
 def validate_sql_endpoint(
-    request: SQLValidationRequest,
+    chat_request: SQLValidationRequest,
     session: Session = Depends(get_session),
 ):
     """
@@ -985,7 +991,7 @@ def validate_sql_endpoint(
     """
     from chat.utils.sql_validator import validate_sql
 
-    is_valid, error_msg = validate_sql(request.sql)
+    is_valid, error_msg = validate_sql(chat_request.sql)
 
     return success_response(
         data={
@@ -998,7 +1004,7 @@ def validate_sql_endpoint(
 
 @router.post("/format-sql")
 def format_sql_endpoint(
-    request: SQLFormatRequest,
+    chat_request: SQLFormatRequest,
     session: Session = Depends(get_session),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
@@ -1013,18 +1019,18 @@ def format_sql_endpoint(
 
     # Get datasource to determine database type
     datasource = None
-    if request.datasource_id:
+    if chat_request.datasource_id:
         datasource = assert_datasource_accessible(
-            session, current_user, request.datasource_id, workspace_oid
+            session, current_user, chat_request.datasource_id, workspace_oid
         )
 
     db_type = datasource.type if datasource else "pg"
 
-    formatted = format_sql(request.sql, db_type)
+    formatted = format_sql(chat_request.sql, db_type)
 
     return success_response(
         data={
-            "original_sql": request.sql,
+            "original_sql": chat_request.sql,
             "formatted_sql": formatted,
             "db_type": db_type,
         },

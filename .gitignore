@@ -11,3 +11,5 @@ build/
 *.egg-info/
 .env
 .next
+frontend-react/tsconfig.tsbuildinfo
+temp/

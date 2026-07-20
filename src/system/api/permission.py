@@ -12,7 +12,7 @@ from common.exceptions.base import ForbiddenException
 from common.schemas.response import success_response
 from datasource.models.datasource import CoreDatasource
 from datasource.models.permission import DsPermission
-from system.api.system import get_current_user
+from system.api.auth_deps import get_current_user
 from system.authz import can_manage_data_permissions
 from system.models.user import SysUser
 from system.models.workspace import SysUserWorkspace

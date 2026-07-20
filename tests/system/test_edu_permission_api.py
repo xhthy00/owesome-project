@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 
 from common.core.database import get_session
 from common.router import register_routers
-from system.api.system import get_current_user
+from system.api.auth_deps import get_current_user
 from system.schemas import UserResponse
 
 

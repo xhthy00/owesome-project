@@ -22,7 +22,7 @@ from datasource.service.edu_permission import (
     validate_edu_scope,
 )
 from datasource.service.query_permission import apply_permissions_for_execute
-from system.api.system import get_current_user
+from system.api.auth_deps import get_current_user
 from system.authz import can_manage_data_permissions
 from system.crud.crud_user import get_user_by_id
 from system.models.user import SysUser

@@ -1,39 +1,30 @@
 """System API routes (auth, users)."""
 
-from fastapi import APIRouter, Depends
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi import APIRouter, Depends, Request
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
-from common.core.database import get_session
-from common.core.security import create_access_token, decode_access_token
-from common.exceptions.base import UnauthorizedException, BadRequestException, NotFoundException
+from common.core.database import SessionLocal, get_session
+from common.core.security import create_access_token, verify_password
+from common.exceptions.base import BadRequestException, UnauthorizedException
 from common.schemas.response import success_response
-from system.schemas import UserCreate, UserResponse
-from system.crud.crud_user import (
-    get_user_by_account,
-    create_user,
-    authenticate,
-    get_user_by_id,
-)
+from system.api.auth_deps import get_current_user
+from system.authz import is_platform_admin
+from system.crud.crud_user import create_user, get_user_by_account, get_user_by_id
+from system.schemas import UserCreate
 
 router = APIRouter(prefix="/system", tags=["system"])
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/system/login")
 
-
-def get_current_user(
-    token: str = Depends(oauth2_scheme),
-    session: Session = Depends(get_session),
-) -> UserResponse:
-    """Get current authenticated user from JWT token."""
-    payload = decode_access_token(token)
-    if payload is None:
-        raise UnauthorizedException("Invalid or expired token")
-    user_id = int(payload.get("sub"))
-    user = get_user_by_id(session, user_id)
-    if user is None:
-        raise NotFoundException("User not found")
-    return user
+def _client_ip(request: Request) -> str:
+    """从请求头解析客户端真实 IP。"""
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[0].strip()
+    real = request.headers.get("x-real-ip")
+    if real:
+        return real.strip()
+    return request.client.host if request.client else ""
 
 
 @router.post("/register")
@@ -69,13 +60,63 @@ def register(user_in: UserCreate, session: Session = Depends(get_session)):
 
 @router.post("/login")
 def login(
+    request: Request,
     form_data: OAuth2PasswordRequestForm = Depends(),
     session: Session = Depends(get_session),
 ):
-    """Login and get access token."""
-    user = authenticate(session, form_data.username, form_data.password)
-    if not user:
+    """Login and get access token. Records login audit log (success/fail)."""
+    from audit.service.writer import log_login  # 局部 import 避免循环
+
+    account = form_data.username
+    ip = _client_ip(request)
+    ua = request.headers.get("user-agent")
+
+    user = get_user_by_account(session, account)
+    if user is None:
+        log_login(
+            session_factory=SessionLocal,
+            account=account,
+            success=False,
+            fail_reason="账号不存在",
+            user_account=account,
+            ip=ip,
+            user_agent=ua,
+        )
         raise UnauthorizedException("Incorrect account or password")
+    if user.status != 1:
+        log_login(
+            session_factory=SessionLocal,
+            account=account,
+            success=False,
+            fail_reason="账号已禁用",
+            user_id=user.id,
+            user_account=account,
+            ip=ip,
+            user_agent=ua,
+        )
+        raise UnauthorizedException("Account disabled")
+    if not verify_password(form_data.password, user.password):
+        log_login(
+            session_factory=SessionLocal,
+            account=account,
+            success=False,
+            fail_reason="密码错误",
+            user_id=user.id,
+            user_account=account,
+            ip=ip,
+            user_agent=ua,
+        )
+        raise UnauthorizedException("Incorrect account or password")
+
+    log_login(
+        session_factory=SessionLocal,
+        account=account,
+        success=True,
+        user_id=user.id,
+        user_account=user.account,
+        ip=ip,
+        user_agent=ua,
+    )
     access_token = create_access_token(user.id)
     return success_response(
         data={"access_token": access_token, "token_type": "bearer"},
@@ -105,5 +146,6 @@ def get_me(
             "origin": current_user.origin,
             "create_time": current_user.create_time,
             "edu_scope": edu_scope,
+            "is_platform_admin": is_platform_admin(db_user) if db_user else False,
         }
     )
