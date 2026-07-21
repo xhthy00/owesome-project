@@ -129,6 +129,10 @@ def compute_score_stats(
         "low_score_rate": _rate(valid, lambda v: v < low_thr),
         "fail_rate": _rate(valid, lambda v: v < pass_thr),
         "full_score": upper,
+        "pass_line": round(pass_thr, 4),
+        "excellent_line": round(exc_thr, 4),
+        "pass_ratio": float(config.pass_ratio),
+        "excellent_ratio": float(config.excellent_ratio),
         "segments": segments,
     }
 
@@ -346,21 +350,82 @@ def identify_at_risk_students(
         students: 每条形如 ``{name, subject, score, prev_score?}``；可含多科目
             多行（同一学生多科）。``prev_score`` 为上一次同科目成绩，缺省视为
             无退步数据。
-        config: 阈值配置。
+        config: 阈值配置（含可选 ``anomaly_rules``；缺省由经典字段推导，
+            行为与历史硬编码一致）。
 
     Returns:
         ``{"critical": [...], "regression": [...], "imbalanced": [...]}``。
         每条含原始字段 + ``reason`` 说明。
     """
+    from src.agent.education.config import (
+        ANOMALY_CRITICAL,
+        ANOMALY_IMBALANCED,
+        ANOMALY_REGRESSION,
+        COMPARE_PASS_LINE,
+        COMPARE_PREV_EXAM,
+        COMPARE_SELF_SUBJECTS,
+        resolve_anomaly_rules,
+    )
+
     critical: list[dict[str, Any]] = []
     regression: list[dict[str, Any]] = []
     imbalanced: list[dict[str, Any]] = []
 
-    pass_thr = config.pass_threshold
-    margin = config.critical_margin
-    reg_thr = config.regression_threshold
+    rules = {r.anomaly_type: r for r in resolve_anomaly_rules(config)}
+    critical_rule = rules.get(ANOMALY_CRITICAL)
+    regression_rule = rules.get(ANOMALY_REGRESSION)
+    imbalance_rule = rules.get(ANOMALY_IMBALANCED)
 
-    # 按学生分组科目，用于偏科判定
+    pass_thr = float(config.pass_threshold)
+    margin = float(config.critical_margin)
+    reg_thr = float(config.regression_threshold)
+    gap_thr = float(getattr(config, "imbalance_score_gap", 20.0))
+
+    critical_enabled = True
+    if critical_rule is not None:
+        critical_enabled = bool(critical_rule.enabled)
+        if critical_rule.fluctuation_value is not None:
+            margin = float(critical_rule.fluctuation_value)
+        lo_off = (
+            float(critical_rule.range_lo_offset)
+            if critical_rule.range_lo_offset is not None
+            else -margin
+        )
+        hi_off = (
+            float(critical_rule.range_hi_offset)
+            if critical_rule.range_hi_offset is not None
+            else margin
+        )
+        target = critical_rule.compare_target or COMPARE_PASS_LINE
+        if target == COMPARE_PASS_LINE:
+            crit_lo = pass_thr + lo_off
+            crit_hi = pass_thr + hi_off
+        elif critical_rule.range_lo is not None and critical_rule.range_hi is not None:
+            crit_lo = float(critical_rule.range_lo)
+            crit_hi = float(critical_rule.range_hi)
+        else:
+            crit_lo = pass_thr - margin
+            crit_hi = pass_thr + margin
+    else:
+        crit_lo = pass_thr - margin
+        crit_hi = pass_thr + margin
+
+    regression_enabled = True
+    if regression_rule is not None:
+        regression_enabled = bool(regression_rule.enabled) and (
+            (regression_rule.compare_target or COMPARE_PREV_EXAM) == COMPARE_PREV_EXAM
+        )
+        if regression_rule.threshold is not None:
+            reg_thr = float(regression_rule.threshold)
+
+    imbalance_enabled = True
+    if imbalance_rule is not None:
+        imbalance_enabled = bool(imbalance_rule.enabled) and (
+            (imbalance_rule.compare_target or COMPARE_SELF_SUBJECTS) == COMPARE_SELF_SUBJECTS
+        )
+        if imbalance_rule.threshold is not None:
+            gap_thr = float(imbalance_rule.threshold)
+
     by_student: dict[str, list[dict[str, Any]]] = {}
     for s in students:
         name = str(s.get(name_key) or "")
@@ -374,42 +439,57 @@ def identify_at_risk_students(
         by_student.setdefault(name, []).append(s)
 
         # 临界生：分数位于 [pass - margin, pass + margin)
-        if pass_thr - margin <= score_val < pass_thr + margin:
-            critical.append({**s, "reason": f"临界生：{score_val} 分处于及格线 ±{margin} 区间"})
+        if critical_enabled and crit_lo <= score_val < crit_hi:
+            critical.append(
+                {**s, "reason": f"临界生：{score_val} 分处于及格线 ±{margin} 区间"}
+            )
 
         # 大幅退步：与 prev_score 相比降幅超过 |regression_threshold|
-        prev = s.get(prev_score_key)
-        if prev is not None:
-            try:
-                prev_val = float(prev)
-                delta = score_val - prev_val
-                if delta <= reg_thr:
-                    regression.append({**s, "reason": f"大幅退步：{prev_val} → {score_val}（降 {abs(delta)} 分）"})
-            except (TypeError, ValueError):
-                pass
+        if regression_enabled:
+            prev = s.get(prev_score_key)
+            if prev is not None:
+                try:
+                    prev_val = float(prev)
+                    delta = score_val - prev_val
+                    if delta <= reg_thr:
+                        regression.append(
+                            {
+                                **s,
+                                "reason": (
+                                    f"大幅退步：{prev_val} → {score_val}（降 {abs(delta)} 分）"
+                                ),
+                            }
+                        )
+                except (TypeError, ValueError):
+                    pass
 
-    # 偏科生：同一学生各科分差最大值 ≥ 20 且最低科 < 及格线
-    for name, rows in by_student.items():
-        if len(rows) < 2:
-            continue
-        scores = []
-        for r in rows:
-            try:
-                scores.append((str(r.get(subject_key) or ""), float(r.get(score_key))))
-            except (TypeError, ValueError):
+    # 偏科生：同一学生各科分差最大值 ≥ gap 且最低科 < 及格线
+    if imbalance_enabled:
+        for name, rows in by_student.items():
+            if len(rows) < 2:
                 continue
-        if len(scores) < 2:
-            continue
-        scores.sort(key=lambda x: x[1])
-        low_sub, low_val = scores[0]
-        high_sub, high_val = scores[-1]
-        if high_val - low_val >= 20 and low_val < pass_thr:
-            imbalanced.append({
-                "name": name,
-                "low_subject": low_sub, "low_score": low_val,
-                "high_subject": high_sub, "high_score": high_val,
-                "reason": f"偏科：{high_sub} {high_val} vs {low_sub} {low_val}",
-            })
+            scores = []
+            for r in rows:
+                try:
+                    scores.append((str(r.get(subject_key) or ""), float(r.get(score_key))))
+                except (TypeError, ValueError):
+                    continue
+            if len(scores) < 2:
+                continue
+            scores.sort(key=lambda x: x[1])
+            low_sub, low_val = scores[0]
+            high_sub, high_val = scores[-1]
+            if high_val - low_val >= gap_thr and low_val < pass_thr:
+                imbalanced.append(
+                    {
+                        "name": name,
+                        "low_subject": low_sub,
+                        "low_score": low_val,
+                        "high_subject": high_sub,
+                        "high_score": high_val,
+                        "reason": f"偏科：{high_sub} {high_val} vs {low_sub} {low_val}",
+                    }
+                )
 
     return {"critical": critical, "regression": regression, "imbalanced": imbalanced}
 

@@ -16,15 +16,18 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "sys_menu_visible",
-        sa.Column("id", sa.BigInteger(), sa.Identity(always=True), primary_key=True, nullable=False),
-        sa.Column("menu_key", sa.String(length=64), nullable=False),
-        sa.Column("visible", sa.Boolean(), nullable=False, server_default=sa.text("true")),
-        sa.Column("create_time", sa.DateTime(), nullable=True),
-        sa.Column("update_time", sa.DateTime(), nullable=True),
-    )
-    op.create_index("ix_sys_menu_visible_menu_key", "sys_menu_visible", ["menu_key"], unique=True)
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if "sys_menu_visible" not in inspector.get_table_names():
+        op.create_table(
+            "sys_menu_visible",
+            sa.Column("id", sa.BigInteger(), sa.Identity(always=True), primary_key=True, nullable=False),
+            sa.Column("menu_key", sa.String(length=64), nullable=False),
+            sa.Column("visible", sa.Boolean(), nullable=False, server_default=sa.text("true")),
+            sa.Column("create_time", sa.DateTime(), nullable=True),
+            sa.Column("update_time", sa.DateTime(), nullable=True),
+        )
+        op.create_index("ix_sys_menu_visible_menu_key", "sys_menu_visible", ["menu_key"], unique=True)
 
 
 def downgrade() -> None:

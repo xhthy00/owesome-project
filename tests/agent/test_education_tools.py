@@ -44,6 +44,17 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_edu_config_from_db(monkeypatch):
+    """工具测试不读取本地库表异常规则，统一用代码默认阈值。"""
+
+    def _fresh() -> EducationConfig:
+        return EducationConfig()
+
+    monkeypatch.setattr("src.agent.education.tools._get_effective_config", _fresh)
+    monkeypatch.setattr("src.agent.education.config_store.get_config", _fresh)
+
+
 # ---- stats ----------------------------------------------------------------
 
 def test_compute_score_stats_empty_returns_placeholder():

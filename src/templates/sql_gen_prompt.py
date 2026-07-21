@@ -7,30 +7,38 @@ from typing import List, Optional
 
 #: 教育学情场景内置 SQL few-shot 示例。
 #:
-#: 覆盖班级均分、年级排名、分数段分布、个体查询、历次对比 5 类高频问法。
-#: 调用方（如 DataAnalyst 的 SQL 生成路径或 legacy SQLGenerator）可通过
-#: ``data_training=education_sql_training_block()`` 注入；不在
-#: ``build_sql_generation_prompt`` 内强制注入，避免污染非教育场景。
-EDUCATION_SQL_EXAMPLES = """<sql-examples>
+#: 覆盖班级均分、年级排名、分数段分布、个体查询、历次对比等高频问法。
+#: 及格/优秀比例**不要**写死在 SQL 里——由异常规则配置 + compute_score_stats_tool 计算。
+#: 调用方可通过 ``data_training=education_sql_training_block()`` 注入。
+def _pass_excellent_ratios() -> tuple[float, float]:
+    try:
+        from src.agent.education.config_store import get_config
+
+        cfg = get_config()
+        return float(cfg.pass_ratio), float(cfg.excellent_ratio)
+    except Exception:
+        return 0.6, 0.85
+
+
+def education_sql_training_block() -> str:
+    """返回教育学情 SQL few-shot 块（及格/优秀不在 SQL 内写死比例）。"""
+    return """<sql-examples>
   <example>
-    <question>南京市第一中学高一(1)班数学平均分和及格率</question>
+    <question>南京市第一中学高一(1)班数学平均分和人数</question>
     <suggestion-answer>SELECT sch.name AS school,
        sc.class,
        sc.subject_name,
        sc.exam_score,
        COUNT(*) AS cnt,
-       ROUND(AVG(sc.score), 2) AS avg_score,
-       ROUND(SUM(CASE WHEN sc.score >= sc.exam_score * 0.6 THEN 1 ELSE 0 END)::numeric
-             / COUNT(*) * 100, 2) AS pass_rate,
-       ROUND(SUM(CASE WHEN sc.score >= sc.exam_score * 0.85 THEN 1 ELSE 0 END)::numeric
-             / COUNT(*) * 100, 2) AS excellent_rate
+       ROUND(AVG(sc.score), 2) AS avg_score
 FROM tb_score sc
 JOIN tb_school sch ON sc.school_id = sch.id
 WHERE sch.name = '南京市第一中学'
   AND sc.class = '高一(1)班'
   AND sc.subject_name = '数学'
 GROUP BY sch.name, sc.class, sc.subject_name, sc.exam_score
-LIMIT 1000;</suggestion-answer>
+LIMIT 1000;
+-- 及格率/优秀率：查明细 score+exam_score 后用 compute_score_stats_tool，禁止在 SQL 写死 0.6/0.85</suggestion-answer>
   </example>
   <example>
     <question>对比三所学校数学均分排名</question>
@@ -60,7 +68,8 @@ JOIN tb_school sch ON sc.school_id = sch.id
 WHERE sch.name = '南京市第一中学' AND sc.subject_name = '数学'
 GROUP BY segment
 ORDER BY segment
-LIMIT 1000;</suggestion-answer>
+LIMIT 1000;
+-- 上表为相对满分的分数段分布（展示用）；及格/优秀线以异常规则配置为准，勿与 0.6/0.85 混淆</suggestion-answer>
   </example>
   <example>
     <question>STU20240001 本次数学成绩</question>
@@ -146,7 +155,12 @@ LIMIT 1000;</suggestion-answer>
   </example>
 </sql-examples>"""
 
-EDUCATION_TERMINOLOGIES = """<terminologies>
+
+def education_terminologies_block() -> str:
+    """返回教育学情术语块；及格/优秀比例注入当前异常规则配置。"""
+    pr, er = _pass_excellent_ratios()
+    pp, ep = round(pr * 100, 2), round(er * 100, 2)
+    return f"""<terminologies>
   <terminology>
     <words><word>学校</word><word>机构</word><word>校区</word></words>
     <description>对应 tb_school.name，过滤用 JOIN tb_school sch ON sc.school_id = sch.id WHERE sch.name = '学校名'</description>
@@ -173,7 +187,7 @@ EDUCATION_TERMINOLOGIES = """<terminologies>
   </terminology>
   <terminology>
     <words><word>及格</word><word>优秀</word></words>
-    <description>及格线 = score >= exam_score * 0.6；优秀线 = score >= exam_score * 0.85；按卷面满分比例计算</description>
+    <description>当前系统配置：及格={pp}%（ratio {pr}）、优秀={ep}%（ratio {er}）。及格线=exam_score×{pr}，优秀线=exam_score×{er}。禁止写死 0.6/0.85。KPI 须用 compute_score_stats_tool（或报告工具）按配置计算，回复中的及格线/优秀线必须与工具结果一致</description>
   </terminology>
   <terminology>
     <words><word>得分率</word><word>难度</word></words>
@@ -182,14 +196,9 @@ EDUCATION_TERMINOLOGIES = """<terminologies>
 </terminologies>"""
 
 
-def education_sql_training_block() -> str:
-    """返回教育学情 SQL few-shot 块，供 ``data_training`` 参数注入。"""
-    return EDUCATION_SQL_EXAMPLES
-
-
-def education_terminologies_block() -> str:
-    """返回教育学情术语块，供 ``terminologies`` 参数注入。"""
-    return EDUCATION_TERMINOLOGIES
+# 兼容旧引用（静态块已改为函数生成）
+EDUCATION_SQL_EXAMPLES = ""
+EDUCATION_TERMINOLOGIES = ""
 
 
 def build_sql_generation_prompt(

@@ -88,3 +88,9 @@ def test_summarizer_prompt_injects_context_variables():
 def test_summarizer_desc_has_required_template_vars():
     for var in ("{{question}}", "{{sub_tasks_block}}"):
         assert var in SUMMARIZER_DESC, f"Summarizer desc missing {var}"
+
+
+def test_summarizer_desc_forbids_offset_page_as_class_size():
+    assert "OFFSET" in SUMMARIZER_DESC
+    assert "样例" in SUMMARIZER_DESC
+    assert "权威统计" in SUMMARIZER_DESC

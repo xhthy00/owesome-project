@@ -937,7 +937,13 @@ def _fill_class_overview_kpis_from_rows(out: dict[str, Any], rows: list[dict[str
         return
 
     full_score = _infer_full_score_for_segments(rows, scores, out)
-    stats = compute_score_stats(scores, EducationConfig(), full_score)
+    try:
+        from src.agent.education.config_store import get_config
+
+        cfg = get_config()
+    except Exception:
+        cfg = EducationConfig()
+    stats = compute_score_stats(scores, cfg, full_score)
 
     kpi_map = {
         "TOTAL_COUNT": str(stats.get("count") or 0),

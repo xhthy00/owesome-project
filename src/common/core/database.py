@@ -27,9 +27,24 @@ SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, clas
 
 def init_db() -> None:
     """Initialize database tables and run lightweight column migrations."""
+    # 确保教育配置表注册进 metadata（create_all 才会建表）
+    from src.agent.education.models_anomaly import EduAnomalyConfig  # noqa: F401
+
     SQLModel.metadata.create_all(bind=engine)
     _ensure_columns()
     _ensure_default_workspace_seed()
+    _ensure_anomaly_config_seed()
+
+
+def _ensure_anomaly_config_seed() -> None:
+    """若表已存在但无数据，写入默认规则（dev create_all 路径）。"""
+    try:
+        from src.agent.education.anomaly_persistence import load_config_from_db
+
+        with Session(engine) as session:
+            load_config_from_db(session)
+    except Exception:
+        pass
 
 
 def _ensure_columns() -> None:
@@ -61,6 +76,10 @@ def _ensure_columns() -> None:
         },
         "ds_rules": {
             "oid": "BIGINT NOT NULL DEFAULT 1",
+        },
+        "edu_anomaly_config": {
+            "pass_ratio": "DOUBLE PRECISION NOT NULL DEFAULT 0.6",
+            "excellent_ratio": "DOUBLE PRECISION NOT NULL DEFAULT 0.85",
         },
     }
 

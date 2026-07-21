@@ -107,12 +107,21 @@ def _mapping_to_dict(m: ScoreSchemaMapping) -> dict[str, Any]:
 def _format_config_schema_result(bundle, warnings: list[str]) -> ToolResult:
     m = bundle.mapping
     meta = bundle.meta
+    # 及格/优秀以异常规则库表为准，不用 schema.json 里的默认 0.6/0.85
+    try:
+        cfg = _get_effective_config()
+        pass_ratio = float(cfg.pass_ratio)
+        excellent_ratio = float(cfg.excellent_ratio)
+    except Exception:
+        pass_ratio = float(meta.pass_ratio)
+        excellent_ratio = float(meta.excellent_ratio)
     lines = [
         f"已加载教育 Schema 配置（来源={m.source}）。",
         f"- score 表：{m.tables.get('score', '')}",
         f"- school 表：{m.tables.get('school', '')}",
         f"- 满分字段：{m.fields.get('full_score', '（未配置）')}（运行时从库读取，非固定值）",
-        f"- 及格/优秀比例：{meta.pass_ratio} / {meta.excellent_ratio}",
+        f"- 及格/优秀比例（异常规则配置）：{pass_ratio} / {excellent_ratio}"
+        f"（即 {round(pass_ratio * 100, 2)}% / {round(excellent_ratio * 100, 2)}%）",
     ]
     if m.joins:
         lines.append("- 标准 JOIN（节选）：")
@@ -130,8 +139,8 @@ def _format_config_schema_result(bundle, warnings: list[str]) -> ToolResult:
         for w in warnings:
             lines.append(f"  · {w}")
     data = _mapping_to_dict(m)
-    data["pass_ratio"] = meta.pass_ratio
-    data["excellent_ratio"] = meta.excellent_ratio
+    data["pass_ratio"] = pass_ratio
+    data["excellent_ratio"] = excellent_ratio
     data["table_comments"] = dict(meta.table_comments)
     data["dimension_samples"] = dict(meta.dimension_samples)
     if warnings:
@@ -523,12 +532,10 @@ def compute_score_stats_tool(
         空数据返回 ``count=0`` 占位结构，不抛。
     """
     cfg = _get_effective_config()
+    # 分数段可取 schema；及格/优秀比例以异常规则库表为准，不覆盖。
     bundle = load_schema_from_config()
-    if bundle is not None:
-        cfg.pass_ratio = bundle.meta.pass_ratio
-        cfg.excellent_ratio = bundle.meta.excellent_ratio
-        if bundle.meta.score_segment_ratios:
-            cfg.score_segment_ratios = list(bundle.meta.score_segment_ratios)
+    if bundle is not None and bundle.meta.score_segment_ratios:
+        cfg.score_segment_ratios = list(bundle.meta.score_segment_ratios)
     if pass_threshold is not None:
         cfg.pass_threshold = float(pass_threshold)
     if excellent_threshold is not None:
@@ -604,11 +611,18 @@ def compute_score_stats_tool(
     stats = _compute_stats(values, cfg, full_score)
     if warnings:
         stats["warnings"] = warnings
+    pass_line = stats.get("pass_line")
+    excellent_line = stats.get("excellent_line")
+    pr = stats.get("pass_ratio")
+    er = stats.get("excellent_ratio")
     content = (
         f"成绩统计完成：共 {stats['count']} 人，均分 {stats['avg']}，"
         f"满分 {stats['full_score']}，"
+        f"及格线 {pass_line}（按异常规则 {stats['full_score']}×{round(float(pr or 0) * 100, 2)}%），"
+        f"优秀线 {excellent_line}（按异常规则 {stats['full_score']}×{round(float(er or 0) * 100, 2)}%），"
         f"及格率 {stats['pass_rate']}%，优秀率 {stats['excellent_rate']}%，"
         f"标准差 {stats['stdev']}。"
+        "撰写结论时必须使用上述及格线/优秀线，禁止改用惯例 60%/85%。"
     )
     if warnings:
         content += "\n" + "\n".join(warnings)
@@ -836,10 +850,6 @@ def build_subject_diagnosis_sections_tool(
     # stats 未传但有 score_result/fetch_data 时，内部计算 KPI
     if (not stats or not stats.get("count")) and score_result:
         cfg = _get_effective_config()
-        bundle_cfg = load_schema_from_config()
-        if bundle_cfg is not None:
-            cfg.pass_ratio = bundle_cfg.meta.pass_ratio
-            cfg.excellent_ratio = bundle_cfg.meta.excellent_ratio
         rows_s, cols_s = _coerce_exec_result(score_result, None, None)
         values: list[float] = []
         fs_val: float | None = None
@@ -866,19 +876,11 @@ def build_subject_diagnosis_sections_tool(
 
     if (stats is None or not stats.get("count")) and isinstance(fetch_data, dict):
         cfg = _get_effective_config()
-        bundle_cfg = load_schema_from_config()
-        if bundle_cfg is not None:
-            cfg.pass_ratio = bundle_cfg.meta.pass_ratio
-            cfg.excellent_ratio = bundle_cfg.meta.excellent_ratio
         stats_from_fetch = _stats_from_fetch_bundle(fetch_data, cfg)
         if stats_from_fetch:
             stats = stats_from_fetch
 
     cfg = _get_effective_config()
-    bundle_cfg = load_schema_from_config()
-    if bundle_cfg is not None:
-        cfg.pass_ratio = bundle_cfg.meta.pass_ratio
-        cfg.excellent_ratio = bundle_cfg.meta.excellent_ratio
 
     score_rows: list[dict[str, Any]] = []
     if isinstance(fetch_data, dict):

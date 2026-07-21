@@ -1,12 +1,12 @@
-"""教育学情配置 API（Phase 3）。
+"""教育学情配置 API。
 
-提供阈值配置的读取 / 更新 / 重置端点，供管理台 UI 调用。
-持久化目前为进程内覆盖（见 ``config_store``）；Phase 4 再接入工作区 JSON / DB。
+阈值与异常规则持久化到系统库表 ``edu_anomaly_config``（见 ``config_store`` /
+``anomaly_persistence``）。
 
 端点：
 - ``GET /api/v1/education/report-config`` — 读取当前生效阈值；
-- ``PUT /api/v1/education/report-config`` — 部分更新阈值；
-- ``POST /api/v1/education/report-config/reset`` — 清除覆盖，回到环境默认。
+- ``PUT /api/v1/education/report-config`` — 部分更新阈值（落库）；
+- ``POST /api/v1/education/report-config/reset`` — 恢复默认并写回 DB。
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from audit.service.decorators import audit_access
 from common.exceptions.base import BadRequestException
 from common.schemas.response import error_response, success_response
 from src.agent.education import config_store
+from src.agent.education.config import config_to_public_dict
 from src.agent.education.orchestrator import ReportOrchestrator
 from src.agent.education.schema_mapping import (
     ScoreSchemaMapping,
@@ -39,49 +40,47 @@ router = APIRouter(prefix="/education", tags=["education"])
 class ReportConfigPayload(BaseModel):
     """阈值配置 payload；所有字段可选，仅传需要更新的。"""
 
-    pass_threshold: Optional[float] = Field(None, ge=0, description="及格线，默认 60")
-    excellent_threshold: Optional[float] = Field(None, ge=0, description="优秀线，默认 85")
+    pass_threshold: Optional[float] = Field(None, ge=0, description="及格绝对分兜底（无满分时）；优先改 pass_ratio")
+    excellent_threshold: Optional[float] = Field(None, ge=0, description="优秀绝对分兜底（无满分时）；优先改 excellent_ratio")
+    pass_ratio: Optional[float] = Field(
+        None, ge=0, le=1, description="及格比例（占卷面满分，如 0.6=60%）；有满分时优先"
+    )
+    excellent_ratio: Optional[float] = Field(
+        None, ge=0, le=1, description="优秀比例（占卷面满分，如 0.85=85%）；有满分时优先"
+    )
     default_full_score: Optional[float] = Field(None, ge=1, description="满分兜底，默认 100")
     critical_margin: Optional[float] = Field(None, ge=0, description="临界生判定半径，默认 5")
     regression_threshold: Optional[float] = Field(
         None,
         description="退步判定阈值（负数，如 -10 表示降幅 ≥10 分算退步）",
     )
+    imbalance_score_gap: Optional[float] = Field(
+        None,
+        ge=0,
+        description="偏科科间分差下限，默认 20",
+    )
+    anomaly_rules: Optional[list[dict[str, Any]]] = Field(
+        None,
+        description="可选：显式异常规则列表（含五类参数）；不传则由经典字段推导",
+    )
 
 
 @router.get("/report-config")
 async def get_report_config() -> dict:
     cfg = config_store.get_config()
-    return success_response(
-        {
-            "pass_threshold": cfg.pass_threshold,
-            "excellent_threshold": cfg.excellent_threshold,
-            "default_full_score": cfg.default_full_score,
-            "critical_margin": cfg.critical_margin,
-            "regression_threshold": cfg.regression_threshold,
-        }
-    )
+    return success_response(config_to_public_dict(cfg))
 
 
 @router.put("/report-config")
 async def update_report_config(payload: ReportConfigPayload) -> dict:
     cfg = config_store.update_config(payload.model_dump(exclude_none=True))
-    return success_response(
-        {
-            "pass_threshold": cfg.pass_threshold,
-            "excellent_threshold": cfg.excellent_threshold,
-            "default_full_score": cfg.default_full_score,
-            "critical_margin": cfg.critical_margin,
-            "regression_threshold": cfg.regression_threshold,
-        },
-        message="配置已更新",
-    )
+    return success_response(config_to_public_dict(cfg), message="配置已更新")
 
 
 @router.post("/report-config/reset")
 async def reset_report_config() -> dict:
     config_store.reset_config()
-    return success_response(None, message="已恢复默认配置")
+    return success_response(config_to_public_dict(config_store.get_config()), message="已恢复默认配置")
 
 
 # ---- 批量报告（Phase 4） --------------------------------------------------

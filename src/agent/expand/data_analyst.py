@@ -114,10 +114,20 @@ DATA_ANALYST_DESC = """[分析范围约束]
 6. **Team 模式分工**：若 Planner 已将「组装 HTML 报告」分配给 ToolExpert 子任务，
    当前 DataAnalyst 子任务**只做查数/统计**，**禁止**调用 `render_html_report` 或
    `build_*_report_data_tool`，查完 `terminate` 即可。
-7. **及格/优秀阈值**：由 ``exam_score``（卷面满分）× 0.6 / 0.85 动态计算；
-   用户指定绝对分数线时用 `compute_score_stats_tool(pass_threshold=..., excellent_threshold=...)` 覆盖。
+7. **及格/优秀阈值**：以 `compute_score_stats_tool` 返回的满分与及格率/优秀率为准
+   （系统按「异常规则」里配置的百分比 × ``exam_score`` 计算，**禁止**在回复里写死 60%/85%
+   或自行用 0.6/0.85 推算）。**禁止**在聚合 SQL 里手写 `score >= 90` / `>= 127.5`
+   （或其它 60%/85% 绝对分）来算及格人数/优秀人数——必须把明细交给
+   `compute_score_stats_tool`。用户指定绝对分数线时可用
+   `compute_score_stats_tool(pass_threshold=..., excellent_threshold=...)` 覆盖。
 8. **受众**：用户说"给家长看"→ `audience=parent`；"给校长看"→ `principal`；
-   未指定 → `default`。受众影响模板文案密度，不影响数值。"""
+   未指定 → `default`。受众影响模板文案密度，不影响数值。
+9. **人数口径**：班级概览须查该班该场该科**全部**学生得分（含 exam_score），
+   **禁止**用 `OFFSET` 翻页拼全班；**禁止**随意 `LIMIT` 截断全班明细
+   （Top-N 排行除外）。人数以无 OFFSET 的 SQL 结果行数 / `compute_score_stats_tool` 的
+   count 为准，前后两次须一致。
+10. **terminate 必带 KPI**：教育学情结论中须明确写出「参考人数」「卷面满分」
+    「及格线」「优秀线」的数字（优先引用 stats 工具返回值），便于下游照抄。"""
 
 
 class DataAnalystAgent(ReActAgent):
@@ -138,6 +148,21 @@ class DataAnalystAgent(ReActAgent):
         raw = dict(reply.context or {}).get("constraints")
         constraints = raw if isinstance(raw, dict) else {}
         base["scope_constraints"] = format_scope_constraints(constraints)
+        try:
+            from src.agent.education.config_store import get_config
+
+            cfg = get_config()
+            pr, er = float(cfg.pass_ratio), float(cfg.excellent_ratio)
+            ratio_note = (
+                f"【当前异常规则】及格={round(pr * 100, 2)}%（ratio {pr}），"
+                f"优秀={round(er * 100, 2)}%（ratio {er}）。"
+                f"有卷面满分时及格线=满分×{pr}、优秀线=满分×{er}；"
+                "禁止写死 60%/85% 或 0.6/0.85；须以 compute_score_stats_tool / 报告工具结果为准。"
+            )
+            prev = str(base.get("scope_constraints") or "").strip()
+            base["scope_constraints"] = f"{prev}\n{ratio_note}".strip() if prev else ratio_note
+        except Exception:
+            pass
         return base
 
 

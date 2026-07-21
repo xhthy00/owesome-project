@@ -1084,8 +1084,12 @@ def _format_sub_tasks_block(
     ToolExpert 子任务额外注入小题/知识点/报告产出摘要。
     """
     from src.agent.education.summary_context import (
+        extract_stats_authority_block,
         format_education_pipeline_footer,
+        format_sql_result_authority_notes,
         format_tool_expert_sub_task_block,
+        sql_looks_paginated,
+        truncate_keeping_kpi_lines,
     )
 
     if not sub_phases:
@@ -1111,12 +1115,40 @@ def _format_sub_tasks_block(
         columns = list(exec_result.get("columns") or [])
         rows = list(exec_result.get("rows") or [])
         row_count = int(exec_result.get("row_count") or len(rows))
+        sample_rows = rows[:_SAMPLE_ROWS_LIMIT]
+        sample_shown = len(sample_rows)
+        sql_text = phase.state.last_sql or ""
+        stats_block = extract_stats_authority_block(phase.state.tool_calls)
+        authority_notes = format_sql_result_authority_notes(
+            sql=sql_text,
+            row_count=row_count,
+            sample_shown=sample_shown,
+        )
+        # DataAnalyst 的 terminate 结论也注入（保留 KPI 行），避免只剩样例表
+        final_ans = (phase.reply.content if phase.reply else "") or ""
+        final_snip = ""
+        if final_ans.strip() and not is_tool_expert:
+            final_snip = (
+                "\n查询结论（须优先照抄其中的人数/分数线）：\n"
+                + truncate_keeping_kpi_lines(final_ans.strip(), limit=1200)
+            )
+
+        sample_label = (
+            f"样例（仅预览前 {sample_shown} 行，禁止当班级总人数"
+            + ("；SQL 含 OFFSET，本页更非全班" if sql_looks_paginated(sql_text) else "")
+            + "）"
+        )
         block = (
             f"{header}\n"
-            f"SQL:\n```sql\n{phase.state.last_sql}\n```\n"
+            f"SQL:\n```sql\n{sql_text}\n```\n"
+            f"{authority_notes}\n"
             f"共 {row_count} 行，列：{', '.join(columns) if columns else '(无)'}\n"
-            f"样例：\n{_format_sample_rows(columns, rows[:_SAMPLE_ROWS_LIMIT])}"
         )
+        if stats_block:
+            block += f"{stats_block}\n"
+        block += f"{sample_label}：\n{_format_sample_rows(columns, sample_rows)}"
+        if final_snip:
+            block += final_snip
         if is_tool_expert:
             block += f"\n\n{tool_block}"
         blocks.append(block)

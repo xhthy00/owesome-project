@@ -1,6 +1,7 @@
 import {
   DownOutlined,
   BarChartOutlined,
+  ControlOutlined,
   DatabaseOutlined,
   GlobalOutlined,
   HistoryOutlined,
@@ -31,6 +32,7 @@ const routes = [
   { key: "report-history", path: "/construct/analysis/history", label: "报告历史", icon: <HistoryOutlined /> },
   { key: "datasource", path: "/construct/database", label: "数据源", icon: <DatabaseOutlined /> },
   { key: "score-import", path: "/construct/education/score-import", label: "成绩导入", icon: <UploadOutlined /> },
+  { key: "anomaly-rules", path: "/construct/education/anomaly-rules", label: "异常规则", icon: <ControlOutlined /> },
   { key: "permission", path: "/construct/permission", label: "权限管理", icon: <SafetyCertificateOutlined /> },
   { key: "system", path: "/system", label: "日志管理", icon: <SettingOutlined /> },
 ];

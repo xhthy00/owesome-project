@@ -277,7 +277,15 @@ class ReportOrchestrator:
     ) -> None:
         self._execute_sql = execute_sql
         self._resolve_schema = resolve_schema
-        self._config = config or load_config()
+        if config is not None:
+            self._config = config
+        else:
+            try:
+                from src.agent.education.config_store import get_config
+
+                self._config = get_config()
+            except Exception:
+                self._config = load_config()
         self._datasource_id = datasource_id
         self._workspace_oid = workspace_oid
         self._user_id = user_id
@@ -349,13 +357,14 @@ class ReportOrchestrator:
         rows = await self._fetch_score_rows(spec, mapping)
         scores = [float(r.get("score") or 0) for r in rows if r.get("score") is not None]
         full_score = _resolve_full_score_from_rows(rows)
-        cfg = self._config
+        from dataclasses import replace
+
+        cfg = replace(self._config)
+        # 分数段边界可来自 schema；及格/优秀比例以 config_store（异常规则库表）为准，
+        # 禁止用 schema 默认 0.6/0.85 覆盖用户配置。
         bundle = load_schema_from_config()
-        if bundle is not None:
-            cfg.pass_ratio = bundle.meta.pass_ratio
-            cfg.excellent_ratio = bundle.meta.excellent_ratio
-            if bundle.meta.score_segment_ratios:
-                cfg.score_segment_ratios = list(bundle.meta.score_segment_ratios)
+        if bundle is not None and bundle.meta.score_segment_ratios:
+            cfg.score_segment_ratios = list(bundle.meta.score_segment_ratios)
         stats = compute_score_stats(scores, cfg, full_score)
 
         charts: dict[str, str] = {}

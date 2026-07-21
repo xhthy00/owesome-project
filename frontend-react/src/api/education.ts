@@ -345,5 +345,88 @@ export const educationApi = {
       ok: (body.code ?? 200) === 200,
       message: body.message || ""
     };
+  },
+
+  async getReportConfig(): Promise<ReportConfig> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/report-config`, {
+      headers: await authHeaders()
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json()) as { code?: number; message?: string; data?: ReportConfig };
+    if ((body.code ?? 200) !== 200 || !body.data) {
+      throw new Error(body.message || "加载配置失败");
+    }
+    return body.data;
+  },
+
+  async updateReportConfig(payload: Partial<ReportConfigUpdate>): Promise<ReportConfig> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/report-config`, {
+      method: "PUT",
+      headers: {
+        ...(await authHeaders()),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json()) as { code?: number; message?: string; data?: ReportConfig };
+    if ((body.code ?? 200) !== 200 || !body.data) {
+      throw new Error(body.message || "保存配置失败");
+    }
+    return body.data;
+  },
+
+  async resetReportConfig(): Promise<ReportConfig> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/report-config/reset`, {
+      method: "POST",
+      headers: await authHeaders()
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json()) as { code?: number; message?: string; data?: ReportConfig };
+    if ((body.code ?? 200) !== 200 || !body.data) {
+      throw new Error(body.message || "重置配置失败");
+    }
+    return body.data;
   }
+};
+
+export interface AnomalyRuleItem {
+  id: string;
+  anomaly_type: string;
+  enabled: boolean;
+  threshold?: number | null;
+  compare_target: string;
+  consecutive_n: number;
+  fluctuation_mode: string;
+  fluctuation_value?: number | null;
+  range_lo?: number | null;
+  range_hi?: number | null;
+  range_lo_offset?: number | null;
+  range_hi_offset?: number | null;
+}
+
+export interface ReportConfig {
+  pass_ratio: number;
+  excellent_ratio: number;
+  pass_percent: number;
+  excellent_percent: number;
+  pass_threshold: number;
+  excellent_threshold: number;
+  default_full_score: number;
+  critical_margin: number;
+  regression_threshold: number;
+  imbalance_score_gap: number;
+  anomaly_rules: AnomalyRuleItem[];
+}
+
+export type ReportConfigUpdate = {
+  pass_ratio?: number;
+  excellent_ratio?: number;
+  pass_threshold?: number;
+  excellent_threshold?: number;
+  default_full_score?: number;
+  critical_margin?: number;
+  regression_threshold?: number;
+  imbalance_score_gap?: number;
+  anomaly_rules?: AnomalyRuleItem[];
 };
