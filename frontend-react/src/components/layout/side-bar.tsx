@@ -38,6 +38,8 @@ const routes = [
 const permissionSubRoutes = [
   { key: "permission-config", path: "/construct/permission/config", label: "权限配置" },
   { key: "permission-edu", path: "/construct/permission/edu", label: "教育权限" },
+  { key: "permission-users", path: "/construct/permission/users", label: "用户管理" },
+  { key: "permission-workspaces", path: "/construct/permission/workspaces", label: "工作空间" },
   { key: "permission-members", path: "/construct/permission/members", label: "成员管理" },
   { key: "permission-menu", path: "/construct/permission/menu", label: "菜单权限管理" }
 ];
