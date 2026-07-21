@@ -32,9 +32,9 @@ router = APIRouter(prefix="/permission/edu", tags=["permission-edu"])
 
 _CSV_TEMPLATE = (
     "account,edu_role,school_id,school_name,class_names,student_id\n"
-    "zhang_principal,school_admin,1,南京市第一中学,,\n"
-    "li_teacher,teacher,1,南京市第一中学,高一(1)班|高一(2)班,\n"
-    "wang_student,student,1,南京市第一中学,,STU20240002\n"
+    "zhang_principal,school_admin,gz_2d2b5c7b,gz_2d2b5c7b,,\n"
+    "li_teacher,teacher,gz_2d2b5c7b,gz_2d2b5c7b,高一(1)班|高一(2)班,\n"
+    "wang_student,student,gz_2d2b5c7b,gz_2d2b5c7b,,STU20240002\n"
     "bureau_user,bureau_admin,,,,\n"
 )
 

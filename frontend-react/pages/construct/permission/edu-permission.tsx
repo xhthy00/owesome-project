@@ -95,8 +95,8 @@ export default function EduPermissionPage() {
     const scopeHint =
       u.class_names?.length
         ? ` · ${u.class_names.join("、")}`
-        : u.school_name || u.school_id
-          ? ` · ${u.school_name || u.school_id}`
+        : u.school_id
+          ? ` · ${u.school_id}`
           : "";
     return `${u.account} (${u.name}) · ${role}${scopeHint}`;
   };
@@ -105,7 +105,6 @@ export default function EduPermissionPage() {
     form.setFieldsValue({
       edu_role: scope.edu_role || undefined,
       school_id: scope.school_id,
-      school_name: scope.school_name,
       class_names: (scope.class_names || []).join("|"),
       student_id: scope.student_id
     });
@@ -180,7 +179,6 @@ export default function EduPermissionPage() {
       const payload = {
         edu_role: values.edu_role,
         school_id: values.school_id,
-        school_name: values.school_name,
         class_names: classNames.length ? classNames : undefined,
         student_id: values.student_id
       };
@@ -306,7 +304,7 @@ export default function EduPermissionPage() {
 
   const scopeItemCount = (user: SystemUser) => {
     let n = 0;
-    if (user.school_id || user.school_name) n += 1;
+    if (user.school_id) n += 1;
     if (user.class_names?.length) n += user.class_names.length;
     if (user.student_id) n += 1;
     return n;
@@ -360,10 +358,10 @@ export default function EduPermissionPage() {
             const scopeTags: Array<{ key: string; label: string; tone: "row" | "column" | "role" }> = [
               { key: "role", label: user.edu_role_label || roleLabel(roleCode), tone: "role" }
             ];
-            if (user.school_name || user.school_id) {
+            if (user.school_id) {
               scopeTags.push({
                 key: "school",
-                label: user.school_name || user.school_id || "",
+                label: user.school_id,
                 tone: "column"
               });
             }
@@ -558,11 +556,12 @@ export default function EduPermissionPage() {
 
           {(requiredFields.includes("school_id") || selectedRole === "bureau_admin") && (
             <>
-              <Form.Item name="school_id" label="学校 ID">
-                <Input placeholder="如 SCH001" />
-              </Form.Item>
-              <Form.Item name="school_name" label="学校名称">
-                <Input placeholder="如 南京市第一中学" />
+              <Form.Item
+                name="school_id"
+                label="学校 ID"
+                extra="填写学校名称的加密结果（密文 id），与 edu.tb_school.id 一致；平台不展示学校明文"
+              >
+                <Input placeholder="如 gz_2d2b5c7b" />
               </Form.Item>
             </>
           )}
