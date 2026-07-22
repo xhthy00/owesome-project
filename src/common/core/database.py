@@ -29,6 +29,7 @@ def init_db() -> None:
     """Initialize database tables and run lightweight column migrations."""
     # 确保教育配置表注册进 metadata（create_all 才会建表）
     from src.agent.education.models_anomaly import EduAnomalyConfig  # noqa: F401
+    from src.agent.education.models_alert import EduAnomalyAlert  # noqa: F401
 
     SQLModel.metadata.create_all(bind=engine)
     _ensure_columns()

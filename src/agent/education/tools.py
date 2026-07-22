@@ -2610,11 +2610,21 @@ def _score_rows_to_at_risk_students(
             continue
         item: dict[str, Any] = {
             "name": name,
+            "student_id": str(r.get("student_id") or name).strip(),
             "subject": str(
                 r.get("subject") or r.get("subject_name") or default_subject or ""
             ),
             "score": score_val,
         }
+        school_id = str(r.get("school_id") or r.get("school") or "").strip()
+        if school_id:
+            item["school_id"] = school_id
+        exam_id = str(r.get("exam_id") or "").strip()
+        if exam_id:
+            item["exam_id"] = exam_id
+        class_name = str(r.get("class") or r.get("class_name") or "").strip()
+        if class_name:
+            item["class"] = class_name
         prev = r.get("prev_score")
         if prev is not None and prev != "":
             try:
@@ -2737,6 +2747,8 @@ def build_tier_alert_report_data_tool(
     render: bool = True,
     report_data: dict[str, Any] | None = None,
     tool_runtime_ctx: dict[str, Any] | None = None,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
 ) -> ToolResult:
     """组装分层预警报告（临界生 / 大幅退步 / 偏科）并直接渲染 HTML。
 
@@ -2849,6 +2861,77 @@ def build_tier_alert_report_data_tool(
         exam_name=exam_name,
         pass_line=cfg.pass_threshold,
     )
+
+    # 补写校内异常提醒（失败不影响报告）
+    try:
+        from src.agent.education.alert_service import (
+            SOURCE_TIER_ALERT,
+            upsert_from_at_risk_payload,
+        )
+        from src.common.core.database import get_db_session
+
+        school_id = ""
+        exam_id = ""
+        for r in resolved_rows or []:
+            if isinstance(r, dict):
+                school_id = school_id or str(
+                    r.get("school_id") or r.get("school") or ""
+                ).strip()
+                exam_id = exam_id or str(r.get("exam_id") or "").strip()
+        for s in student_list:
+            school_id = school_id or str(s.get("school_id") or "").strip()
+            exam_id = exam_id or str(s.get("exam_id") or "").strip()
+        # 工具参数 school_name 实际常被填成学校编码（如 GZ_A53C79E3）
+        if not school_id and school_name and _looks_like_school_id(school_name):
+            school_id = school_name.strip()
+        # 权限约束里的 target_school
+        if not school_id:
+            constraints = ctx.get("constraints") if isinstance(ctx.get("constraints"), dict) else {}
+            target = str(
+                (constraints or {}).get("target_school")
+                or ctx.get("target_school")
+                or ""
+            ).strip()
+            if target and _looks_like_school_id(target):
+                school_id = target
+
+        ds_id = datasource_id if datasource_id is not None else ctx.get("datasource_id")
+        ws_oid = workspace_oid if workspace_oid is not None else (ctx.get("workspace_oid") or 1)
+        if school_id and ds_id is not None:
+            with get_db_session() as session:
+                stats = upsert_from_at_risk_payload(
+                    session,
+                    at_risk,
+                    workspace_oid=int(ws_oid),
+                    datasource_id=int(ds_id),
+                    school_id=school_id,
+                    exam_id=exam_id or exam_name or "unknown",
+                    exam_name=exam_name or "",
+                    class_name=class_name or "",
+                    source=SOURCE_TIER_ALERT,
+                )
+            import logging
+
+            logging.getLogger(__name__).info(
+                "tier_alert anomaly alerts upserted school=%s exam=%s stats=%s",
+                school_id,
+                exam_id or exam_name,
+                stats,
+            )
+        else:
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "tier_alert anomaly alerts skipped: school_id=%r datasource_id=%r "
+                "(need both; school_name=%r)",
+                school_id,
+                ds_id,
+                school_name,
+            )
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).exception("tier_alert anomaly alert upsert failed")
 
     if not render:
         data["critical"] = at_risk.get("critical") or []

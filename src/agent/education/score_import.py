@@ -102,6 +102,8 @@ class ImportResult:
     error_rows: list[ImportErrorRow] = field(default_factory=list)
     summary: dict[str, int] = field(default_factory=dict)
     preview_sample: list[dict[str, Any]] = field(default_factory=list)
+    #: 导入成功后供异常扫描使用（含校验失败时为空）
+    resolved_rows: list[ResolvedRow] = field(default_factory=list)
 
 
 def template_path(import_type: ImportType) -> Path:
@@ -1085,6 +1087,7 @@ def import_scores(
         "students_to_create": len({r.student_id for r in resolved if r.create_student}),
         "students_created": students_created,
     }
+    preview.resolved_rows = list(resolved)
     return preview
 
 

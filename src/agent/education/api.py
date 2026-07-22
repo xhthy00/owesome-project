@@ -859,4 +859,147 @@ async def execute_score_import(
             message="导入校验未通过",
             data=import_result_to_dict(result),
         )
-    return success_response(import_result_to_dict(result), message="成绩导入成功")
+
+    alert_stats: dict = {}
+    # 产品约定：总分 + 小题分都导完后才生成异常提醒（仅在小题分导入成功时扫描）
+    if t == "detail":
+        try:
+            from src.agent.education.alert_service import scan_alerts_after_import
+
+            with get_db_session() as session:
+                alert_stats = scan_alerts_after_import(
+                    session,
+                    db_type=db_type,
+                    config=config,
+                    workspace_oid=int(workspace_oid),
+                    datasource_id=int(datasource_id),
+                    resolved_rows=list(result.resolved_rows or []),
+                )
+        except Exception:  # noqa: BLE001
+            import logging
+
+            logging.getLogger(__name__).exception("post-import anomaly alert scan failed")
+
+    payload = import_result_to_dict(result)
+    if t == "total":
+        payload["anomaly_alerts_pending"] = True
+    if alert_stats:
+        payload["anomaly_alerts"] = alert_stats
+    return success_response(payload, message="成绩导入成功")
+
+
+# ---- 异常提醒（校内待办）----------------------------------------------------
+
+
+class AnomalyAlertConfirmPayload(BaseModel):
+    note: Optional[str] = Field(None, max_length=512, description="可选处理说明")
+
+
+@router.get("/anomaly-alerts")
+async def list_anomaly_alerts(
+    status: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    """校长/老师查看本校（本班）异常提醒；教育局不可见。"""
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.agent.education.alert_service import (
+        alert_to_dict,
+        can_access_anomaly_alerts,
+        list_alerts,
+    )
+    from src.common.core.database import get_db_session
+    from system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        user = get_user_by_id(session, int(current_user.id))
+        scope = parse_edu_scope(user)
+        if not can_access_anomaly_alerts(scope):
+            return success_response(
+                {
+                    "accessible": False,
+                    "total": 0,
+                    "items": [],
+                    "message": "教育局/学生账号不提供校内异常提醒",
+                }
+            )
+        rows, total = list_alerts(
+            session,
+            scope,
+            workspace_oid=int(workspace_oid),
+            status=(status or "").strip() or None,
+            limit=limit,
+            offset=offset,
+        )
+        return success_response(
+            {
+                "accessible": True,
+                "total": total,
+                "items": [alert_to_dict(r) for r in rows],
+            }
+        )
+
+
+@router.get("/anomaly-alerts/{alert_id}")
+async def get_anomaly_alert(
+    alert_id: int,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.agent.education.alert_service import (
+        alert_to_dict,
+        can_access_anomaly_alerts,
+        get_alert_for_scope,
+    )
+    from src.common.core.database import get_db_session
+    from system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        user = get_user_by_id(session, int(current_user.id))
+        scope = parse_edu_scope(user)
+        if not can_access_anomaly_alerts(scope):
+            return error_response(code=403, message="无权查看异常提醒")
+        row = get_alert_for_scope(
+            session, int(alert_id), scope, workspace_oid=int(workspace_oid)
+        )
+        if row is None:
+            return error_response(code=404, message="异常提醒不存在或无权查看")
+        return success_response(alert_to_dict(row))
+
+
+@router.post("/anomaly-alerts/{alert_id}/confirm")
+async def confirm_anomaly_alert(
+    alert_id: int,
+    payload: AnomalyAlertConfirmPayload | None = None,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.agent.education.alert_service import (
+        alert_to_dict,
+        can_access_anomaly_alerts,
+        confirm_alert,
+    )
+    from src.common.core.database import get_db_session
+    from system.crud.crud_user import get_user_by_id
+
+    note = (payload.note if payload else None) or ""
+    with get_db_session() as session:
+        user = get_user_by_id(session, int(current_user.id))
+        scope = parse_edu_scope(user)
+        if not can_access_anomaly_alerts(scope):
+            return error_response(code=403, message="无权确认异常提醒")
+        row = confirm_alert(
+            session,
+            int(alert_id),
+            scope,
+            workspace_oid=int(workspace_oid),
+            user_id=int(current_user.id),
+            note=note,
+        )
+        if row is None:
+            return error_response(code=404, message="异常提醒不存在或无权确认")
+        return success_response(alert_to_dict(row), message="已确认处理")

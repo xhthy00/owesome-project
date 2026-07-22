@@ -21,6 +21,14 @@ export interface CurrentUser {
   origin: number;
   create_time: number;
   is_platform_admin: boolean;
+  edu_scope?: {
+    edu_role?: string | null;
+    edu_role_label?: string | null;
+    school_id?: string | null;
+    school_name?: string | null;
+    class_names?: string[] | null;
+    student_id?: string | null;
+  };
 }
 
 export async function login(payload: LoginPayload) {

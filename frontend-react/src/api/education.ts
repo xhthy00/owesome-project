@@ -23,6 +23,14 @@ export interface ScoreImportResult {
     students_created?: number;
   };
   preview_sample: Array<Record<string, unknown>>;
+  anomaly_alerts_pending?: boolean;
+  anomaly_alerts?: {
+    inserted?: number;
+    updated?: number;
+    skipped?: number;
+    detected?: number;
+    exams?: number;
+  };
 }
 
 export interface ScoreImportResponse {
@@ -387,8 +395,107 @@ export const educationApi = {
       throw new Error(body.message || "重置配置失败");
     }
     return body.data;
+  },
+
+  async listAnomalyAlerts(query?: {
+    status?: "pending" | "confirmed" | "";
+    limit?: number;
+    offset?: number;
+  }): Promise<AnomalyAlertListResult> {
+    const params = new URLSearchParams();
+    if (query?.status) params.set("status", query.status);
+    if (query?.limit != null) params.set("limit", String(query.limit));
+    if (query?.offset != null) params.set("offset", String(query.offset));
+    const qs = params.toString();
+    const resp = await fetch(
+      `${getApiBaseUrl()}/education/anomaly-alerts${qs ? `?${qs}` : ""}`,
+      { headers: await authHeaders() }
+    );
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: AnomalyAlertListResult;
+    };
+    if ((body.code ?? 200) !== 200 || !body.data) {
+      throw new Error(body.message || "加载异常提醒失败");
+    }
+    return body.data;
+  },
+
+  async getAnomalyAlert(alertId: number): Promise<AnomalyAlertItem> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/anomaly-alerts/${alertId}`, {
+      headers: await authHeaders()
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: AnomalyAlertItem;
+    };
+    if ((body.code ?? 200) !== 200 || !body.data) {
+      throw new Error(body.message || "加载详情失败");
+    }
+    return body.data;
+  },
+
+  async confirmAnomalyAlert(alertId: number, note?: string): Promise<AnomalyAlertItem> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/anomaly-alerts/${alertId}/confirm`, {
+      method: "POST",
+      headers: {
+        ...(await authHeaders()),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ note: note || "" })
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: AnomalyAlertItem;
+    };
+    if ((body.code ?? 200) !== 200 || !body.data) {
+      throw new Error(body.message || "确认失败");
+    }
+    return body.data;
   }
 };
+
+export interface AnomalyAlertItem {
+  id: number;
+  workspace_oid: number;
+  datasource_id: number;
+  school_id: string;
+  class_name: string;
+  student_id: string;
+  exam_id: string;
+  exam_name: string;
+  subject_name: string;
+  anomaly_type: string;
+  anomaly_type_label: string;
+  title: string;
+  reason: string;
+  payload: Record<string, unknown>;
+  counts?: {
+    critical: number;
+    regression: number;
+    imbalanced: number;
+  };
+  source: string;
+  status: "pending" | "confirmed" | string;
+  confirmed_by?: number | null;
+  confirmed_at?: string | null;
+  confirm_note?: string;
+  create_time?: string | null;
+  update_time?: string | null;
+}
+
+export interface AnomalyAlertListResult {
+  accessible: boolean;
+  total: number;
+  items: AnomalyAlertItem[];
+  message?: string;
+}
 
 export interface AnomalyRuleItem {
   id: string;

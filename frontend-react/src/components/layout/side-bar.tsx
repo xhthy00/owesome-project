@@ -1,4 +1,5 @@
 import {
+  AlertOutlined,
   DownOutlined,
   BarChartOutlined,
   ControlOutlined,
@@ -32,6 +33,7 @@ const routes = [
   { key: "report-history", path: "/construct/analysis/history", label: "报告历史", icon: <HistoryOutlined /> },
   { key: "datasource", path: "/construct/database", label: "数据源", icon: <DatabaseOutlined /> },
   { key: "score-import", path: "/construct/education/score-import", label: "成绩导入", icon: <UploadOutlined /> },
+  { key: "anomaly-alerts", path: "/construct/education/anomaly-alerts", label: "异常提醒", icon: <AlertOutlined /> },
   { key: "anomaly-rules", path: "/construct/education/anomaly-rules", label: "异常规则", icon: <ControlOutlined /> },
   { key: "permission", path: "/construct/permission", label: "权限管理", icon: <SafetyCertificateOutlined /> },
   { key: "system", path: "/system", label: "日志管理", icon: <SettingOutlined /> },
@@ -164,9 +166,17 @@ export default function SideBar() {
   }, [groupedHistory]);
 
   const visibleRoutes = useMemo(() => {
-    if (isPlatformAdmin) return routes;
-    return routes.filter((item) => menuVisibility[item.key] !== false);
-  }, [isPlatformAdmin, menuVisibility]);
+    const eduRole = currentUser?.edu_scope?.edu_role || "";
+    const hideAnomalyAlerts = eduRole === "bureau_admin" || eduRole === "student";
+    let list = routes;
+    if (!isPlatformAdmin) {
+      list = routes.filter((item) => menuVisibility[item.key] !== false);
+    }
+    if (hideAnomalyAlerts) {
+      list = list.filter((item) => item.key !== "anomaly-alerts");
+    }
+    return list;
+  }, [isPlatformAdmin, menuVisibility, currentUser?.edu_scope?.edu_role]);
 
   if (!isMenuExpand) {
     return (

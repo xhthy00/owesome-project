@@ -13,3 +13,4 @@ build/
 .next
 frontend-react/tsconfig.tsbuildinfo
 temp/
+testdata/

@@ -557,6 +557,8 @@ async def _run_data_analyst_phase(
             ``final_answer`` 事件 payload 里，前端据此按子任务折叠展示。
     """
     state = _RunState(sub_task_index=sub_task_index, constraints=constraints)
+    state.tool_runtime_ctx["datasource_id"] = request.datasource_id
+    state.tool_runtime_ctx["workspace_oid"] = workspace_oid
 
     if llm_client is None:
         llm_client = LangChainLlmClient()
@@ -631,6 +633,8 @@ async def _run_tool_expert_phase(
     workspace_oid: int = 1,
 ) -> _DataAnalystPhase:
     state = _RunState(sub_task_index=sub_task_index, constraints=constraints)
+    state.tool_runtime_ctx["datasource_id"] = request.datasource_id
+    state.tool_runtime_ctx["workspace_oid"] = workspace_oid
     # ToolExpert 本阶段通常不再 execute_sql；把上游 DataAnalyst 的完整明细
     # 写入 tool_runtime_ctx，供综合/学生报告工具空参读取（禁止 LLM 手抄 200+ 行）。
     if constraints and isinstance(constraints.report_data, dict):
@@ -1208,6 +1212,8 @@ class _RunState:
             "last_exec_result": None,
             "last_fetch_data": None,
             "report_data": constraints.report_data if constraints else None,
+            "datasource_id": None,
+            "workspace_oid": None,
         }
 
 

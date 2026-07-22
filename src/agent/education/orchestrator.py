@@ -1042,6 +1042,10 @@ class ReportOrchestrator:
                     "student_id": r.get("student_id"),
                     "student_name": r.get("student_name"),
                     "exam_name": r.get("exam_name"),
+                    "exam_id": r.get("exam_id"),
+                    "school_id": r.get("school_id"),
+                    "class": r.get("class") or r.get("class_name"),
+                    "class_name": r.get("class") or r.get("class_name"),
                 }
                 for r in rows
             ]
@@ -1056,6 +1060,10 @@ class ReportOrchestrator:
                     "name": r.get("student_name") or r.get("student_id"),
                     "student_id": r.get("student_id"),
                     "exam_name": r.get("exam_name"),
+                    "exam_id": r.get("exam_id"),
+                    "school_id": r.get("school_id"),
+                    "class": r.get("class") or r.get("class_name"),
+                    "class_name": r.get("class") or r.get("class_name"),
                 }
                 for r in rows
             ]
@@ -1083,6 +1091,45 @@ class ReportOrchestrator:
             pass_line=local_cfg.pass_threshold,
         )
         data.update(filled)
+
+        # 编排器路径同样落异常提醒
+        try:
+            from src.agent.education.alert_service import (
+                SOURCE_TIER_ALERT,
+                upsert_from_at_risk_payload,
+            )
+            from src.agent.education.tools import _looks_like_school_id
+            from src.common.core.database import get_db_session
+
+            school_id = ""
+            exam_id = ""
+            for r in rows:
+                school_id = school_id or str(r.get("school_id") or "").strip()
+                exam_id = exam_id or str(r.get("exam_id") or "").strip()
+            sn = str(spec.filters.get("school_name") or "").strip()
+            if not school_id and sn and _looks_like_school_id(sn):
+                school_id = sn
+            ds_id = getattr(self, "_datasource_id", None)
+            ws_oid = getattr(self, "_workspace_oid", None) or 1
+            if school_id and ds_id is not None:
+                with get_db_session() as session:
+                    upsert_from_at_risk_payload(
+                        session,
+                        at_risk,
+                        workspace_oid=int(ws_oid),
+                        datasource_id=int(ds_id),
+                        school_id=school_id,
+                        exam_id=exam_id or str(spec.filters.get("exam_name") or "unknown"),
+                        exam_name=str(spec.filters.get("exam_name") or ""),
+                        class_name=str(spec.filters.get("class_name") or ""),
+                        source=SOURCE_TIER_ALERT,
+                    )
+        except Exception:  # noqa: BLE001
+            import logging
+
+            logging.getLogger(__name__).exception(
+                "orchestrator tier_alert anomaly alert upsert failed"
+            )
 
     def _fill_group_feature(
         self,

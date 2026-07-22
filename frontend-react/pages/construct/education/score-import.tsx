@@ -34,6 +34,8 @@ type StepImportState = {
   preview: ScoreImportResult | null;
   doneMessage: string;
   done: boolean;
+  anomalyTip?: string;
+  anomalyDetected?: number;
 };
 
 const emptyImportState = (): StepImportState => ({
@@ -158,11 +160,25 @@ export default function ScoreImportPage() {
       const tip = s
         ? `导入完成：更新 ${s.updated} 条${s.students_created ? `，新增学生 ${s.students_created} 人` : ""}`
         : res.message || "导入成功";
+      const alerts = res.data?.anomaly_alerts;
+      const detected = Number(alerts?.detected || 0);
+      const inserted = Number(alerts?.inserted || 0);
+      const updated = Number(alerts?.updated || 0);
+      let anomalyTip = "";
+      if (importType === "total" || res.data?.anomaly_alerts_pending) {
+        anomalyTip = "总分已导入。请继续导入小题分，两步都完成后将自动生成异常提醒。";
+      } else if (alerts && detected > 0) {
+        anomalyTip = `小题分已导入，已自动生成 ${detected} 份异常报告（新增 ${inserted}，更新 ${updated}），可在「异常提醒」中查看。`;
+      } else if (importType === "detail") {
+        anomalyTip = "小题分已导入，本次未检出新的异常报告（可能分数未触及阈值）。";
+      }
       setState((prev) => ({
         ...prev,
         preview: res.data || prev.preview,
         doneMessage: tip,
-        done: true
+        done: true,
+        anomalyTip,
+        anomalyDetected: detected
       }));
       message.success(tip);
     } catch (err) {
@@ -296,6 +312,18 @@ export default function ScoreImportPage() {
               showIcon
               icon={<CheckCircleOutlined />}
               message={state.doneMessage}
+              description={
+                state.anomalyTip ? (
+                  <div className="space-y-2">
+                    <div>{state.anomalyTip}</div>
+                    {(state.anomalyDetected || 0) > 0 ? (
+                      <Button type="link" href="/construct/education/anomaly-alerts" className="!px-0">
+                        去异常提醒查看
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : undefined
+              }
               action={
                 importType === "total" ? (
                   <Button type="primary" onClick={() => setStep(2)}>
@@ -342,7 +370,7 @@ export default function ScoreImportPage() {
   };
 
   return (
-    <div className="dbgpt-ui-font p-6">
+    <div className="dbgpt-ui-font h-full min-h-0 overflow-y-auto p-6 pb-10">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <Typography.Title level={4} className="!mb-1">
