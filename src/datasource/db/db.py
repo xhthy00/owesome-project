@@ -130,6 +130,11 @@ class WriteDbSession:
             self._cursor.execute(sql, params)
             return True, "Success", {"row_count": self._cursor.rowcount}
         except Exception as e:
+            # PG：失败后须 rollback，否则事务处于 aborted 状态，后续语句全部级联失败。
+            try:
+                self.rollback()
+            except Exception:
+                pass
             return False, f"SQL execution failed: {str(e)}", {}
 
     def execute_upsert_batch(
@@ -196,6 +201,12 @@ class WriteDbSession:
                 total += self._cursor.rowcount if self._cursor.rowcount > 0 else len(chunk)
             return True, "Success", {"row_count": total}
         except Exception as e:
+            # PG：事务一旦在某条语句上失败即进入 aborted 状态，必须 rollback 才能继续用此连接，
+            # 否则后续所有语句都会级联报 "current transaction is aborted, commands ignored"。
+            try:
+                self.rollback()
+            except Exception:
+                pass
             return False, f"SQL execution failed: {str(e)}", {}
 
     def execute_query(

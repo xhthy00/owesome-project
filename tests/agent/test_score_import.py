@@ -383,6 +383,42 @@ def test_score_import_execute_api_errors(monkeypatch):
     assert r.json()["code"] == 400
 
 
+def test_ensure_missing_students_returns_real_error_not_cascade(monkeypatch):
+    """批量 INSERT 失败时应返回真实根因，不得在已中止事务上逐条重试（PG 级联错误）。"""
+    from src.agent.education import score_import as si
+
+    batch_calls: list[tuple] = []
+    write_calls: list[tuple] = []
+
+    class FakeSession:
+        def execute_upsert_batch(self, table, cols, conflict_cols, param_rows, *, page_size=500):
+            batch_calls.append((table, cols, list(param_rows)))
+            return False, "SQL execution failed: null value in column \"batch\" violates not-null constraint", {}
+
+        def execute_write(self, sql, params=None):
+            write_calls.append((sql, params))
+            return False, "SQL execution failed: current transaction is aborted, commands ignored until end of transaction block", {}
+
+        def rollback(self):
+            pass
+
+        def commit(self):
+            pass
+
+    rows = [ResolvedRow(
+        2, "试卷A", "STU999", "高三(8)班", 80.0,
+        "E1", "YZYZ", "数学", 150.0, None, create_student=True,
+    )]
+    created, err = si._ensure_missing_students(FakeSession(), "pg", {}, rows)
+    assert created == 0
+    # 真实根因必须透传，而非级联 "transaction is aborted"
+    assert err is not None
+    assert "batch" in err and "not-null" in err
+    assert "transaction is aborted" not in err
+    # 关键：不得在脏事务上继续逐条发 SQL
+    assert write_calls == []
+
+
 def test_write_rows_parallel_uses_batch_for_small(monkeypatch):
     from src.agent.education import score_import as si
 

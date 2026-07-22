@@ -878,20 +878,6 @@ def _resolve_write_target(
     raise ValueError(f"不支持的 import_type: {import_type}")
 
 
-def _build_student_insert_sql(db_type: str, table: str, cols: list[str]) -> str:
-    q = _quote_ident
-    col_list = ", ".join(q(c, db_type) for c in cols)
-    placeholders = ", ".join(["%s"] * len(cols))
-    if db_type == "pg":
-        return (
-            f"INSERT INTO {q(table, db_type)} ({col_list}) VALUES ({placeholders}) "
-            f"ON CONFLICT (id) DO NOTHING"
-        )
-    return (
-        f"INSERT IGNORE INTO {q(table, db_type)} ({col_list}) VALUES ({placeholders})"
-    )
-
-
 def _ensure_missing_students(
     session: WriteDbSession,
     db_type: str,
@@ -930,16 +916,11 @@ def _ensure_missing_students(
         param_rows,
         page_size=_BATCH_SIZE,
     )
-    # student 可能没有适合的 ON CONFLICT 语义（仅 PK）；若失败则逐条 INSERT IGNORE
     if not ok:
-        sql = _build_student_insert_sql(db_type, student_table, cols)
-        created = 0
-        for params in param_rows:
-            ok2, msg2, _ = session.execute_write(sql, params)
-            if not ok2:
-                return created, f"新增学生失败：{msg2}"
-            created += 1
-        return created, None
+        # 批量失败的 msg 已包含真实根因（NOT NULL/外键/缺列等），直接返回。
+        # 不要在同一个（已 rollback 的）session 上逐条重试：PG 下逐条同样会触犯同一约束，
+        # 且旧实现会在已中止事务上继续发 SQL，把真实错误淹没在 "current transaction is aborted" 级联里。
+        return 0, f"新增学生失败：{msg}"
     return len(param_rows), None
 
 
