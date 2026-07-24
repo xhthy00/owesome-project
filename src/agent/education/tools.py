@@ -2705,6 +2705,67 @@ def _build_tier_alert_template_data(
         recs.append("<li>本班暂无明显预警对象，维持常规学情跟踪即可。</li>")
     recommendations = "<ul>" + "".join(recs) + "</ul>"
 
+    tier_type_chart = ""
+    critical_dist_chart = ""
+    total_alert = len(critical) + len(regression) + len(imbalanced)
+    if total_alert > 0:
+        try:
+            tier_type_chart = _build_chart_option(
+                "pie",
+                {
+                    "items": [
+                        {
+                            "name": "临界生",
+                            "value": len(critical),
+                            "color": "#faad14",
+                        },
+                        {
+                            "name": "大幅退步",
+                            "value": len(regression),
+                            "color": "#ff4d4f",
+                        },
+                        {
+                            "name": "偏科生",
+                            "value": len(imbalanced),
+                            "color": "#1677ff",
+                        },
+                    ]
+                },
+                title="预警类型人数分布",
+            )
+        except Exception:
+            tier_type_chart = ""
+
+    crit_scores: list[float] = []
+    for s in critical:
+        try:
+            if s.get("score") is not None:
+                crit_scores.append(float(s["score"]))
+        except (TypeError, ValueError):
+            continue
+    if crit_scores:
+        try:
+            from src.agent.education.config import load_config
+            from src.agent.education.stats import compute_score_stats
+
+            cfg = load_config()
+            full_est: float | None = None
+            if pass_line is not None and float(cfg.pass_ratio or 0) > 0:
+                full_est = float(pass_line) / float(cfg.pass_ratio)
+            stats = compute_score_stats(crit_scores, cfg, full_score=full_est)
+            segs = list(stats.get("segments") or [])
+            if any(int(s.get("count") or 0) > 0 for s in segs):
+                critical_dist_chart = _build_chart_option(
+                    "score_distribution",
+                    {
+                        "segments": segs,
+                        "pass_rate": stats.get("pass_rate"),
+                    },
+                    title="临界生分数分布",
+                )
+        except Exception:
+            critical_dist_chart = ""
+
     return {
         "REPORT_TITLE": title,
         "REPORT_TYPE": report_type_label(ReportType.TIER_ALERT),
@@ -2716,6 +2777,8 @@ def _build_tier_alert_template_data(
         "CRITICAL_COUNT": str(len(critical)),
         "REGRESSION_COUNT": str(len(regression)),
         "IMBALANCED_COUNT": str(len(imbalanced)),
+        "TIER_TYPE_CHART": tier_type_chart,
+        "CRITICAL_DIST_CHART": critical_dist_chart,
         "CRITICAL_TABLE": _tier_alert_table_html(
             ["姓名", "科目", "分数", "原因"], crit_rows
         ),
@@ -3262,12 +3325,18 @@ def build_class_overview_report_data_tool(
     render: bool = True,
     report_data: dict[str, Any] | None = None,
     tool_runtime_ctx: dict[str, Any] | None = None,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
 ) -> ToolResult:
     """组装班级总览报告并直接渲染 HTML（``education/class_overview.html``）。
 
     **成绩总览 / 班级总览的关键工具**：从上游学生明细补齐 KPI、分数段、能力画像后渲染。
+    有 ``datasource_id`` 且缺知识点时，仅自动补拉**本班知识点**（薄弱清单/柱），
+    不拉全校 peer、不改写 ``score_rows``（避免多人次/跨考污染 KPI）。
     LLM 调完只需 ``terminate``，**禁止**再调 ``build_subject_diagnosis_sections_tool``。
     """
+    import logging
+
     from src.agent.resource.tool.business import (
         _enrich_class_overview_archive,
         _polish_class_overview_html,
@@ -3275,8 +3344,42 @@ def build_class_overview_report_data_tool(
         _sanitize_report_html,
     )
 
+    log = logging.getLogger(__name__)
     ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    if ctx.get("user_id") is None and ctx.get("userid") is not None:
+        ctx = {**ctx, "user_id": ctx.get("userid")}
     rd = report_data if isinstance(report_data, dict) else ctx.get("report_data")
+    rd_out: dict[str, Any] = dict(rd) if isinstance(rd, dict) else {}
+
+    ds_id = datasource_id if datasource_id is not None else ctx.get("datasource_id")
+    ws_oid = workspace_oid if workspace_oid is not None else ctx.get("workspace_oid")
+    uid = ctx.get("user_id")
+
+    need_kn = not (
+        isinstance(rd_out.get("knowledge_rows"), list) and rd_out.get("knowledge_rows")
+    )
+    if ds_id and need_kn and class_name:
+        school = _resolve_school_for_class_overview(
+            school_name,
+            tool_runtime_ctx=ctx,
+            report_data=rd_out,
+        )
+        try:
+            kn_bundle = _fetch_subject_diagnosis_rows(
+                datasource_id=int(ds_id),
+                workspace_oid=int(ws_oid) if ws_oid is not None else None,
+                user_id=int(uid) if uid is not None else None,
+                school_name=school,
+                subject_name=subject_name,
+                exam_name=exam_name,
+                class_name=class_name,
+            )
+            kn_rows = list(kn_bundle.get("knowledge_rows") or [])
+            if kn_rows:
+                rd_out["knowledge_rows"] = kn_rows
+        except Exception as e:  # noqa: BLE001
+            log.warning("class_overview auto-fetch knowledge failed: %s", e)
+
     title_bits = [p for p in (school_name, class_name, subject_name) if p]
     title = f"{' · '.join(title_bits)}班级总览报告" if title_bits else "班级总览报告"
     data: dict[str, Any] = {
@@ -3287,13 +3390,15 @@ def build_class_overview_report_data_tool(
         "CLASS_NAME": class_name or "",
         "EXAM_NAME": exam_name or "本次考试",
         "SUBJECT_NAME": subject_name or "全科",
+        "WEAK_KNOWLEDGE_LIST": "",
+        "WEAK_KNOWLEDGE_CHART": "",
         "SUMMARY": "<p>班级成绩总览：关注均分、及格率与分数段分布。</p>",
         "RECOMMENDATIONS": "<p>结合 KPI 与分数段，对薄弱区间安排巩固练习。</p>",
     }
     data = _enrich_class_overview_archive(
         "education/class_overview.html",
         data,
-        report_data=rd if isinstance(rd, dict) else None,
+        report_data=rd_out or None,
         tool_runtime_ctx=ctx,
     )
     if not render:
@@ -3326,6 +3431,50 @@ def build_class_overview_report_data_tool(
         payload,
         report_type=ReportType.CLASS_OVERVIEW,
     )
+
+
+def _resolve_school_for_class_overview(
+    school_name: str = "",
+    *,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+    report_data: dict[str, Any] | None = None,
+) -> str:
+    """班级总览查数用学校：优先权限 school_id，避免口语校名对不上。"""
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    rd = report_data if isinstance(report_data, dict) else {}
+    constraints = ctx.get("constraints") if isinstance(ctx.get("constraints"), dict) else {}
+    edu = (
+        constraints.get("edu_scope")
+        if isinstance(constraints.get("edu_scope"), dict)
+        else None
+    )
+    if not isinstance(edu, dict):
+        edu = ctx.get("edu_scope") if isinstance(ctx.get("edu_scope"), dict) else {}
+
+    sn = (school_name or "").strip()
+    if sn and _looks_like_school_id(sn):
+        return sn
+    for cand in (
+        edu.get("school_id") if isinstance(edu, dict) else None,
+        constraints.get("school_id"),
+        constraints.get("target_school"),
+        ctx.get("school_id"),
+        ctx.get("target_school"),
+        rd.get("school_id"),
+    ):
+        s = str(cand or "").strip()
+        if s and _looks_like_school_id(s):
+            return s
+    for cand in (
+        edu.get("school_name") if isinstance(edu, dict) else None,
+        sn,
+        rd.get("school_name"),
+        rd.get("SCHOOL_NAME"),
+    ):
+        s = str(cand or "").strip()
+        if s:
+            return s
+    return sn
 
 
 @tool()

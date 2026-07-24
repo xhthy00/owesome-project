@@ -504,6 +504,28 @@ def identify_weak_knowledge(
     return weak[:max_items]
 
 
+def pick_weak_knowledge_topn(
+    rows: list[dict[str, Any]],
+    *,
+    weak_threshold: float = 60.0,
+    max_items: int = 8,
+) -> list[dict[str, Any]]:
+    """班级总览用：优先绝对薄弱（< 阈值）；若无则回退得分率最低 TopN。
+
+    避免整班得分率都在阈值以上时整段空白（例如最低 65% 仍应展示相对薄弱）。
+    """
+    weak = identify_weak_knowledge(
+        rows, weak_threshold=weak_threshold, max_items=max_items
+    )
+    if weak:
+        return weak
+    return _pick_relative_rows(
+        rows,
+        max_n=max_items,
+        soft_ceiling=max(float(weak_threshold or 60.0) + 15.0, 75.0),
+    )
+
+
 def identify_weak_items(
     rows: list[dict[str, Any]],
     *,
@@ -518,6 +540,49 @@ def identify_weak_items(
         scored.append((rate, r))
     scored.sort(key=lambda x: x[0])
     return [r for rate, r in scored if rate < weak_threshold][:max_items]
+
+
+def build_weak_knowledge_list_html(
+    weak_rows: list[dict[str, Any]],
+    *,
+    weak_threshold: float = 60.0,
+) -> str:
+    """薄弱知识点芯片清单 HTML（无数据返回空串）。"""
+    if not weak_rows:
+        return ""
+    chips = "".join(
+        _diag_chip(
+            str(r.get("knowledge_name") or ""),
+            _num(r.get("score_rate")),
+            weak_threshold=weak_threshold,
+        )
+        for r in weak_rows
+        if str(r.get("knowledge_name") or "").strip()
+    )
+    if not chips:
+        return ""
+    return f'<div class="edu-diag-chips">{chips}</div>'
+
+
+def build_weak_knowledge_chart(
+    weak_rows: list[dict[str, Any]],
+    *,
+    max_n: int = 8,
+    title: str = "薄弱知识点得分率（由低到高）",
+) -> str:
+    """薄弱知识点横向柱图 JSON；无数据返回空串。"""
+    from src.agent.education.charts import build_chart_option
+
+    rows = [r for r in (weak_rows or [])[:max_n] if str(r.get("knowledge_name") or "").strip()]
+    if not rows:
+        return ""
+    categories = [str(r.get("knowledge_name") or "") for r in rows]
+    values = [round(float(_num(r.get("score_rate")) or 0), 1) for r in rows]
+    return build_chart_option(
+        "knowledge_bar",
+        {"categories": categories, "values": values},
+        title=title,
+    )
 
 
 def _rate_level(rate: float | None, *, weak_threshold: float = 60.0) -> str:
@@ -1406,11 +1471,14 @@ __all__ = [
     "build_knowledge_compare_table_html",
     "build_knowledge_table_html",
     "build_segment_table_html",
+    "build_weak_knowledge_chart",
+    "build_weak_knowledge_list_html",
     "coerce_report_table_fields",
     "collect_class_names",
     "enrich_knowledge_rows",
     "identify_weak_items",
     "identify_weak_knowledge",
+    "pick_weak_knowledge_topn",
     "knowledge_names_subquery_join",
     "knowledge_weighted_join",
     "normalize_item_row",

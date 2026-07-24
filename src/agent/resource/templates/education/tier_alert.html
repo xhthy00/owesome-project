@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{{REPORT_TITLE}}</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
   <style>
     :root {
       --edu-primary: #1677ff; --edu-primary-bg: #e6f4ff;
@@ -29,6 +30,7 @@
     .edu-table th, .edu-table td { border: 1px solid var(--edu-border); padding: 8px 10px; text-align: left; }
     .edu-table th { background: var(--edu-primary-bg); color: var(--edu-text-lv2); font-weight: 600; }
     .edu-table tr:nth-child(even) td { background: #fafafa; }
+    .edu-chart { width: 100%; height: 320px; }
     .edu-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; background: var(--edu-primary-bg); color: var(--edu-primary); }
     .edu-footer { color: var(--edu-text-lv3); font-size: 12px; text-align: right; }
     @media print { body { background: #fff; } .edu-card { border: none; } }
@@ -54,6 +56,46 @@
         <div class="edu-kpi err"><div class="label">大幅退步</div><div class="value">{{REGRESSION_COUNT}}</div></div>
         <div class="edu-kpi"><div class="label">偏科生</div><div class="value">{{IMBALANCED_COUNT}}</div></div>
       </div>
+    </section>
+
+    <section class="edu-card" id="tierTypeChartSection">
+      <h2>预警类型分布</h2>
+      <p class="edu-sub">临界生 / 大幅退步 / 偏科生人数占比（无人预警时本段隐藏）。</p>
+      <div id="tierTypeChart" class="edu-chart"></div>
+      <script type="application/json" id="tierTypeChartData">{{TIER_TYPE_CHART}}</script>
+      <script>
+        (function () {
+          var section = document.getElementById('tierTypeChartSection');
+          var el = document.getElementById('tierTypeChart');
+          var raw = (document.getElementById('tierTypeChartData').textContent || '').trim();
+          if (!raw || raw === '{}' || raw === 'null') {
+            if (section) section.style.display = 'none';
+            return;
+          }
+          try { echarts.init(el).setOption(JSON.parse(raw)); }
+          catch (e) { if (section) section.style.display = 'none'; }
+        })();
+      </script>
+    </section>
+
+    <section class="edu-card" id="criticalDistSection">
+      <h2>临界生分数分布</h2>
+      <p class="edu-sub">仅统计临界生名单中的得分分布（无临界生时本段隐藏）。</p>
+      <div id="criticalDist" class="edu-chart"></div>
+      <script type="application/json" id="criticalDistData">{{CRITICAL_DIST_CHART}}</script>
+      <script>
+        (function () {
+          var section = document.getElementById('criticalDistSection');
+          var el = document.getElementById('criticalDist');
+          var raw = (document.getElementById('criticalDistData').textContent || '').trim();
+          if (!raw || raw === '{}' || raw === 'null') {
+            if (section) section.style.display = 'none';
+            return;
+          }
+          try { echarts.init(el).setOption(JSON.parse(raw)); }
+          catch (e) { if (section) section.style.display = 'none'; }
+        })();
+      </script>
     </section>
 
     <section class="edu-card">

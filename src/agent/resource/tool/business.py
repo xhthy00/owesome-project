@@ -685,6 +685,22 @@ def _enrich_class_overview_archive(
         report_data=report_data,
         tool_runtime_ctx=tool_runtime_ctx,
     )
+    # 薄弱知识点：仅班级总览；无 knowledge 时保持空串，不影响 KPI/雷达
+    out.setdefault("WEAK_KNOWLEDGE_CHART", "")
+    out.setdefault("WEAK_KNOWLEDGE_LIST", out.get("WEAK_KNOWLEDGE_LIST") or "")
+    try:
+        thr = 60.0
+        cached = out.get("_stats") if isinstance(out.get("_stats"), dict) else {}
+        if cached.get("weak_threshold") is not None:
+            thr = float(cached.get("weak_threshold") or 60.0)
+        _fill_class_overview_weak_knowledge(
+            out,
+            report_data=report_data,
+            tool_runtime_ctx=tool_runtime_ctx,
+            weak_threshold=thr,
+        )
+    except Exception:
+        pass
     # coerce 前先抽出排名摘要，供总体分析引用
     if not out.get("_RANK_SUMMARY"):
         rs = _extract_rank_summary_text(out.get("RANK_INFO"))
@@ -1052,6 +1068,43 @@ def _collect_knowledge_rows_for_overview(
         if out:
             return out
     return []
+
+
+def _fill_class_overview_weak_knowledge(
+    out: dict[str, Any],
+    *,
+    report_data: dict[str, Any] | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+    weak_threshold: float = 60.0,
+) -> None:
+    """有 knowledge_rows 时补薄弱芯片 + 柱；无数据保持空（前端隐藏）。"""
+    list_blank = not str(out.get("WEAK_KNOWLEDGE_LIST") or "").strip()
+    chart_blank = _chart_option_blank(out.get("WEAK_KNOWLEDGE_CHART"))
+    if not list_blank and not chart_blank:
+        return
+    knowledge = _collect_knowledge_rows_for_overview(report_data, tool_runtime_ctx)
+    if not knowledge:
+        return
+    try:
+        from src.agent.education.subject_diagnosis import (
+            build_weak_knowledge_chart,
+            build_weak_knowledge_list_html,
+            enrich_knowledge_rows,
+            pick_weak_knowledge_topn,
+        )
+    except Exception:
+        return
+    kn = enrich_knowledge_rows(knowledge)
+    thr = float(weak_threshold or 60.0)
+    weak = pick_weak_knowledge_topn(kn, weak_threshold=thr, max_items=8)
+    if not weak:
+        return
+    if list_blank:
+        out["WEAK_KNOWLEDGE_LIST"] = build_weak_knowledge_list_html(
+            weak, weak_threshold=thr
+        )
+    if chart_blank:
+        out["WEAK_KNOWLEDGE_CHART"] = build_weak_knowledge_chart(weak)
 
 
 def _guess_subject_name(rows: list[dict[str, Any]], out: dict[str, Any]) -> str:

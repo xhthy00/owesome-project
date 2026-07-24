@@ -412,6 +412,7 @@ class ReportOrchestrator:
             "ITEM_TABLE": "",
             "KNOWLEDGE_TABLE": "",
             "WEAK_KNOWLEDGE_LIST": "",
+            "WEAK_KNOWLEDGE_CHART": "",
             "SUMMARY": "<p>由 ReportOrchestrator 自动生成。</p>",
             "RECOMMENDATIONS": "<p>结合 KPI 与分数段分布关注薄弱区间。</p>",
             "STUDENT_ARCHIVE_TABLE": "",
@@ -461,6 +462,10 @@ class ReportOrchestrator:
             self._fill_comprehensive(data, rows, spec, cfg)
         if spec.report_type == ReportType.CLASS_OVERVIEW and mapping.source == "config_edu":
             await self._fill_class_overview_rank(data, rows, spec, mapping, cfg)
+            try:
+                await self._fill_class_overview_weak_knowledge(data, spec, mapping, cfg)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("班级总览薄弱知识点填充失败: %s", e)
         if spec.report_type == ReportType.SUBJECT_DIAGNOSIS and mapping.source == "config_edu":
             await self._fill_subject_diagnosis(
                 data,
@@ -1267,9 +1272,11 @@ class ReportOrchestrator:
                 if str(g.get("dimension_value") or "") == target:
                     val = g.get(metric)
                     return {
-                        "指标": {"avg": "均分", "pass_rate": "及格率", "excellent_rate": "优秀率"}.get(
-                            metric, metric
-                        ),
+                        "指标": {
+                            "avg": "均分",
+                            "pass_rate": "及格率",
+                            "excellent_rate": "优秀率",
+                        }.get(metric, metric),
                         "value": (
                             f"{float(val):.2f}%"
                             if metric.endswith("rate") and val is not None
@@ -1285,7 +1292,11 @@ class ReportOrchestrator:
                     }
             return None
 
-        items = [x for x in (_rank_of("avg"), _rank_of("pass_rate"), _rank_of("excellent_rate")) if x]
+        items = [
+            x
+            for x in (_rank_of("avg"), _rank_of("pass_rate"), _rank_of("excellent_rate"))
+            if x
+        ]
         if not items:
             return
         grade_label = my_grade or "年级"
@@ -1297,6 +1308,31 @@ class ReportOrchestrator:
         data["RANK_INFO"] = _format_rank_info_html(
             {"scope": scope, "items": items, "summary": summary}
         )
+
+    async def _fill_class_overview_weak_knowledge(
+        self,
+        data: dict[str, Any],
+        spec: ReportSpec,
+        mapping: ScoreSchemaMapping,
+        cfg: EducationConfig,
+    ) -> None:
+        """班级总览：有知识点行时补薄弱芯片 + 柱（无数据保持空）。"""
+        from src.agent.resource.tool.business import _fill_class_overview_weak_knowledge
+
+        try:
+            knowledge_rows = await self._fetch_knowledge_rows(spec, mapping)
+        except Exception:
+            knowledge_rows = []
+        if not knowledge_rows:
+            return
+        thr = float(getattr(cfg, "weak_knowledge_threshold", 60.0) or 60.0)
+        _fill_class_overview_weak_knowledge(
+            data,
+            report_data={"knowledge_rows": knowledge_rows},
+            weak_threshold=thr,
+        )
+        if not spec.include_charts:
+            data["WEAK_KNOWLEDGE_CHART"] = ""
 
     async def _fetch_score_rows(
         self,

@@ -177,6 +177,26 @@
       border-radius: 12px;
       font-size: 13px;
     }
+    .edu-diag-chips { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 12px; }
+    .edu-diag-chip {
+      display: grid;
+      grid-template-columns: 1fr 100px 52px;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      background: #fff;
+      border: 1px solid var(--edu-border);
+    }
+    .edu-diag-chip-name { font-size: 13px; font-weight: 500; }
+    .edu-rate-track { height: 6px; border-radius: 3px; background: #f0f0f0; overflow: hidden; }
+    .edu-rate-fill { height: 100%; background: var(--edu-primary); }
+    .edu-rate-error .edu-rate-fill { background: var(--edu-error); }
+    .edu-rate-warn .edu-rate-fill { background: var(--edu-warning); }
+    .edu-rate-ok .edu-rate-fill { background: var(--edu-success); }
+    .edu-rate-val { font-size: 12px; color: var(--edu-text-lv3); text-align: right; }
+    .edu-diag-chip-error { border-color: #ffccc7; }
+    .edu-diag-chip-warn { border-color: #ffe58f; }
     .edu-badge {
       display: inline-block;
       padding: 3px 10px;
@@ -379,6 +399,32 @@
           var section = document.getElementById('rankSection');
           var html = (section.querySelector('.rank-block').innerHTML || '').trim();
           if (!html) section.style.display = 'none';
+        })();
+      </script>
+    </section>
+
+    <section class="edu-card" id="weakKnowledgeSection">
+      <h2>薄弱知识点</h2>
+      <p class="edu-sub">得分率最低的 TopN 知识点；低于阈值标红，整体偏高时仍展示相对薄弱（无小题/知识点数据时本段隐藏）。</p>
+      <div id="weakKnowledgeList">{{WEAK_KNOWLEDGE_LIST}}</div>
+      <div id="weakKnowledgeBar" class="edu-chart"></div>
+      <script type="application/json" id="weakKnowledgeBarData">{{WEAK_KNOWLEDGE_CHART}}</script>
+      <script>
+        (function () {
+          var section = document.getElementById('weakKnowledgeSection');
+          var listEl = document.getElementById('weakKnowledgeList');
+          var listHtml = (listEl && listEl.innerHTML || '').trim();
+          var el = document.getElementById('weakKnowledgeBar');
+          var raw = (document.getElementById('weakKnowledgeBarData').textContent || '').trim();
+          var hasChart = false;
+          if (raw && raw !== '{}' && raw !== 'null') {
+            try {
+              echarts.init(el).setOption(JSON.parse(raw));
+              hasChart = true;
+            } catch (e) {}
+          }
+          if (!hasChart && el) el.style.display = 'none';
+          if (!listHtml && !hasChart && section) section.style.display = 'none';
         })();
       </script>
     </section>

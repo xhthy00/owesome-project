@@ -833,21 +833,25 @@ def test_trend_tracking_template_renders():
 
 
 def test_tier_alert_template_renders():
+    from src.agent.resource.tool.business import _render_template_html, _sanitize_report_html
+
     data = {
         "REPORT_TITLE": "分层预警报告", "REPORT_SUBTITLE": "初三1班",
         "REPORT_TIME": "2026-07-01", "SCOPE": "初三1班", "EXAM_NAME": "期中考试",
+        "REPORT_TYPE": "分层预警报告",
         "CRITICAL_COUNT": "3", "REGRESSION_COUNT": "2", "IMBALANCED_COUNT": "1",
+        "TIER_TYPE_CHART": "", "CRITICAL_DIST_CHART": "",
         "CRITICAL_TABLE": "<table class=\"edu-table\"><tr><th>姓名</th></tr></table>",
         "REGRESSION_TABLE": "<p>无</p>", "IMBALANCED_TABLE": "<p>无</p>",
         "SUMMARY": "<p>需关注</p>", "RECOMMENDATIONS": "<p>分层辅导</p>",
     }
-    result = _run(
-        render_html_report.execute(
-            datasource_id=1, template_name="education/tier_alert.html", data=data, title="预警报告"
-        )
+    html = _sanitize_report_html(
+        _render_template_html("education/tier_alert.html", data)
     )
-    assert "分层预警" in result.data["html"]
-    assert "临界生" in result.data["html"]
+    assert "分层预警" in html
+    assert "临界生" in html
+    assert "tierTypeChartData" in html
+    assert "criticalDistData" in html
 
 
 def test_student_profile_parent_template_renders():
