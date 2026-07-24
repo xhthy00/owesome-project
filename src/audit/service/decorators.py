@@ -20,7 +20,7 @@ import inspect
 import json
 import logging
 import time
-from typing import Callable, Optional
+from typing import Callable, Optional, get_type_hints
 
 from fastapi import Request
 
@@ -77,6 +77,33 @@ def _jsonable(obj):
     return obj
 
 
+def _preserve_endpoint_signature(wrapper: Callable, func: Callable) -> Callable:
+    """让 FastAPI 仍按原端点签名解析 Body/Depends（wraps 默认只保留 *args/**kwargs）。
+
+    需把注解解析成真实类型：``from __future__ import annotations`` 下签名里是字符串，
+    FastAPI 会用 wrapper 的 ``__globals__``（装饰器模块）求值，解析不到 Pydantic 模型，
+    会把 ``req`` 误判为 query 参数导致 422。
+    """
+    sig = inspect.signature(func)
+    try:
+        hints = get_type_hints(func)
+    except Exception:  # noqa: BLE001
+        hints = {}
+    if hints:
+        params = [
+            p.replace(annotation=hints[name]) if name in hints else p
+            for name, p in sig.parameters.items()
+        ]
+        ret = hints.get("return", sig.return_annotation)
+        sig = sig.replace(parameters=params, return_annotation=ret)
+    wrapper.__signature__ = sig  # type: ignore[attr-defined]
+    try:
+        wrapper.__annotations__ = dict(hints) if hints else dict(getattr(func, "__annotations__", {}) or {})
+    except Exception:  # noqa: BLE001
+        pass
+    return wrapper
+
+
 def audit_access(*, datasource_id_arg: Optional[str] = None, query_arg: Optional[str] = None):
     """访问日志装饰器：贴在 NL2SQL / 查询端点上，成功失败都记一条 AuditAccessLog。
 
@@ -125,7 +152,9 @@ def audit_access(*, datasource_id_arg: Optional[str] = None, query_arg: Optional
                     request, current_user, kwargs, datasource_id_arg, query_arg, success, error_msg, start
                 )
 
-        return async_wrapper if is_async else sync_wrapper
+        if is_async:
+            return _preserve_endpoint_signature(async_wrapper, func)
+        return _preserve_endpoint_signature(sync_wrapper, func)
 
     return decorator
 
@@ -231,7 +260,9 @@ def audit_operation(
                     start,
                 )
 
-        return async_wrapper if is_async else sync_wrapper
+        if is_async:
+            return _preserve_endpoint_signature(async_wrapper, func)
+        return _preserve_endpoint_signature(sync_wrapper, func)
 
     return decorator
 
