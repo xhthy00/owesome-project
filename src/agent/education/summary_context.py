@@ -133,12 +133,26 @@ def truncate_keeping_kpi_lines(text: str, *, limit: int = 1200) -> str:
     return combined[: limit + 200] + "\n…（已截断）"
 
 
-def extract_stats_authority_block(
+_PASS_LINE_IN_TEXT_RE = re.compile(r"(及格线\s*)(\d+(?:\.\d+)?)")
+_EXCELLENT_LINE_IN_TEXT_RE = re.compile(r"(优秀线\s*)(\d+(?:\.\d+)?)")
+_REF_HEADCOUNT_IN_TEXT_RE = re.compile(
+    r"((?:参考人数|班级人数|应考人数|实考人数)\s*(?:为)?\s*)(\d+)(\s*人)"
+)
+
+
+def _fmt_authority_score(value: Any) -> str:
+    """分数线展示：整数写 ``70.0``（与工具原文常见写法一致），非整保留有效小数。"""
+    f = float(value)
+    if abs(f - round(f)) < 1e-9:
+        return f"{int(round(f))}.0"
+    text = f"{round(f, 4):.4f}".rstrip("0").rstrip(".")
+    return text
+
+
+def extract_stats_authority_data(
     tool_calls: list[dict[str, Any]] | None = None,
-) -> str:
-    """从 compute_score_stats_tool 抽取权威 KPI，供 Summarizer 照抄。"""
-    best: dict[str, Any] | None = None
-    best_content = ""
+) -> dict[str, Any] | None:
+    """从 ``compute_score_stats_tool`` 抽取权威 KPI dict；没有则 ``None``。"""
     for tc in tool_calls or []:
         if not tc.get("success"):
             continue
@@ -146,12 +160,56 @@ def extract_stats_authority_block(
             continue
         data = tc.get("data")
         if isinstance(data, dict) and not data.get("error") and data.get("count") is not None:
-            best = data
-            best_content = str(tc.get("content") or "")
-            break
+            return data
+    return None
+
+
+def reconcile_summary_kpis(
+    text: str,
+    stats: dict[str, Any] | None,
+) -> str:
+    """用权威统计改写结论中的及格线/优秀线/参考人数，避免 Summarizer 回落到惯例 60/85。
+
+    无权威统计或空文本时原样返回；只改带明确标签的数字，不动及格率/均分等其它值。
+    """
+    if not text or not stats:
+        return text or ""
+
+    out = text
+    if stats.get("pass_line") is not None:
+        pl = _fmt_authority_score(stats["pass_line"])
+        out = _PASS_LINE_IN_TEXT_RE.sub(rf"\g<1>{pl}", out)
+    if stats.get("excellent_line") is not None:
+        el = _fmt_authority_score(stats["excellent_line"])
+        out = _EXCELLENT_LINE_IN_TEXT_RE.sub(rf"\g<1>{el}", out)
+    if stats.get("count") is not None:
+        try:
+            count = int(stats["count"])
+        except (TypeError, ValueError):
+            count = None
+        if count is not None:
+            out = _REF_HEADCOUNT_IN_TEXT_RE.sub(rf"\g<1>{count}\g<3>", out)
+    return out
+
+
+def extract_stats_authority_block(
+    tool_calls: list[dict[str, Any]] | None = None,
+) -> str:
+    """从 compute_score_stats_tool 抽取权威 KPI，供 Summarizer 照抄。"""
+    best = extract_stats_authority_data(tool_calls)
+    best_content = ""
+    for tc in tool_calls or []:
+        if not tc.get("success"):
+            continue
+        if str(tc.get("tool") or "") != "compute_score_stats_tool":
+            continue
         content = str(tc.get("content") or "")
+        if best is not None:
+            best_content = content
+            break
         if "成绩统计完成" in content:
             best_content = content
+            break
     if best is None and not best_content:
         return ""
     lines = ["【权威统计（compute_score_stats_tool，须照抄）】"]
@@ -279,9 +337,11 @@ def format_education_pipeline_footer(report_data: dict[str, Any] | None) -> str:
 __all__ = [
     "collect_education_artifacts",
     "extract_stats_authority_block",
+    "extract_stats_authority_data",
     "format_education_pipeline_footer",
     "format_sql_result_authority_notes",
     "format_tool_expert_sub_task_block",
+    "reconcile_summary_kpis",
     "sql_looks_paginated",
     "truncate_keeping_kpi_lines",
 ]

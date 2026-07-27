@@ -73,6 +73,33 @@ def test_extract_long_student_id_and_score_query_is_individual():
     assert should_replace_with_individual_student_plan(q, [{"sub_task": q, "sub_task_agent": "DataAnalyst"}])
 
 
+def test_extract_date_style_student_id_without_stu():
+    """非 STU 学号（年份_日期_学校_序号）也应抽出并走个人报告意图。"""
+    from src.agent.education.query_parse import (
+        extract_student_id_target,
+        extract_student_target,
+        is_individual_student_analysis_query,
+    )
+
+    sid = "2024_20250102_GZ_E884AF1D_5143"
+    q = f"学生 {sid} 个人考试分析报告"
+    assert extract_student_id_target(q) == sid
+    assert extract_student_target(q) == sid
+    assert is_individual_student_analysis_query(q) is True
+
+    q2 = f"{sid}的成绩"
+    assert extract_student_id_target(q2) == sid
+    assert is_individual_student_analysis_query(q2) is True
+
+
+def test_extract_student_id_skips_school_code_as_score_subject():
+    """单段学校编码不应被「xxx的成绩」误认为学号。"""
+    from src.agent.education.query_parse import extract_student_id_target
+
+    assert extract_student_id_target("GZ_E884AF1D的成绩") is None
+    assert extract_student_id_target("分析学生张三的成绩报告") is None
+
+
 def test_extract_school_target_from_full_name():
     q = "帮我分析南京市第一中学在江苏省高一上学期数学期末质量检测的成绩"
     assert extract_school_target(q) == "南京市第一中学"

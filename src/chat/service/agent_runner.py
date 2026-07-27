@@ -1044,11 +1044,30 @@ async def _run_summarizer_multi(
     except Exception as e:  # noqa: BLE001 - 后处理失败不中断主流程
         logger.warning("summarizer failed: %s", e)
         await emit("agent_speak", {"agent": "Summarizer", "status": "error", "error": str(e)})
-        return fallback
+        return _reconcile_summary_with_sub_phases(fallback, sub_phases)
 
     await emit("agent_speak", {"agent": "Summarizer", "status": "end"})
     content = (reply.content or "").strip()
-    return content or fallback
+    return _reconcile_summary_with_sub_phases(content or fallback, sub_phases)
+
+
+def _reconcile_summary_with_sub_phases(
+    text: str,
+    sub_phases: list[tuple[str, "_DataAnalystPhase"]],
+) -> str:
+    """有 compute_score_stats 权威 KPI 时改写结论中的分数线/参考人数；否则原样返回。"""
+    from src.agent.education.summary_context import (
+        extract_stats_authority_data,
+        reconcile_summary_kpis,
+    )
+
+    tool_calls: list[dict[str, Any]] = []
+    for _goal, phase in sub_phases:
+        tool_calls.extend(list(getattr(getattr(phase, "state", None), "tool_calls", None) or []))
+    stats = extract_stats_authority_data(tool_calls)
+    if not stats:
+        return text
+    return reconcile_summary_kpis(text, stats)
 
 
 def _build_single_task_context(question: str, state: "_RunState") -> dict[str, Any]:

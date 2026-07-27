@@ -211,3 +211,54 @@ def test_truncate_keeping_kpi_lines_preserves_pass_line():
     out = truncate_keeping_kpi_lines(long, limit=800)
     assert "参考人数 52" in out
     assert "及格线 45" in out
+
+
+def test_reconcile_summary_kpis_rewrites_wrong_pass_line():
+    from src.agent.education.summary_context import reconcile_summary_kpis
+
+    draft = (
+        "邗江中学高三(1)班本次地理考试班级总览报告已生成。\n"
+        "本次考试参考人数为 20 人，考试科目为地理，卷面满分 100 分，"
+        "及格线 60.0 分、优秀线 85.0 分。"
+    )
+    stats = {
+        "count": 20,
+        "pass_line": 70.0,
+        "excellent_line": 85.0,
+        "full_score": 100,
+    }
+    out = reconcile_summary_kpis(draft, stats)
+    assert "及格线 70.0" in out
+    assert "及格线 60" not in out
+    assert "优秀线 85.0" in out
+    assert "参考人数为 20 人" in out
+
+
+def test_reconcile_summary_kpis_noop_without_stats():
+    from src.agent.education.summary_context import reconcile_summary_kpis
+
+    draft = "及格线 60.0 分，优秀线 85.0 分。"
+    assert reconcile_summary_kpis(draft, None) == draft
+    assert reconcile_summary_kpis(draft, {}) == draft
+
+
+def test_reconcile_summary_kpis_does_not_touch_pass_rate():
+    from src.agent.education.summary_context import reconcile_summary_kpis
+
+    draft = "及格率 80.00%，优秀率 0.00%，及格线 60 分。"
+    out = reconcile_summary_kpis(draft, {"pass_line": 70.0, "excellent_line": 85.0, "count": 20})
+    assert "及格率 80.00%" in out
+    assert "及格线 70.0" in out
+
+
+def test_reconcile_summary_kpis_fixes_headcount_label():
+    from src.agent.education.summary_context import reconcile_summary_kpis
+
+    draft = "参考人数为 12 人，及格线 90 分、优秀线 127.5 分。"
+    out = reconcile_summary_kpis(
+        draft,
+        {"count": 52, "pass_line": 45.0, "excellent_line": 75.0},
+    )
+    assert "参考人数为 52 人" in out
+    assert "及格线 45.0" in out
+    assert "优秀线 75.0" in out

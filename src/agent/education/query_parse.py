@@ -34,15 +34,52 @@ _STUDENT_PATTERNS = (
     re.compile(r"[「\"']([\u4e00-\u9fff]{2,4})[」\"']"),
 )
 
+# 学号 token：字母/数字开头，允许 _.- ，且必须含数字（与「学生张三」中文名区分）
+_STUDENT_ID_TOKEN = r"(?=[A-Za-z0-9_.-]*\d)[A-Za-z0-9][A-Za-z0-9_.-]{3,63}"
+
+# 旧规则（回滚时恢复下面元组，并删除/注释新规则即可）
 # 兼容 STU20240003、2024_STU20260052_YZZX_3884、学生2024_STU... 等
+# _STUDENT_ID_PATTERNS = (
+#     re.compile(r"学生编号[为：:\s]*([A-Za-z0-9_]{4,64})", re.I),
+#     re.compile(r"学号[为：:\s]*([A-Za-z0-9_]{4,64})", re.I),
+#     re.compile(r"(?:学生|学员)[为：:\s]*([0-9]{4}_STU[A-Za-z0-9_]+)", re.I),
+#     re.compile(r"(?:学生|学员)([0-9]{4}_STU[A-Za-z0-9_]+)", re.I),
+#     re.compile(r"\b([0-9]{4}_STU[A-Za-z0-9_]+)\b", re.I),
+#     re.compile(r"\b(STU[A-Za-z0-9_]{4,})\b", re.I),
+# )
+
+# 新规则：不强制 STU/年份前缀；优先「学生/学号」语境，其次「xxx的成绩」类意图
 _STUDENT_ID_PATTERNS = (
-    re.compile(r"学生编号[为：:\s]*([A-Za-z0-9_]{4,64})", re.I),
-    re.compile(r"学号[为：:\s]*([A-Za-z0-9_]{4,64})", re.I),
-    re.compile(r"(?:学生|学员)[为：:\s]*([0-9]{4}_STU[A-Za-z0-9_]+)", re.I),
-    re.compile(r"(?:学生|学员)([0-9]{4}_STU[A-Za-z0-9_]+)", re.I),
-    re.compile(r"\b([0-9]{4}_STU[A-Za-z0-9_]+)\b", re.I),
+    # 高置信：显式编号/学号
+    re.compile(rf"学生编号[为：:\s]*({_STUDENT_ID_TOKEN})", re.I),
+    re.compile(rf"学号[为：:\s]*({_STUDENT_ID_TOKEN})", re.I),
+    # 高置信：学生/学员 + 账号型 token（含 2024_20250102_GZ_… / 2024_STU…）
+    re.compile(rf"(?:学生|学员)[为：:\s]*({_STUDENT_ID_TOKEN})", re.I),
+    # 兼容旧 STU 裸号
     re.compile(r"\b(STU[A-Za-z0-9_]{4,})\b", re.I),
+    # 中置信：像学号的串 + 成绩/报告意图（如「2024_…_5143的成绩」）
+    re.compile(
+        rf"({_STUDENT_ID_TOKEN})的?(?:成绩|得分|学情|报告|分析|排名|诊断|考试分析)",
+        re.I,
+    ),
 )
+
+
+def _is_plausible_student_id_token(token: str, *, contextual: bool) -> bool:
+    """过滤误抽：学校编码等短下划线串；语境命中时可略宽。"""
+    t = str(token or "").strip()
+    if not t or len(t) < 4 or len(t) > 64:
+        return False
+    if not re.search(r"\d", t):
+        return False
+    if re.match(r"(?i)^STU", t):
+        return True
+    sep = t.count("_") + t.count("-")
+    if contextual:
+        # 「学生/学号」后：有分隔或足够长即可
+        return sep >= 1 or len(t) >= 8
+    # 裸串 /「xxx的成绩」：至少两段分隔，降低 GZ_E884AF1D 这类学校 ID 误伤
+    return sep >= 2 and len(t) >= 10
 
 
 def normalize_student_key(name: str) -> str:
@@ -57,14 +94,19 @@ def normalize_fullwidth_parentheses(text: str) -> str:
 
 
 def extract_student_id_target(question: str) -> str | None:
-    """从问题中抽取学号（如 STU20240003 / 2024_STU..._YZZX_3884）。"""
+    """从问题中抽取学号（不限定 STU/年份前缀；优先学生/学号语境）。"""
     q = (question or "").strip()
     if not q:
         return None
-    for pat in _STUDENT_ID_PATTERNS:
+    for idx, pat in enumerate(_STUDENT_ID_PATTERNS):
         m = pat.search(q)
-        if m:
-            return str(m.group(1)).strip()
+        if not m:
+            continue
+        token = str(m.group(1)).strip()
+        # 前 3 条为显式语境；其后为裸 STU /「xxx的成绩」
+        contextual = idx < 3
+        if _is_plausible_student_id_token(token, contextual=contextual):
+            return token
     return None
 
 
