@@ -180,46 +180,44 @@ export default function SideBar() {
 
   if (!isMenuExpand) {
     return (
-      <div className="flex h-screen flex-col justify-between bg-[#d7dfed] pt-4 dark:bg-[#232734]">
-        <div>
-          <div className="flex flex-col items-center pb-2">
-            <Link href="/" className="flex items-center justify-center pb-2">
-              <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-white shadow-sm">
-                <Image src="/logo-mark.svg" alt="logo" width={34} height={34} />
-              </span>
-            </Link>
-            <Tooltip title="展开侧栏" placement="right">
-              <div
-                onClick={() => setIsMenuExpand(true)}
-                className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
-              >
-                <MenuUnfoldOutlined style={{ fontSize: 14 }} />
-              </div>
-            </Tooltip>
-          </div>
-          <div className="mt-2 flex flex-col items-center gap-4">
-            {visibleRoutes.map((item) => {
-              const active =
-                item.key === "analysis"
-                  ? pathname === "/construct/analysis"
-                  : pathname === item.path || pathname.startsWith(item.path + "/");
-              return (
-                <Link key={item.key} href={item.path} className="h-12 flex items-center">
-                  <Tooltip title={item.label} placement="right">
-                    <div
-                      className={`mx-auto flex h-12 w-12 items-center justify-center rounded-xl text-xl transition-colors ${
-                        active ? "bg-blue-50 text-blue-600 shadow-sm dark:bg-blue-900/20 dark:text-blue-400" : "hover:bg-blue-50/50 dark:hover:bg-blue-900/10"
-                      }`}
-                    >
-                      {item.icon}
-                    </div>
-                  </Tooltip>
-                </Link>
-              );
-            })}
-          </div>
+      <div className="flex h-screen flex-col bg-[#d7dfed] pt-4 dark:bg-[#232734]">
+        <div className="flex shrink-0 flex-col items-center pb-2">
+          <Link href="/" className="flex items-center justify-center pb-2">
+            <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-white shadow-sm">
+              <Image src="/logo-mark.svg" alt="logo" width={34} height={34} />
+            </span>
+          </Link>
+          <Tooltip title="展开侧栏" placement="right">
+            <div
+              onClick={() => setIsMenuExpand(true)}
+              className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+            >
+              <MenuUnfoldOutlined style={{ fontSize: 14 }} />
+            </div>
+          </Tooltip>
         </div>
-        <div className="py-4">
+        <div className="mt-2 flex min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto overscroll-contain px-1 pb-2 [scrollbar-gutter:stable] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[#9aa8c0]/70 [&::-webkit-scrollbar-track]:bg-transparent">
+          {visibleRoutes.map((item) => {
+            const active =
+              item.key === "analysis"
+                ? pathname === "/construct/analysis"
+                : pathname === item.path || pathname.startsWith(item.path + "/");
+            return (
+              <Link key={item.key} href={item.path} className="flex h-12 shrink-0 items-center">
+                <Tooltip title={item.label} placement="right">
+                  <div
+                    className={`mx-auto flex h-12 w-12 items-center justify-center rounded-xl text-xl transition-colors ${
+                      active ? "bg-blue-50 text-blue-600 shadow-sm dark:bg-blue-900/20 dark:text-blue-400" : "hover:bg-blue-50/50 dark:hover:bg-blue-900/10"
+                    }`}
+                  >
+                    {item.icon}
+                  </div>
+                </Tooltip>
+              </Link>
+            );
+          })}
+        </div>
+        <div className="shrink-0 py-4">
           <Tooltip title="展开侧栏" placement="right">
             <div
               className="mx-auto flex h-12 w-12 cursor-pointer items-center justify-center rounded-xl text-xl transition-colors hover:bg-blue-50/50 dark:hover:bg-blue-900/10"
@@ -235,7 +233,7 @@ export default function SideBar() {
 
   return (
     <div className="flex h-screen w-[240px] min-w-[240px] flex-col border-r border-[#cfd8e8] bg-[#d7dfed] px-4 pt-4 dark:border-[#34384a] dark:bg-[#232734]">
-      <div className="dbgpt-ui-font flex items-center justify-between p-2 pb-4">
+      <div className="dbgpt-ui-font flex shrink-0 items-center justify-between p-2 pb-4">
         <Link href="/" className="flex items-center gap-2">
           <Image src="/logo-mark.svg" alt="logo" width={40} height={40} className="rounded-md" />
           <span className="text-sm font-semibold tracking-[0.03em] text-[#243149] dark:text-white">扬州电教馆</span>
@@ -250,154 +248,156 @@ export default function SideBar() {
         </Tooltip>
       </div>
 
-      <Link href="/chat">
+      <Link href="/chat" className="shrink-0">
         <div className="dbgpt-ui-font mb-4 flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-black px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90 dark:bg-white dark:text-black">
           <PlusOutlined className="text-xs" />
           <span>新建任务</span>
         </div>
       </Link>
 
-      <div className="flex flex-col gap-1">
-        {visibleRoutes.map((item) => {
-          const active =
-            item.key === "analysis"
-              ? pathname === "/construct/analysis"
-              : pathname === item.path || pathname.startsWith(item.path + "/");
-          const isPermissionRoot = item.key === "permission";
-          const isSystemRoot = item.key === "system";
-          return (
-            <div key={item.key}>
-              <button
-                type="button"
-                onClick={() => {
-                  if (isPermissionRoot) {
-                    setPermissionExpanded((prev) => !prev);
-                  } else if (isSystemRoot) {
-                    setSystemExpanded((prev) => !prev);
-                  } else {
-                    void router.push(item.path);
-                  }
-                }}
-                className={`flex h-12 w-full items-center px-4 transition-colors hover:rounded-xl hover:bg-blue-50/50 dark:hover:bg-blue-900/10 ${
-                  active ? "rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400" : "text-[#2e3a52] dark:text-gray-300"
-                }`}
-              >
-                <div className="mr-3">{item.icon}</div>
-                <span className="dbgpt-ui-font text-sm">{item.label}</span>
-                {isPermissionRoot || isSystemRoot ? (
-                  <DownOutlined
-                    className={`ml-auto text-xs transition-transform ${
-                      (isPermissionRoot ? permissionExpanded : systemExpanded) ? "rotate-0" : "-rotate-90"
-                    }`}
-                  />
-                ) : null}
-              </button>
-              {isPermissionRoot && permissionExpanded ? (
-                <div className="ml-11 mt-1 flex flex-col gap-1">
-                  {permissionSubRoutes.map((sub) => {
-                    const subActive = pathname === sub.path || pathname.startsWith(sub.path + "/");
-                    return (
-                      <Link
-                        key={sub.key}
-                        href={sub.path}
-                        className={`flex h-10 items-center rounded-lg px-3 text-sm transition-colors ${
-                          subActive
-                            ? "bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400"
-                            : "text-[#3d4a64] hover:bg-blue-50/50 dark:text-gray-400 dark:hover:bg-blue-900/10"
-                        }`}
-                      >
-                        {sub.label}
-                      </Link>
-                    );
-                  })}
-                </div>
-              ) : null}
-              {isSystemRoot && systemExpanded ? (
-                <div className="ml-11 mt-1 flex flex-col gap-1">
-                  {systemSubRoutes.map((sub) => {
-                    const subActive = pathname === sub.path || pathname.startsWith(sub.path + "/");
-                    return (
-                      <Link
-                        key={sub.key}
-                        href={sub.path}
-                        className={`flex h-10 items-center rounded-lg px-3 text-sm transition-colors ${
-                          subActive
-                            ? "bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400"
-                            : "text-[#3d4a64] hover:bg-blue-50/50 dark:text-gray-400 dark:hover:bg-blue-900/10"
-                        }`}
-                      >
-                        {sub.label}
-                      </Link>
-                    );
-                  })}
-                </div>
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="mb-2 mt-4 px-1">
-        <div className="flex items-center justify-between">
-          <span className="dbgpt-ui-font text-xs font-semibold uppercase tracking-wider text-gray-400">所有任务</span>
-          <Link href="/conversations" className="inline-flex items-center">
-            <Tooltip title="查看全部">
-              <RightOutlined className="cursor-pointer text-xs text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-gray-300" />
-            </Tooltip>
-          </Link>
-        </div>
-      </div>
-      <div className="min-h-0 flex-1 overflow-y-auto scrollbar-hide">
-        {historyList.length ? (
-          <div className="space-y-2 px-1 pb-2">
-            {groupedHistory.map((group) => (
-              <div key={group.key}>
+      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain [scrollbar-gutter:stable] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[#9aa8c0]/70 dark:[&::-webkit-scrollbar-thumb]:bg-[#5a6578] [&::-webkit-scrollbar-track]:bg-transparent">
+        <div className="flex flex-col gap-1">
+          {visibleRoutes.map((item) => {
+            const active =
+              item.key === "analysis"
+                ? pathname === "/construct/analysis"
+                : pathname === item.path || pathname.startsWith(item.path + "/");
+            const isPermissionRoot = item.key === "permission";
+            const isSystemRoot = item.key === "system";
+            return (
+              <div key={item.key}>
                 <button
-                  onClick={() => setCollapsedGroups((prev) => ({ ...prev, [group.key]: !prev[group.key] }))}
-                  className="flex w-full items-center px-2 pb-1 text-left"
+                  type="button"
+                  onClick={() => {
+                    if (isPermissionRoot) {
+                      setPermissionExpanded((prev) => !prev);
+                    } else if (isSystemRoot) {
+                      setSystemExpanded((prev) => !prev);
+                    } else {
+                      void router.push(item.path);
+                    }
+                  }}
+                  className={`flex h-12 w-full items-center px-4 transition-colors hover:rounded-xl hover:bg-blue-50/50 dark:hover:bg-blue-900/10 ${
+                    active ? "rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400" : "text-[#2e3a52] dark:text-gray-300"
+                  }`}
                 >
-                  <span className="text-[10px] font-semibold uppercase tracking-wider text-[#98a2b3]">{group.label}</span>
-                  <DownOutlined
-                    className={`ml-1 text-[10px] text-[#98a2b3] transition-transform ${
-                      collapsedGroups[group.key] ? "-rotate-90" : "rotate-0"
-                    }`}
-                  />
+                  <div className="mr-3">{item.icon}</div>
+                  <span className="dbgpt-ui-font text-sm">{item.label}</span>
+                  {isPermissionRoot || isSystemRoot ? (
+                    <DownOutlined
+                      className={`ml-auto text-xs transition-transform ${
+                        (isPermissionRoot ? permissionExpanded : systemExpanded) ? "rotate-0" : "-rotate-90"
+                      }`}
+                    />
+                  ) : null}
                 </button>
-                {!collapsedGroups[group.key] ? (
-                  <div className="space-y-1">
-                    {group.items.map((item) => {
-                      const active = activeConversationId === item.id;
+                {isPermissionRoot && permissionExpanded ? (
+                  <div className="ml-11 mt-1 flex flex-col gap-1">
+                    {permissionSubRoutes.map((sub) => {
+                      const subActive = pathname === sub.path || pathname.startsWith(sub.path + "/");
                       return (
                         <Link
-                          key={item.id}
-                          href={{ pathname: "/chat", query: { conversation_id: item.id } }}
-                          className={`block rounded-lg px-3 py-2 transition ${
-                            active
-                              ? "border border-[#dbeafe] bg-[#f5f9ff] text-[#1d4ed8] shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-[#2f4b75] dark:bg-[#1d2940] dark:text-[#93c5fd]"
-                              : "border border-transparent hover:bg-white/80 dark:hover:bg-[#2a3040]"
+                          key={sub.key}
+                          href={sub.path}
+                          className={`flex h-10 items-center rounded-lg px-3 text-sm transition-colors ${
+                            subActive
+                              ? "bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400"
+                              : "text-[#3d4a64] hover:bg-blue-50/50 dark:text-gray-400 dark:hover:bg-blue-900/10"
                           }`}
                         >
-                          <div className="truncate text-[13px] font-medium leading-5">{item.title || `对话 ${item.id}`}</div>
-                          <div className="mt-0.5 truncate text-[10px] text-[#98a2b3]">{item.update_time?.slice(0, 16) || "刚刚"}</div>
+                          {sub.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {isSystemRoot && systemExpanded ? (
+                  <div className="ml-11 mt-1 flex flex-col gap-1">
+                    {systemSubRoutes.map((sub) => {
+                      const subActive = pathname === sub.path || pathname.startsWith(sub.path + "/");
+                      return (
+                        <Link
+                          key={sub.key}
+                          href={sub.path}
+                          className={`flex h-10 items-center rounded-lg px-3 text-sm transition-colors ${
+                            subActive
+                              ? "bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400"
+                              : "text-[#3d4a64] hover:bg-blue-50/50 dark:text-gray-400 dark:hover:bg-blue-900/10"
+                          }`}
+                        >
+                          {sub.label}
                         </Link>
                       );
                     })}
                   </div>
                 ) : null}
               </div>
-            ))}
+            );
+          })}
+        </div>
+
+        <div className="mb-2 mt-4 px-1">
+          <div className="flex items-center justify-between">
+            <span className="dbgpt-ui-font text-xs font-semibold uppercase tracking-wider text-gray-400">所有任务</span>
+            <Link href="/conversations" className="inline-flex items-center">
+              <Tooltip title="查看全部">
+                <RightOutlined className="cursor-pointer text-xs text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-gray-300" />
+              </Tooltip>
+            </Link>
           </div>
-        ) : (
-          <div className="px-3 py-8 text-center">
-            <div className="mb-2 text-gray-300 dark:text-gray-600">
-              <MessageOutlined style={{ fontSize: 24 }} />
+        </div>
+        <div className="pb-2">
+          {historyList.length ? (
+            <div className="space-y-2 px-1 pb-2">
+              {groupedHistory.map((group) => (
+                <div key={group.key}>
+                  <button
+                    onClick={() => setCollapsedGroups((prev) => ({ ...prev, [group.key]: !prev[group.key] }))}
+                    className="flex w-full items-center px-2 pb-1 text-left"
+                  >
+                    <span className="text-[10px] font-semibold uppercase tracking-wider text-[#98a2b3]">{group.label}</span>
+                    <DownOutlined
+                      className={`ml-1 text-[10px] text-[#98a2b3] transition-transform ${
+                        collapsedGroups[group.key] ? "-rotate-90" : "rotate-0"
+                      }`}
+                    />
+                  </button>
+                  {!collapsedGroups[group.key] ? (
+                    <div className="space-y-1">
+                      {group.items.map((item) => {
+                        const active = activeConversationId === item.id;
+                        return (
+                          <Link
+                            key={item.id}
+                            href={{ pathname: "/chat", query: { conversation_id: item.id } }}
+                            className={`block rounded-lg px-3 py-2 transition ${
+                              active
+                                ? "border border-[#dbeafe] bg-[#f5f9ff] text-[#1d4ed8] shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-[#2f4b75] dark:bg-[#1d2940] dark:text-[#93c5fd]"
+                                : "border border-transparent hover:bg-white/80 dark:hover:bg-[#2a3040]"
+                            }`}
+                          >
+                            <div className="truncate text-[13px] font-medium leading-5">{item.title || `对话 ${item.id}`}</div>
+                            <div className="mt-0.5 truncate text-[10px] text-[#98a2b3]">{item.update_time?.slice(0, 16) || "刚刚"}</div>
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
             </div>
-            <p className="dbgpt-ui-font text-xs text-gray-400">暂无历史任务</p>
-          </div>
-        )}
+          ) : (
+            <div className="px-3 py-8 text-center">
+              <div className="mb-2 text-gray-300 dark:text-gray-600">
+                <MessageOutlined style={{ fontSize: 24 }} />
+              </div>
+              <p className="dbgpt-ui-font text-xs text-gray-400">暂无历史任务</p>
+            </div>
+          )}
+        </div>
       </div>
 
-      <div className="pb-2 pt-4">
+      <div className="shrink-0 pb-2 pt-4">
         <div className="mt-2 flex items-center justify-around border-t border-dashed border-gray-200 py-4 dark:border-gray-700">
           <div className="flex-1 cursor-pointer text-center text-xl text-[#52617d] dark:text-gray-300" onClick={() => setIsMenuExpand(false)}>
             <MenuFoldOutlined />

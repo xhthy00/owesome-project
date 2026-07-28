@@ -47,19 +47,6 @@ def list_workspaces(
     )
 
 
-@router.get("/{workspace_id}")
-def get_workspace(
-    workspace_id: int,
-    session: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
-):
-    _ = current_user
-    row = session.query(SysWorkspace).filter(SysWorkspace.id == workspace_id).first()
-    if not row:
-        raise NotFoundException("Workspace not found")
-    return success_response(data={"id": row.id, "name": row.name, "create_time": row.create_time})
-
-
 @router.post("")
 def create_workspace(
     payload: dict,
@@ -107,24 +94,7 @@ def update_workspace(
     return success_response(data={"id": row.id, "name": row.name}, message="Workspace updated")
 
 
-@router.delete("/{workspace_id}")
-def delete_workspace(
-    workspace_id: int,
-    session: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
-):
-    _ = current_user
-    if workspace_id == 1:
-        raise BadRequestException("Default workspace cannot be deleted")
-    row = session.query(SysWorkspace).filter(SysWorkspace.id == workspace_id).first()
-    if not row:
-        raise NotFoundException("Workspace not found")
-    session.query(SysUserWorkspace).filter(SysUserWorkspace.oid == workspace_id).delete()
-    session.delete(row)
-    session.commit()
-    return success_response(data={"id": workspace_id}, message="Workspace deleted")
-
-
+# NOTE: /uws* 必须注册在 /{workspace_id} 之前，否则 DELETE/GET /uws 会被当成 workspace_id="uws" → 422
 @router.get("/uws/pager/{page_num}/{page_size}")
 def list_workspace_members(
     page_num: int,
@@ -297,3 +267,34 @@ def remove_workspace_member(
     ).delete(synchronize_session=False)
     session.commit()
     return success_response(data={"uid_list": uid_list, "oid": oid_value}, message="Member removed")
+
+
+@router.get("/{workspace_id}")
+def get_workspace(
+    workspace_id: int,
+    session: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    _ = current_user
+    row = session.query(SysWorkspace).filter(SysWorkspace.id == workspace_id).first()
+    if not row:
+        raise NotFoundException("Workspace not found")
+    return success_response(data={"id": row.id, "name": row.name, "create_time": row.create_time})
+
+
+@router.delete("/{workspace_id}")
+def delete_workspace(
+    workspace_id: int,
+    session: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    _ = current_user
+    if workspace_id == 1:
+        raise BadRequestException("Default workspace cannot be deleted")
+    row = session.query(SysWorkspace).filter(SysWorkspace.id == workspace_id).first()
+    if not row:
+        raise NotFoundException("Workspace not found")
+    session.query(SysUserWorkspace).filter(SysUserWorkspace.oid == workspace_id).delete()
+    session.delete(row)
+    session.commit()
+    return success_response(data={"id": workspace_id}, message="Workspace deleted")
