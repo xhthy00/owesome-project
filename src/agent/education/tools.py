@@ -372,12 +372,11 @@ def _aggregate_long_table_records(
             except (TypeError, ValueError):
                 pass
         elif not subject and score_raw is not None:
-            # 单科宽表：无 subject 列时用 score 作为总分
+            # 单科宽表：无 subject 列时用 score 作为总分（含 0 分）
             try:
                 sv = float(score_raw)
-                if sv > 0:
-                    slot["total"] = sv
-                    slot["subjects"].setdefault("成绩", sv)
+                slot["total"] = sv
+                slot["subjects"].setdefault("成绩", sv)
             except (TypeError, ValueError):
                 pass
     for slot in agg.values():

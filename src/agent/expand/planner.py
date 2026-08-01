@@ -545,7 +545,7 @@ def build_trend_tracking_plan_items(question: str) -> list[dict[str, str]]:
         {
             "sub_task": (
                 f"查询【{school_l}】【{class_l}】历次{subject_l}考试每位学生分数"
-                "（SQL 须含 exam_name、student_id/姓名、score、exam_score；"
+                "（SQL 须含 exam_name、student_id/姓名、subject_name、score、exam_score；"
                 "按考试时间排序；禁止只查一场、禁止只查 KPI 聚合）"
             ),
             "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,

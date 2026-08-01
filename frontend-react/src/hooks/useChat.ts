@@ -274,7 +274,7 @@ export function useChat() {
         {
           id: bootstrapId,
           title: "准备执行计划",
-          detail: "正在初始化 Planner...",
+          detail: "正在初始化规划专家…",
           status: "running",
           runId,
           section: "plan"

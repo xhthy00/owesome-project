@@ -45,6 +45,26 @@ def test_build_trend_tracking_data_fills_chart_and_table():
     assert "成绩趋势报告" in data["REPORT_TYPE"]
 
 
+def test_trend_tracking_uses_placeholder_subject_when_sql_omits_subject_col():
+    """上游 SQL 无 subject_name 时聚合为 subjects['成绩']，指定科目仍应出数。"""
+    records = [
+        {"exam": "摸底", "student": "A", "subjects": {"成绩": 80}, "total": 80},
+        {"exam": "摸底", "student": "B", "subjects": {"成绩": 70}, "total": 70},
+        {"exam": "调研", "student": "A", "subjects": {"成绩": 85}, "total": 85},
+        {"exam": "调研", "student": "B", "subjects": {"成绩": 75}, "total": 75},
+    ]
+    data = build_trend_tracking_data(
+        records,
+        ["摸底", "调研"],
+        class_name="高三(7)班",
+        subject_name="数学",
+    )
+    assert data["EXAM_COUNT"] == 2
+    assert "<td>2</td>" in data["TREND_TABLE"]  # 每场参考人数
+    assert "0.0 变为 0.0" not in data["CHANGE_INFO"]
+    assert "75.0" in data["CHANGE_INFO"] or "75" in data["TREND_TABLE"]
+
+
 def test_trend_tracking_query_not_swallowed_by_comprehensive():
     q = "扬州中学高三(10)班数学成绩走势与进退步分析"
     assert is_trend_tracking_query(q) is True

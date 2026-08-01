@@ -26,25 +26,50 @@ def _now_str() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
+_PLACEHOLDER_SUBJECT_KEYS = frozenset({"成绩", "总分", "score", "total", ""})
+
+
 def _score_for_record(record: dict[str, Any], subject_name: str = "") -> float | None:
-    """取单条记录用于趋势的分数：指定科目用该科，否则用有效总分。"""
+    """取单条记录用于趋势的分数：指定科目用该科，否则用有效总分。
+
+    上游 SQL 常按科目过滤但未 SELECT subject_name，聚合会把分数落在「成绩」
+    占位键上；此时若调用方已指定 subject_name，仍应读到该唯一分数。
+    """
     sub = (subject_name or "").strip()
-    if sub:
-        subjects = record.get("subjects") or {}
-        if sub in subjects and subjects[sub] is not None:
+    subjects = record.get("subjects") or {}
+    if not sub:
+        return _record_effective_total(record)
+
+    if sub in subjects and subjects[sub] is not None:
+        try:
+            return float(subjects[sub])
+        except (TypeError, ValueError):
+            return None
+
+    # 科目名模糊匹配（如「数学」↔「数学一」）
+    for k, v in subjects.items():
+        if not k or str(k) in _PLACEHOLDER_SUBJECT_KEYS:
+            continue
+        if sub in str(k) or str(k) in sub:
             try:
-                return float(subjects[sub])
+                return float(v)
             except (TypeError, ValueError):
-                return None
-        # 科目名模糊匹配
-        for k, v in subjects.items():
-            if sub in str(k) or str(k) in sub:
-                try:
-                    return float(v)
-                except (TypeError, ValueError):
-                    continue
-        return None
-    return _record_effective_total(record)
+                continue
+
+    # 单科宽表 / 已 WHERE 滤科：subjects 仅一科（含「成绩」占位）
+    numeric: list[float] = []
+    for v in subjects.values():
+        if v is None:
+            continue
+        try:
+            numeric.append(float(v))
+        except (TypeError, ValueError):
+            continue
+    if len(numeric) == 1:
+        return numeric[0]
+    if numeric and all(str(k) in _PLACEHOLDER_SUBJECT_KEYS for k in subjects):
+        return _record_effective_total(record)
+    return None
 
 
 def _infer_full_score(
