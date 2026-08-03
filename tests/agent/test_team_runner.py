@@ -633,6 +633,13 @@ def test_team_routes_sub_task_to_tool_expert(monkeypatch):
     assert calc_calls[0].get("agent") == "ToolExpert"
     assert calc_calls[0].get("sub_task_index") == 0
 
+    # 与 DataAnalyst 一致：ToolExpert 子任务须独立广播 agent_speak
+    te_speaks = [
+        p for e, p in events if e == "agent_speak" and p.get("agent") == "ToolExpert"
+    ]
+    assert any(p.get("status") == "start" for p in te_speaks)
+    assert any(p.get("status") == "end" for p in te_speaks)
+
 
 def test_team_disable_tool_agent_falls_back_to_data_analyst(monkeypatch):
     """enable_tool_agent=False 时，Planner 标记 ToolExpert 也应回退 DataAnalyst。"""

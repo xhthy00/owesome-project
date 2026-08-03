@@ -15,7 +15,7 @@ from src.chat.service.agent_runner import (
     _DataAnalystPhase,
     _build_shared_constraints,
     _first_non_empty,
-    _persist_sync,
+    _persist_async,
     _run_charter,
     _run_data_analyst_phase,
     _run_planner_phase,
@@ -66,11 +66,13 @@ async def node_planner(state: TeamState, config: RunnableConfig) -> dict[str, An
     request = state["request"]
     current_user_id = state["current_user_id"]
     shared_constraints = _build_shared_constraints(request.question, current_user_id)
+    speak_steps: list[dict[str, Any]] = []
     plan_items = await _run_planner_phase(
         request=request,
         llm_client=llm,
         emit=emit,
         constraints=shared_constraints,
+        steps=speak_steps,
     )
     team_cfg = build_chat_team(
         enable_tool_agent=config["configurable"].get("enable_tool_agent", True),
@@ -83,6 +85,7 @@ async def node_planner(state: TeamState, config: RunnableConfig) -> dict[str, An
         "plans": plans,
         "plan_agents": plan_agents,
         "constraints_ctx": shared_constraints.to_context(),
+        "all_steps": speak_steps,
     }
 
 
@@ -105,7 +108,7 @@ async def node_sub_tasks_loop(state: TeamState, config: RunnableConfig) -> dict[
 
     sub_phases: list[tuple[str, _DataAnalystPhase]] = []
     last_good_phase: _DataAnalystPhase | None = None
-    all_steps: list[dict[str, Any]] = []
+    all_steps: list[dict[str, Any]] = list(state.get("all_steps") or [])
 
     current_user_id = state["current_user_id"]
     workspace_oid = state["workspace_oid"]
@@ -226,8 +229,7 @@ async def node_persist_failure(state: TeamState, config: RunnableConfig) -> dict
     persist = state.get("persist", True)
     record_id = 0
     if persist:
-        record_id = await asyncio.to_thread(
-            _persist_sync,
+        record_id = await _persist_async(
             request=request,
             current_user_id=state["current_user_id"],
             question=request.question,
@@ -255,14 +257,20 @@ async def node_charter(state: TeamState, config: RunnableConfig) -> dict[str, An
     llm = _llm_from_config(config)
     request = state["request"]
     last_good_phase: _DataAnalystPhase = state["last_good_phase"]
+    speak_steps: list[dict[str, Any]] = []
     chart_type, chart_config = await _run_charter(
         question=request.question,
         state=last_good_phase.state,
         llm_client=llm,
         emit=emit,
+        steps=speak_steps,
     )
     await emit("chart", {"chart_type": chart_type, "chart_config": chart_config})
-    return {"chart_type": chart_type, "chart_config": chart_config}
+    return {
+        "chart_type": chart_type,
+        "chart_config": chart_config,
+        "all_steps": list(state.get("all_steps") or []) + speak_steps,
+    }
 
 
 async def node_summarizer(state: TeamState, config: RunnableConfig) -> dict[str, Any]:
@@ -273,6 +281,7 @@ async def node_summarizer(state: TeamState, config: RunnableConfig) -> dict[str,
     last_good_phase: _DataAnalystPhase = state["last_good_phase"]
 
     default_summary = last_good_phase.reply.content if last_good_phase.reply else ""
+    speak_steps: list[dict[str, Any]] = []
     summary_text = await _run_summarizer_multi(
         question=request.question,
         sub_phases=sub_phases,
@@ -280,9 +289,13 @@ async def node_summarizer(state: TeamState, config: RunnableConfig) -> dict[str,
         emit=emit,
         fallback=default_summary,
         report_data=state.get("upstream_report_data"),
+        steps=speak_steps,
     )
     await emit("summary", {"content": summary_text})
-    return {"summary_text": summary_text}
+    return {
+        "summary_text": summary_text,
+        "all_steps": list(state.get("all_steps") or []) + speak_steps,
+    }
 
 
 async def node_persist_success(state: TeamState, config: RunnableConfig) -> dict[str, Any]:
@@ -301,8 +314,7 @@ async def node_persist_success(state: TeamState, config: RunnableConfig) -> dict
     persist = state.get("persist", True)
     record_id = 0
     if persist:
-        record_id = await asyncio.to_thread(
-            _persist_sync,
+        record_id = await _persist_async(
             request=request,
             current_user_id=state["current_user_id"],
             question=request.question,

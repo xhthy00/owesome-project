@@ -44,6 +44,8 @@ export type ConversationRecord = {
   question: string;
   reasoning?: string;
   summary?: string;
+  total_tokens?: number | null;
+  elapsed_ms?: number | null;
   steps?: Array<{ name?: string; label?: string; status?: string; elapsed_ms?: number; detail?: string; sub_task_index?: number }>;
   tool_calls?: Array<{
     round?: number;
@@ -144,6 +146,12 @@ type StreamHandlers = {
   }) => void;
   onFinalAnswer?: (content: string) => void;
   onSummary?: (content: string) => void;
+  onUsage?: (payload: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+    delta_total?: number;
+  }) => void;
   onError?: (msg: string) => void;
   onDone?: (recordId: number) => void;
 };
@@ -296,6 +304,15 @@ export async function sendMessageStream(
           break;
         case "summary":
           handlers.onSummary?.((data.content as string) ?? "");
+          break;
+        case "usage":
+          handlers.onUsage?.({
+            prompt_tokens: typeof data.prompt_tokens === "number" ? data.prompt_tokens : undefined,
+            completion_tokens:
+              typeof data.completion_tokens === "number" ? data.completion_tokens : undefined,
+            total_tokens: typeof data.total_tokens === "number" ? data.total_tokens : undefined,
+            delta_total: typeof data.delta_total === "number" ? data.delta_total : undefined
+          });
           break;
         case "error":
           handlers.onError?.((data.error as string) ?? "Unknown error");

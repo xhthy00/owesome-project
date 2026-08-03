@@ -71,6 +71,8 @@ def _ensure_columns() -> None:
             "tool_calls": "TEXT",
             "summary": "TEXT",
             "reports": "TEXT",
+            "total_tokens": "INTEGER",
+            "elapsed_ms": "INTEGER",
         },
         "ds_permission": {
             "table_name": "TEXT",

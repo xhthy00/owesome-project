@@ -22,7 +22,7 @@ function safeParse(raw: string): unknown {
   }
 }
 
-export async function streamSSE(opts: SSEStreamOptions): Promise<void> {
+export async function streamSSE(opts: SSEStreamOptions): Promise<{ aborted: boolean }> {
   const { url, body, headers, signal, onEvent, onError, onDone } = opts;
   const emitChunk = (chunk: string) => {
     if (!chunk.trim()) return;
@@ -74,8 +74,12 @@ export async function streamSSE(opts: SSEStreamOptions): Promise<void> {
       emitChunk(buffer);
     }
     onDone?.();
+    return { aborted: false };
   } catch (err) {
-    if ((err as { name?: string })?.name === "AbortError") return;
+    if ((err as { name?: string })?.name === "AbortError") {
+      return { aborted: true };
+    }
     onError?.(err);
+    return { aborted: false };
   }
 }

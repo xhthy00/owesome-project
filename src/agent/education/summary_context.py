@@ -16,6 +16,7 @@ _DIAGNOSIS_REPORT_TOOLS = frozenset({
 })
 
 _SQL_OFFSET_RE = re.compile(r"\bOFFSET\b", re.IGNORECASE)
+_SQL_LIMIT_RE = re.compile(r"\bLIMIT\s+\d+", re.IGNORECASE)
 _KPI_LINE_RE = re.compile(
     r"(参考人数|班级人数|应考|实考|全班|共\s*\d+\s*人|卷面满分|及格线|优秀线|"
     r"及格率|优秀率|均分|满分|count\s*=)",
@@ -116,6 +117,15 @@ def sql_looks_paginated(sql: str | None) -> bool:
     return bool(_SQL_OFFSET_RE.search(sql or ""))
 
 
+def sql_looks_row_capped(sql: str | None) -> bool:
+    """SQL 是否含 LIMIT/OFFSET，使返回行数不能当作全体参考人数。
+
+    常见误判：``LIMIT 20`` 无 OFFSET 时，下游仍把「共 20 行」写成全班 20 人。
+    """
+    s = sql or ""
+    return bool(_SQL_OFFSET_RE.search(s) or _SQL_LIMIT_RE.search(s))
+
+
 def truncate_keeping_kpi_lines(text: str, *, limit: int = 1200) -> str:
     """截断结论时优先保留含人数/分数线的行，避免丢掉 52 人 / 45 / 75。"""
     text = (text or "").strip()
@@ -136,7 +146,7 @@ def truncate_keeping_kpi_lines(text: str, *, limit: int = 1200) -> str:
 _PASS_LINE_IN_TEXT_RE = re.compile(r"(及格线\s*)(\d+(?:\.\d+)?)")
 _EXCELLENT_LINE_IN_TEXT_RE = re.compile(r"(优秀线\s*)(\d+(?:\.\d+)?)")
 _REF_HEADCOUNT_IN_TEXT_RE = re.compile(
-    r"((?:参考人数|班级人数|应考人数|实考人数)\s*(?:为)?\s*)(\d+)(\s*人)"
+    r"((?:参考人数|班级人数|应考人数|实考人数|全班(?:人数)?)\s*(?:为|共)?\s*)(\d+)(\s*人)"
 )
 
 
@@ -235,17 +245,18 @@ def format_sql_result_authority_notes(
     row_count: int,
     sample_shown: int,
 ) -> str:
-    """针对 execute_sql 结果的人数口径说明（防 OFFSET→12 人幻觉）。"""
+    """针对 execute_sql 结果的人数口径说明（防 LIMIT/OFFSET→20 人幻觉）。"""
     lines: list[str] = []
-    if sql_looks_paginated(sql):
+    if sql_looks_row_capped(sql):
+        kind = "OFFSET 分页" if sql_looks_paginated(sql) else "LIMIT 截断"
         lines.append(
-            f"⚠️ 本 SQL 含 OFFSET：下列「共 {row_count} 行」仅为本页返回行数，"
-            f"**禁止**当作班级/全体总人数；总人数须用 compute_score_stats 的 count、"
-            f"无 OFFSET 的 COUNT/明细查询、或查询结论中已写明的「参考人数」。"
+            f"⚠️ 本 SQL 含 {kind}：下列「共 {row_count} 行」仅为本次返回行数，"
+            f"**禁止**当作班级/全体参考人数；总人数须用 compute_score_stats 的 count、"
+            f"无 LIMIT/OFFSET 的 COUNT(*)/明细全量查询，或权威统计块中的 count。"
         )
     else:
         lines.append(
-            f"权威行数：共 {row_count} 行（无 OFFSET 时可作为明细人数；"
+            f"权威行数：共 {row_count} 行（无 LIMIT/OFFSET 时可作为明细人数；"
             f"若另有权威统计块，以统计块的 count 为准）。"
         )
     if sample_shown > 0 and sample_shown < row_count:
@@ -255,7 +266,7 @@ def format_sql_result_authority_notes(
         )
     elif sample_shown > 0:
         lines.append(
-            f"样例展示 {sample_shown} 行；若上文标明 OFFSET 分页，仍不得把样例/本页行数当作全班人数。"
+            f"样例展示 {sample_shown} 行（含系统预览上限），**禁止**把样例行数写成全班参考人数。"
         )
     return "\n".join(lines)
 
@@ -343,5 +354,6 @@ __all__ = [
     "format_tool_expert_sub_task_block",
     "reconcile_summary_kpis",
     "sql_looks_paginated",
+    "sql_looks_row_capped",
     "truncate_keeping_kpi_lines",
 ]

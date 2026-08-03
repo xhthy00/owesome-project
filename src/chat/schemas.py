@@ -99,6 +99,8 @@ class ConversationRecordResponse(BaseModel):
     tool_calls: Optional[List[Dict[str, Any]]] = None
     summary: Optional[str] = None
     reports: Optional[List[Dict[str, Any]]] = None
+    total_tokens: Optional[int] = None
+    elapsed_ms: Optional[int] = None
 
     class Config:
         from_attributes = True

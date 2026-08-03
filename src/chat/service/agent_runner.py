@@ -203,41 +203,45 @@ async def run_agent_stream(
     Returns:
         新建的 record_id；若无 conversation_id 或持久化失败则返回 0。
     """
-    phase = await _run_data_analyst_phase(
-        request=request,
-        current_user_id=current_user_id,
-        emit=emit,
-        llm_client=llm_client,
-        constraints=_build_shared_constraints(request.question, current_user_id),
-        workspace_oid=workspace_oid,
-    )
-    if phase.fatal_error:
-        return 0
+    from src.agent.adapter.usage_sink import usage_tracking
 
-    if not phase.terminated:
-        await emit("error", {"error": phase.fail_reason or "agent did not reach a final answer"})
+    async with usage_tracking(emit):
+        phase = await _run_data_analyst_phase(
+            request=request,
+            current_user_id=current_user_id,
+            emit=emit,
+            llm_client=llm_client,
+            constraints=_build_shared_constraints(request.question, current_user_id),
+            workspace_oid=workspace_oid,
+        )
+        if phase.fatal_error:
+            return 0
 
-    if not persist:
-        return 0
+        if not phase.terminated:
+            await emit(
+                "error", {"error": phase.fail_reason or "agent did not reach a final answer"}
+            )
 
-    return await asyncio.to_thread(
-        _persist_sync,
-        request=request,
-        current_user_id=current_user_id,
-        question=request.question,
-        sql=phase.state.last_sql,
-        sql_error=None if phase.is_success else (phase.fail_reason or ""),
-        exec_result=phase.state.last_exec_result,
-        is_success=phase.is_success,
-        reasoning=phase.reply.content if phase.reply else "",
-        steps=list(phase.state.steps),
-        chart_type="table",
-        chart_config=None,
-        agent_mode="agent",
-        tool_calls=list(phase.state.tool_calls),
-        reports=list(phase.state.reports),
-        workspace_oid=workspace_oid,
-    )
+        if not persist:
+            return 0
+
+        return await _persist_async(
+            request=request,
+            current_user_id=current_user_id,
+            question=request.question,
+            sql=phase.state.last_sql,
+            sql_error=None if phase.is_success else (phase.fail_reason or ""),
+            exec_result=phase.state.last_exec_result,
+            is_success=phase.is_success,
+            reasoning=phase.reply.content if phase.reply else "",
+            steps=list(phase.state.steps),
+            chart_type="table",
+            chart_config=None,
+            agent_mode="agent",
+            tool_calls=list(phase.state.tool_calls),
+            reports=list(phase.state.reports),
+            workspace_oid=workspace_oid,
+        )
 
 
 async def run_team_stream(
@@ -271,10 +275,22 @@ async def run_team_stream(
     编排实现由配置 ``team_orchestrator``（环境变量 ``TEAM_ORCHESTRATOR``）选择：
     ``langgraph``（默认）或 ``legacy``。
     """
-    if get_settings().team_orchestrator == "langgraph":
-        from src.chat.service.team_graph import run_team_stream_graph
+    from src.agent.adapter.usage_sink import usage_tracking
 
-        return await run_team_stream_graph(
+    async with usage_tracking(emit):
+        if get_settings().team_orchestrator == "langgraph":
+            from src.chat.service.team_graph import run_team_stream_graph
+
+            return await run_team_stream_graph(
+                request=request,
+                current_user_id=current_user_id,
+                emit=emit,
+                llm_client=llm_client,
+                persist=persist,
+                enable_tool_agent=enable_tool_agent,
+                workspace_oid=workspace_oid,
+            )
+        return await _run_team_stream_legacy(
             request=request,
             current_user_id=current_user_id,
             emit=emit,
@@ -283,15 +299,6 @@ async def run_team_stream(
             enable_tool_agent=enable_tool_agent,
             workspace_oid=workspace_oid,
         )
-    return await _run_team_stream_legacy(
-        request=request,
-        current_user_id=current_user_id,
-        emit=emit,
-        llm_client=llm_client,
-        persist=persist,
-        enable_tool_agent=enable_tool_agent,
-        workspace_oid=workspace_oid,
-    )
 
 
 async def _run_team_stream_legacy(
@@ -310,11 +317,13 @@ async def _run_team_stream_legacy(
     team_cfg = build_chat_team(enable_tool_agent=enable_tool_agent)
 
     shared_constraints = _build_shared_constraints(request.question, current_user_id)
+    all_steps: list[dict[str, Any]] = []
     plan_items = await _run_planner_phase(
         request=request,
         llm_client=llm_client,
         emit=emit,
         constraints=shared_constraints,
+        steps=all_steps,
     )
     plans = [it["sub_task"] for it in plan_items]
     plan_agents = [team_cfg.resolve_sub_task_agent(it["sub_task_agent"]) for it in plan_items]
@@ -323,7 +332,6 @@ async def _run_team_stream_legacy(
 
     sub_phases: list[tuple[str, _DataAnalystPhase]] = []
     last_good_phase: _DataAnalystPhase | None = None
-    all_steps: list[dict[str, Any]] = []
 
     for idx, item in enumerate(plan_items):
         sub_task = item["sub_task"]
@@ -442,8 +450,7 @@ async def _run_team_stream_legacy(
         ) or "all sub tasks failed"
         await emit("error", {"error": overall_reason})
         if persist:
-            return await asyncio.to_thread(
-                _persist_sync,
+            return await _persist_async(
                 request=request,
                 current_user_id=current_user_id,
                 question=request.question,
@@ -470,6 +477,7 @@ async def _run_team_stream_legacy(
         state=last_good_phase.state,
         llm_client=llm_client,
         emit=emit,
+        steps=all_steps,
     )
     await emit("chart", {"chart_type": chart_type, "chart_config": chart_config})
 
@@ -481,14 +489,14 @@ async def _run_team_stream_legacy(
         emit=emit,
         fallback=default_summary,
         report_data=upstream_report_data,
+        steps=all_steps,
     )
     await emit("summary", {"content": summary_text})
 
     if not persist:
         return 0
 
-    return await asyncio.to_thread(
-        _persist_sync,
+    return await _persist_async(
         request=request,
         current_user_id=current_user_id,
         question=request.question,
@@ -516,6 +524,40 @@ def _first_non_empty(items: list[str]) -> str:
         if s:
             return s
     return ""
+
+
+async def _emit_agent_speak(
+    emit: EmitCallback,
+    *,
+    agent: str,
+    status: str,
+    steps: list[dict[str, Any]] | None = None,
+    **extra: Any,
+) -> None:
+    """广播 agent_speak，并同步写入 steps 供落库 / 历史回放（与 SSE 一致）。"""
+    payload: dict[str, Any] = {"agent": agent, "status": status, **extra}
+    await emit("agent_speak", payload)
+    if steps is None:
+        return
+    err = str(extra.get("error") or "")
+    detail = err
+    if not detail and status == "end":
+        if extra.get("chart_type") is not None:
+            detail = f"chart_type={extra.get('chart_type')}"
+        elif extra.get("plan_count") is not None:
+            detail = f"plan_count={extra.get('plan_count')}"
+        elif extra.get("summary_preview"):
+            detail = str(extra.get("summary_preview"))
+    step_status = "error" if status == "error" else ("running" if status == "start" else "ok")
+    step: dict[str, Any] = {
+        "name": f"{agent}:{status}",
+        "label": f"{agent}: {status}",
+        "status": step_status,
+        "detail": detail,
+    }
+    if extra.get("sub_task_index") is not None:
+        step["sub_task_index"] = extra["sub_task_index"]
+    steps.append(step)
 
 
 # --------------------------------------------------------------------------- #
@@ -573,6 +615,13 @@ async def _run_data_analyst_phase(
     agent.stream_callback = _make_forwarder(state, emit)
 
     question = question_override if question_override is not None else request.question
+    await _emit_agent_speak(
+        emit,
+        agent="DataAnalyst",
+        status="start",
+        steps=state.steps,
+        sub_task_index=sub_task_index,
+    )
     try:
         reply = await agent.generate_reply(
             received_message=AgentMessage(
@@ -586,6 +635,14 @@ async def _run_data_analyst_phase(
         )
     except Exception as e:  # noqa: BLE001 - 端点级兜底，禁止异常外溢
         logger.exception("agent run failed")
+        await _emit_agent_speak(
+            emit,
+            agent="DataAnalyst",
+            status="error",
+            steps=state.steps,
+            error=str(e),
+            sub_task_index=sub_task_index,
+        )
         await emit("error", {"error": f"agent run failed: {e}"})
         return _DataAnalystPhase(
             reply=None,
@@ -609,6 +666,22 @@ async def _run_data_analyst_phase(
             reply.action_report.content
             if reply.action_report and reply.action_report.content
             else "agent did not reach a final answer"
+        )
+        await _emit_agent_speak(
+            emit,
+            agent="DataAnalyst",
+            status="error",
+            steps=state.steps,
+            error=fail_reason,
+            sub_task_index=sub_task_index,
+        )
+    else:
+        await _emit_agent_speak(
+            emit,
+            agent="DataAnalyst",
+            status="end",
+            steps=state.steps,
+            sub_task_index=sub_task_index,
         )
 
     return _DataAnalystPhase(
@@ -667,6 +740,14 @@ async def _run_tool_expert_phase(
     )
     agent.stream_callback = _make_forwarder(state, emit)
 
+    # 与 DataAnalyst 一致：独立广播 start / end / error，并写入 steps 落库
+    await _emit_agent_speak(
+        emit,
+        agent="ToolExpert",
+        status="start",
+        steps=state.steps,
+        sub_task_index=sub_task_index,
+    )
     try:
         reply = await agent.generate_reply(
             received_message=AgentMessage(
@@ -680,6 +761,14 @@ async def _run_tool_expert_phase(
         )
     except Exception as e:  # noqa: BLE001
         logger.exception("tool expert run failed")
+        await _emit_agent_speak(
+            emit,
+            agent="ToolExpert",
+            status="error",
+            steps=state.steps,
+            error=str(e),
+            sub_task_index=sub_task_index,
+        )
         await emit("error", {"error": f"tool expert run failed: {e}"})
         return _DataAnalystPhase(
             reply=None,
@@ -699,6 +788,22 @@ async def _run_tool_expert_phase(
             reply.action_report.content
             if reply.action_report and reply.action_report.content
             else "tool expert did not reach a final answer"
+        )
+        await _emit_agent_speak(
+            emit,
+            agent="ToolExpert",
+            status="error",
+            steps=state.steps,
+            error=fail_reason,
+            sub_task_index=sub_task_index,
+        )
+    else:
+        await _emit_agent_speak(
+            emit,
+            agent="ToolExpert",
+            status="end",
+            steps=state.steps,
+            sub_task_index=sub_task_index,
         )
 
     return _DataAnalystPhase(
@@ -722,6 +827,7 @@ async def _run_planner_phase(
     llm_client: Any,
     emit: EmitCallback,
     constraints: _RunConstraints | None = None,
+    steps: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, str]]:
     """跑 Planner 得到 sub_task 列表。失败一律回落 [原问题]，不抛。"""
     from src.agent.education.query_parse import (
@@ -754,117 +860,109 @@ async def _run_planner_phase(
         should_replace_with_tier_alert_plan,
     )
 
-    await emit("agent_speak", {"agent": "Planner", "status": "start"})
+    await _emit_agent_speak(emit, agent="Planner", status="start", steps=steps)
 
     # 全市学情报告：确定性 3 步计划，跳过 Planner LLM（避免超时/回落单任务）
     if is_citywide_analysis_query(request.question):
         plan_items = build_citywide_team_plan_items(request.question)
-        await emit(
-            "agent_speak",
-            {
-                "agent": "Planner",
-                "status": "end",
-                "plan_count": len(plan_items),
-                "deterministic": True,
-            },
+        await _emit_agent_speak(
+            emit,
+            agent="Planner",
+            status="end",
+            steps=steps,
+            plan_count=len(plan_items),
+            deterministic=True,
         )
         return plan_items
 
     # 单个学生得分/知识点：确定性 2 步，避免被当成「简单查询」只出总分
     if is_individual_student_analysis_query(request.question):
         plan_items = build_individual_student_exam_plan_items(request.question)
-        await emit(
-            "agent_speak",
-            {
-                "agent": "Planner",
-                "status": "end",
-                "plan_count": len(plan_items),
-                "deterministic": True,
-            },
+        await _emit_agent_speak(
+            emit,
+            agent="Planner",
+            status="end",
+            steps=steps,
+            plan_count=len(plan_items),
+            deterministic=True,
         )
         return plan_items
 
     # 班级多场考试：确定性走 comprehensive，避免误入单科诊断导致人次累加、无对比
     if is_multi_exam_class_analysis_query(request.question):
         plan_items = build_comprehensive_class_plan_items(request.question)
-        await emit(
-            "agent_speak",
-            {
-                "agent": "Planner",
-                "status": "end",
-                "plan_count": len(plan_items),
-                "deterministic": True,
-            },
+        await _emit_agent_speak(
+            emit,
+            agent="Planner",
+            status="end",
+            steps=steps,
+            plan_count=len(plan_items),
+            deterministic=True,
         )
         return plan_items
 
     # 临界生/分层预警：优先于学校科目诊断
     if is_tier_alert_query(request.question):
         plan_items = build_tier_alert_plan_items(request.question)
-        await emit(
-            "agent_speak",
-            {
-                "agent": "Planner",
-                "status": "end",
-                "plan_count": len(plan_items),
-                "deterministic": True,
-            },
+        await _emit_agent_speak(
+            emit,
+            agent="Planner",
+            status="end",
+            steps=steps,
+            plan_count=len(plan_items),
+            deterministic=True,
         )
         return plan_items
 
     # 群体特征（按班级/区县等）：优先于班级横向对比与科目诊断
     if is_group_feature_query(request.question):
         plan_items = build_group_feature_plan_items(request.question)
-        await emit(
-            "agent_speak",
-            {
-                "agent": "Planner",
-                "status": "end",
-                "plan_count": len(plan_items),
-                "deterministic": True,
-            },
+        await _emit_agent_speak(
+            emit,
+            agent="Planner",
+            status="end",
+            steps=steps,
+            plan_count=len(plan_items),
+            deterministic=True,
         )
         return plan_items
 
     # 班级成绩总览：优先于学校科目诊断
     if is_class_overview_query(request.question):
         plan_items = build_class_overview_plan_items(request.question)
-        await emit(
-            "agent_speak",
-            {
-                "agent": "Planner",
-                "status": "end",
-                "plan_count": len(plan_items),
-                "deterministic": True,
-            },
+        await _emit_agent_speak(
+            emit,
+            agent="Planner",
+            status="end",
+            steps=steps,
+            plan_count=len(plan_items),
+            deterministic=True,
         )
         return plan_items
 
     # 学校各班横向对比：确定性全校 3 步，禁止缩成单班诊断
     if is_school_class_comparison_query(request.question):
         plan_items = build_school_class_comparison_plan_items(request.question)
-        await emit(
-            "agent_speak",
-            {
-                "agent": "Planner",
-                "status": "end",
-                "plan_count": len(plan_items),
-                "deterministic": True,
-            },
+        await _emit_agent_speak(
+            emit,
+            agent="Planner",
+            status="end",
+            steps=steps,
+            plan_count=len(plan_items),
+            deterministic=True,
         )
         return plan_items
 
     # 学校科目/多维报告：确定性 3 步，避免 LLM 漏拆或缩成单班
     if is_school_exam_report_query(request.question):
         plan_items = build_school_subject_report_plan_items(request.question)
-        await emit(
-            "agent_speak",
-            {
-                "agent": "Planner",
-                "status": "end",
-                "plan_count": len(plan_items),
-                "deterministic": True,
-            },
+        await _emit_agent_speak(
+            emit,
+            agent="Planner",
+            status="end",
+            steps=steps,
+            plan_count=len(plan_items),
+            deterministic=True,
         )
         return plan_items
 
@@ -883,7 +981,7 @@ async def _run_planner_phase(
         )
     except Exception as e:  # noqa: BLE001 - Planner 失败不能拖垮 team
         logger.warning("planner failed: %s", e)
-        await emit("agent_speak", {"agent": "Planner", "status": "error", "error": str(e)})
+        await _emit_agent_speak(emit, agent="Planner", status="error", steps=steps, error=str(e))
         plan_items = [{"sub_task": request.question, "sub_task_agent": "DataAnalyst"}]
         if should_replace_with_citywide_plan(request.question, plan_items):
             plan_items = build_citywide_team_plan_items(request.question)
@@ -968,9 +1066,12 @@ async def _run_planner_phase(
     else:
         plan_items = coerce_plan_items_if_needed(request.question, plan_items)
 
-    await emit(
-        "agent_speak",
-        {"agent": "Planner", "status": "end", "plan_count": len(plan_items)},
+    await _emit_agent_speak(
+        emit,
+        agent="Planner",
+        status="end",
+        steps=steps,
+        plan_count=len(plan_items),
     )
     return plan_items
 
@@ -986,10 +1087,11 @@ async def _run_charter(
     state: "_RunState",
     llm_client: Any,
     emit: EmitCallback,
+    steps: list[dict[str, Any]] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """跑 Charter；失败一律回落 table + 空 config，不抛。"""
     context = _build_single_task_context(question, state)
-    await emit("agent_speak", {"agent": "Charter", "status": "start"})
+    await _emit_agent_speak(emit, agent="Charter", status="start", steps=steps)
     try:
         charter = CharterAgent(llm_client=llm_client)
         reply = await charter.generate_reply(
@@ -1002,7 +1104,9 @@ async def _run_charter(
         )
     except Exception as e:  # noqa: BLE001 - 后处理失败不中断主流程
         logger.warning("charter failed: %s", e)
-        await emit("agent_speak", {"agent": "Charter", "status": "error", "error": str(e)})
+        await _emit_agent_speak(
+            emit, agent="Charter", status="error", steps=steps, error=str(e)
+        )
         return "table", {}
 
     ar = reply.action_report
@@ -1011,7 +1115,13 @@ async def _run_charter(
     chart_config = extra.get("chart_config") or {}
     if not isinstance(chart_config, dict):
         chart_config = {}
-    await emit("agent_speak", {"agent": "Charter", "status": "end", "chart_type": chart_type})
+    await _emit_agent_speak(
+        emit,
+        agent="Charter",
+        status="end",
+        steps=steps,
+        chart_type=chart_type,
+    )
     return chart_type, chart_config
 
 
@@ -1023,6 +1133,7 @@ async def _run_summarizer_multi(
     emit: EmitCallback,
     fallback: str,
     report_data: dict[str, Any] | None = None,
+    steps: list[dict[str, Any]] | None = None,
 ) -> str:
     """把 N 个 sub_task 的结果综合成一段中文结论。失败回落 ``fallback``。"""
     sub_tasks_block = _format_sub_tasks_block(sub_phases, report_data=report_data)
@@ -1030,7 +1141,7 @@ async def _run_summarizer_multi(
         "question": question,
         "sub_tasks_block": sub_tasks_block,
     }
-    await emit("agent_speak", {"agent": "Summarizer", "status": "start"})
+    await _emit_agent_speak(emit, agent="Summarizer", status="start", steps=steps)
     try:
         summarizer = SummarizerAgent(llm_client=llm_client)
         reply = await summarizer.generate_reply(
@@ -1043,12 +1154,22 @@ async def _run_summarizer_multi(
         )
     except Exception as e:  # noqa: BLE001 - 后处理失败不中断主流程
         logger.warning("summarizer failed: %s", e)
-        await emit("agent_speak", {"agent": "Summarizer", "status": "error", "error": str(e)})
+        await _emit_agent_speak(
+            emit, agent="Summarizer", status="error", steps=steps, error=str(e)
+        )
         return _reconcile_summary_with_sub_phases(fallback, sub_phases)
 
-    await emit("agent_speak", {"agent": "Summarizer", "status": "end"})
     content = (reply.content or "").strip()
-    return _reconcile_summary_with_sub_phases(content or fallback, sub_phases)
+    reconciled = _reconcile_summary_with_sub_phases(content or fallback, sub_phases)
+    preview = reconciled.replace("\n", " ").strip()[:160]
+    await _emit_agent_speak(
+        emit,
+        agent="Summarizer",
+        status="end",
+        steps=steps,
+        summary_preview=preview,
+    )
+    return reconciled
 
 
 def _reconcile_summary_with_sub_phases(
@@ -1111,7 +1232,7 @@ def _format_sub_tasks_block(
         format_education_pipeline_footer,
         format_sql_result_authority_notes,
         format_tool_expert_sub_task_block,
-        sql_looks_paginated,
+        sql_looks_row_capped,
         truncate_keeping_kpi_lines,
     )
 
@@ -1158,7 +1279,11 @@ def _format_sub_tasks_block(
 
         sample_label = (
             f"样例（仅预览前 {sample_shown} 行，禁止当班级总人数"
-            + ("；SQL 含 OFFSET，本页更非全班" if sql_looks_paginated(sql_text) else "")
+            + (
+                "；SQL 含 LIMIT/OFFSET，返回行数更非全班"
+                if sql_looks_row_capped(sql_text)
+                else ""
+            )
             + "）"
         )
         block = (
@@ -1589,6 +1714,8 @@ def _persist_sync(
     tool_calls: list[dict[str, Any]] | None = None,
     summary: str | None = None,
     reports: list[dict[str, Any]] | None = None,
+    total_tokens: int | None = None,
+    elapsed_ms: int | None = None,
     workspace_oid: int = 1,
 ) -> int:
     """在工作线程里开短事务并写 record。失败吞掉返回 0。"""
@@ -1619,6 +1746,8 @@ def _persist_sync(
                 tool_calls=tool_calls,
                 summary=summary,
                 reports=reports,
+                total_tokens=total_tokens,
+                elapsed_ms=elapsed_ms,
                 workspace_oid=workspace_oid,
             )
             return record.id or 0
@@ -1627,4 +1756,28 @@ def _persist_sync(
         return 0
 
 
-__all__ = ["run_agent_stream", "run_team_stream", "EmitCallback"]
+def _usage_persist_fields() -> tuple[int | None, int | None]:
+    """从当前请求 UsageSink 取 total_tokens / elapsed_ms；无 sink 则 (None, None)。"""
+    try:
+        from src.agent.adapter.usage_sink import get_usage_sink
+
+        sink = get_usage_sink()
+        if sink is None:
+            return None, None
+        snap = sink.snapshot_for_persist()
+        tokens = int(snap.get("total_tokens") or 0)
+        elapsed = int(snap.get("elapsed_ms") or 0)
+        return (tokens if tokens > 0 else None), (elapsed if elapsed > 0 else None)
+    except Exception:  # noqa: BLE001
+        return None, None
+
+
+async def _persist_async(**kwargs: Any) -> int:
+    """在 async 协程里读取 UsageSink，再丢到线程写库（ContextVar 不进线程）。"""
+    tokens, elapsed = _usage_persist_fields()
+    kwargs.setdefault("total_tokens", tokens)
+    kwargs.setdefault("elapsed_ms", elapsed)
+    return await asyncio.to_thread(_persist_sync, **kwargs)
+
+
+__all__ = ["run_agent_stream", "run_team_stream", "EmitCallback", "_persist_async"]

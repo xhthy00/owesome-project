@@ -48,3 +48,5 @@ class ConversationRecord(SQLModel, table=True):
     tool_calls: Optional[str] = Field(default=None, sa_column=Column(Text))
     summary: Optional[str] = Field(default=None, sa_column=Column(Text))
     reports: Optional[str] = Field(default=None, sa_column=Column(Text))
+    total_tokens: Optional[int] = Field(default=None, sa_column=Column(Integer, nullable=True))
+    elapsed_ms: Optional[int] = Field(default=None, sa_column=Column(Integer, nullable=True))

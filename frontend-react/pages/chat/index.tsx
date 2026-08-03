@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Flex, Layout } from "antd";
 import { useRouter } from "next/router";
 import ChatContentContainer from "@/components/chat/ChatContentContainer";
@@ -19,6 +19,9 @@ export default function ChatPage() {
     reports,
     queryResults,
     loading,
+    activity,
+    runMetrics,
+    metricsByRunId,
     send,
     stop,
     loadConversation,
@@ -33,12 +36,9 @@ export default function ChatPage() {
   const [maxNewTokensValue, setMaxNewTokensValue] = useState(4000);
   const [resourceValue, setResourceValue] = useState("database:sales");
   const [modelValue, setModelValue] = useState("dbgpt-pro");
-  const [localMessages, setLocalMessages] = useState(messages);
   const [selectedStepId, setSelectedStepId] = useState<string | undefined>(undefined);
-
-  useEffect(() => {
-    setLocalMessages(messages);
-  }, [messages]);
+  const prevConversationQuery = useRef<string | null>(null);
+  const loadedConversationIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     if (!executionSteps.length) {
@@ -66,16 +66,29 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!router.isReady) return;
-    const cid = router.query.conversation_id;
-    if (!cid) {
-      clearConversation();
+    const raw = router.query.conversation_id;
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    const prev = prevConversationQuery.current;
+
+    // 无 conversation_id：仅从「历史会话 → 新建任务」切过来时清空。
+    // 首次进入 / 发送中途不要 clear，否则会与 SSE 竞态把 messages 清掉，左侧一直停在欢迎页。
+    if (!value) {
+      if (prev) {
+        clearConversation();
+      }
+      prevConversationQuery.current = null;
+      loadedConversationIdRef.current = null;
       return;
     }
-    const value = Array.isArray(cid) ? cid[0] : cid;
+    prevConversationQuery.current = value;
     const id = Number(value);
     if (!id || Number.isNaN(id)) return;
+    // 流式中不加载；同一会话回答结束也不再 load（避免冲掉 SSE 里的 agent_speak）
+    if (loading) return;
+    if (loadedConversationIdRef.current === id) return;
+    loadedConversationIdRef.current = id;
     void loadConversation(id);
-  }, [router.isReady, router.query.conversation_id, loadConversation, clearConversation]);
+  }, [router.isReady, router.query.conversation_id, loadConversation, clearConversation, loading]);
 
   const appInfo = useMemo(
     () => ({
@@ -95,7 +108,6 @@ export default function ChatPage() {
       canAbort: loading,
       handleChat: async (text: string) => {
         await send(text, { datasourceId });
-        setLocalMessages((prev) => [...prev]);
       },
       stopReply: stop,
       replayLast: () => {
@@ -105,7 +117,7 @@ export default function ChatPage() {
         }
       },
       clearHistory: () => {
-        setLocalMessages([]);
+        clearConversation();
       },
       appInfo,
       temperatureValue,
@@ -120,7 +132,7 @@ export default function ChatPage() {
       datasourceId,
       setDatasourceId
     }),
-    [loading, send, stop, appInfo, temperatureValue, maxNewTokensValue, resourceValue, modelValue, messages, datasourceId, setDatasourceId]
+    [loading, send, stop, clearConversation, appInfo, temperatureValue, maxNewTokensValue, resourceValue, modelValue, messages, datasourceId, setDatasourceId]
   );
 
   return (
@@ -133,8 +145,14 @@ export default function ChatPage() {
                 <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-[#eceff5] bg-[#f5f6f8] dark:border-[#2f3441] dark:bg-[#0f1219]">
                   <div className="min-h-0 flex-1 overflow-hidden px-6 pt-4">
                     <ChatContentContainer
-                      messages={localMessages.length ? localMessages : messages}
+                      messages={messages}
                       steps={executionSteps}
+                      loading={loading}
+                      activity={activity}
+                      reports={reports}
+                      summaryByRunId={summaryByRunId}
+                      runMetrics={runMetrics}
+                      metricsByRunId={metricsByRunId}
                       selectedStepId={selectedStepId}
                       onSelectStep={setSelectedStepId}
                     />

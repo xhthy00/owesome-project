@@ -171,12 +171,30 @@ class LangChainLlmClient:
             # 理论上不会走到这里，兜底便于调用侧拿到明确错误。
             raise RuntimeError(f"LLM 调用失败：{last_error}")
 
+        await self._record_usage(response)
+
         content = getattr(response, "content", None)
         if content is None:
             return str(response)
         if isinstance(content, str):
             return content
         return "".join(str(part) for part in content)
+
+    @staticmethod
+    async def _record_usage(response: Any) -> None:
+        from src.agent.adapter.usage_sink import extract_usage_from_response, get_usage_sink
+
+        sink = get_usage_sink()
+        if sink is None:
+            return
+        usage = extract_usage_from_response(response)
+        if usage is None:
+            return
+        prompt, completion, total = usage
+        try:
+            await sink.record(prompt, completion, total)
+        except Exception:  # noqa: BLE001 - token 上报失败不影响主回答
+            logger.debug("usage sink record failed", exc_info=True)
 
     async def chat_with_schema(
         self,

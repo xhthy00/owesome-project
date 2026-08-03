@@ -123,10 +123,14 @@ def test_sql_offset_authority_notes_forbid_page_as_class_size():
         extract_stats_authority_block,
         format_sql_result_authority_notes,
         sql_looks_paginated,
+        sql_looks_row_capped,
     )
 
     assert sql_looks_paginated("SELECT * FROM t LIMIT 20 OFFSET 40")
     assert not sql_looks_paginated("SELECT * FROM t LIMIT 3")
+    assert sql_looks_row_capped("SELECT * FROM t LIMIT 20")
+    assert sql_looks_row_capped("SELECT * FROM t LIMIT 20 OFFSET 40")
+    assert not sql_looks_row_capped("SELECT COUNT(*) FROM t")
     notes = format_sql_result_authority_notes(
         sql="SELECT * FROM tb_score ORDER BY id LIMIT 20 OFFSET 40",
         row_count=12,
@@ -135,6 +139,15 @@ def test_sql_offset_authority_notes_forbid_page_as_class_size():
     assert "OFFSET" in notes
     assert "禁止" in notes
     assert "12" in notes
+
+    limit_notes = format_sql_result_authority_notes(
+        sql="SELECT student_id, score FROM tb_score WHERE class_name='高三(7)班' LIMIT 20",
+        row_count=20,
+        sample_shown=20,
+    )
+    assert "LIMIT" in limit_notes
+    assert "禁止" in limit_notes
+    assert "权威行数" not in limit_notes
 
     stats = extract_stats_authority_block(
         [

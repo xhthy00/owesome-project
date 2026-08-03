@@ -141,6 +141,8 @@ def create_conversation_record(
     tool_calls: Optional[List[Any]] = None,
     summary: Optional[str] = None,
     reports: Optional[List[Any]] = None,
+    total_tokens: Optional[int] = None,
+    elapsed_ms: Optional[int] = None,
     workspace_oid: int = 1,
 ) -> ConversationRecord:
     """Create a new conversation record。"""
@@ -194,6 +196,8 @@ def create_conversation_record(
         tool_calls=tool_calls_str,
         summary=summary,
         reports=reports_str,
+        total_tokens=total_tokens,
+        elapsed_ms=elapsed_ms,
     )
     session.add(record)
 

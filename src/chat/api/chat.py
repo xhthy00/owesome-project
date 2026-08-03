@@ -139,6 +139,8 @@ def get_conversation(
             "tool_calls": _parse_json(getattr(record, "tool_calls", None), None),
             "summary": getattr(record, "summary", None),
             "reports": _parse_json(getattr(record, "reports", None), None),
+            "total_tokens": getattr(record, "total_tokens", None),
+            "elapsed_ms": getattr(record, "elapsed_ms", None),
         }
         record_responses.append(ConversationRecordResponse(**record_dict))
 

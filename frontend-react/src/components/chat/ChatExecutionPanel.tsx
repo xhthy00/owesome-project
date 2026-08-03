@@ -3,7 +3,7 @@ import {
   BarChartOutlined,
   CodeOutlined,
   CopyOutlined,
-  DesktopOutlined,
+  RobotOutlined,
   DownloadOutlined,
   DownOutlined,
   EditOutlined,
@@ -29,6 +29,17 @@ import {
   hasRecommendationsSection
 } from "@/utils/reportRecommendations";
 import { exportReportAsWord } from "@/utils/exportReportWord";
+import AgentTeamStrip from "@/components/chat/AgentTeamStrip";
+import {
+  AGENT_STATUS_LABEL,
+  FLOW_AGENT_META,
+  FLOW_AGENTS,
+  assignStepToAgent,
+  computeFlowStatus,
+  groupStepsByAgent,
+  type FlowAgent
+} from "@/utils/agentTeam";
+import { humanizeStepDetail, humanizeStepTitle } from "@/utils/toolLabels";
 
 type Props = {
   steps: ExecutionStep[];
@@ -97,7 +108,6 @@ export default function ChatExecutionPanel({
 }: Props) {
   const [activeTab, setActiveTab] = useState<"steps" | "summary">("steps");
   const [summaryThinkExpanded, setSummaryThinkExpanded] = useState(false);
-  const [summaryConclusionExpanded, setSummaryConclusionExpanded] = useState(true);
   const [stepDetailExpanded, setStepDetailExpanded] = useState(true);
   const [showReportDialog, setShowReportDialog] = useState(false);
   const [selectedReportIndex, setSelectedReportIndex] = useState(-1);
@@ -110,14 +120,8 @@ export default function ChatExecutionPanel({
   const [editText, setEditText] = useState("");
   const [editSaving, setEditSaving] = useState(false);
   const [reviewSaving, setReviewSaving] = useState(false);
+  const [expandedAgents, setExpandedAgents] = useState<Set<FlowAgent>>(() => new Set());
   const pageSize = 20;
-  const flowAgents = ["Planner", "DataAnalyst", "Charter", "Summarizer"] as const;
-  const flowAgentLabelMap: Record<(typeof flowAgents)[number], string> = {
-    Planner: "规划",
-    DataAnalyst: "分析",
-    Charter: "制图",
-    Summarizer: "总结"
-  };
   const selectedStep = useMemo(
     () => steps.find((s) => s.id === selectedStepId) ?? steps[steps.length - 1],
     [steps, selectedStepId]
@@ -160,9 +164,24 @@ export default function ChatExecutionPanel({
     });
   }, [scopedReports]);
 
-  const selectedStepTitleText = useMemo(() => normalizeToText(selectedStep?.title), [selectedStep?.title]);
+  const selectedStepAgentLabel = useMemo(() => {
+    if (!selectedStep) return "";
+    return FLOW_AGENT_META[assignStepToAgent(selectedStep)].identity;
+  }, [selectedStep]);
+  const selectedStepTitleText = useMemo(
+    () =>
+      humanizeStepTitle(
+        normalizeToText(selectedStep?.title),
+        normalizeToText(selectedStep?.detail),
+        selectedStep?.status
+      ),
+    [selectedStep?.title, selectedStep?.detail, selectedStep?.status]
+  );
   const selectedStepStatusText = useMemo(() => normalizeToText(selectedStep?.status), [selectedStep?.status]);
-  const detailText = useMemo(() => normalizeToText(selectedStep?.detail), [selectedStep?.detail]);
+  const detailText = useMemo(
+    () => humanizeStepDetail(normalizeToText(selectedStep?.detail)),
+    [selectedStep?.detail]
+  );
   const summaryText = useMemo(() => normalizeToText(scopedSummary), [scopedSummary]);
   const parsedDetail = useMemo(() => parseThinkContent(detailText), [detailText]);
   const parsedSummary = useMemo(() => parseThinkContent(summaryText), [summaryText]);
@@ -178,14 +197,6 @@ export default function ChatExecutionPanel({
     const normalized = normalizeToText(markdownDetailText);
     return typeof normalized === "string" ? normalized : String(normalized ?? "");
   }, [markdownDetailText]);
-  const summaryMarkdownText = useMemo(
-    () => normalizeToText(parsedSummary.plain || ""),
-    [parsedSummary.plain]
-  );
-  const safeSummaryMarkdownText = useMemo(() => {
-    const normalized = normalizeToText(summaryMarkdownText);
-    return typeof normalized === "string" ? normalized : String(normalized ?? "");
-  }, [summaryMarkdownText]);
   const markdownPlugins = useMemo(() => [remarkGfm], []);
   const safeReportHtml = useMemo(() => normalizeToText(activeReport?.html || ""), [activeReport?.html]);
   const safeReportTitle = useMemo(
@@ -310,11 +321,11 @@ export default function ChatExecutionPanel({
   useEffect(() => {
     if (scopedReports.length) setActiveTab("summary");
   }, [selectedRunId, scopedReports.length]);
-  const isToolResultStep = selectedStepTitleText.startsWith("工具结果:");
+  const rawSelectedTitle = normalizeToText(selectedStep?.title);
+  const isToolResultStep = /^工具结果:/i.test(rawSelectedTitle);
   const isStepError =
     selectedStepStatusText === "error" ||
     /execute failed|failed|error|异常|失败/i.test(detailText);
-  const stepTitle = (selectedStepTitleText || "选择一个步骤查看详情").replace(/^工具结果:\s*/, "");
   const copyReportHtml = async () => {
     try {
       await navigator.clipboard.writeText(safeReportHtml);
@@ -394,32 +405,69 @@ export default function ChatExecutionPanel({
       setExportingPdf(false);
     }
   };
-  const flowStatus = useMemo(() => {
-    const statusMap: Record<string, "idle" | "running" | "done" | "error"> = {};
-    flowAgents.forEach((agent) => {
-      statusMap[agent] = "idle";
-    });
-    scopedSteps.forEach((step) => {
-      const [agent, event] = normalizeToText(step.title).split(":").map((v) => v.trim());
-      if (!flowAgents.includes(agent as (typeof flowAgents)[number])) return;
-      if (event === "error" || step.status === "error") {
-        statusMap[agent] = "error";
-      } else if (event === "start" || step.status === "running") {
-        if (statusMap[agent] !== "error") statusMap[agent] = "running";
-      } else if (event === "end" || step.status === "done") {
-        if (statusMap[agent] !== "error") statusMap[agent] = "done";
+  const flowStatus = useMemo(() => computeFlowStatus(scopedSteps), [scopedSteps]);
+  const agentGroups = useMemo(
+    () => groupStepsByAgent(scopedSteps, flowStatus),
+    [scopedSteps, flowStatus]
+  );
+  const agentActions = useMemo(() => {
+    const fallbackDone: Record<FlowAgent, string> = {
+      Planner: "已完成问题拆解",
+      DataAnalyst: "已完成数据分析",
+      Charter: "已完成图表方案",
+      Summarizer: "已整理分析结论"
+    };
+    const actions = Object.fromEntries(FLOW_AGENTS.map((a) => [a, ""])) as Record<FlowAgent, string>;
+    agentGroups.forEach((g) => {
+      const last = g.steps[g.steps.length - 1];
+      if (last) {
+        actions[g.agent] = humanizeStepTitle(
+          normalizeToText(last.title),
+          normalizeToText(last.detail),
+          last.status
+        );
+      } else if (flowStatus[g.agent] === "done") {
+        actions[g.agent] = fallbackDone[g.agent];
       }
     });
-    // 历史会话通常不会保留 start/end 事件；若无 running 且存在执行记录，则将 idle 兜底为 done。
-    const hasSteps = scopedSteps.length > 0;
-    const hasRunning = scopedSteps.some((step) => step.status === "running");
-    if (hasSteps && !hasRunning) {
-      flowAgents.forEach((agent) => {
-        if (statusMap[agent] === "idle") statusMap[agent] = "done";
-      });
-    }
-    return statusMap;
-  }, [scopedSteps]);
+    return actions;
+  }, [agentGroups, flowStatus]);
+
+  const prevFlowStatusRef = useRef(flowStatus);
+  useEffect(() => {
+    const prev = prevFlowStatusRef.current;
+    prevFlowStatusRef.current = flowStatus;
+    const justStarted = FLOW_AGENTS.filter(
+      (a) => flowStatus[a] === "running" && prev[a] !== "running"
+    );
+    if (!justStarted.length) return;
+    setExpandedAgents((expanded) => {
+      const next = new Set(expanded);
+      justStarted.forEach((a) => next.add(a));
+      return next;
+    });
+  }, [flowStatus]);
+
+  const toggleAgentExpand = (agent: FlowAgent) => {
+    setExpandedAgents((prev) => {
+      const next = new Set(prev);
+      if (next.has(agent)) next.delete(agent);
+      else next.add(agent);
+      return next;
+    });
+  };
+
+  const onSelectAgent = (agent: FlowAgent) => {
+    setActiveTab("steps");
+    setExpandedAgents((prev) => new Set(prev).add(agent));
+    const first = agentGroups.find((g) => g.agent === agent)?.steps[0];
+    if (first) onSelectStep?.(first.id);
+  };
+
+  const focusAgent =
+    FLOW_AGENTS.find((a) => flowStatus[a] === "running") ??
+    FLOW_AGENTS.find((a) => expandedAgents.has(a)) ??
+    null;
 
   return (
     <div className="flex h-full w-full min-w-0 flex-col overflow-hidden border-l border-[#eceff5] bg-[#f8f9fc] dark:border-[#2f3441] dark:bg-[#171b24]">
@@ -430,126 +478,203 @@ export default function ChatExecutionPanel({
             <span className="h-2.5 w-2.5 rounded-full bg-[#f59e0b]" />
             <span className="h-2.5 w-2.5 rounded-full bg-[#22c55e]" />
           </span>
-          <DesktopOutlined className="ml-1 text-[13px]" />
-          <span>终端显示</span>
+          <RobotOutlined className="ml-1 text-[13px]" />
+          <span>AI 工作台</span>
         </div>
         <a className="cursor-pointer text-[12px] text-[#3b82f6]">分享</a>
       </div>
 
-      <div className="flex h-11 items-center justify-between border-b border-[#eceff5] px-5 dark:border-[#2f3441]">
-        <div className="flex items-center">
-          <button
-            onClick={() => setActiveTab("steps")}
-            className={`mr-6 pb-2 text-sm font-medium ${
-              activeTab === "steps"
-                ? "border-b-2 border-black text-[#111827] dark:border-white dark:text-[#f8fafc]"
-                : "text-[#94a3b8]"
-            }`}
-          >
-            执行步骤
-          </button>
-          <button
-            onClick={() => setActiveTab("summary")}
-            className={`pb-2 text-sm font-medium ${
-              activeTab === "summary"
-                ? "border-b-2 border-black text-[#111827] dark:border-white dark:text-[#f8fafc]"
-                : "text-[#94a3b8]"
-            }`}
-          >
-            摘要
-          </button>
-        </div>
-        <div className="ml-4 flex min-w-0 items-center gap-2 overflow-hidden">
-          {flowAgents.map((agent, idx) => {
-            const st = flowStatus[agent];
-            const color =
-              st === "error"
-                ? "bg-[#ef4444]"
-                : st === "running"
-                  ? "bg-[#f59e0b]"
-                  : st === "done"
-                    ? "bg-[#22c55e]"
-                    : "bg-[#cbd5e1]";
-            return (
-              <div key={agent} className="flex shrink-0 items-center gap-2">
-                <span className={`h-2 w-2 rounded-full ${color}`} />
-                <span className="text-[11px] text-[#64748b] dark:text-[#94a3b8]">{flowAgentLabelMap[agent]}</span>
-                {idx < flowAgents.length - 1 ? <span className="text-[#cbd5e1]">→</span> : null}
-              </div>
-            );
-          })}
-        </div>
+      <AgentTeamStrip
+        statusMap={flowStatus}
+        actions={agentActions}
+        focusAgent={focusAgent}
+        onSelectAgent={onSelectAgent}
+      />
+
+      <div className="flex h-11 items-center border-b border-[#eceff5] px-5 dark:border-[#2f3441]">
+        <button
+          onClick={() => setActiveTab("steps")}
+          className={`mr-6 pb-2 text-sm font-medium ${
+            activeTab === "steps"
+              ? "border-b-2 border-black text-[#111827] dark:border-white dark:text-[#f8fafc]"
+              : "text-[#94a3b8]"
+          }`}
+        >
+          分析过程
+        </button>
+        <button
+          onClick={() => setActiveTab("summary")}
+          className={`pb-2 text-sm font-medium ${
+            activeTab === "summary"
+              ? "border-b-2 border-black text-[#111827] dark:border-white dark:text-[#f8fafc]"
+              : "text-[#94a3b8]"
+          }`}
+        >
+          摘要
+        </button>
       </div>
 
       <div className="min-h-0 min-w-0 flex-1 overflow-y-scroll overflow-x-hidden p-4 text-[#94a3b8]">
-        {activeTab === "steps" && steps.length ? (
-          <div className="flex h-full min-w-0 flex-col">
-            <div className="flex min-h-0 flex-1 min-w-0 flex-col rounded-lg border border-[#e5e7eb] bg-white p-4 dark:border-[#2f3441] dark:bg-[#11131a]">
-              <button
-                onClick={() => setStepDetailExpanded((prev) => !prev)}
-                className="mb-2 flex w-full min-w-0 items-center justify-between gap-3 rounded-md border border-[#e5e7eb] bg-white px-2.5 py-1.5 text-left dark:border-[#2f3441] dark:bg-[#11131a]"
-              >
-                <div className="flex min-w-0 items-center gap-2">
-                  <DownOutlined
-                    className={`text-[12px] text-[#64748b] transition-transform ${
-                      stepDetailExpanded ? "rotate-0" : "-rotate-90"
-                    }`}
-                  />
-                  <div className="truncate text-sm font-semibold text-[#0f172a] dark:text-[#e2e8f0]">
-                    {isToolResultStep ? `工具结果: ${stepTitle}` : selectedStepTitleText || "选择一个步骤查看详情"}
-                  </div>
-                </div>
-                {selectedStepStatusText ? (
-                  <span
-                    className={`ml-2 shrink-0 rounded px-2 py-0.5 text-[11px] ${
-                      selectedStepStatusText === "error"
-                        ? "bg-[#fee2e2] text-[#b91c1c] dark:bg-[#7f1d1d]/30 dark:text-[#fecaca]"
-                        : selectedStepStatusText === "running"
-                          ? "bg-[#fef3c7] text-[#92400e] dark:bg-[#78350f]/30 dark:text-[#fde68a]"
-                          : "bg-[#dcfce7] text-[#166534] dark:bg-[#14532d]/30 dark:text-[#bbf7d0]"
-                    }`}
+        {activeTab === "steps" ? (
+          scopedSteps.length ? (
+            <div className="flex min-h-0 flex-col gap-3">
+              <div className="space-y-2">
+                {agentGroups.map((group) => {
+                  const meta = FLOW_AGENT_META[group.agent];
+                  const open = expandedAgents.has(group.agent);
+                  return (
+                    <div
+                      key={group.agent}
+                      className={`rounded-xl border bg-white dark:bg-[#11131a] ${meta.border}`}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => toggleAgentExpand(group.agent)}
+                        className="flex w-full items-center justify-between gap-2 px-3 py-2.5 text-left"
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <DownOutlined
+                            className={`text-[11px] text-[#64748b] transition-transform ${
+                              open ? "rotate-0" : "-rotate-90"
+                            }`}
+                          />
+                          <span className={`text-sm font-semibold ${meta.text}`}>{meta.identity}</span>
+                          <span className="text-[11px] text-[#94a3b8]">
+                            {AGENT_STATUS_LABEL[group.status]}
+                            {group.steps.length ? ` · ${group.steps.length}` : ""}
+                          </span>
+                        </div>
+                      </button>
+                      {open ? (
+                        <div className="space-y-1.5 border-t border-[#eef2f7] px-2 py-2 dark:border-[#2f3441]">
+                          {group.steps.length ? (
+                            group.steps.map((step) => {
+                              const active = step.id === selectedStep?.id;
+                              return (
+                                <button
+                                  key={step.id}
+                                  type="button"
+                                  onClick={() => onSelectStep?.(step.id)}
+                                  className={`w-full rounded-lg border px-2.5 py-2 text-left ${
+                                    active
+                                      ? "border-[#93c5fd] bg-[#eff6ff] dark:border-[#1d4ed8] dark:bg-[#172554]"
+                                      : "border-transparent hover:bg-[#f8fafc] dark:hover:bg-[#0f172a]"
+                                  }`}
+                                >
+                                  <div className="truncate text-xs font-medium text-[#0f172a] dark:text-[#e2e8f0]">
+                                    {humanizeStepTitle(
+                                      normalizeToText(step.title),
+                                      normalizeToText(step.detail),
+                                      step.status
+                                    )}
+                                  </div>
+                                  {step.detail ? (
+                                    <div className="mt-0.5 line-clamp-2 text-[11px] text-[#64748b]">
+                                      {humanizeStepDetail(normalizeToText(step.detail))}
+                                    </div>
+                                  ) : null}
+                                </button>
+                              );
+                            })
+                          ) : (
+                            <div className="px-2 py-1.5 text-[11px] text-[#94a3b8]">
+                              {group.status === "idle" ? "尚未开始" : "暂无明细步骤"}
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {selectedStep ? (
+                <div className="flex min-h-0 min-w-0 flex-col rounded-lg border border-[#e5e7eb] bg-white p-4 dark:border-[#2f3441] dark:bg-[#11131a]">
+                  <button
+                    onClick={() => setStepDetailExpanded((prev) => !prev)}
+                    className="mb-2 flex w-full min-w-0 items-center justify-between gap-3 rounded-md border border-[#e5e7eb] bg-white px-2.5 py-1.5 text-left dark:border-[#2f3441] dark:bg-[#11131a]"
                   >
-                    {selectedStepStatusText}
-                  </span>
-                ) : null}
-              </button>
-              <div className="min-h-0 min-w-0 flex-1 overflow-auto">
-                {stepDetailExpanded && parsedDetail.thinkBlocks.length ? (
-                  <div className="mb-3 space-y-2">
-                    {parsedDetail.thinkBlocks.map((block, idx) => (
-                      <div key={`think-${idx}`} className="rounded-md border border-[#dbeafe] bg-[#eff6ff] px-3 py-2 dark:border-[#1d4ed8] dark:bg-[#172554]">
-                        <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[#1d4ed8] dark:text-[#93c5fd]">think</div>
-                        <pre className="whitespace-pre-wrap break-words text-xs leading-6 text-[#1e3a8a] dark:text-[#bfdbfe]">{block}</pre>
+                    <div className="flex min-w-0 items-center gap-2">
+                      <DownOutlined
+                        className={`text-[12px] text-[#64748b] transition-transform ${
+                          stepDetailExpanded ? "rotate-0" : "-rotate-90"
+                        }`}
+                      />
+                      {selectedStepAgentLabel ? (
+                        <span className="shrink-0 rounded-full border border-[#bfdbfe] bg-[#eff6ff] px-2 py-0.5 text-[11px] font-medium text-[#1d4ed8] dark:border-[#1e3a5f] dark:bg-[#172554] dark:text-[#93c5fd]">
+                          {selectedStepAgentLabel}
+                        </span>
+                      ) : null}
+                      <div className="truncate text-sm font-semibold text-[#0f172a] dark:text-[#e2e8f0]">
+                        {selectedStepTitleText || "选择一个步骤查看详情"}
                       </div>
-                    ))}
-                  </div>
-                ) : null}
-                {stepDetailExpanded ? (
-                  <div
-                    className={`rounded-md border px-3 py-2 ${
-                      isToolResultStep
-                        ? "min-w-0 w-full max-w-full flex-none border-[#bfdbfe] bg-[#eff6ff] px-4 py-3 overflow-x-auto overflow-y-hidden"
-                        : "border-[#dbeafe] bg-[#eff6ff] dark:border-[#1d4ed8] dark:bg-[#172554]"
-                    }`}
-                  >
-                    {isToolResultStep ? (
-                      <div
-                        className={`prose max-w-none w-full max-w-full overflow-x-auto leading-relaxed [&_p]:text-inherit [&_li]:text-inherit [&_strong]:text-inherit [&_strong]:font-bold [&_b]:text-inherit [&_b]:font-bold [&_h1]:text-inherit [&_h1]:text-2xl [&_h1]:leading-9 [&_h1]:font-bold [&_h2]:text-inherit [&_h2]:text-xl [&_h2]:leading-8 [&_h2]:font-semibold [&_h3]:text-inherit [&_h3]:text-lg [&_h3]:leading-7 [&_h3]:font-semibold [&_h4]:text-inherit [&_h5]:text-inherit [&_h6]:text-inherit [&_code]:bg-transparent [&_code]:px-0 [&_code]:font-mono [&_pre]:bg-transparent [&_pre]:p-0 [&_table]:w-max [&_table]:min-w-full [&_table]:border-collapse [&_table]:border [&_table]:border-[#93c5fd] [&_th]:border [&_th]:border-[#93c5fd] [&_th]:px-2 [&_th]:py-1 [&_th]:font-semibold [&_td]:border [&_td]:border-[#93c5fd] [&_td]:px-2 [&_td]:py-1 ${
-                          isStepError ? "text-[#b91c1c]" : "text-[#111827]"
+                    </div>
+                    {selectedStepStatusText ? (
+                      <span
+                        className={`ml-2 shrink-0 rounded px-2 py-0.5 text-[11px] ${
+                          selectedStepStatusText === "error"
+                            ? "bg-[#fee2e2] text-[#b91c1c] dark:bg-[#7f1d1d]/30 dark:text-[#fecaca]"
+                            : selectedStepStatusText === "running"
+                              ? "bg-[#fef3c7] text-[#92400e] dark:bg-[#78350f]/30 dark:text-[#fde68a]"
+                              : "bg-[#dcfce7] text-[#166534] dark:bg-[#14532d]/30 dark:text-[#bbf7d0]"
                         }`}
                       >
-                        <ReactMarkdown remarkPlugins={markdownPlugins}>{safeMarkdownText}</ReactMarkdown>
+                        {selectedStepStatusText}
+                      </span>
+                    ) : null}
+                  </button>
+                  <div className="min-h-0 min-w-0 overflow-auto">
+                    {stepDetailExpanded && parsedDetail.thinkBlocks.length ? (
+                      <div className="mb-3 space-y-2">
+                        {parsedDetail.thinkBlocks.map((block, idx) => (
+                          <div
+                            key={`think-${idx}`}
+                            className="rounded-md border border-[#dbeafe] bg-[#eff6ff] px-3 py-2 dark:border-[#1d4ed8] dark:bg-[#172554]"
+                          >
+                            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[#1d4ed8] dark:text-[#93c5fd]">
+                              think
+                            </div>
+                            <pre className="whitespace-pre-wrap break-words text-xs leading-6 text-[#1e3a8a] dark:text-[#bfdbfe]">
+                              {block}
+                            </pre>
+                          </div>
+                        ))}
                       </div>
-                    ) : (
-                      <pre className="m-0 text-[#1e3a8a] dark:text-[#bfdbfe]">
-                        {markdownDetailText}
-                      </pre>
-                    )}
+                    ) : null}
+                    {stepDetailExpanded ? (
+                      <div
+                        className={`rounded-md border px-3 py-2 ${
+                          isToolResultStep
+                            ? "min-w-0 w-full max-w-full flex-none border-[#bfdbfe] bg-[#eff6ff] px-4 py-3 overflow-x-auto overflow-y-hidden"
+                            : "border-[#dbeafe] bg-[#eff6ff] dark:border-[#1d4ed8] dark:bg-[#172554]"
+                        }`}
+                      >
+                        {isToolResultStep ? (
+                          <div
+                            className={`prose max-w-none w-full max-w-full overflow-x-auto leading-relaxed [&_p]:text-inherit [&_li]:text-inherit [&_strong]:text-inherit [&_strong]:font-bold [&_b]:text-inherit [&_b]:font-bold [&_h1]:text-inherit [&_h1]:text-2xl [&_h1]:leading-9 [&_h1]:font-bold [&_h2]:text-inherit [&_h2]:text-xl [&_h2]:leading-8 [&_h2]:font-semibold [&_h3]:text-inherit [&_h3]:text-lg [&_h3]:leading-7 [&_h3]:font-semibold [&_h4]:text-inherit [&_h5]:text-inherit [&_h6]:text-inherit [&_code]:bg-transparent [&_code]:px-0 [&_code]:font-mono [&_pre]:bg-transparent [&_pre]:p-0 [&_table]:w-max [&_table]:min-w-full [&_table]:border-collapse [&_table]:border [&_table]:border-[#93c5fd] [&_th]:border [&_th]:border-[#93c5fd] [&_th]:px-2 [&_th]:py-1 [&_th]:font-semibold [&_td]:border [&_td]:border-[#93c5fd] [&_td]:px-2 [&_td]:py-1 ${
+                              isStepError ? "text-[#b91c1c]" : "text-[#111827]"
+                            }`}
+                          >
+                            <ReactMarkdown remarkPlugins={markdownPlugins}>{safeMarkdownText}</ReactMarkdown>
+                          </div>
+                        ) : (
+                          <pre className="m-0 text-[#1e3a8a] dark:text-[#bfdbfe]">{markdownDetailText}</pre>
+                        )}
+                      </div>
+                    ) : null}
                   </div>
-                ) : null}
-              </div>
+                </div>
+              ) : null}
             </div>
-          </div>
+          ) : (
+            <div className="flex h-full flex-col items-center justify-center">
+              <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-2xl bg-white/70 text-3xl dark:bg-white/10">
+                <FileTextOutlined />
+              </div>
+              <div className="text-base">等待 Agent 团队上场</div>
+              <div className="mt-2 text-sm">提问后将按角色展示分析过程</div>
+            </div>
+          )
         ) : activeTab === "summary" ? (
           scopedSummary || scopedReports.length || scopedQueryResults.length ? (
             <div className="space-y-3">
@@ -580,30 +705,6 @@ export default function ChatExecutionPanel({
                           </pre>
                         </div>
                       ))}
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
-              {parsedSummary.plain ? (
-                <div className="rounded-xl border border-[#e6eefc] bg-white p-4 dark:border-[#2f3441] dark:bg-[#11131a]">
-                  <button
-                    onClick={() => setSummaryConclusionExpanded((prev) => !prev)}
-                    className="flex w-full items-center justify-between text-left"
-                  >
-                    <span className="text-xs font-semibold tracking-wide text-[#1d4ed8] dark:text-[#93c5fd]">
-                      结论总结
-                    </span>
-                    <DownOutlined
-                      className={`text-[12px] text-[#64748b] transition-transform ${
-                        summaryConclusionExpanded ? "rotate-180" : "rotate-0"
-                      }`}
-                    />
-                  </button>
-                  {summaryConclusionExpanded ? (
-                    <div className="mt-2 rounded-md border border-[#dbeafe] bg-[#eff6ff] p-3 text-sm leading-7 text-[#1e3a8a] dark:border-[#1d4ed8] dark:bg-[#172554] dark:text-[#bfdbfe]">
-                      <div className="prose max-w-none overflow-x-auto text-[#1e3a8a] dark:prose-invert dark:text-[#bfdbfe] [&_p]:text-inherit [&_li]:text-inherit [&_strong]:text-inherit [&_strong]:font-bold [&_b]:text-inherit [&_b]:font-bold [&_h1]:text-inherit [&_h1]:text-2xl [&_h1]:leading-9 [&_h1]:font-bold [&_h2]:text-inherit [&_h2]:text-xl [&_h2]:leading-8 [&_h2]:font-semibold [&_h3]:text-inherit [&_h3]:text-lg [&_h3]:leading-7 [&_h3]:font-semibold [&_h4]:text-inherit [&_h5]:text-inherit [&_h6]:text-inherit [&_code]:bg-transparent [&_code]:px-0 [&_code]:font-mono [&_pre]:bg-transparent [&_pre]:p-0 [&_table]:w-max [&_table]:min-w-full [&_table]:border-collapse [&_table]:border [&_table]:border-[#93c5fd] dark:[&_table]:border-[#2b425f] [&_th]:border [&_th]:border-[#93c5fd] dark:[&_th]:border-[#2b425f] [&_th]:px-2 [&_th]:py-1 [&_th]:font-semibold [&_td]:border [&_td]:border-[#93c5fd] dark:[&_td]:border-[#2b425f] [&_td]:px-2 [&_td]:py-1">
-                        <ReactMarkdown remarkPlugins={markdownPlugins}>{safeSummaryMarkdownText}</ReactMarkdown>
-                      </div>
                     </div>
                   ) : null}
                 </div>
@@ -844,37 +945,16 @@ export default function ChatExecutionPanel({
                   ) : null}
                 </div>
               ) : null}
-              {!parsedSummary.thinkBlocks.length && !parsedSummary.plain && !scopedReports.length && !activeQuery ? (
-                <div className="flex h-full items-center justify-center text-sm">暂无摘要</div>
+              {!parsedSummary.thinkBlocks.length && !scopedReports.length && !activeQuery ? (
+                <div className="flex h-full items-center justify-center text-sm text-[#64748b]">
+                  {scopedSummary ? "结论已在左侧对话区展示" : "暂无摘要"}
+                </div>
               ) : null}
             </div>
           ) : (
             <div className="flex h-full items-center justify-center text-sm">暂无摘要</div>
           )
-        ) : scopedSteps.length ? (
-          <div className="space-y-2">
-            {scopedSteps.map((step) => (
-              <button
-                key={step.id}
-                onClick={() => onSelectStep?.(step.id)}
-                className="w-full rounded-xl border border-[#e5e7eb] bg-white p-3 text-left dark:border-[#2f3441] dark:bg-[#11131a]"
-              >
-                <div className="text-sm font-medium text-[#0f172a] dark:text-[#e2e8f0]">{normalizeToText(step.title)}</div>
-                {step.detail ? (
-                  <div className="mt-1 line-clamp-3 text-xs text-[#64748b] dark:text-[#94a3b8]">{normalizeToText(step.detail)}</div>
-                ) : null}
-              </button>
-            ))}
-          </div>
-        ) : (
-          <div className="flex h-full flex-col items-center justify-center">
-            <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-2xl bg-white/70 text-3xl dark:bg-white/10">
-              <FileTextOutlined />
-            </div>
-            <div className="text-base">选择一个步骤查看详情</div>
-            <div className="mt-2 text-sm">点击左侧的步骤卡片以显示执行结果</div>
-          </div>
-        )}
+        ) : null}
       </div>
 
       <div className="h-7 border-t border-[#e5e7eb] px-4 text-[10px] leading-7 text-[#94a3b8] dark:border-[#2f3441]">

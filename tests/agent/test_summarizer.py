@@ -94,3 +94,17 @@ def test_summarizer_desc_forbids_offset_page_as_class_size():
     assert "OFFSET" in SUMMARIZER_DESC
     assert "样例" in SUMMARIZER_DESC
     assert "权威统计" in SUMMARIZER_DESC
+
+
+def test_summarizer_desc_requires_detailed_edu_structure():
+    """结论须为详实教育学情结构，紧扣已有数据。"""
+    assert "先给结论（1~2 句）" not in SUMMARIZER_DESC
+    assert "简述依据（≤ 3 句）" not in SUMMARIZER_DESC
+    assert "教育学情" in SUMMARIZER_DESC
+    assert "学情总判" in SUMMARIZER_DESC
+    assert "关键指标" in SUMMARIZER_DESC
+    assert "学情解读" in SUMMARIZER_DESC
+    assert "教学建议" in SUMMARIZER_DESC
+    assert "紧扣已有数据" in SUMMARIZER_DESC or "只依据" in SUMMARIZER_DESC
+    assert "禁止编造" in SUMMARIZER_DESC
+    assert "400~900" in SUMMARIZER_DESC
