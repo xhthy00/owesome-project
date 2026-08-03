@@ -1,6 +1,7 @@
 /** 智学助手：全局 AI 助手元信息与对外文案 */
 
 export const ASSISTANT_NAME = "智学助手";
+export const ASSISTANT_AVATAR = "/assistant-avatar.png?v=3";
 export const ASSISTANT_THINKING = "助手正在抓紧分析您的提问…";
 export const ASSISTANT_WELCOME_TITLE = "您好，我是智学助手";
 export const ASSISTANT_WELCOME_DESC = "用自然语言提问即可，我会协助分析成绩、生成图表与报告，并给出可行建议。";

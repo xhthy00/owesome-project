@@ -3,13 +3,13 @@ import {
   DownOutlined,
   ExclamationCircleOutlined,
   LoadingOutlined,
-  RobotOutlined,
   UserOutlined
 } from "@ant-design/icons";
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
+  ASSISTANT_AVATAR,
   ASSISTANT_NAME,
   ASSISTANT_THINKING,
   STORY_FOLD_TITLE,
@@ -84,12 +84,16 @@ export default function OpenCodeSessionTurn({
       </div>
 
       <div className="flex gap-2">
-        <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#e8f3ff] text-[#0c75fc] dark:bg-[#1e293b]">
-          <RobotOutlined />
-        </div>
+        <img
+          src={ASSISTANT_AVATAR}
+          alt=""
+          width={36}
+          height={36}
+          className="mt-0.5 h-9 w-9 shrink-0 rounded-full object-cover shadow-sm ring-1 ring-[#dbeafe] dark:ring-[#1e3a5f]"
+        />
         <div className="min-w-0 flex-1 rounded-2xl border border-[#e7eaf0] bg-white p-4 shadow-[0_1px_3px_rgba(16,24,40,0.04)] dark:border-[#2f3441] dark:bg-[#111723]">
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <span className="text-xs font-semibold text-[#0c75fc]">{ASSISTANT_NAME}</span>
+            <span className="text-[13px] font-semibold text-[#0c75fc]">{ASSISTANT_NAME}</span>
             {showMetrics && runMetrics ? (
               <span className="run-metrics-blink text-[13px] font-bold tabular-nums">
                 Token {formatTokenCount(runMetrics.totalTokens, runMetrics.tokenKnown)}
