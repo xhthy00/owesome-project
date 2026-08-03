@@ -765,6 +765,8 @@ def format_scope_constraints(constraints: dict[str, Any] | None) -> str:
         "禁止默认查全量学生、全校或多校合并数据。"
         "探查维表（tb_exam / tb_knowledge / tb_school 等）无需手写 school_id/class——"
         "系统仅在成绩表上自动注入行级权限。"
+        "学校字段：展示与过滤只用 sch.name 或 sch.id / sc.school_id（脱敏码）；"
+        "**禁止** SELECT/引用 tb_school.s_name（可能含中文明文）。"
         "范围：" + "；".join(parts)
     )
 

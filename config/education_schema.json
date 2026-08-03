@@ -45,8 +45,8 @@
     "excellent_ratio": 0.85,
     "score_segment_ratios": [0.6, 0.7, 0.8, 0.9]
   },
-  "table_comments": {
-    "tb_school": "学校维度表（含 district 区县字段）",
+    "table_comments": {
+    "tb_school": "学校维度表：id/name 为脱敏码；district 区县；禁止使用 s_name 明文列",
     "tb_student": "学生维度表（id 为学号，无姓名字段）",
     "tb_exam": "考试维度表，exam_score 为该科卷面满分",
     "tb_score": "学生科目成绩事实表（一行=一学生一科目一次考试）",

@@ -161,7 +161,7 @@ PLANNER_DESC = """[你的职责]
    {"task": "调 build_diagnostic_report_data_tool(scope_label=【范围】, exam_name=【考试】, subject_name=【科目】, render=true) 生成结构化诊断 HTML（勿手传 score_rows/fetch_data）", "sub_task_agent": "ToolExpert"}]
 - **全市 + 考试 + 科目成绩分析**（如「帮我分析全市的江苏省高一上学期数学期末质量检测成绩，形成详细报告」）——
   **拆 3 个子任务**，与学校科目诊断同构（先查数、再 fetch、再组装），**禁止**一步调用 `build_citywide_exam_analysis_report_tool`：
-  ["查询全市【XX考试】【XX科目】学生成绩 KPI 与明细（SQL 须 JOIN tb_school sch ON sc.school_id=sch.id JOIN tb_exam e ON sc.exam_id=e.id，SELECT sc.score, sc.exam_score, sc.class, sch.district, sch.name AS school_name, sc.student_id, sc.subject_name；按 subject_name 与 exam_name 过滤；全市范围**不传** school_name/class_name）",
+  ["查询全市【XX考试】【XX科目】学生成绩 KPI 与明细（SQL 须 JOIN tb_school sch ON sc.school_id=sch.id JOIN tb_exam e ON sc.exam_id=e.id，SELECT sc.score, sc.exam_score, sc.class, sch.district, sch.name AS school_name, sc.student_id, sc.subject_name；按 subject_name 与 exam_name 过滤；全市范围**不传** school_name/class_name；**禁止** sch.s_name）",
    {"task": "调 fetch_subject_diagnosis_data_tool(subject_name=【科目】, exam_name=【考试】) 查询全市小题明细与知识点——**本步仅 fetch，禁止 render**；完成后 terminate（**禁止**调 build_diagnostic_report_data_tool）", "sub_task_agent": "ToolExpert"},
    {"task": "调 build_diagnostic_report_data_tool(scope_label=全市, exam_name=【考试】, subject_name=【科目】, render=true) **一步完成区县对比+分数段+小题/知识点+HTML**；**禁止**再调 fetch_subject_diagnosis_data_tool（工具自动读取上游成绩与 fetch 数据）；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 
@@ -204,7 +204,7 @@ def build_citywide_team_plan_items(question: str) -> list[dict[str, str]]:
                 "（SQL 须 JOIN tb_school sch ON sc.school_id=sch.id JOIN tb_exam e ON sc.exam_id=e.id，"
                 "SELECT sc.score, sc.exam_score, sc.class, sch.district, sch.name AS school_name, "
                 "sc.student_id, sc.subject_name；按 subject_name 与 exam_name 过滤；"
-                "全市范围**不传** school_name/class_name；"
+                "全市范围**不传** school_name/class_name；**禁止** sch.s_name；"
                 "**exam_name / subject_name 必须取自问题原文，禁止填「本次考试」「该科目」**）"
             ),
             "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
