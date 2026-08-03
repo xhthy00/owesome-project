@@ -1034,8 +1034,8 @@ def build_subject_diagnosis_sections_tool(
         "EXAM_NAME": exam_name or "本次考试",
         "SCOPE": scope_label,
         "AVG_SCORE": _fmt_val(st.get("avg")),
-        "PASS_RATE": _fmt_val(st.get("pass_rate")),
-        "EXCELLENT_RATE": _fmt_val(st.get("excellent_rate")),
+        "PASS_RATE": _fmt_pct_val(st.get("pass_rate")),
+        "EXCELLENT_RATE": _fmt_pct_val(st.get("excellent_rate")),
         "STDEV": _fmt_val(st.get("stdev")),
         "VARIANCE": _fmt_val(st.get("variance")),
     }
@@ -1317,8 +1317,8 @@ def build_subject_diagnosis_report_tool(
         "EXAM_NAME": exam_name or "本次考试",
         "SCOPE": scope_label,
         "AVG_SCORE": _fmt_val(stats.get("avg")),
-        "PASS_RATE": _fmt_val(stats.get("pass_rate")),
-        "EXCELLENT_RATE": _fmt_val(stats.get("excellent_rate")),
+        "PASS_RATE": _fmt_pct_val(stats.get("pass_rate")),
+        "EXCELLENT_RATE": _fmt_pct_val(stats.get("excellent_rate")),
         "STDEV": _fmt_val(stats.get("stdev")),
         "VARIANCE": _fmt_val(stats.get("variance")),
     }
@@ -2006,6 +2006,13 @@ def _fmt_val(v: Any) -> str:
     if isinstance(v, float):
         return f"{v:.2f}"
     return str(v)
+
+
+def _fmt_pct_val(v: Any) -> str:
+    """比率字段：数值后带一个 %（模板不再追加 %）。"""
+    if v is None:
+        return "-"
+    return f"{_fmt_val(v)}%"
 
 
 def _coerce_numeric_score(v: Any) -> float | None:
