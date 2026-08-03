@@ -174,6 +174,7 @@ export default function ChatPage() {
                     queryResults={queryResults}
                     selectedStepId={selectedStepId}
                     onSelectStep={setSelectedStepId}
+                    runMetrics={runMetrics}
                     onPatchReport={patchReport}
                   />
                 </div>

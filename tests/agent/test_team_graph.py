@@ -88,6 +88,7 @@ def test_langgraph_single_sub_task_happy_path(monkeypatch):
             '{"tool":"terminate","args":{"final_answer":"5 人"}}',
             '{"chart_type":"table"}',
             "共有 5 位用户。",
+            '{"generate":false,"reason":"单点事实问答"}',
         ]
     )
     events, emit = _collect_events()

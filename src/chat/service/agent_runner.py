@@ -20,6 +20,8 @@
 from __future__ import annotations
 
 import asyncio
+import html as html_lib
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -27,6 +29,13 @@ from typing import Any, Awaitable, Callable
 
 from src.agent.adapter.llm_adapter import LangChainLlmClient
 from src.agent.core.agent import AgentMessage
+from src.agent.education.query_parse import (
+    build_edu_aware_constraints,
+    extract_upstream_participant_count,
+    report_matches_school,
+    report_matches_student,
+    report_participant_count_conflicts,
+)
 from src.agent.expand.charter import CharterAgent
 from src.agent.expand.chat_awel_team import build_chat_team
 from src.agent.expand.data_analyst import build_data_analyst
@@ -34,15 +43,7 @@ from src.agent.expand.planner import PlannerAgent
 from src.agent.expand.summarizer import SummarizerAgent
 from src.agent.expand.tool_agent import build_tool_agent
 from src.agent.expand.user_proxy import UserProxyAgent
-from src.agent.education.query_parse import (
-    build_edu_aware_constraints,
-    extract_school_target,
-    extract_student_target,
-    extract_upstream_participant_count,
-    report_matches_school,
-    report_matches_student,
-    report_participant_count_conflicts,
-)
+from src.agent.util.json_parser import parse_json_tolerant
 from src.chat.schemas import ChatRequest
 from src.common.core.config import get_settings
 
@@ -53,6 +54,169 @@ EmitCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 # Summarizer / Charter 上下文里塞给 LLM 的样例行数上限，避免 prompt 爆炸
 _SAMPLE_ROWS_LIMIT = 20
 _SQL_TABLE_RE = re.compile(r"""(?i)\b(?:from|join)\s+([`"]?[A-Za-z0-9_.]+[`"]?)""")
+_ADHOC_REPORT_MAX_HTML = 120_000
+_ADHOC_REPORT_TYPE_LABEL = "自主分析报告"
+_ADHOC_ECHARTS_CDN = "https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"
+_ADHOC_ECHARTS_BOOTSTRAP = """
+<script>
+(function () {
+  if (typeof echarts === 'undefined') return;
+  document.querySelectorAll('script[type="application/json"][data-echart-for]').forEach(function (node) {
+    var id = node.getAttribute('data-echart-for');
+    var el = id ? document.getElementById(id) : null;
+    var raw = (node.textContent || '').trim();
+    if (!el || !raw) return;
+    try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) { el.style.display = 'none'; }
+  });
+})();
+</script>
+"""
+# 与教育报告视觉对齐的轻量样式：片段壳与完整 HTML 均可注入
+_ADHOC_REPORT_CSS = """
+<style id="adhoc-report-polish">
+:root {
+  --adhoc-primary: #1677ff;
+  --adhoc-primary-soft: #e6f4ff;
+  --adhoc-accent: #0ea5e9;
+  --adhoc-text: rgba(0,0,0,0.88);
+  --adhoc-muted: rgba(0,0,0,0.45);
+  --adhoc-border: #eef0f3;
+  --adhoc-bg: #f0f2f5;
+  --adhoc-card: #ffffff;
+}
+* { box-sizing: border-box; }
+body.adhoc-body, .adhoc-page {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  background: var(--adhoc-bg);
+  color: var(--adhoc-text);
+  line-height: 1.65;
+}
+.adhoc-page { max-width: 980px; margin: 0 auto; padding: 20px 16px 36px; }
+.adhoc-hero {
+  background: linear-gradient(135deg, #1677ff 0%, #0ea5e9 100%);
+  color: #fff;
+  border-radius: 12px;
+  padding: 22px 26px;
+  margin-bottom: 16px;
+  box-shadow: 0 8px 24px rgba(22, 119, 255, 0.18);
+}
+.adhoc-hero h1 { margin: 8px 0 0; font-size: 22px; font-weight: 650; line-height: 1.35; color: #fff; }
+.adhoc-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  background: rgba(255,255,255,0.2);
+  border: 1px solid rgba(255,255,255,0.35);
+}
+.adhoc-card {
+  background: var(--adhoc-card);
+  border: 1px solid var(--adhoc-border);
+  border-radius: 12px;
+  padding: 20px 22px;
+  margin-bottom: 14px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+.adhoc-card h2, .adhoc-body-card h2, .adhoc-charts > h2 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 650;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--adhoc-border);
+  color: var(--adhoc-text);
+}
+.adhoc-card h3, .adhoc-chart-card h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  color: rgba(0,0,0,0.65);
+}
+.adhoc-body-card p { margin: 8px 0; }
+.adhoc-body-card ul, .adhoc-body-card ol { margin: 8px 0; padding-left: 22px; }
+.adhoc-body-card li { margin: 6px 0; }
+.adhoc-body-card table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  margin: 12px 0;
+  overflow: hidden;
+  border-radius: 8px;
+}
+.adhoc-body-card th, .adhoc-body-card td {
+  border: 1px solid var(--adhoc-border);
+  padding: 10px 12px;
+  text-align: left;
+}
+.adhoc-body-card thead th {
+  background: var(--adhoc-primary-soft);
+  color: rgba(0,0,0,0.65);
+  font-weight: 600;
+}
+.adhoc-body-card tbody tr:nth-child(even) td { background: #fafafa; }
+.adhoc-charts { margin-top: 4px; }
+.adhoc-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.adhoc-chart-card { margin-bottom: 0; }
+.adhoc-chart {
+  width: 100%;
+  height: 320px;
+  margin: 4px 0 0;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #fafcff 0%, #fff 100%);
+}
+.adhoc-footer {
+  margin-top: 8px;
+  text-align: right;
+  font-size: 12px;
+  color: var(--adhoc-muted);
+}
+@media (max-width: 760px) {
+  .adhoc-page { padding: 12px 10px 24px; }
+  .adhoc-hero { padding: 16px 18px; }
+  .adhoc-hero h1 { font-size: 18px; }
+  .adhoc-chart-grid { grid-template-columns: 1fr; }
+  .adhoc-chart { height: 280px; }
+}
+@media print {
+  body.adhoc-body, .adhoc-page { background: #fff; }
+  .adhoc-hero { box-shadow: none; }
+  .adhoc-card { box-shadow: none; break-inside: avoid; }
+}
+</style>
+"""
+_ADHOC_REPORT_SYSTEM = """你是聊天 Team 的自主报告决策与撰写助手。
+在子任务已完成、且尚未产出预设 HTML 报告时，根据用户问题与分析结论，决定是否需要一份独立 HTML 报告。
+
+[何时 generate=true]
+- 多维对比、分层/趋势/诊断等需要结构化「一页纸」呈现
+- 结论含多指标表格，领导/教师更适合读报告而非长文聊天
+- 有实质数据可支撑章节（非空结果）
+
+[何时 generate=false]
+- 单点事实问答（人数、均分、是谁、有没有等一句可答完）
+- 数据为空、查询失败、或结论已足够无需另开报告
+
+[输出]
+只输出一个 JSON 对象（可包在 ```json 中），字段：
+- generate: bool
+- reason: 短说明
+- title: 报告标题（仅 generate=true）
+- html: HTML **正文片段**（仅 generate=true；不要写完整 <html>/<head>/<body>，样式由系统壳提供）
+  中文；围绕结论；数字必须来自输入；用语义结构：
+  <section><h2>核心结论</h2><p>...</p></section>
+  <section><h2>关键指标</h2><table>...</table></section>
+  <section><h2>教学建议</h2><ul>...</ul></section>
+  **禁止**在 html 内写 echarts CDN、script、data-echart-for、内联大段 CSS 或图表 option。
+- charts: 数组（generate=true 且有可对比数据时**必填，至少 2 项**）
+  每项：{"id":"chartRadar","title":"图标题","option":{...完整 ECharts option...}}
+  优先 radar（areaStyle.opacity≈0.25）与 scatter（symbolSize≈12），辅以 bar/line/pie。
+  option.series 必填；数字必须来自输入。散点 data 为 [[x,y],...]。
+
+不要输出 JSON 以外的解释。"""
 
 
 @dataclass
@@ -262,7 +426,9 @@ async def run_team_stream(
     2. 串行跑 N 次 DataAnalyst，每次独立 ReAct 上下文；
     3. Chart 基于**最后一个成功**的 sub_task 推荐图表；
     4. Summarizer 综合**所有** sub_task 的 SQL+结果给出中文结论；
-    5. 持久化：``sql`` / ``exec_result`` / ``chart_type`` 来自最后一个成功
+    5. 若子任务未产出预设 HTML 报告，AdHoc 阶段由 LLM 决定是否围绕结论
+       自主撰写报告（``report`` SSE，``report_type_label=自主分析报告``）；
+    6. 持久化：``sql`` / ``exec_result`` / ``chart_type`` 来自最后一个成功
        sub_task；``reasoning`` 来自 Summarizer 最终结论；``steps`` 里按
        sub_task 分组累计所有 DataAnalyst 回合。
 
@@ -492,6 +658,17 @@ async def _run_team_stream_legacy(
         steps=all_steps,
     )
     await emit("summary", {"content": summary_text})
+
+    await _run_ad_hoc_report_phase(
+        question=request.question,
+        summary_text=summary_text,
+        sub_phases=sub_phases,
+        llm_client=llm_client,
+        emit=emit,
+        steps=all_steps,
+        report_data=upstream_report_data,
+        chart_type=chart_type,
+    )
 
     if not persist:
         return 0
@@ -1171,6 +1348,368 @@ async def _run_summarizer_multi(
     )
     return reconciled
 
+
+async def _run_ad_hoc_report_phase(
+    *,
+    question: str,
+    summary_text: str,
+    sub_phases: list[tuple[str, "_DataAnalystPhase"]],
+    llm_client: Any,
+    emit: EmitCallback,
+    steps: list[dict[str, Any]] | None = None,
+    report_data: dict[str, Any] | None = None,
+    chart_type: str | None = None,
+) -> list[dict[str, Any]]:
+    """无预设 HTML 报告时，由 LLM 决定是否围绕结论自主撰写报告。
+
+    已有 ``phase.state.reports`` 则整段跳过。失败 / generate=false 均不出报告。
+    agent_speak 复用 Charter（少改四卡 UI），detail 标明自主分析报告。
+    """
+    if any(p.state.reports for _, p in sub_phases):
+        return []
+
+    sub_block = _format_sub_tasks_block(sub_phases, report_data=report_data)
+    if len(sub_block) > 8000:
+        sub_block = sub_block[:8000] + "\n…（子任务详情已截断）"
+    user_prompt = (
+        f"用户问题：{question}\n\n"
+        f"分析结论：\n{summary_text or '(无)'}\n\n"
+        f"图表类型：{chart_type or 'table'}\n\n"
+        f"子任务执行详情：\n{sub_block}"
+    )
+
+    await _emit_agent_speak(emit, agent="Charter", status="start", steps=steps)
+    try:
+        raw = await llm_client.chat(
+            [
+                {"role": "system", "content": _ADHOC_REPORT_SYSTEM},
+                {"role": "user", "content": user_prompt},
+            ]
+        )
+        parsed = parse_json_tolerant(raw)
+    except Exception as e:  # noqa: BLE001 - 自主报告失败不中断主流程
+        logger.warning("ad-hoc report failed: %s", e)
+        await _emit_agent_speak(
+            emit, agent="Charter", status="error", steps=steps, error=str(e)
+        )
+        return []
+
+    if not isinstance(parsed, dict):
+        await _emit_agent_speak(
+            emit,
+            agent="Charter",
+            status="end",
+            steps=steps,
+            summary_preview=f"跳过{_ADHOC_REPORT_TYPE_LABEL}: 输出非 JSON 对象",
+        )
+        return []
+
+    reason = str(parsed.get("reason") or "").strip()
+    if not parsed.get("generate"):
+        preview = f"跳过{_ADHOC_REPORT_TYPE_LABEL}"
+        if reason:
+            preview = f"{preview}: {reason}"
+        await _emit_agent_speak(
+            emit, agent="Charter", status="end", steps=steps, summary_preview=preview[:160]
+        )
+        return []
+
+    title = str(parsed.get("title") or "自主分析报告").strip() or "自主分析报告"
+    html_body = str(parsed.get("html") or "").strip()
+    if not html_body:
+        await _emit_agent_speak(
+            emit,
+            agent="Charter",
+            status="end",
+            steps=steps,
+            summary_preview=f"跳过{_ADHOC_REPORT_TYPE_LABEL}: 无 HTML",
+        )
+        return []
+
+    charts = parsed.get("charts") if isinstance(parsed.get("charts"), list) else []
+    html_body = _inject_ad_hoc_charts(html_body, charts)
+    if "data-echart-for" not in html_body:
+        fallback = _build_fallback_ad_hoc_charts(summary_text, html_body)
+        if fallback:
+            logger.info("ad-hoc report: LLM 未给 charts，使用结论数字兜底 %d 张图", len(fallback))
+            html_body = _inject_ad_hoc_charts(html_body, fallback)
+
+    html = _wrap_ad_hoc_html(html_body, title)
+    if _report_html_is_sparse(html):
+        await _emit_agent_speak(
+            emit,
+            agent="Charter",
+            status="end",
+            steps=steps,
+            summary_preview=f"跳过{_ADHOC_REPORT_TYPE_LABEL}: 内容过空",
+        )
+        return []
+
+    report_payload: dict[str, Any] = {
+        "title": title,
+        "html": html,
+        "mode": "inline",
+        "agent": "Charter",
+        "review_status": "pending",
+        "report_type_label": _ADHOC_REPORT_TYPE_LABEL,
+    }
+    for _, phase in reversed(sub_phases):
+        if phase.is_success:
+            phase.state.reports.append(dict(report_payload))
+            break
+    await emit("report", report_payload)
+    end_preview = f"{_ADHOC_REPORT_TYPE_LABEL}: {title}"
+    if reason:
+        end_preview = f"{end_preview}（{reason}）"
+    await _emit_agent_speak(
+        emit,
+        agent="Charter",
+        status="end",
+        steps=steps,
+        summary_preview=end_preview[:160],
+    )
+    return [report_payload]
+
+
+def _build_fallback_ad_hoc_charts(summary: str, html: str) -> list[dict[str, Any]]:
+    """从结论/正文中的「标签+分数」抽数字，兜底柱状 + 雷达（保证至少有图）。"""
+    blob = f"{summary or ''}\n{html or ''}"
+    pairs: list[tuple[str, float]] = []
+    seen: set[str] = set()
+    for m in re.finditer(
+        r"([\u4e00-\u9fffA-Za-z0-9（）()]{2,20}?)"
+        r"(?:平均分|均分|得分|分数|分差|差值)?"
+        r"(?:达到|约为|为|是|：|:)?\s*"
+        r"(\d+(?:\.\d+)?)\s*分",
+        blob,
+    ):
+        label = re.sub(r"\s+", "", m.group(1))[-12:]
+        try:
+            val = float(m.group(2))
+        except ValueError:
+            continue
+        if val <= 0 or val > 1000:
+            continue
+        key = f"{label}:{val}"
+        if key in seen:
+            continue
+        seen.add(key)
+        pairs.append((label, val))
+        if len(pairs) >= 6:
+            break
+    if len(pairs) < 2:
+        nums = []
+        for m in re.finditer(r"(\d+(?:\.\d+)?)\s*分", blob):
+            try:
+                v = float(m.group(1))
+            except ValueError:
+                continue
+            if 0 < v <= 1000:
+                nums.append(v)
+        uniq: list[float] = []
+        for v in nums:
+            if v not in uniq:
+                uniq.append(v)
+            if len(uniq) >= 4:
+                break
+        if len(uniq) < 2:
+            return []
+        pairs = [(f"指标{i + 1}", v) for i, v in enumerate(uniq)]
+
+    names = [p[0] for p in pairs]
+    values = [p[1] for p in pairs]
+    vmax = max(values) * 1.15 if values else 100
+    bar = {
+        "id": "adhocFallbackBar",
+        "title": "关键指标对比",
+        "option": {
+            "tooltip": {"trigger": "axis"},
+            "grid": {"left": "12%", "right": "8%", "bottom": "12%", "containLabel": True},
+            "xAxis": {"type": "category", "data": names},
+            "yAxis": {"type": "value", "name": "分"},
+            "series": [
+                {
+                    "type": "bar",
+                    "data": values,
+                    "itemStyle": {"color": "#1677ff", "borderRadius": [6, 6, 0, 0]},
+                    "label": {"show": True, "position": "top"},
+                }
+            ],
+        },
+    }
+    radar = {
+        "id": "adhocFallbackRadar",
+        "title": "指标雷达",
+        "option": {
+            "tooltip": {},
+            "radar": {
+                "indicator": [{"name": n, "max": round(vmax, 1)} for n in names],
+            },
+            "series": [
+                {
+                    "type": "radar",
+                    "data": [{"value": values, "name": "数值"}],
+                    "areaStyle": {"opacity": 0.25},
+                }
+            ],
+        },
+    }
+    return [bar, radar]
+
+
+def _inject_ad_hoc_charts(html: str, charts: list[Any]) -> str:
+    """把 charts 数组渲染为卡片网格并插入 HTML。"""
+    blocks: list[str] = []
+    for idx, item in enumerate(charts or []):
+        if not isinstance(item, dict):
+            continue
+        cid = re.sub(r"[^A-Za-z0-9_-]", "", str(item.get("id") or f"adhocChart{idx}")) or f"adhocChart{idx}"
+        if isinstance(item.get("option"), dict):
+            option = item["option"]
+        elif item.get("series") is not None:
+            option = {k: v for k, v in item.items() if k not in ("id", "title")}
+        else:
+            continue
+        if not isinstance(option, dict) or not option.get("series"):
+            continue
+        try:
+            opt_json = json.dumps(option, ensure_ascii=False)
+        except (TypeError, ValueError):
+            continue
+        heading = str(item.get("title") or "").strip()
+        h = f"<h3>{html_lib.escape(heading)}</h3>" if heading else ""
+        blocks.append(
+            '<div class="adhoc-card adhoc-chart-card">'
+            f"{h}"
+            f'<div id="{cid}" class="adhoc-chart"></div>'
+            f'<script type="application/json" data-echart-for="{cid}">{opt_json}</script>'
+            "</div>"
+        )
+    if not blocks:
+        return html
+    section = (
+        '<section class="adhoc-charts">'
+        "<h2>数据可视化</h2>"
+        '<div class="adhoc-chart-grid">'
+        + "".join(blocks)
+        + "</div></section>"
+    )
+    if "data-echart-for" in html and "adhoc-charts" in html:
+        return html
+    if re.search(r"(?i)</body>", html):
+        return re.sub(r"(?i)</body>", section + "</body>", html, count=1)
+    return html + section
+
+
+def _split_adhoc_body_and_charts(html: str) -> tuple[str, str]:
+    """把正文与已注入的图表区分开，便于套入卡片布局。"""
+    m = re.search(
+        r'(?is)(<section\s+class=["\']adhoc-charts["\'][\s\S]*?</section>)',
+        html or "",
+    )
+    if not m:
+        return (html or "").strip(), ""
+    charts = m.group(1)
+    body = ((html or "")[: m.start()] + (html or "")[m.end() :]).strip()
+    return body, charts
+
+
+def _wrap_ad_hoc_html(body: str, title: str) -> str:
+    """给自主报告加美化文档壳；完整 html 则补 polish CSS + ECharts 运行时。"""
+    stripped = (body or "").strip()
+    lower = stripped[:32].lower()
+    if lower.startswith("<!doctype") or lower.startswith("<html"):
+        polished = _ensure_ad_hoc_report_polish(stripped)
+        return _ensure_ad_hoc_echarts_runtime(polished)[:_ADHOC_REPORT_MAX_HTML]
+
+    prose, charts_html = _split_adhoc_body_and_charts(stripped)
+    safe_title = html_lib.escape(title)
+    main_inner = (
+        f'<section class="adhoc-card adhoc-body-card">{prose}</section>'
+        if prose
+        else ""
+    )
+    if charts_html:
+        main_inner += charts_html
+    wrapped = (
+        "<!DOCTYPE html><html lang=\"zh-CN\"><head>"
+        "<meta charset=\"utf-8\">"
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0">'
+        f"<title>{safe_title}</title>"
+        f'<script src="{_ADHOC_ECHARTS_CDN}"></script>'
+        f"{_ADHOC_REPORT_CSS}"
+        "</head>"
+        '<body class="adhoc-body">'
+        '<div class="adhoc-page">'
+        '<header class="adhoc-hero">'
+        f'<span class="adhoc-badge">{_ADHOC_REPORT_TYPE_LABEL}</span>'
+        f"<h1>{safe_title}</h1>"
+        "</header>"
+        f"{main_inner}"
+        '<p class="adhoc-footer">专家团协作生成（规划 / 分析 / 可视化 / 总结）· 待审核</p>'
+        "</div>"
+        f"{_ADHOC_ECHARTS_BOOTSTRAP}"
+        "</body></html>"
+    )
+    return wrapped[:_ADHOC_REPORT_MAX_HTML]
+
+
+def _ensure_ad_hoc_report_polish(html: str) -> str:
+    """完整 HTML 注入统一 polish CSS，并尽量包一层 page 容器。"""
+    out = html
+    if 'id="adhoc-report-polish"' not in out:
+        if re.search(r"(?i)</head>", out):
+            out = re.sub(r"(?i)</head>", _ADHOC_REPORT_CSS + "</head>", out, count=1)
+        else:
+            out = _ADHOC_REPORT_CSS + out
+
+    body_m = re.search(r"(?i)<body([^>]*)>", out)
+    if body_m and "adhoc-body" not in body_m.group(0):
+        attrs = body_m.group(1) or ""
+        if re.search(r"(?i)\bclass\s*=", attrs):
+            new_body = re.sub(
+                r'(?i)\bclass\s*=\s*(["\'])',
+                r'class=\1adhoc-body ',
+                body_m.group(0),
+                count=1,
+            )
+        else:
+            new_body = f'<body class="adhoc-body"{attrs}>'
+        out = out[: body_m.start()] + new_body + out[body_m.end() :]
+
+    if "adhoc-page" not in out and re.search(r"(?i)<body[^>]*>", out) and re.search(
+        r"(?i)</body>", out
+    ):
+        out = re.sub(
+            r"(?i)(<body[^>]*>)",
+            r'\1<div class="adhoc-page">',
+            out,
+            count=1,
+        )
+        out = re.sub(r"(?i)</body>", "</div></body>", out, count=1)
+    return out
+
+
+def _ensure_ad_hoc_echarts_runtime(html: str) -> str:
+    """完整 HTML 若含 data-echart-for 但缺 CDN/init，则补注入。"""
+    out = html
+    if "data-echart-for" not in out:
+        return out
+    if "echarts.min.js" not in out and "echarts/dist/echarts" not in out:
+        tag = f'<script src="{_ADHOC_ECHARTS_CDN}"></script>'
+        if re.search(r"(?i)</head>", out):
+            out = re.sub(r"(?i)</head>", tag + "</head>", out, count=1)
+        else:
+            out = tag + out
+    if "echarts.init" not in out:
+        boot = _ADHOC_ECHARTS_BOOTSTRAP.strip()
+        if re.search(r"(?i)</body>", out):
+            out = re.sub(r"(?i)</body>", boot + "</body>", out, count=1)
+        else:
+            out = out + boot
+    if 'id="adhoc-report-polish"' not in out:
+        out = _ensure_ad_hoc_report_polish(out)
+    return out
 
 def _reconcile_summary_with_sub_phases(
     text: str,

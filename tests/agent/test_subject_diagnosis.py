@@ -222,6 +222,82 @@ def test_pick_score_from_score_rows_skips_rank_when_only_self():
     assert rank is None
 
 
+def test_align_score_rows_prefers_upstream_best_score_exam():
+    """多场时 KPI 应对齐上游结论分（历次最高），不能被无序/最近场覆盖。"""
+    from src.agent.education.tools import (
+        _align_score_rows_to_exam,
+        _pick_score_from_score_rows,
+    )
+
+    sid = "GZ_58BCBAA2_B57E95"
+    rows = [
+        {
+            "student_id": sid,
+            "score": 141.0,
+            "exam_id": "e_recent",
+            "exam_name": "5月月考",
+            "exam_time": "2026-05-08",
+            "exam_score": 150,
+        },
+        {
+            "student_id": "peer",
+            "score": 130.0,
+            "exam_id": "e_recent",
+            "exam_name": "5月月考",
+            "exam_time": "2026-05-08",
+            "exam_score": 150,
+        },
+        {
+            "student_id": sid,
+            "score": 148.0,
+            "exam_id": "e_best",
+            "exam_name": "3月联考",
+            "exam_time": "2026-03-01",
+            "exam_score": 150,
+        },
+        {
+            "student_id": "peer",
+            "score": 140.0,
+            "exam_id": "e_best",
+            "exam_name": "3月联考",
+            "exam_time": "2026-03-01",
+            "exam_score": 150,
+        },
+    ]
+    aligned = _align_score_rows_to_exam(rows, sid, preferred_score=148.0)
+    assert {r["exam_id"] for r in aligned} == {"e_best"}
+    score, rank = _pick_score_from_score_rows(rows, sid, preferred_score=148.0)
+    assert score == 148.0
+    assert rank == 1
+
+
+def test_align_score_rows_falls_back_to_latest_exam():
+    """无上游分时收敛到最近一场。"""
+    from src.agent.education.tools import _align_score_rows_to_exam, _pick_score_from_score_rows
+
+    sid = "STU_A"
+    rows = [
+        {
+            "student_id": sid,
+            "score": 100.0,
+            "exam_id": "e1",
+            "exam_name": "旧考",
+            "exam_time": "2026-01-01",
+        },
+        {
+            "student_id": sid,
+            "score": 110.0,
+            "exam_id": "e2",
+            "exam_name": "新考",
+            "exam_time": "2026-06-01",
+        },
+    ]
+    aligned = _align_score_rows_to_exam(rows, sid)
+    assert {r["exam_id"] for r in aligned} == {"e2"}
+    score, _ = _pick_score_from_score_rows(rows, sid)
+    assert score == 110.0
+
+
 def test_pick_student_overview_computes_rank_from_full_class_table():
     """上游全班得分表（无排名列）应推算出正确班排，不被后续单人结果覆盖。"""
     from src.agent.education.tools import _pick_student_overview_from_report

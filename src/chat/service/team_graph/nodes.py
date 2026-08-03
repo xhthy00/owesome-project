@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import Any
 
@@ -12,10 +11,11 @@ from src.agent.adapter.llm_adapter import LangChainLlmClient
 from src.agent.expand.chat_awel_team import build_chat_team
 from src.chat.schemas import ChatRequest
 from src.chat.service.agent_runner import (
-    _DataAnalystPhase,
     _build_shared_constraints,
+    _DataAnalystPhase,
     _first_non_empty,
     _persist_async,
+    _run_ad_hoc_report_phase,
     _run_charter,
     _run_data_analyst_phase,
     _run_planner_phase,
@@ -292,6 +292,17 @@ async def node_summarizer(state: TeamState, config: RunnableConfig) -> dict[str,
         steps=speak_steps,
     )
     await emit("summary", {"content": summary_text})
+
+    await _run_ad_hoc_report_phase(
+        question=request.question,
+        summary_text=summary_text,
+        sub_phases=sub_phases,
+        llm_client=llm,
+        emit=emit,
+        steps=speak_steps,
+        report_data=state.get("upstream_report_data"),
+        chart_type=state.get("chart_type"),
+    )
     return {
         "summary_text": summary_text,
         "all_steps": list(state.get("all_steps") or []) + speak_steps,

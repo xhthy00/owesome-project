@@ -7,35 +7,47 @@ export type AgentFlowStatus = "idle" | "running" | "done" | "error";
 
 export const FLOW_AGENT_META: Record<
   FlowAgent,
-  { identity: string; accent: string; border: string; bg: string; text: string }
+  {
+    identity: string;
+    accent: string;
+    border: string;
+    bg: string;
+    text: string;
+    /** 拟人化角色头像（public 路径） */
+    avatar: string;
+  }
 > = {
   Planner: {
     identity: AGENT_IDENTITY.Planner,
     accent: "bg-[#3b82f6]",
     border: "border-[#93c5fd]",
     bg: "bg-[#eff6ff]",
-    text: "text-[#1d4ed8]"
+    text: "text-[#1d4ed8]",
+    avatar: "/agent-planner.png"
   },
   DataAnalyst: {
     identity: AGENT_IDENTITY.DataAnalyst,
     accent: "bg-[#22c55e]",
     border: "border-[#86efac]",
     bg: "bg-[#f0fdf4]",
-    text: "text-[#166534]"
+    text: "text-[#166534]",
+    avatar: "/agent-analyst.png"
   },
   Charter: {
     identity: AGENT_IDENTITY.Charter,
     accent: "bg-[#f59e0b]",
     border: "border-[#fcd34d]",
     bg: "bg-[#fffbeb]",
-    text: "text-[#92400e]"
+    text: "text-[#92400e]",
+    avatar: "/agent-charter.png"
   },
   Summarizer: {
     identity: AGENT_IDENTITY.Summarizer,
     accent: "bg-[#8b5cf6]",
     border: "border-[#c4b5fd]",
     bg: "bg-[#f5f3ff]",
-    text: "text-[#5b21b6]"
+    text: "text-[#5b21b6]",
+    avatar: "/agent-summarizer.png"
   }
 };
 
@@ -45,6 +57,51 @@ export const AGENT_STATUS_LABEL: Record<AgentFlowStatus, string> = {
   done: "已完成",
   error: "失败"
 };
+
+/** 顶栏流水线短标签：规划 → 分析 → 可视化 → 总结 */
+export const FLOW_PIPELINE_LABELS: Record<FlowAgent, string> = {
+  Planner: "规划",
+  DataAnalyst: "分析",
+  Charter: "可视化",
+  Summarizer: "总结"
+};
+
+/** 由四角色状态推导一行协作动态文案 */
+export function describeTeamCollaboration(
+  statusMap: Record<FlowAgent, AgentFlowStatus>
+): string {
+  const running = FLOW_AGENTS.find((a) => statusMap[a] === "running");
+  if (running === "Planner") return "问题规划师正在拆解任务…";
+  if (running === "DataAnalyst") return "规划完成，数据分析专家接手查数…";
+  if (running === "Charter") return "分析完成，可视化专家准备图表…";
+  if (running === "Summarizer") return "学情总结专家正在汇总结论…";
+
+  if (FLOW_AGENTS.some((a) => statusMap[a] === "error")) {
+    return "专家团协作遇到问题，可查看失败角色明细";
+  }
+  if (FLOW_AGENTS.every((a) => statusMap[a] === "done")) {
+    return "专家团协作完成";
+  }
+  if (FLOW_AGENTS.every((a) => statusMap[a] === "idle")) {
+    return "专家团待命，提问后依次上场";
+  }
+  // 部分完成、当前无人 running（衔接间隙）
+  const lastDone = [...FLOW_AGENTS].reverse().find((a) => statusMap[a] === "done");
+  if (lastDone === "Planner") return "规划已完成，正在交接给数据分析专家…";
+  if (lastDone === "DataAnalyst") return "分析已完成，正在交接给可视化专家…";
+  if (lastDone === "Charter") return "图表就绪，正在交接给学情总结专家…";
+  return "专家团协作进行中…";
+}
+
+/** 流水线当前高亮角色：优先 running，否则下一个 idle 前的最后 done */
+export function activePipelineAgent(
+  statusMap: Record<FlowAgent, AgentFlowStatus>
+): FlowAgent | null {
+  const running = FLOW_AGENTS.find((a) => statusMap[a] === "running");
+  if (running) return running;
+  if (FLOW_AGENTS.every((a) => statusMap[a] === "done")) return "Summarizer";
+  return null;
+}
 
 function normalizeAgentKey(raw: string): FlowAgent | null {
   const hit = FLOW_AGENTS.find((a) => a.toLowerCase() === raw.toLowerCase());

@@ -130,3 +130,44 @@ body {
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
 }
+
+@keyframes run-metrics-shimmer {
+  0% {
+    background-position: 200% center;
+  }
+  100% {
+    background-position: -200% center;
+  }
+}
+
+.run-metrics-blink {
+  background-image: linear-gradient(
+    110deg,
+    #64748b 0%,
+    #64748b 35%,
+    #38bdf8 45%,
+    #ffffff 50%,
+    #818cf8 55%,
+    #64748b 65%,
+    #64748b 100%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: run-metrics-shimmer 4.8s linear infinite;
+}
+
+.dark .run-metrics-blink {
+  background-image: linear-gradient(
+    110deg,
+    #94a3b8 0%,
+    #94a3b8 35%,
+    #7dd3fc 45%,
+    #f8fafc 50%,
+    #a5b4fc 55%,
+    #94a3b8 65%,
+    #94a3b8 100%
+  );
+}

@@ -3,7 +3,6 @@ import {
   BarChartOutlined,
   CodeOutlined,
   CopyOutlined,
-  RobotOutlined,
   DownloadOutlined,
   DownOutlined,
   EditOutlined,
@@ -31,14 +30,17 @@ import {
 import { exportReportAsWord } from "@/utils/exportReportWord";
 import AgentTeamStrip from "@/components/chat/AgentTeamStrip";
 import {
+  activePipelineAgent,
   AGENT_STATUS_LABEL,
   FLOW_AGENT_META,
   FLOW_AGENTS,
+  FLOW_PIPELINE_LABELS,
   assignStepToAgent,
   computeFlowStatus,
   groupStepsByAgent,
   type FlowAgent
 } from "@/utils/agentTeam";
+import { formatElapsed, formatTokenCount, type RunMetrics } from "@/utils/runMetrics";
 import { humanizeStepDetail, humanizeStepTitle } from "@/utils/toolLabels";
 
 type Props = {
@@ -49,6 +51,7 @@ type Props = {
   queryResults?: QueryResult[];
   selectedStepId?: string;
   onSelectStep?: (stepId: string) => void;
+  runMetrics?: RunMetrics | null;
   onPatchReport?: (
     report: ReportPayload,
     patch: { recommendationsText?: string; reviewStatus?: "pending" | "approved" }
@@ -104,6 +107,7 @@ export default function ChatExecutionPanel({
   queryResults = [],
   selectedStepId,
   onSelectStep,
+  runMetrics = null,
   onPatchReport
 }: Props) {
   const [activeTab, setActiveTab] = useState<"steps" | "summary">("steps");
@@ -469,19 +473,59 @@ export default function ChatExecutionPanel({
     FLOW_AGENTS.find((a) => expandedAgents.has(a)) ??
     null;
 
+  const showRunMetrics = Boolean(
+    runMetrics &&
+      (runMetrics.runStartedAt != null ||
+        runMetrics.tokenKnown ||
+        runMetrics.elapsedKnown ||
+        runMetrics.progressPct >= 100)
+  );
+
   return (
     <div className="flex h-full w-full min-w-0 flex-col overflow-hidden border-l border-[#eceff5] bg-[#f8f9fc] dark:border-[#2f3441] dark:bg-[#171b24]">
-      <div className="flex h-14 items-center justify-between border-b border-[#eceff5] px-5 dark:border-[#2f3441]">
-        <div className="flex items-center gap-2 text-sm font-semibold text-[#1f2937] dark:text-[#e2e8f0]">
-          <span className="inline-flex items-center gap-1">
-            <span className="h-2.5 w-2.5 rounded-full bg-[#ef4444]" />
-            <span className="h-2.5 w-2.5 rounded-full bg-[#f59e0b]" />
-            <span className="h-2.5 w-2.5 rounded-full bg-[#22c55e]" />
-          </span>
-          <RobotOutlined className="ml-1 text-[13px]" />
-          <span>AI 工作台</span>
+      <div className="flex h-11 items-center justify-between gap-3 border-b border-[#eceff5] px-5 dark:border-[#2f3441]">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <div className="flex shrink-0 items-center gap-2 text-sm font-semibold text-[#1f2937] dark:text-[#e2e8f0]">
+            <img
+              src="/expert-team-avatar.png?v=2"
+              alt=""
+              width={28}
+              height={28}
+              className="h-7 w-7 shrink-0 rounded-lg object-cover shadow-sm ring-1 ring-[#dbeafe]"
+            />
+            <span>专家团协作</span>
+          </div>
+          <span className="hidden h-3.5 w-px shrink-0 bg-[#e2e8f0] sm:block dark:bg-[#334155]" />
+          <div className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5 text-[11px] text-[#94a3b8]">
+            {FLOW_AGENTS.map((agent, idx) => {
+              const active = activePipelineAgent(flowStatus) === agent;
+              const done = flowStatus[agent] === "done";
+              return (
+                <span key={agent} className="inline-flex items-center gap-1">
+                  {idx > 0 ? <span className="text-[#cbd5e1]">→</span> : null}
+                  <span
+                    className={
+                      active
+                        ? "font-semibold text-[#2563eb]"
+                        : done
+                          ? "text-[#64748b]"
+                          : "text-[#94a3b8]"
+                    }
+                  >
+                    {FLOW_PIPELINE_LABELS[agent]}
+                  </span>
+                </span>
+              );
+            })}
+          </div>
         </div>
-        <a className="cursor-pointer text-[12px] text-[#3b82f6]">分享</a>
+        {showRunMetrics && runMetrics ? (
+          <span className="run-metrics-blink shrink-0 text-[13px] font-bold tabular-nums">
+            Token {formatTokenCount(runMetrics.totalTokens, runMetrics.tokenKnown)}
+            {" · "}
+            耗时 {formatElapsed(runMetrics.elapsedMs, runMetrics.elapsedKnown)}
+          </span>
+        ) : null}
       </div>
 
       <AgentTeamStrip
@@ -537,6 +581,13 @@ export default function ChatExecutionPanel({
                             className={`text-[11px] text-[#64748b] transition-transform ${
                               open ? "rotate-0" : "-rotate-90"
                             }`}
+                          />
+                          <img
+                            src={`${meta.avatar}?v=1`}
+                            alt=""
+                            width={22}
+                            height={22}
+                            className="h-[22px] w-[22px] shrink-0 rounded-full object-cover ring-1 ring-[#e2e8f0]"
                           />
                           <span className={`text-sm font-semibold ${meta.text}`}>{meta.identity}</span>
                           <span className="text-[11px] text-[#94a3b8]">
@@ -671,8 +722,8 @@ export default function ChatExecutionPanel({
               <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-2xl bg-white/70 text-3xl dark:bg-white/10">
                 <FileTextOutlined />
               </div>
-              <div className="text-base">等待 Agent 团队上场</div>
-              <div className="mt-2 text-sm">提问后将按角色展示分析过程</div>
+              <div className="text-base">等待专家团上场</div>
+              <div className="mt-2 text-sm">提问后，专家团将按角色接力完成分析</div>
             </div>
           )
         ) : activeTab === "summary" ? (

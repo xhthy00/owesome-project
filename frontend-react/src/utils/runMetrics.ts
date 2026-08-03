@@ -80,5 +80,18 @@ export function formatElapsed(ms: number, known = true): string {
 
 export function formatTokenCount(n: number, known: boolean): string {
   if (!known) return "—";
-  return n.toLocaleString("en-US");
+  const abs = Math.abs(n);
+  const sign = n < 0 ? "-" : "";
+  const trim = (v: number): string => {
+    const digits = v >= 100 ? 0 : v >= 10 ? 1 : 2;
+    return v
+      .toFixed(digits)
+      .replace(/\.0+$/, "")
+      .replace(/(\.\d*[1-9])0+$/, "$1");
+  };
+  if (abs < 10_000) return `${sign}${Math.round(abs)}`;
+  if (abs < 1_000_000) return `${sign}${trim(abs / 10_000)}万`;
+  if (abs < 10_000_000) return `${sign}${trim(abs / 1_000_000)}百万`;
+  if (abs < 100_000_000) return `${sign}${trim(abs / 10_000_000)}千万`;
+  return `${sign}${trim(abs / 100_000_000)}亿`;
 }

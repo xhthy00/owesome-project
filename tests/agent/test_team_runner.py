@@ -21,7 +21,7 @@ from src.chat.service.agent_runner import run_team_stream
 
 
 class _ScriptedLlm:
-    """所有 Agent 共享的顺序消费队列：Planner 1 条 → N × (DataAnalyst K 轮) → Charter 1 条 → Summarizer 1 条。"""
+    """顺序消费队列：Planner → N×DataAnalyst → Charter → Summarizer → AdHoc。"""
 
     def __init__(self, replies: list[str]) -> None:
         self._q = list(replies)
@@ -95,6 +95,8 @@ def test_team_single_sub_task_happy_path(monkeypatch):
             '{"chart_type":"table"}',
             # Summarizer
             "共有 5 位用户。",
+            # AdHoc：单点问答不出报告
+            '{"generate":false,"reason":"单点事实问答"}',
         ]
     )
     events, emit = _collect_events()
@@ -154,6 +156,7 @@ def test_team_multi_sub_tasks_all_succeed(monkeypatch):
             '{"chart_type":"bar","chart_config":{"x":"q","y":["amount"]}}',
             # Summarizer
             "Q2 与 Q3 销售持平，均为 100。",
+            '{"generate":false,"reason":"测试跳过自主报告"}',
         ]
     )
     events, emit = _collect_events()
@@ -186,8 +189,8 @@ def test_team_multi_sub_tasks_all_succeed(monkeypatch):
     summary = next(p for e, p in events if e == "summary")
     assert "100" in summary["content"]
 
-    # Summarizer 的 prompt 必须看到所有 3 个子任务
-    summarizer_call = llm.calls[-1][0]["content"]  # system prompt
+    # Summarizer 的 prompt 必须看到所有 3 个子任务（AdHoc 为最后一次 LLM 调用）
+    summarizer_call = llm.calls[-2][0]["content"]  # system prompt
     assert "子任务 1" in summarizer_call
     assert "子任务 2" in summarizer_call
     assert "子任务 3" in summarizer_call
@@ -250,6 +253,7 @@ def test_team_multi_sub_tasks_partial_failure(monkeypatch):
             '{"chart_type":"table"}',
             # Summarizer
             "部分查询完成",
+            '{"generate":false,"reason":"测试跳过自主报告"}',
         ]
     )
     events, emit = _collect_events()
@@ -354,6 +358,7 @@ def test_team_planner_garbage_falls_back_to_single_plan(monkeypatch):
             '{"chart_type":"table"}',
             # Summarizer
             "查到 1 条数据。",
+            '{"generate":false,"reason":"测试跳过自主报告"}',
         ]
     )
     events, emit = _collect_events()
@@ -390,6 +395,7 @@ def test_team_charter_garbage_falls_back_and_summary_continues(monkeypatch):
             '{"tool":"terminate","args":{"final_answer":"ok"}}',
             "not json",  # Charter
             "就 1 条。",   # Summarizer
+            '{"generate":false,"reason":"测试跳过自主报告"}',
         ]
     )
     events, emit = _collect_events()
@@ -476,6 +482,7 @@ def test_team_tool_events_carry_sub_task_index(monkeypatch):
             '{"tool":"terminate","args":{"final_answer":"B"}}',
             '{"chart_type":"table"}',
             "综合结论",
+            '{"generate":false,"reason":"测试跳过自主报告"}',
         ]
     )
     events, emit = _collect_events()
@@ -557,6 +564,7 @@ def test_team_schema_exploration_without_execute_sql_is_success(monkeypatch):
             '{"tool":"terminate","args":{"final_answer":"users 表含 id/name 两列"}}',
             '{"chart_type":"table"}',
             "users 表结构如上：id + name 两列。",
+            '{"generate":false,"reason":"测试跳过自主报告"}',
         ]
     )
     events, emit = _collect_events()
@@ -601,6 +609,7 @@ def test_team_routes_sub_task_to_tool_expert(monkeypatch):
             '{"tool":"terminate","args":{"final_answer":"已计算完成"}}',
             '{"chart_type":"table"}',
             "最终结果为 210。",
+            '{"generate":false,"reason":"测试跳过自主报告"}',
         ]
     )
     events, emit = _collect_events()
@@ -649,6 +658,7 @@ def test_team_disable_tool_agent_falls_back_to_data_analyst(monkeypatch):
             '{"tool":"terminate","args":{"final_answer":"2"}}',
             '{"chart_type":"table"}',
             "结果是 2。",
+            '{"generate":false,"reason":"测试跳过自主报告"}',
         ]
     )
     events, emit = _collect_events()
@@ -706,3 +716,279 @@ def test_team_report_event_carries_sub_task_index(monkeypatch):
     assert report is not None
     assert report["title"] == "TeamReport"
     assert report.get("sub_task_index") == 0
+    # 已有预设 HTML 时跳过 AdHoc（否则 ScriptedLlm 队列会在 summarizer 后耗尽）
+    assert [e for e, _ in events].count("report") == 1
+    assert not llm._q
+
+
+# --------------------------------------------------------------------------- #
+# 10. AdHoc 自主报告（无预设 HTML 时）
+# --------------------------------------------------------------------------- #
+
+
+def test_team_ad_hoc_report_generate_false_emits_no_report(monkeypatch):
+    """简单问数 + AdHoc generate=false → 无 report 事件。"""
+    _patch_db(
+        monkeypatch,
+        lambda *_a, **_kw: (True, "ok", {"columns": ["n"], "rows": [[5]]}),
+    )
+    llm = _ScriptedLlm(
+        [
+            '{"plans":["有多少用户"]}',
+            '{"tool":"execute_sql","args":{"sql":"SELECT COUNT(*) AS n FROM users"}}',
+            '{"tool":"terminate","args":{"final_answer":"5 人"}}',
+            '{"chart_type":"table"}',
+            "共有 5 位用户。",
+            '{"generate":false,"reason":"单点事实问答"}',
+        ]
+    )
+    events, emit = _collect_events()
+    req = ChatRequest(question="有多少用户", datasource_id=1)
+    _run(
+        run_team_stream(
+            request=req,
+            current_user_id=1,
+            emit=emit,
+            llm_client=llm,
+            persist=False,
+        )
+    )
+    assert not any(e == "report" for e, _ in events)
+    assert not llm._q
+
+
+def test_team_ad_hoc_report_generate_true_emits_report(monkeypatch):
+    """无预设报告 + generate=true + charts 字段 → 服务端注入 ECharts。"""
+    import json
+
+    _patch_db(
+        monkeypatch,
+        lambda *_a, **_kw: (True, "ok", {"columns": ["q", "amount"], "rows": [[2, 100], [3, 100]]}),
+    )
+    html_body = (
+        "<h2>结论摘要</h2><p>Q2 与 Q3 销售均为 100。</p>"
+        "<h2>建议</h2><ul><li>保持节奏</li></ul>"
+    )
+    llm = _ScriptedLlm(
+        [
+            '{"plans":["对比 Q2/Q3"]}',
+            '{"tool":"execute_sql","args":{"sql":"SELECT q, amount FROM sales"}}',
+            '{"tool":"terminate","args":{"final_answer":"Q2=100,Q3=100"}}',
+            '{"chart_type":"bar"}',
+            "Q2 与 Q3 销售持平，均为 100。",
+            json.dumps(
+                {
+                    "generate": True,
+                    "reason": "多维对比",
+                    "title": "销售对比报告",
+                    "html": html_body,
+                    "charts": [
+                        {
+                            "id": "chartRadar",
+                            "title": "季度雷达",
+                            "option": {
+                                "tooltip": {},
+                                "radar": {
+                                    "indicator": [
+                                        {"name": "Q2", "max": 200},
+                                        {"name": "Q3", "max": 200},
+                                    ]
+                                },
+                                "series": [
+                                    {
+                                        "type": "radar",
+                                        "data": [{"value": [100, 100], "name": "销售额"}],
+                                        "areaStyle": {"opacity": 0.25},
+                                    }
+                                ],
+                            },
+                        },
+                        {
+                            "id": "chartScatter",
+                            "title": "散点",
+                            "option": {
+                                "xAxis": {"type": "value"},
+                                "yAxis": {"type": "value"},
+                                "series": [
+                                    {
+                                        "type": "scatter",
+                                        "symbolSize": 12,
+                                        "data": [[2, 100], [3, 100]],
+                                    }
+                                ],
+                            },
+                        },
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        ]
+    )
+    events, emit = _collect_events()
+    req = ChatRequest(question="对比 Q2/Q3 销售", datasource_id=1)
+    _run(
+        run_team_stream(
+            request=req,
+            current_user_id=1,
+            emit=emit,
+            llm_client=llm,
+            persist=False,
+        )
+    )
+    reports = [p for e, p in events if e == "report"]
+    assert len(reports) == 1
+    assert reports[0]["title"] == "销售对比报告"
+    assert reports[0]["report_type_label"] == "自主分析报告"
+    assert reports[0]["review_status"] == "pending"
+    html = reports[0]["html"]
+    assert "Q2" in html
+    assert "echarts.min.js" in html
+    assert 'data-echart-for="chartRadar"' in html
+    assert '"type": "radar"' in html or '"type":"radar"' in html
+    assert "echarts.init" in html
+    assert "数据可视化" in html
+    assert not llm._q
+
+
+def test_team_ad_hoc_fallback_charts_when_llm_omits_charts(monkeypatch):
+    """LLM 只给文字 html、无 charts 时，从结论分数兜底注入柱状+雷达。"""
+    import json
+
+    _patch_db(
+        monkeypatch,
+        lambda *_a, **_kw: (True, "ok", {"columns": ["n"], "rows": [[45]]}),
+    )
+    prose = (
+        "<div class='header'>学情报告</div>"
+        "<p>前十均分达到 138.8 分，后十均分为 108.4 分，"
+        "优秀线为 127.5 分，两者平均分之差达 30.4 分。</p>"
+    )
+    llm = _ScriptedLlm(
+        [
+            '{"plans":["分析差距"]}',
+            '{"tool":"execute_sql","args":{"sql":"SELECT 1"}}',
+            '{"tool":"terminate","args":{"final_answer":"前十138.8后十108.4"}}',
+            '{"chart_type":"table"}',
+            "前十均分达到 138.8 分，后十均分为 108.4 分，优秀线为 127.5 分。",
+            json.dumps(
+                {
+                    "generate": True,
+                    "reason": "两极分化",
+                    "title": "差距学情分析",
+                    "html": prose,
+                },
+                ensure_ascii=False,
+            ),
+        ]
+    )
+    events, emit = _collect_events()
+    req = ChatRequest(question="前十与后十差距", datasource_id=1)
+    _run(
+        run_team_stream(
+            request=req,
+            current_user_id=1,
+            emit=emit,
+            llm_client=llm,
+            persist=False,
+        )
+    )
+    reports = [p for e, p in events if e == "report"]
+    assert len(reports) == 1
+    html = reports[0]["html"]
+    assert "echarts.min.js" in html
+    assert "data-echart-for" in html
+    assert "adhocFallbackBar" in html or "关键指标对比" in html
+    assert '"type": "radar"' in html or '"type":"radar"' in html
+
+
+def test_wrap_ad_hoc_html_injects_echarts_runtime():
+    from src.chat.service.agent_runner import _wrap_ad_hoc_html
+
+    body = (
+        "<section><h2>核心结论</h2><p>说明</p></section>"
+        '<section class="adhoc-charts"><h2>数据可视化</h2>'
+        '<div class="adhoc-chart-grid">'
+        '<div class="adhoc-card adhoc-chart-card">'
+        '<div id="c1" class="adhoc-chart"></div>'
+        '<script type="application/json" data-echart-for="c1">'
+        '{"series":[{"type":"radar","data":[{"value":[1,2]}]}]}</script>'
+        "</div></div></section>"
+    )
+    html = _wrap_ad_hoc_html(body, "测试")
+    assert "echarts.min.js" in html
+    assert "echarts.init" in html
+    assert "adhoc-report-polish" in html
+    assert "adhoc-hero" in html
+    assert "adhoc-chart-grid" in html
+    assert "专家团协作生成" in html
+
+
+def test_wrap_ad_hoc_html_full_doc_missing_cdn_gets_injected():
+    from src.chat.service.agent_runner import _wrap_ad_hoc_html
+
+    full = (
+        "<!DOCTYPE html><html><head><title>t</title></head><body>"
+        '<div id="c1" class="adhoc-chart"></div>'
+        '<script type="application/json" data-echart-for="c1">'
+        '{"series":[{"type":"scatter","data":[[1,2]]}]}</script>'
+        "</body></html>"
+    )
+    html = _wrap_ad_hoc_html(full, "t")
+    assert "echarts.min.js" in html
+    assert "echarts.init" in html
+    assert "adhoc-report-polish" in html
+    assert "adhoc-page" in html
+
+
+def test_inject_ad_hoc_charts_appends_section():
+    from src.chat.service.agent_runner import _inject_ad_hoc_charts
+
+    out = _inject_ad_hoc_charts(
+        "<p>正文</p>",
+        [
+            {
+                "id": "c1",
+                "title": "雷达",
+                "option": {"series": [{"type": "radar", "data": [{"value": [1, 2]}]}]},
+            }
+        ],
+    )
+    assert "数据可视化" in out
+    assert 'data-echart-for="c1"' in out
+    assert "adhoc-chart-grid" in out
+    assert "adhoc-chart-card" in out
+
+def test_team_ad_hoc_skips_when_preset_report_exists(monkeypatch):
+    """子任务已带 HTML 报告 → 不调用 AdHoc LLM。"""
+    _patch_db(
+        monkeypatch,
+        lambda *_a, **_kw: (True, "ok", {"columns": [], "rows": []}),
+    )
+    llm = _ScriptedLlm(
+        [
+            '{"plans":["输出报告"]}',
+            '{"tool":"render_html_report","args":{"title":"Preset","html":"<html><body><p>preset</p></body></html>"}}',
+            '{"tool":"terminate","args":{"final_answer":"done"}}',
+            '{"chart_type":"table"}',
+            "报告已生成。",
+            # 若误调 AdHoc，会消费这条并留下可观测痕迹；正确路径应不消费
+            '{"generate":true,"title":"不应出现","html":"<p>leak</p>"}',
+        ]
+    )
+    events, emit = _collect_events()
+    req = ChatRequest(question="输出报告", datasource_id=1)
+    _run(
+        run_team_stream(
+            request=req,
+            current_user_id=1,
+            emit=emit,
+            llm_client=llm,
+            persist=False,
+        )
+    )
+    reports = [p for e, p in events if e == "report"]
+    assert len(reports) == 1
+    assert reports[0]["title"] == "Preset"
+    # AdHoc 未调用 → 队列仍剩 generate:true 那条
+    assert len(llm._q) == 1
+    assert "不应出现" in llm._q[0]

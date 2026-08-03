@@ -91,7 +91,7 @@ export default function OpenCodeSessionTurn({
           <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs font-semibold text-[#0c75fc]">{ASSISTANT_NAME}</span>
             {showMetrics && runMetrics ? (
-              <span className="text-[11px] tabular-nums text-[#64748b] dark:text-[#94a3b8]">
+              <span className="run-metrics-blink text-[13px] font-bold tabular-nums">
                 Token {formatTokenCount(runMetrics.totalTokens, runMetrics.tokenKnown)}
                 {" · "}
                 耗时 {formatElapsed(runMetrics.elapsedMs, runMetrics.elapsedKnown)}

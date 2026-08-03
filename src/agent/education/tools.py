@@ -1626,6 +1626,7 @@ def _diagnosis_sql_bundle(
     )
     score_sql = (
         "SELECT sc.score AS score, sc.exam_score AS exam_score, sc.exam_id AS exam_id,\n"
+        "       e.exam_name AS exam_name, e.exam_time AS exam_time,\n"
         "       sc.class AS class, sc.class AS class_name, sc.student_id AS student_id,\n"
         "       sc.subject_name AS subject, sch.name AS school_name,\n"
         "       sch.district AS district\n"
@@ -1633,7 +1634,8 @@ def _diagnosis_sql_bundle(
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
         "JOIN tb_exam e ON sc.exam_id = e.id"
         + where_clause_score
-        + "\nLIMIT 5000"
+        + "\nORDER BY e.exam_time DESC, sc.score DESC\n"
+        "LIMIT 5000"
     )
     exam_id_sql = (
         "SELECT DISTINCT sc.exam_id AS exam_id\n"
@@ -2064,21 +2066,103 @@ def _parse_rank_value(value: Any) -> int | None:
     return iv if iv > 0 else None
 
 
+def _align_score_rows_to_exam(
+    score_rows: list[dict[str, Any]],
+    student_id: str,
+    *,
+    preferred_score: float | None = None,
+    preferred_exam_name: str = "",
+) -> list[dict[str, Any]]:
+    """多场成绩时收敛到与上游结论一致的一场（保留同场班级同学行）。
+
+    优先级：preferred_exam_name → 本人得分匹配 preferred_score → 本人最近一场（exam_time）。
+    单场或无法识别 exam_id 时原样返回。
+    """
+    from src.agent.education.query_parse import is_vague_exam_name, student_matches
+
+    if not score_rows:
+        return score_rows
+    sid = (student_id or "").strip()
+    exam_ids = {
+        str(r.get("exam_id") or "").strip()
+        for r in score_rows
+        if isinstance(r, dict) and str(r.get("exam_id") or "").strip()
+    }
+    if len(exam_ids) <= 1:
+        return score_rows
+
+    own_rows = [
+        r
+        for r in score_rows
+        if isinstance(r, dict)
+        and student_matches(str(r.get("student_id") or r.get("id") or ""), sid)
+        and _coerce_numeric_score(r.get("score")) is not None
+    ]
+    if not own_rows:
+        return score_rows
+
+    target: str | None = None
+    pref_exam = (preferred_exam_name or "").strip()
+    if pref_exam and not is_vague_exam_name(pref_exam):
+        for r in own_rows:
+            en = str(r.get("exam_name") or r.get("exam") or "").strip()
+            if en and (pref_exam in en or en in pref_exam):
+                eid = str(r.get("exam_id") or "").strip()
+                if eid:
+                    target = eid
+                    break
+
+    if target is None and preferred_score is not None:
+        for r in own_rows:
+            val = _coerce_numeric_score(r.get("score"))
+            if val is not None and abs(val - preferred_score) < 0.051:
+                eid = str(r.get("exam_id") or "").strip()
+                if eid:
+                    target = eid
+                    break
+
+    if target is None:
+        def _exam_time_key(r: dict[str, Any]) -> str:
+            return str(r.get("exam_time") or "")
+
+        latest = max(own_rows, key=_exam_time_key)
+        target = str(latest.get("exam_id") or "").strip() or None
+
+    if not target:
+        return score_rows
+    narrowed = [
+        r
+        for r in score_rows
+        if isinstance(r, dict) and str(r.get("exam_id") or "").strip() == target
+    ]
+    return narrowed or score_rows
+
+
 def _pick_score_from_score_rows(
     score_rows: list[dict[str, Any]],
     student_id: str,
+    *,
+    preferred_score: float | None = None,
+    preferred_exam_name: str = "",
 ) -> tuple[float | None, Any]:
     """从 score_rows 取该生数值得分，并在班级样本足够时给出班内名次。
 
-    仅有本人 1 行时**不算排名**（会错误得到第 1 名），返回 rank=None。
+    多场时先按上游得分/考试名收敛；仅有本人 1 行时**不算排名**（会错误得到第 1 名），
+    返回 rank=None。
     """
     from src.agent.education.query_parse import student_matches
 
+    rows = _align_score_rows_to_exam(
+        score_rows,
+        student_id,
+        preferred_score=preferred_score,
+        preferred_exam_name=preferred_exam_name,
+    )
     sid = (student_id or "").strip()
     scored: list[tuple[float, bool]] = []
     own: float | None = None
     peer_ids: set[str] = set()
-    for r in score_rows:
+    for r in rows:
         if not isinstance(r, dict):
             continue
         val = _coerce_numeric_score(r.get("score"))
@@ -4935,10 +5019,35 @@ def build_student_subject_diagnosis_tool(
     if not overview.get("school_name") and score_rows:
         overview["school_name"] = score_rows[0].get("school_name")
 
-    # 得分必须以数值为准；上游误把学号填入 score 列时，用 score_rows 覆盖
+    # 得分必须以数值为准；上游误把学号填入 score 列时，用 score_rows 覆盖。
+    # 多场时优先与上游结论同场对齐，避免无序首行（如最近场 141）覆盖历次最高 148。
+    # 注意：KPI 用对齐后的子集；score_rows 本身保留全量，供多场趋势段使用。
+    from src.agent.education.query_parse import student_matches as _student_matches
+
     overview_score = _coerce_numeric_score(overview.get("total_score"))
-    row_score, row_class_rank = _pick_score_from_score_rows(score_rows, sid)
-    if row_score is not None:
+    aligned_score_rows = _align_score_rows_to_exam(
+        score_rows,
+        sid,
+        preferred_score=overview_score,
+        preferred_exam_name=exam_name,
+    )
+    row_score, row_class_rank = _pick_score_from_score_rows(
+        aligned_score_rows,
+        sid,
+        preferred_score=overview_score,
+        preferred_exam_name=exam_name,
+    )
+    own_raw_scores = [
+        v
+        for r in score_rows
+        if isinstance(r, dict)
+        and _student_matches(str(r.get("student_id") or r.get("id") or ""), sid)
+        for v in [_coerce_numeric_score(r.get("score"))]
+        if v is not None
+    ]
+    if overview_score is not None and any(abs(v - overview_score) < 0.051 for v in own_raw_scores):
+        overview["total_score"] = overview_score
+    elif row_score is not None:
         overview["total_score"] = row_score
     elif overview_score is not None:
         overview["total_score"] = overview_score
@@ -4966,8 +5075,8 @@ def build_student_subject_diagnosis_tool(
     subtitle = " ".join(p for p in (school_label, class_label) if p)
 
     full_score_val = bundle.get("full_score")
-    if full_score_val is None and score_rows:
-        fs = score_rows[0].get("exam_score")
+    if full_score_val is None and aligned_score_rows:
+        fs = aligned_score_rows[0].get("exam_score")
         try:
             full_score_val = float(fs) if fs is not None else None
         except (TypeError, ValueError):
@@ -4999,9 +5108,14 @@ def build_student_subject_diagnosis_tool(
         multi_series, student_id=sid
     )
     is_multi = bool(ov_title)
-    display_exam = exam_badge if is_multi else (exam_name or "本次考试")
+    aligned_exam = ""
+    if aligned_score_rows:
+        aligned_exam = str(
+            aligned_score_rows[0].get("exam_name") or aligned_score_rows[0].get("exam") or ""
+        ).strip()
+    display_exam = exam_badge if is_multi else (exam_name or aligned_exam or "本次考试")
     if is_vague_exam_name(display_exam):
-        display_exam = exam_badge or "本次考试"
+        display_exam = exam_badge or aligned_exam or "本次考试"
 
     single_kpi = (
         f'<div class="edu-kpi"><div class="label">得分</div><div class="value">{_fmt_val(overview.get("total_score"))}</div></div>'
