@@ -1832,6 +1832,9 @@ def test_diagnosis_where_clause_pair_uses_correct_exam_id_column():
     assert "sd.exam_id" not in score_sql
     assert "tb_exam_question_knowledge" in item_sql
     assert "eq.knowledge_id" not in item_sql
+    assert "LIMIT 50000" in score_sql
+    assert "score DESC" not in score_sql
+    assert "ORDER BY e.exam_time DESC" in score_sql
 
 
 def test_diagnosis_sql_bundle_uses_weighted_knowledge_join():

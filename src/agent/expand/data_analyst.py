@@ -124,10 +124,13 @@ DATA_ANALYST_DESC = """[分析范围约束]
    未指定 → `default`。受众影响模板文案密度，不影响数值。
 9. **人数口径**：班级概览须查该班该场该科**全部**学生得分（含 exam_score），
    **禁止**用 `OFFSET` 翻页拼全班；**禁止**随意 `LIMIT` 截断全班明细
-   （Top-N 排行除外）。人数以无 OFFSET 的 SQL 结果行数 / `compute_score_stats_tool` 的
-   count 为准，前后两次须一致。
+   （Top-N 排行除外，且 Top-N 结论不得写成「参考人数=N」）。
+   人数以无 OFFSET/LIMIT 的 SQL 结果行数 / `compute_score_stats_tool` 的
+   count / 报告 KPI 为准。execute_sql 返回的 PREVIEW_ROWS（默认 20）**绝不是**参考人数。
 10. **terminate 必带 KPI**：教育学情结论中须明确写出「参考人数」「卷面满分」
-    「及格线」「优秀线」的数字（优先引用 stats 工具返回值），便于下游照抄。"""
+    「及格线」「优秀线」的数字（优先引用 stats 工具返回值），便于下游照抄。
+    若只看到预览表、SQL 含 LIMIT≤20，**禁止**把 20 写成参考人数——须先去掉 LIMIT
+    重查，或调 `compute_score_stats_tool` / `COUNT(*)`。"""
 
 
 class DataAnalystAgent(ReActAgent):

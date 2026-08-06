@@ -103,7 +103,7 @@ class ReportIntentResolver:
     """把自然语言问题映射到 ``ReportSpec``（纯规则，无 LLM）。
 
     优先级与 ``agent_runner`` / Planner 确定性格径对齐：
-    全市 → 个人学生 → 成绩趋势 → 多场综合 → 分层预警 → 群体特征 → 班级总览 → 各班横向 →
+    全市 → 个人学生 → 成绩趋势 → 多场综合 → 分层预警 → 各班横向 → 群体特征 → 班级总览 →
     结构化诊断 → 学校科目报告 → 关键词回落。
     """
 
@@ -133,12 +133,12 @@ class ReportIntentResolver:
             report_type = ReportType.COMPREHENSIVE
         elif is_tier_alert_query(q):
             report_type = ReportType.TIER_ALERT
+        elif is_school_class_comparison_query(q):
+            report_type = ReportType.GRADE_COMPARISON
         elif is_group_feature_query(q):
             report_type = ReportType.GROUP_FEATURE
         elif is_class_overview_query(q):
             report_type = ReportType.CLASS_OVERVIEW
-        elif is_school_class_comparison_query(q):
-            report_type = ReportType.GRADE_COMPARISON
         elif is_structured_diagnostic_query(q):
             report_type = ReportType.DIAGNOSTIC_REPORT
         elif is_school_exam_report_query(q):
@@ -158,7 +158,6 @@ class ReportIntentResolver:
                 if any(k in q for k in keywords):
                     report_type = rt
                     break
-
         audience = self._resolve_audience(q, audience_hint)
         # 简单的过滤条件抽取：班级名（初三/初二/高一...N班）、科目、考试名。
         filters: dict[str, str] = {}
@@ -1403,7 +1402,9 @@ class ReportOrchestrator:
         where = _filters_to_where(filters, school_expr, class_expr, subject_expr, exam_expr)
         if where:
             sql += f"\nWHERE {where}"
-        limit = 5000 if spec.report_type in (
+        # 全市/全区诊断等报告常超万人；5000 会截断参考人数与 KPI。
+        # 与 tools 诊断明细上限对齐，覆盖地市级单次考试规模。
+        limit = 50000 if spec.report_type in (
             ReportType.STUDENT_PROFILE,
             ReportType.TREND_TRACKING,
             ReportType.COMPREHENSIVE,

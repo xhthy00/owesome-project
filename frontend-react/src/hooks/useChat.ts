@@ -228,6 +228,8 @@ export function useChat() {
   const [runMetrics, setRunMetrics] = useState<RunMetrics>(EMPTY_RUN_METRICS);
   const [metricsByRunId, setMetricsByRunId] = useState<Record<string, RunMetrics>>({});
   const [conversationId, setConversationId] = useState<number | undefined>(undefined);
+  /** 当前进行中的一轮 runId；供专家条计时按「每一问」清零 */
+  const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const sendingRef = useRef(false);
   const activeRunIdRef = useRef<string | null>(null);
@@ -292,12 +294,14 @@ export function useChat() {
         ...prev,
         elapsedMs: prev.runStartedAt ? Date.now() - prev.runStartedAt : prev.elapsedMs,
         elapsedKnown: Boolean(prev.runStartedAt) || prev.elapsedKnown,
-        progressPct: Math.max(prev.progressPct, 0)
+        progressPct: Math.max(prev.progressPct, 0),
+        // 结束本轮后清掉，避免专家条 timerEpoch 仍挂在上一问
+        runStartedAt: null
       };
       if (stoppedRunId) {
         setMetricsByRunId((m) => ({
           ...m,
-          [stoppedRunId]: { ...next, runStartedAt: null, progressPct: 100 }
+          [stoppedRunId]: { ...next, progressPct: 100 }
         }));
       }
       return next;
@@ -797,11 +801,12 @@ export function useChat() {
                   ...prev,
                   elapsedMs: prev.runStartedAt ? Date.now() - prev.runStartedAt : prev.elapsedMs,
                   elapsedKnown: true,
-                  progressPct: 100
+                  progressPct: 100,
+                  runStartedAt: null
                 };
                 setMetricsByRunId((m) => ({
                   ...m,
-                  [runId]: { ...next, runStartedAt: null }
+                  [runId]: { ...next }
                 }));
                 return next;
               });
@@ -935,11 +940,12 @@ export function useChat() {
           const next: RunMetrics = {
             ...prev,
             elapsedMs: prev.runStartedAt ? Date.now() - prev.runStartedAt : prev.elapsedMs,
-            elapsedKnown: true
+            elapsedKnown: true,
+            runStartedAt: null
           };
           setMetricsByRunId((m) => ({
             ...m,
-            [runId]: { ...next, runStartedAt: null, progressPct: Math.max(next.progressPct, 100) }
+            [runId]: { ...next, progressPct: Math.max(next.progressPct, 100) }
           }));
           return next;
         });

@@ -492,7 +492,7 @@ def test_orchestrator_config_edu_sql_includes_exam_name_and_student():
     assert "exam_name" in sql
     assert "student_id AS student_name" in sql or "student_name" in sql
     assert "st.name" not in sql
-    assert "LIMIT 5000" in sql
+    assert "LIMIT 50000" in sql
 
 
 def test_orchestrator_locked_class_overrides_question_class():

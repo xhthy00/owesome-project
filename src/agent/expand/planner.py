@@ -138,7 +138,9 @@ PLANNER_DESC = """[你的职责]
   **只拆 2 个子任务**，走分层预警，**禁止**走科目诊断 fetch+sections：
   ["查询该班【科目】每位学生得分（SQL 须含 student_id/姓名、score、exam_score；有上次成绩则带 prev_score）",
    {"task": "调 build_tier_alert_report_data_tool(class_name=【班级】, subject_name=【科目】, render=true) 生成分层预警 HTML（临界生/退步/偏科）；**禁止** build_subject_diagnosis_sections_tool；完成后 terminate", "sub_task_agent": "ToolExpert"}]
-- **学校 + 按班级/区县等群体对比特征**（如「扬州中学连淮扬镇数学考试按班级群体对比特征」）——
+- **学校 + 按班级/区县等群体对比特征**（如「扬州中学连淮扬镇数学考试按班级群体对比特征」；
+  问句须含「群体特征/按班级群体」等**明确**口径。
+  **「班级横向对比 / 各班横向 / 横向对比学情」不是群体特征，必须走上方 grade_comparison 三步**）——
   **只拆 2 个子任务**，走群体特征报告，**禁止**走班级横向对比科目诊断三步：
   ["查询【XX学校】在【XX考试】【XX科目】每位学生得分（SQL 须含 student_id、class、score、exam_score；**禁止**按单班过滤）",
    {"task": "调 build_group_feature_report_data_tool(school_name=【XX学校】, subject_name=【XX科目】, exam_name=【XX考试】, dimension=class, render=true) 生成群体特征 HTML；**禁止** build_subject_diagnosis_sections_tool；完成后 terminate", "sub_task_agent": "ToolExpert"}]
@@ -759,6 +761,13 @@ def coerce_plan_items_if_needed(
             len(plan_items),
         )
         return build_tier_alert_plan_items(q)
+    # 班级横向对比须先于群体特征：避免 LLM 把「横向对比」拆成 group_feature
+    if should_replace_with_school_class_comparison_plan(q, plan_items):
+        logger.info(
+            "planner class-comparison coerce: replacing %d plan(s) with school-wide 3-step",
+            len(plan_items),
+        )
+        return build_school_class_comparison_plan_items(q)
     if should_replace_with_group_feature_plan(q, plan_items):
         logger.info(
             "planner group-feature coerce: replacing %d plan(s) with group_feature 2-step",
@@ -777,12 +786,6 @@ def coerce_plan_items_if_needed(
             len(plan_items),
         )
         return build_comprehensive_class_plan_items(q)
-    if should_replace_with_school_class_comparison_plan(q, plan_items):
-        logger.info(
-            "planner class-comparison coerce: replacing %d plan(s) with school-wide 3-step",
-            len(plan_items),
-        )
-        return build_school_class_comparison_plan_items(q)
     if should_replace_with_school_exam_plan(q, plan_items):
         logger.info(
             "planner school-exam coerce: replacing %d plan(s) with school subject 3-step",

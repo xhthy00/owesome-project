@@ -146,7 +146,44 @@ def truncate_keeping_kpi_lines(text: str, *, limit: int = 1200) -> str:
 _PASS_LINE_IN_TEXT_RE = re.compile(r"(及格线\s*)(\d+(?:\.\d+)?)")
 _EXCELLENT_LINE_IN_TEXT_RE = re.compile(r"(优秀线\s*)(\d+(?:\.\d+)?)")
 _REF_HEADCOUNT_IN_TEXT_RE = re.compile(
-    r"((?:参考人数|班级人数|应考人数|实考人数|全班(?:人数)?)\s*(?:为|共)?\s*)(\d+)(\s*人)"
+    r"((?:年级|班级|全校|全年级)?"
+    r"(?:参考人数|班级人数|应考人数|实考人数|全班(?:人数)?)\s*(?:为|共)?\s*)(\d+)(\s*人)"
+)
+_AVG_IN_TEXT_RE = re.compile(
+    r"((?:年级|班级|全校|全年级)?(?:均分|平均分)\s*(?:为|是)?\s*)(\d+(?:\.\d+)?)"
+)
+_STDEV_IN_TEXT_RE = re.compile(r"(标准差\s*(?:为|是)?\s*)(\d+(?:\.\d+)?)")
+_PASS_RATE_IN_TEXT_RE = re.compile(r"(及格率\s*(?:为|是)?\s*)(\d+(?:\.\d+)?)\s*%")
+_EXCELLENT_RATE_IN_TEXT_RE = re.compile(r"(优秀率\s*(?:为|是)?\s*)(\d+(?:\.\d+)?)\s*%")
+_FULL_SCORE_IN_TEXT_RE = re.compile(
+    r"((?:卷面)?满分\s*(?:为|是)?\s*)(\d+(?:\.\d+)?)(\s*分)?"
+)
+
+# HTML KPI 卡片：<div class="label">参考人数</div><div class="value">829</div>
+_HTML_KPI_RE = re.compile(
+    r'class="label"[^>]*>\s*(参考人数|平均分|均分|及格率|优秀率|标准差|满分|卷面满分)'
+    r"\s*</div>\s*<div[^>]*class=\"value\"[^>]*>\s*([^<]+?)\s*</div>",
+    re.IGNORECASE,
+)
+_HTML_REF_COUNT_RE = re.compile(r"参考人数\s*(\d+)\s*人")
+_PREVIEW_LIKE_COUNTS = frozenset({3, 5, 10, 20})  # 常见预览/LIMIT 上限，优先不信
+_SCORE_COL_HINTS = (
+    "student",
+    "学生",
+    "姓名",
+    "name",
+    "学号",
+    "score",
+    "分数",
+    "成绩",
+    "得分",
+)
+# 「共 20 人 / 20 名学生」等无标签人数——仅当数值像预览规模或明显小于权威 count 时改写
+_LOOSE_TOTAL_HEADCOUNT_RE = re.compile(r"(共\s*)(\d+)(\s*人)")
+_LOOSE_STUDENT_HEADCOUNT_RE = re.compile(r"(\d+)(\s*名(?:学生|同学))")
+_VIEWED_HEADCOUNT_RE = re.compile(r"(所查看的\s*)(\d+)(\s*名?)")
+_MD_TABLE_HEADCOUNT_RE = re.compile(
+    r"(\|\s*(?:参考人数|班级人数|应考人数|实考人数)\s*\|\s*)(\d+)(\s*人?\s*\|)"
 )
 
 
@@ -159,28 +196,248 @@ def _fmt_authority_score(value: Any) -> str:
     return text
 
 
+def _fmt_authority_rate(value: Any) -> str:
+    """百分率展示：保留最多两位小数，去掉尾随 0。"""
+    f = float(value)
+    text = f"{round(f, 2):.2f}".rstrip("0").rstrip(".")
+    return text if text else "0"
+
+
+def _fmt_authority_metric(value: Any) -> str:
+    """均分/标准差等：最多两位小数。"""
+    f = float(value)
+    if abs(f - round(f)) < 1e-9:
+        return str(int(round(f)))
+    return f"{round(f, 2):.2f}".rstrip("0").rstrip(".")
+
+
+def _safe_int(value: Any) -> int | None:
+    try:
+        if value is None or value == "" or value == "-":
+            return None
+        return int(float(str(value).strip().replace(",", "").replace("人", "")))
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        if value is None or value == "" or value == "-":
+            return None
+        text = str(value).strip().replace(",", "").replace("%", "").replace("分", "")
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _stats_rank_key(stats: dict[str, Any]) -> tuple[int, int, int, int]:
+    """权威候选排序：人数优先，其次完整度；预览规模人数降权。"""
+    count = _safe_int(stats.get("count")) or 0
+    preview_penalty = 1 if count in _PREVIEW_LIKE_COUNTS else 0
+    has_rate = 1 if stats.get("pass_rate") is not None else 0
+    has_avg = 1 if stats.get("avg") is not None else 0
+    return (count, -preview_penalty, has_rate, has_avg)
+
+
+def _merge_stats_fields(*parts: dict[str, Any] | None) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for part in parts:
+        if not isinstance(part, dict):
+            continue
+        for k, v in part.items():
+            if v is None or v == "" or v == "-":
+                continue
+            if k not in out or out[k] in (None, "", "-"):
+                out[k] = v
+    return out
+
+
+def _stats_from_mapping(data: dict[str, Any]) -> dict[str, Any] | None:
+    """从工具 data / 模板字段抽出 KPI（支持 ``_stats`` 与 TOTAL_COUNT 等）。"""
+    if not isinstance(data, dict) or data.get("error"):
+        return None
+    cached = data.get("_stats")
+    base: dict[str, Any] = {}
+    if isinstance(cached, dict) and (
+        cached.get("count") is not None or cached.get("avg") is not None
+    ):
+        base = dict(cached)
+
+    mapped = {
+        "count": _safe_int(data.get("TOTAL_COUNT") if data.get("TOTAL_COUNT") is not None else data.get("count")),
+        "avg": _safe_float(data.get("AVG_SCORE") if data.get("AVG_SCORE") is not None else data.get("avg")),
+        "pass_rate": _safe_float(
+            data.get("PASS_RATE") if data.get("PASS_RATE") is not None else data.get("pass_rate")
+        ),
+        "excellent_rate": _safe_float(
+            data.get("EXCELLENT_RATE")
+            if data.get("EXCELLENT_RATE") is not None
+            else data.get("excellent_rate")
+        ),
+        "stdev": _safe_float(data.get("STDEV") if data.get("STDEV") is not None else data.get("stdev")),
+        "full_score": _safe_float(
+            data.get("FULL_SCORE")
+            if data.get("FULL_SCORE") is not None
+            else data.get("_FULL_SCORE")
+            if data.get("_FULL_SCORE") is not None
+            else data.get("full_score")
+        ),
+        "max": _safe_float(data.get("MAX_SCORE") if data.get("MAX_SCORE") is not None else data.get("max")),
+        "min": _safe_float(data.get("MIN_SCORE") if data.get("MIN_SCORE") is not None else data.get("min")),
+        "pass_line": _safe_float(data.get("pass_line")),
+        "excellent_line": _safe_float(data.get("excellent_line")),
+    }
+    merged = _merge_stats_fields(base, {k: v for k, v in mapped.items() if v is not None})
+    if merged.get("count") is None and merged.get("avg") is None and merged.get("pass_rate") is None:
+        return None
+    return merged
+
+
+def extract_stats_from_report_html(html: str | None) -> dict[str, Any] | None:
+    """从已渲染报告 HTML 抽取 KPI（报告侧全量统计，优先于样例预览）。"""
+    if not html:
+        return None
+    blob = html[:20000]
+    out: dict[str, Any] = {}
+    for m in _HTML_KPI_RE.finditer(blob):
+        label = m.group(1).strip()
+        raw = m.group(2).strip()
+        if label == "参考人数":
+            n = _safe_int(raw)
+            if n is not None:
+                out["count"] = n
+        elif label in ("平均分", "均分"):
+            v = _safe_float(raw)
+            if v is not None:
+                out["avg"] = v
+        elif label == "及格率":
+            v = _safe_float(raw)
+            if v is not None:
+                out["pass_rate"] = v
+        elif label == "优秀率":
+            v = _safe_float(raw)
+            if v is not None:
+                out["excellent_rate"] = v
+        elif label == "标准差":
+            v = _safe_float(raw)
+            if v is not None:
+                out["stdev"] = v
+        elif label in ("满分", "卷面满分"):
+            v = _safe_float(raw)
+            if v is not None:
+                out["full_score"] = v
+    if out.get("count") is None:
+        m = _HTML_REF_COUNT_RE.search(blob)
+        if m:
+            out["count"] = int(m.group(1))
+    if not out:
+        return None
+    return out
+
+
+def _columns_look_like_roster(columns: list[Any] | None) -> bool:
+    blob = "".join(str(c).lower() for c in (columns or []))
+    return any(h in blob for h in _SCORE_COL_HINTS)
+
+
+def extract_exec_authority_data(
+    *,
+    sql: str | None = None,
+    row_count: int | None = None,
+    columns: list[Any] | None = None,
+    sql_row_capped: bool | None = None,
+) -> dict[str, Any] | None:
+    """无 LIMIT/OFFSET 的明细查询行数可作为参考人数权威来源。"""
+    rc = _safe_int(row_count)
+    if rc is None or rc <= 0:
+        return None
+    capped = bool(sql_row_capped) if sql_row_capped is not None else sql_looks_row_capped(sql)
+    if capped:
+        return None
+    if columns is not None and not _columns_look_like_roster(columns):
+        return None
+    return {"count": rc}
+
+
 def extract_stats_authority_data(
     tool_calls: list[dict[str, Any]] | None = None,
+    *,
+    reports: list[dict[str, Any]] | None = None,
+    exec_results: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
-    """从 ``compute_score_stats_tool`` 抽取权威 KPI dict；没有则 ``None``。"""
+    """抽取权威 KPI（全模式通用）。
+
+    候选来源（取人数最大、预览规模降权）：
+    1. 报告 HTML / ``_stats`` / TOTAL_COUNT
+    2. ``compute_score_stats_tool``
+    3. 其它 build 工具 data
+    4. 无 LIMIT 的 ``execute_sql`` / exec_result 行数（纯 SQL 提问也能对齐人数）
+    """
+    candidates: list[dict[str, Any]] = []
+
+    for rp in reports or []:
+        if not isinstance(rp, dict):
+            continue
+        from_html = extract_stats_from_report_html(str(rp.get("html") or ""))
+        from_meta = _stats_from_mapping(rp)
+        merged = _merge_stats_fields(from_html, from_meta)
+        if merged:
+            candidates.append(merged)
+
     for tc in tool_calls or []:
         if not tc.get("success"):
             continue
-        if str(tc.get("tool") or "") != "compute_score_stats_tool":
-            continue
+        tool = str(tc.get("tool") or "")
         data = tc.get("data")
-        if isinstance(data, dict) and not data.get("error") and data.get("count") is not None:
-            return data
-    return None
+        if not isinstance(data, dict) or data.get("error"):
+            continue
+        if tool == "compute_score_stats_tool" and data.get("count") is not None:
+            candidates.append(dict(data))
+            continue
+        if tool in ("execute_sql", "execute_sql_tool") or (
+            "row_count" in data and ("columns" in data or "rows" in data)
+        ):
+            exec_auth = extract_exec_authority_data(
+                sql=str(data.get("sql") or ""),
+                row_count=data.get("row_count"),
+                columns=list(data.get("columns") or []),
+                sql_row_capped=data.get("sql_row_capped"),
+            )
+            if exec_auth:
+                candidates.append(exec_auth)
+        mapped = _stats_from_mapping(data)
+        if mapped:
+            candidates.append(mapped)
+        if data.get("output_type") == "html" or data.get("html"):
+            from_html = extract_stats_from_report_html(str(data.get("html") or ""))
+            if from_html:
+                candidates.append(from_html)
+
+    for er in exec_results or []:
+        if not isinstance(er, dict):
+            continue
+        exec_auth = extract_exec_authority_data(
+            sql=str(er.get("sql") or ""),
+            row_count=er.get("row_count"),
+            columns=list(er.get("columns") or []),
+            sql_row_capped=er.get("sql_row_capped"),
+        )
+        if exec_auth:
+            candidates.append(exec_auth)
+
+    if not candidates:
+        return None
+    return max(candidates, key=_stats_rank_key)
 
 
 def reconcile_summary_kpis(
     text: str,
     stats: dict[str, Any] | None,
 ) -> str:
-    """用权威统计改写结论中的及格线/优秀线/参考人数，避免 Summarizer 回落到惯例 60/85。
+    """用权威统计改写结论中的人数/分数线/均分/率，避免与报告 KPI 矛盾。
 
-    无权威统计或空文本时原样返回；只改带明确标签的数字，不动及格率/均分等其它值。
+    无权威统计或空文本时原样返回。覆盖带标签人数，以及「共 N 人 / N 名学生」等
+    预览规模误写（全模式通用后处理）。
     """
     if not text or not stats:
         return text or ""
@@ -192,49 +449,129 @@ def reconcile_summary_kpis(
     if stats.get("excellent_line") is not None:
         el = _fmt_authority_score(stats["excellent_line"])
         out = _EXCELLENT_LINE_IN_TEXT_RE.sub(rf"\g<1>{el}", out)
-    if stats.get("count") is not None:
-        try:
-            count = int(stats["count"])
-        except (TypeError, ValueError):
-            count = None
-        if count is not None:
-            out = _REF_HEADCOUNT_IN_TEXT_RE.sub(rf"\g<1>{count}\g<3>", out)
+
+    count = _safe_int(stats.get("count"))
+    if count is not None:
+        out = _REF_HEADCOUNT_IN_TEXT_RE.sub(rf"\g<1>{count}\g<3>", out)
+        out = _MD_TABLE_HEADCOUNT_RE.sub(rf"\g<1>{count}\g<3>", out)
+
+        def _rewrite_loose(match: re.Match[str], *, num_g: int, keep_prefix: bool) -> str:
+            try:
+                n = int(match.group(num_g))
+            except (TypeError, ValueError):
+                return match.group(0)
+            if n == count:
+                return match.group(0)
+            # 预览规模，或明显小于权威人数（常见 LIMIT/样例误写）
+            if n in _PREVIEW_LIKE_COUNTS or n < count:
+                if keep_prefix:
+                    return f"{match.group(1)}{count}{match.group(3)}"
+                return f"{count}{match.group(2)}"
+            return match.group(0)
+
+        out = _LOOSE_TOTAL_HEADCOUNT_RE.sub(
+            lambda m: _rewrite_loose(m, num_g=2, keep_prefix=True), out
+        )
+        out = _LOOSE_STUDENT_HEADCOUNT_RE.sub(
+            lambda m: _rewrite_loose(m, num_g=1, keep_prefix=False), out
+        )
+        out = _VIEWED_HEADCOUNT_RE.sub(
+            lambda m: _rewrite_loose(m, num_g=2, keep_prefix=True), out
+        )
+
+    if stats.get("avg") is not None:
+        avg = _fmt_authority_metric(stats["avg"])
+        out = _AVG_IN_TEXT_RE.sub(rf"\g<1>{avg}", out)
+    if stats.get("stdev") is not None:
+        sd = _fmt_authority_metric(stats["stdev"])
+        out = _STDEV_IN_TEXT_RE.sub(rf"\g<1>{sd}", out)
+    if stats.get("pass_rate") is not None:
+        pr = _fmt_authority_rate(stats["pass_rate"])
+        out = _PASS_RATE_IN_TEXT_RE.sub(rf"\g<1>{pr}%", out)
+    if stats.get("excellent_rate") is not None:
+        er = _fmt_authority_rate(stats["excellent_rate"])
+        out = _EXCELLENT_RATE_IN_TEXT_RE.sub(rf"\g<1>{er}%", out)
+    if stats.get("full_score") is not None:
+        fs = _fmt_authority_metric(stats["full_score"])
+        out = _FULL_SCORE_IN_TEXT_RE.sub(rf"\g<1>{fs}\g<3>", out)
     return out
 
 
+def scrub_preview_headcount_claims(text: str) -> str:
+    """无权威 count 时，去掉明显把预览规模写成全体人数的表述。
+
+    避免任意提问在缺 stats 时仍输出「参考人数 20 人」。
+    """
+    if not text:
+        return text or ""
+    out = text
+    for n in sorted(_PREVIEW_LIKE_COUNTS, reverse=True):
+        out = re.sub(
+            rf"((?:年级|班级|全校|全年级)?"
+            rf"(?:参考人数|班级人数|应考人数|实考人数|全班(?:人数)?)\s*(?:为|共)?\s*){n}(\s*人)",
+            r"\1（以全量统计/报告为准，预览行数不可用）",
+            out,
+        )
+        out = re.sub(
+            rf"所查看的\s*{n}\s*名?",
+            "（预览样本，非全体）",
+            out,
+        )
+    return out
+
+
+def reconcile_answer_with_artifacts(
+    text: str,
+    *,
+    tool_calls: list[dict[str, Any]] | None = None,
+    reports: list[dict[str, Any]] | None = None,
+    exec_results: list[dict[str, Any]] | None = None,
+) -> str:
+    """全模式统一后处理：有权威 KPI 则改写，否则清洗预览规模人数幻觉。"""
+    stats = extract_stats_authority_data(
+        tool_calls, reports=reports, exec_results=exec_results
+    )
+    if stats:
+        return reconcile_summary_kpis(text, stats)
+    return scrub_preview_headcount_claims(text)
+
 def extract_stats_authority_block(
     tool_calls: list[dict[str, Any]] | None = None,
+    *,
+    reports: list[dict[str, Any]] | None = None,
 ) -> str:
-    """从 compute_score_stats_tool 抽取权威 KPI，供 Summarizer 照抄。"""
-    best = extract_stats_authority_data(tool_calls)
+    """抽取权威 KPI 块，供 Summarizer 照抄（报告 HTML / _stats / compute_score_stats）。"""
+    best = extract_stats_authority_data(tool_calls, reports=reports)
     best_content = ""
+    best_count = _safe_int(best.get("count")) if best else None
     for tc in tool_calls or []:
         if not tc.get("success"):
             continue
         if str(tc.get("tool") or "") != "compute_score_stats_tool":
             continue
         content = str(tc.get("content") or "")
-        if best is not None:
+        data = tc.get("data") if isinstance(tc.get("data"), dict) else {}
+        tc_count = _safe_int(data.get("count"))
+        if best_count is not None and tc_count == best_count:
             best_content = content
             break
-        if "成绩统计完成" in content:
+        if not best_content and "成绩统计完成" in content:
             best_content = content
-            break
     if best is None and not best_content:
         return ""
-    lines = ["【权威统计（compute_score_stats_tool，须照抄）】"]
+    lines = ["【报告权威 KPI（须原样照抄；禁止用样例/LIMIT 行数改写）】"]
     if best is not None:
         lines.append(
-            f"- 人数 count={best.get('count')}；均分={best.get('avg')}；"
-            f"满分={best.get('full_score')}；"
+            f"- 参考人数 count={best.get('count')}；均分={best.get('avg')}；"
+            f"满分={best.get('full_score')}；标准差={best.get('stdev')}；"
             f"及格线={best.get('pass_line')}；优秀线={best.get('excellent_line')}；"
             f"及格率={best.get('pass_rate')}%；优秀率={best.get('excellent_rate')}%"
         )
     if best_content:
-        lines.append(f"- 原文：{best_content.strip()[:500]}")
+        lines.append(f"- 统计工具原文：{best_content.strip()[:500]}")
     lines.append(
-        "- **禁止**把下方「样例」行数或带 OFFSET 的「共 N 行」当成班级总人数；"
-        "有本块时人数与分数线以本块为准。"
+        "- **禁止**把下方「样例」行数或带 LIMIT/OFFSET 的「共 N 行」当成参考人数；"
+        "有本块时人数、均分、及格率、优秀率一律以本块为准。"
     )
     return "\n".join(lines)
 
@@ -280,7 +617,7 @@ def format_tool_expert_sub_task_block(
     """ToolExpert 子任务的可读摘要（供 Summarizer 使用）。"""
     agg = collect_education_artifacts(tool_calls=tool_calls, reports=reports)
     lines = ["执行者：ToolExpert（教育报告工具链）"]
-    stats_block = extract_stats_authority_block(tool_calls)
+    stats_block = extract_stats_authority_block(tool_calls, reports=reports)
     if stats_block:
         lines.append(stats_block)
     if agg["has_item_data"] or agg["has_knowledge_data"]:
@@ -325,8 +662,9 @@ def format_education_pipeline_footer(report_data: dict[str, Any] | None) -> str:
         "撰写结论时须引导用户查看报告详情，**禁止**声称「无法获取小题级/知识点级诊断数据」。"
     )
     parts.append(
-        "- **人数口径**：班级总人数以「权威统计 count」或无 OFFSET 明细的「共 N 行」或结论中的"
-        "「参考人数」为准；**禁止**把样例行数、OFFSET 本页行数写成全班人数。"
+        "- **人数口径**：以「报告权威 KPI」/「权威统计 count」为准；"
+        "**禁止**把样例行数、LIMIT/OFFSET 本页「共 N 行」写成参考人数；"
+        "均分/及格率/优秀率亦须与报告权威 KPI 一致。"
     )
     try:
         from src.agent.education.config_store import get_config
@@ -347,12 +685,16 @@ def format_education_pipeline_footer(report_data: dict[str, Any] | None) -> str:
 
 __all__ = [
     "collect_education_artifacts",
+    "extract_exec_authority_data",
     "extract_stats_authority_block",
     "extract_stats_authority_data",
+    "extract_stats_from_report_html",
     "format_education_pipeline_footer",
     "format_sql_result_authority_notes",
     "format_tool_expert_sub_task_block",
+    "reconcile_answer_with_artifacts",
     "reconcile_summary_kpis",
+    "scrub_preview_headcount_claims",
     "sql_looks_paginated",
     "sql_looks_row_capped",
     "truncate_keeping_kpi_lines",

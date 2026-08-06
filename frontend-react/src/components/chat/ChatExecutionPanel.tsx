@@ -533,6 +533,7 @@ export default function ChatExecutionPanel({
         actions={agentActions}
         focusAgent={focusAgent}
         onSelectAgent={onSelectAgent}
+        timerEpoch={`${selectedRunId ?? ""}:${runMetrics?.runStartedAt ?? 0}`}
       />
 
       <div className="flex h-11 items-center border-b border-[#eceff5] px-5 dark:border-[#2f3441]">

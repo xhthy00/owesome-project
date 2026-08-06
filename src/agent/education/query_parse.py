@@ -514,14 +514,46 @@ _GROUP_FEATURE_HINTS = (
     "群体特征报告",
     "群体对比分析",
 )
+#: 出现这些时优先班级横向对比，禁止被群体特征抢走
+_GROUP_FEATURE_YIELD_TO_CLASS_COMPARE = (
+    "横向对比",
+    "横向分析",
+    "横向多维",
+    "班级横向",
+    "各班对比",
+    "各班横向",
+    "各个班级",
+    "各班级",
+    "年级对比",
+    "班级排名",
+    "年级排名",
+)
 
 
 def is_group_feature_query(question: str) -> bool:
-    """按维度做群体特征对比（如按班级群体对比特征）→ group_feature。"""
+    """按维度做群体特征对比（如按班级群体对比特征）→ group_feature。
+
+    「班级横向对比 / 各班对比」优先走 grade_comparison，即使句子里也有「对比」。
+    仅当明确出现群体特征口径（或「按X群体」）时才命中。
+    """
     q = (question or "").strip()
     if not q or is_citywide_analysis_query(q) or is_individual_student_analysis_query(q):
         return False
     if is_tier_alert_query(q):
+        return False
+    # 「扬州中学…班级横向对比学情分析」不得被群体特征抢走
+    has_class_compare = any(h in q for h in _GROUP_FEATURE_YIELD_TO_CLASS_COMPARE)
+    has_explicit_group = any(
+        h in q
+        for h in (
+            "群体特征",
+            "群体对比特征",
+            "按班级群体",
+            "群体特征报告",
+            "群体对比分析",
+        )
+    )
+    if has_class_compare and not has_explicit_group:
         return False
     if any(h in q for h in _GROUP_FEATURE_HINTS):
         return True
@@ -794,11 +826,15 @@ def extract_upstream_participant_count(report_data: dict[str, Any] | None) -> in
 
     优先采用 ``exec_result.row_count``（SQL 实际返回行数），避免 ``final_answer``
     文案中的较小数字拉低人数（如 SQL 40 行但摘要写 20）。
+    含 LIMIT/OFFSET 且行数像预览上限（3/5/10/20）的结果不计入，避免误拦全量报告。
     """
     if not report_data:
         return None
+    from src.agent.education.summary_context import sql_looks_row_capped
+
     sql_counts: list[int] = []
     text_counts: list[int] = []
+    preview_like = frozenset({3, 5, 10, 20})
     for st in report_data.get("sub_tasks") or []:
         if st.get("sub_task_agent") == "ToolExpert":
             continue
@@ -812,24 +848,34 @@ def extract_upstream_participant_count(report_data: dict[str, Any] | None) -> in
         ):
             m = re.search(pat, fa, flags=re.I)
             if m:
-                text_counts.append(int(m.group(1)))
+                n = int(m.group(1))
+                # 文案里的预览规模人数也降权：仅作候选，后面若有更大 sql_counts 仍取 max
+                text_counts.append(n)
         er = st.get("exec_result") or {}
         cols = [str(c).lower() for c in (er.get("columns") or [])]
         col_blob = "".join(cols)
         rc = er.get("row_count")
+        sql_text = str(st.get("sql") or st.get("last_sql") or "")
         if isinstance(rc, int) and rc > 0:
             if any(
                 k in col_blob
                 for k in ("student", "学生", "姓名", "name", "学号", "score", "分数")
             ):
+                # LIMIT 20 预览行数不能当作全体参考人数
+                if sql_looks_row_capped(sql_text) and rc in preview_like:
+                    continue
                 sql_counts.append(rc)
         cached = st.get("score_rows")
         if isinstance(cached, list) and cached:
             sql_counts.append(len(cached))
     if sql_counts:
-        return max(sql_counts)
-    if text_counts:
-        return max(text_counts)
+        # 预览规模行数不当作拦截权威（真·20 人全量班也不应用来拦更大报告）
+        credible_sql = [n for n in sql_counts if n not in preview_like]
+        return max(credible_sql) if credible_sql else None
+    # 仅文案时：丢掉预览规模，避免「共 20 人」误拦 829 人全量报告 → 落入自主分析
+    credible = [n for n in text_counts if n not in preview_like]
+    if credible:
+        return max(credible)
     return None
 
 
@@ -1530,7 +1576,11 @@ def resolve_subject_diagnosis_fetch_data(
 
 
 def report_participant_count_conflicts(html: str, expected: int) -> bool:
-    """HTML 中是否出现与上游参考人数明显矛盾的数字。"""
+    """HTML 中是否出现与上游参考人数明显矛盾的数字。
+
+    只拦「报告人数明显小于上游」（报告缩水）；
+    报告人数大于上游时放行（上游常为 LIMIT/预览 20，全量报告为真）。
+    """
     if expected <= 0:
         return False
     blob = html[:12000]
@@ -1539,11 +1589,22 @@ def report_participant_count_conflicts(html: str, expected: int) -> bool:
         r"(?:参考|参与|合计|共)\s*(\d+)\s*人",
         r"(\d+)\s*名?学生",
         r"TOTAL_COUNT[^0-9]*(\d+)",
+        r'class="label"[^>]*>\s*参考人数\s*</div>\s*<div[^>]*class="value"[^>]*>\s*(\d+)',
     )
+    preview_like = frozenset({3, 5, 10, 20})
     for pat in patterns:
         for m in re.finditer(pat, blob, flags=re.I):
             found = int(m.group(1))
-            if found != expected:
+            if found == expected:
+                continue
+            # 上游是预览规模、报告更大 → 不拦
+            if expected in preview_like and found > expected:
+                continue
+            # 报告比上游更全 → 不拦
+            if found > expected:
+                continue
+            # 报告明显缩水
+            if expected - found >= max(5, int(expected * 0.05)):
                 return True
     return False
 

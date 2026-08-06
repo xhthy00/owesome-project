@@ -45,7 +45,17 @@ export default function ChatPage() {
       setSelectedStepId(undefined);
       return;
     }
-    setSelectedStepId((prev) => (prev && executionSteps.some((step) => step.id === prev) ? prev : executionSteps[executionSteps.length - 1]?.id));
+    const latest = executionSteps[executionSteps.length - 1];
+    setSelectedStepId((prev) => {
+      if (!prev) return latest?.id;
+      const prevStep = executionSteps.find((step) => step.id === prev);
+      if (!prevStep) return latest?.id;
+      // 新一轮提问后跟到最新 run，避免右侧专家条仍停在上一问并累计计时
+      if (latest?.runId && prevStep.runId && prevStep.runId !== latest.runId) {
+        return latest.id;
+      }
+      return prev;
+    });
   }, [executionSteps]);
 
   useEffect(() => {

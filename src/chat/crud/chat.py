@@ -146,12 +146,15 @@ def create_conversation_record(
     workspace_oid: int = 1,
 ) -> ConversationRecord:
     """Create a new conversation record。"""
+    from src.chat.utils.payload_slim import slim_exec_result, slim_tool_calls
+
     exec_result_str = None
     if exec_result is not None:
-        if isinstance(exec_result, dict):
-            exec_result_str = json.dumps(exec_result, ensure_ascii=False)
+        slim_er = slim_exec_result(exec_result)
+        if isinstance(slim_er, dict):
+            exec_result_str = json.dumps(slim_er, ensure_ascii=False)
         else:
-            exec_result_str = str(exec_result)
+            exec_result_str = str(slim_er)
 
     chart_config_str = None
     if chart_config is not None:
@@ -169,9 +172,9 @@ def create_conversation_record(
     plan_states_str = (
         json.dumps(plan_states, ensure_ascii=False) if plan_states is not None else None
     )
-    tool_calls_str = (
-        json.dumps(tool_calls, ensure_ascii=False) if tool_calls is not None else None
-    )
+    tool_calls_str = None
+    if tool_calls is not None:
+        tool_calls_str = json.dumps(slim_tool_calls(tool_calls), ensure_ascii=False)
     reports_str = json.dumps(reports, ensure_ascii=False) if reports is not None else None
 
     record = ConversationRecord(
@@ -216,21 +219,87 @@ def get_conversation_records(
     session: Session,
     conversation_id: int,
     user_id: int,
-    limit: int = 100
+    limit: int = 100,
+    *,
+    for_history_detail: bool = False,
 ) -> List[ConversationRecord]:
-    """Get conversation records."""
+    """Get conversation records.
+
+    ``for_history_detail=True`` 时：SELECT 不含 ``tool_calls`` / ``exec_result``，
+    避免历史详情接口从远端库拖数 MB TEXT；计划 / 步骤 / 报告 / 摘要仍完整返回。
+    """
+    if not for_history_detail:
+        statement = (
+            select(ConversationRecord)
+            .where(
+                and_(
+                    ConversationRecord.conversation_id == conversation_id,
+                    ConversationRecord.user_id == user_id,
+                )
+            )
+            .order_by(ConversationRecord.create_time)
+            .limit(limit)
+        )
+        return list(session.exec(statement).all())
+
+    return _get_conversation_records_for_history_detail(
+        session, conversation_id, user_id, limit=limit
+    )
+
+
+def _get_conversation_records_for_history_detail(
+    session: Session,
+    conversation_id: int,
+    user_id: int,
+    *,
+    limit: int = 100,
+) -> List[ConversationRecord]:
+    """仅加载历史恢复所需轻量列；重字段置空，禁止触发懒加载。"""
+    from sqlalchemy.orm import load_only
+
     statement = (
         select(ConversationRecord)
         .where(
             and_(
                 ConversationRecord.conversation_id == conversation_id,
-                ConversationRecord.user_id == user_id
+                ConversationRecord.user_id == user_id,
+            )
+        )
+        .options(
+            load_only(
+                ConversationRecord.id,
+                ConversationRecord.conversation_id,
+                ConversationRecord.user_id,
+                ConversationRecord.question,
+                ConversationRecord.sql,
+                ConversationRecord.sql_answer,
+                ConversationRecord.sql_error,
+                ConversationRecord.chart_type,
+                ConversationRecord.chart_config,
+                ConversationRecord.is_success,
+                ConversationRecord.finish_time,
+                ConversationRecord.create_time,
+                ConversationRecord.reasoning,
+                ConversationRecord.steps,
+                ConversationRecord.agent_mode,
+                ConversationRecord.plans,
+                ConversationRecord.sub_task_agents,
+                ConversationRecord.plan_states,
+                ConversationRecord.summary,
+                ConversationRecord.reports,
+                ConversationRecord.total_tokens,
+                ConversationRecord.elapsed_ms,
             )
         )
         .order_by(ConversationRecord.create_time)
         .limit(limit)
     )
-    return session.exec(statement).all()
+    records = list(session.exec(statement).all())
+    # 禁止后续访问 deferred 列时再发懒加载 SQL
+    for rec in records:
+        rec.__dict__["tool_calls"] = None
+        rec.__dict__["exec_result"] = None
+    return records
 
 
 def get_record_by_id(session: Session, record_id: int, user_id: int) -> Optional[ConversationRecord]:
@@ -269,10 +338,13 @@ def update_conversation_record(
     if sql_error is not None:
         record.sql_error = sql_error
     if exec_result is not None:
-        if isinstance(exec_result, dict):
-            record.exec_result = json.dumps(exec_result, ensure_ascii=False)
+        from src.chat.utils.payload_slim import slim_exec_result
+
+        slim_er = slim_exec_result(exec_result)
+        if isinstance(slim_er, dict):
+            record.exec_result = json.dumps(slim_er, ensure_ascii=False)
         else:
-            record.exec_result = str(exec_result)
+            record.exec_result = str(slim_er)
     if chart_type is not None:
         record.chart_type = chart_type
     if chart_config is not None:

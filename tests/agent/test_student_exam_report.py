@@ -150,9 +150,12 @@ def test_extract_upstream_participant_count_from_final_answer():
 
 
 def test_report_participant_count_conflicts_detects_mismatch():
-    html = "<p>参考人数 40 人</p>"
-    assert report_participant_count_conflicts(html, 24)
+    # 报告人数明显小于上游 → 拦截（报告缩水）
+    assert report_participant_count_conflicts("<p>参考人数 10 人</p>", 24)
     assert not report_participant_count_conflicts("<p>参考人数 24 人</p>", 24)
+    # 报告人数大于上游（上游常为 LIMIT/预览）→ 不拦，避免误丢班级横向对比全量报告
+    assert not report_participant_count_conflicts("<p>参考人数 40 人</p>", 24)
+    assert not report_participant_count_conflicts("<p>参考人数 829 人</p>", 20)
 
 
 def test_extract_exam_name_hint_rejects_vague_zhe_jici():

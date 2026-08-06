@@ -14,6 +14,8 @@ type Props = {
   actions: Record<FlowAgent, string>;
   focusAgent?: FlowAgent | null;
   onSelectAgent?: (agent: FlowAgent) => void;
+  /** 新问题 / 切换会话轮次时变化，用于把各角色计时清零 */
+  timerEpoch?: number | string | null;
 };
 
 function formatElapsed(ms: number): string {
@@ -23,16 +25,40 @@ function formatElapsed(ms: number): string {
   return m > 0 ? `${m}:${String(s).padStart(2, "0")}` : `${s}s`;
 }
 
-export default function AgentTeamStrip({ statusMap, actions, focusAgent, onSelectAgent }: Props) {
+export default function AgentTeamStrip({
+  statusMap,
+  actions,
+  focusAgent,
+  onSelectAgent,
+  timerEpoch
+}: Props) {
   const [tick, setTick] = useState(0);
   const startedAtRef = useRef<Partial<Record<FlowAgent, number>>>({});
   const frozenRef = useRef<Partial<Record<FlowAgent, number>>>({});
   const collabLine = describeTeamCollaboration(statusMap);
 
   useEffect(() => {
+    startedAtRef.current = {};
+    frozenRef.current = {};
+    const now = Date.now();
+    // 同一轮 render 里若角色已是 running，立刻重新打点，
+    // 否则 statusMap 未变时不会再进下面的 effect，计时会一直空着或沿用旧值。
+    FLOW_AGENTS.forEach((agent) => {
+      if (statusMap[agent] === "running") {
+        startedAtRef.current[agent] = now;
+      }
+    });
+    setTick((n) => n + 1);
+    // 仅在新问题 / 切换 run 时重置；故意不把 statusMap 放进依赖。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [timerEpoch]);
+
+  useEffect(() => {
     FLOW_AGENTS.forEach((agent) => {
       const st = statusMap[agent];
       if (st === "running") {
+        // 同轮多 sub_task 的 done→running 保留首次 start，累计本问耗时；
+        // 新问题靠 timerEpoch 清零后再进入此处。
         if (startedAtRef.current[agent] == null) {
           startedAtRef.current[agent] = Date.now();
         }

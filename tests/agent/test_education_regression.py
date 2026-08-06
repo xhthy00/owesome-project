@@ -284,6 +284,35 @@ def test_extract_upstream_participant_count_prefers_sql_row_count():
     assert count == 40
 
 
+def test_extract_upstream_ignores_preview_limit_so_grade_compare_not_blocked():
+    """LIMIT 20 / 「共 20 人」不得作为上游权威，否则班级横向对比全量报告被拦 → 自主分析。"""
+    from src.agent.education.query_parse import (
+        extract_upstream_participant_count,
+        report_participant_count_conflicts,
+    )
+
+    count = extract_upstream_participant_count({
+        "sub_tasks": [
+            {
+                "sub_task_agent": "DataAnalyst",
+                "final_answer": "年级参考人数 20 人，均分 110.24",
+                "sql": "SELECT student_id, score FROM tb_score WHERE school='扬州中学' LIMIT 20",
+                "exec_result": {
+                    "columns": ["student_id", "score"],
+                    "rows": [{"student_id": f"s{i}", "score": 100} for i in range(20)],
+                    "row_count": 20,
+                },
+            }
+        ]
+    })
+    assert count is None
+    html = (
+        '<div class="edu-kpi"><div class="label">参考人数</div>'
+        '<div class="value">829</div></div>参考人数 829 人'
+    )
+    assert not report_participant_count_conflicts(html, count or 0)
+
+
 def test_resolve_diagnostic_score_rows_prefers_upstream_over_llm_preview():
     from src.agent.education.query_parse import resolve_diagnostic_score_rows
 

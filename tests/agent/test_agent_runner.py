@@ -103,6 +103,7 @@ def test_happy_path_emits_full_event_sequence(monkeypatch):
     assert names.count("tool_result") == 4
     assert "sql" in names and "result" in names
     assert "final_answer" in names
+    assert "summary" in names  # agent 模式也走权威对齐后处理
     assert "error" not in names
 
     sql_event = next(p for e, p in events if e == "sql")
@@ -157,7 +158,11 @@ def test_execute_sql_failure_is_fed_back_not_emitted_as_legacy_sql(monkeypatch):
     assert call_count["n"] == 2
 
 
-def test_does_not_terminate_emits_error_and_zero_record(monkeypatch):
+def test_max_rounds_with_valid_observation_auto_converges(monkeypatch):
+    """达轮数上限但最后观察有效时，ReAct 会自动收敛为 final_answer（非 error）。
+
+    runner 再对结论做权威人数对齐，并 emit summary（与 team 口径一致）。
+    """
     _patch_db(
         monkeypatch,
         lambda *a, **kw: (True, "ok", {"columns": [], "rows": []}),
@@ -188,6 +193,46 @@ def test_does_not_terminate_emits_error_and_zero_record(monkeypatch):
         )
     )
 
+    assert record_id == 0
+    names = [e for e, _ in events]
+    assert "final_answer" in names
+    assert "summary" in names
+    assert "error" not in names
+
+
+def test_max_rounds_without_valid_observation_emits_error(monkeypatch):
+    """达上限且无有效观察时，仍应发 error、不发 final_answer。"""
+    _patch_db(
+        monkeypatch,
+        lambda *a, **kw: (False, "boom", None),
+    )
+    # 故意让工具名非法，Observation 失败且无法收敛
+    llm = _ScriptedLlm(
+        ['{"tool": "not_a_real_tool", "args": {}}'] * 20
+    )
+    events, emit = _collect_events()
+    req = ChatRequest(question="q", datasource_id=1)
+
+    import src.agent.expand.data_analyst as da_mod
+    orig = da_mod.build_data_analyst
+
+    def capped_factory(*args, **kwargs):
+        kwargs["max_react_rounds"] = 2
+        return orig(*args, **kwargs)
+
+    monkeypatch.setattr(da_mod, "build_data_analyst", capped_factory)
+    import src.chat.service.agent_runner as runner_mod
+    monkeypatch.setattr(runner_mod, "build_data_analyst", capped_factory)
+
+    record_id = _run(
+        run_agent_stream(
+            request=req,
+            current_user_id=1,
+            emit=emit,
+            llm_client=llm,
+            persist=False,
+        )
+    )
     assert record_id == 0
     assert any(e == "error" for e, _ in events)
     assert not any(e == "final_answer" for e, _ in events)

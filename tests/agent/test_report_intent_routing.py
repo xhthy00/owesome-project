@@ -43,16 +43,15 @@ def _route(question: str) -> str:
         return "multi-exam"
     if is_tier_alert_query(question):
         return "tier-alert"
+    if is_school_class_comparison_query(question):
+        return "class-comparison"
     if is_group_feature_query(question):
         return "group-feature"
     if is_class_overview_query(question):
         return "class-overview"
-    if is_school_class_comparison_query(question):
-        return "class-comparison"
     if is_school_exam_report_query(question):
         return "school-exam"
     return "llm"
-
 
 @pytest.mark.parametrize(
     "question,report_type,route",
@@ -257,6 +256,29 @@ def test_group_feature_plan_not_class_comparison():
     cmp_q = "扬州中学在连淮扬镇数学考试中各个班级的横向多维对比分析"
     assert is_group_feature_query(cmp_q) is False
     assert is_school_class_comparison_query(cmp_q) is True
+
+
+def test_class_horizontal_xueqing_not_group_feature():
+    """「班级横向对比学情分析」必须是班级横向对比，不能落到群体特征。"""
+    from src.agent.expand.planner import coerce_plan_items_if_needed
+
+    q = "扬州中学高二数学班级横向对比学情分析"
+    assert is_group_feature_query(q) is False
+    assert is_school_class_comparison_query(q) is True
+    assert ReportIntentResolver().resolve(q).report_type == ReportType.GRADE_COMPARISON
+    assert _route(q) == "class-comparison"
+    # LLM 若误拆成群体特征，coerce 须纠正
+    wrong = [
+        {"sub_task": "查成绩", "sub_task_agent": "DataAnalyst"},
+        {
+            "sub_task": "调 build_group_feature_report_data_tool(school_name=扬州中学, dimension=class)",
+            "sub_task_agent": "ToolExpert",
+        },
+    ]
+    fixed = coerce_plan_items_if_needed(q, wrong)
+    blob = " ".join(p["sub_task"] for p in fixed)
+    assert "build_subject_diagnosis_sections_tool" in blob
+    assert "build_group_feature_report_data_tool" not in blob
 
 
 def test_class_overview_plan_not_subject_diagnosis():

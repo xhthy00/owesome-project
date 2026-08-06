@@ -1102,6 +1102,20 @@ def build_subject_diagnosis_sections_tool(
         "mode": "template",
         "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
     }
+    if has_scores and isinstance(st, dict):
+        payload["_stats"] = st
+        if st.get("count") is not None:
+            payload["TOTAL_COUNT"] = str(st.get("count"))
+        if st.get("avg") is not None:
+            payload["AVG_SCORE"] = _fmt_val(st.get("avg"))
+        if st.get("pass_rate") is not None:
+            payload["PASS_RATE"] = _fmt_val(st.get("pass_rate"))
+        if st.get("excellent_rate") is not None:
+            payload["EXCELLENT_RATE"] = _fmt_val(st.get("excellent_rate"))
+        if st.get("stdev") is not None:
+            payload["STDEV"] = _fmt_val(st.get("stdev"))
+        if st.get("full_score") is not None:
+            payload["FULL_SCORE"] = _fmt_val(st.get("full_score"))
     score_note = (
         f"{int(st.get('count') or 0)} 条成绩"
         if has_scores
@@ -1389,6 +1403,21 @@ def build_subject_diagnosis_report_tool(
         "mode": "template",
         "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
     }
+    if isinstance(stats, dict) and (
+        stats.get("count") is not None or stats.get("avg") is not None
+    ):
+        payload["_stats"] = stats
+        if stats.get("count") is not None:
+            payload["TOTAL_COUNT"] = str(stats.get("count"))
+        for k_src, k_dst in (
+            ("avg", "AVG_SCORE"),
+            ("pass_rate", "PASS_RATE"),
+            ("excellent_rate", "EXCELLENT_RATE"),
+            ("stdev", "STDEV"),
+            ("full_score", "FULL_SCORE"),
+        ):
+            if stats.get(k_src) is not None:
+                payload[k_dst] = _fmt_val(stats.get(k_src))
     weak_cnt = sum(1 for r in knowledge_enriched if r.get("level") == "需加强")
     sql_note = _format_diagnosis_sql_logs(sql_logs)
     score_note = (
@@ -1634,8 +1663,9 @@ def _diagnosis_sql_bundle(
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
         "JOIN tb_exam e ON sc.exam_id = e.id"
         + where_clause_score
-        + "\nORDER BY e.exam_time DESC, sc.score DESC\n"
-        "LIMIT 5000"
+        # 勿按 score DESC：LIMIT 截断时会偏向高分，导致参考人数偏少、及格/优秀率虚高。
+        + "\nORDER BY e.exam_time DESC\n"
+        "LIMIT 50000"
     )
     exam_id_sql = (
         "SELECT DISTINCT sc.exam_id AS exam_id\n"
@@ -2247,6 +2277,23 @@ def _html_report_tool_result(
     from src.agent.education.report_types import report_type_label
 
     data = dict(payload)
+    # 确保 Summarizer 能拿到全量 KPI（即使 HTML 卡片缺「参考人数」）
+    if not isinstance(data.get("_stats"), dict):
+        mapped: dict[str, Any] = {}
+        for src, dst in (
+            ("TOTAL_COUNT", "count"),
+            ("AVG_SCORE", "avg"),
+            ("PASS_RATE", "pass_rate"),
+            ("EXCELLENT_RATE", "excellent_rate"),
+            ("STDEV", "stdev"),
+            ("FULL_SCORE", "full_score"),
+            ("MAX_SCORE", "max"),
+            ("MIN_SCORE", "min"),
+        ):
+            if data.get(src) is not None and str(data.get(src)).strip() not in ("", "-"):
+                mapped[dst] = data.get(src)
+        if mapped:
+            data["_stats"] = mapped
     if report_type is not None:
         rt = report_type if isinstance(report_type, ReportType) else _coerce_report_type(str(report_type))
         if rt is not None:
@@ -3137,7 +3184,28 @@ def build_group_feature_report_data_tool(
     LLM 调完只需 ``terminate``，**禁止**再调科目诊断 sections / ``render_html_report``。
     """
     from src.agent.education.group_feature import build_group_feature_data
-    from src.agent.education.query_parse import resolve_group_feature_score_rows
+    from src.agent.education.query_parse import (
+        is_school_class_comparison_query,
+        resolve_group_feature_score_rows,
+    )
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    # 用户原问是「班级横向对比」时，禁止被误调成群体特征报告
+    user_q = str(
+        ctx.get("user_question")
+        or (ctx.get("constraints") or {}).get("question")
+        or ""
+    )
+    if user_q and is_school_class_comparison_query(user_q):
+        return ToolResult(
+            content=(
+                "本题是「班级横向对比」而非「群体特征」。"
+                "请改调 `build_subject_diagnosis_sections_tool(school_name=..., "
+                "subject_name=..., render=true)`（**禁止传 class_name**），"
+                "勿再调 build_group_feature_report_data_tool。"
+            ),
+            data={"error": "use_build_subject_diagnosis_sections_tool_for_class_compare"},
+        )
 
     dim = (dimension or "class").strip().lower()
     if dim not in DIMENSIONS:
@@ -3146,7 +3214,6 @@ def build_group_feature_report_data_tool(
             data={"error": "invalid dimension"},
         )
 
-    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
     rd = report_data if isinstance(report_data, dict) else ctx.get("report_data")
     rows = resolve_group_feature_score_rows(
         score_rows=score_rows if score_rows else None,
@@ -3509,6 +3576,20 @@ def build_class_overview_report_data_tool(
             }
         ],
     }
+    if isinstance(data.get("_stats"), dict):
+        payload["_stats"] = data["_stats"]
+    for kpi_key in (
+        "TOTAL_COUNT",
+        "AVG_SCORE",
+        "PASS_RATE",
+        "EXCELLENT_RATE",
+        "STDEV",
+        "FULL_SCORE",
+        "MAX_SCORE",
+        "MIN_SCORE",
+    ):
+        if data.get(kpi_key) is not None and str(data.get(kpi_key)).strip() not in ("", "-"):
+            payload[kpi_key] = data[kpi_key]
     return _html_report_tool_result(
         f"班级总览报告已渲染（{data.get('CLASS_NAME') or class_name or '本班'}）。",
         payload,

@@ -386,6 +386,15 @@ async def run_agent_stream(
                 "error", {"error": phase.fail_reason or "agent did not reach a final answer"}
             )
 
+        raw_answer = (phase.reply.content if phase.reply else "") or ""
+        # 与 team Summarizer 共用权威对齐：任意提问都纠正预览/LIMIT 人数幻觉
+        reconciled = _reconcile_phase_answer(raw_answer, phase) if raw_answer else ""
+        if reconciled and reconciled != raw_answer:
+            await emit("summary", {"content": reconciled})
+        elif reconciled and phase.is_success:
+            # 即使未改写，也发 summary，保证前端气泡与落库口径一致
+            await emit("summary", {"content": reconciled})
+
         if not persist:
             return 0
 
@@ -397,13 +406,14 @@ async def run_agent_stream(
             sql_error=None if phase.is_success else (phase.fail_reason or ""),
             exec_result=phase.state.last_exec_result,
             is_success=phase.is_success,
-            reasoning=phase.reply.content if phase.reply else "",
+            reasoning=reconciled or raw_answer,
             steps=list(phase.state.steps),
             chart_type="table",
             chart_config=None,
             agent_mode="agent",
             tool_calls=list(phase.state.tool_calls),
             reports=list(phase.state.reports),
+            summary=reconciled or None,
             workspace_oid=workspace_oid,
         )
 
@@ -778,6 +788,8 @@ async def _run_data_analyst_phase(
     state = _RunState(sub_task_index=sub_task_index, constraints=constraints)
     state.tool_runtime_ctx["datasource_id"] = request.datasource_id
     state.tool_runtime_ctx["workspace_oid"] = workspace_oid
+    state.tool_runtime_ctx["user_question"] = request.question
+    state.tool_runtime_ctx["user_id"] = current_user_id
 
     if llm_client is None:
         llm_client = LangChainLlmClient()
@@ -885,6 +897,8 @@ async def _run_tool_expert_phase(
     state = _RunState(sub_task_index=sub_task_index, constraints=constraints)
     state.tool_runtime_ctx["datasource_id"] = request.datasource_id
     state.tool_runtime_ctx["workspace_oid"] = workspace_oid
+    state.tool_runtime_ctx["user_question"] = request.question
+    state.tool_runtime_ctx["user_id"] = current_user_id
     # ToolExpert 本阶段通常不再 execute_sql；把上游 DataAnalyst 的完整明细
     # 写入 tool_runtime_ctx，供综合/学生报告工具空参读取（禁止 LLM 手抄 200+ 行）。
     if constraints and isinstance(constraints.report_data, dict):
@@ -1091,19 +1105,6 @@ async def _run_planner_phase(
         )
         return plan_items
 
-    # 群体特征（按班级/区县等）：优先于班级横向对比与科目诊断
-    if is_group_feature_query(request.question):
-        plan_items = build_group_feature_plan_items(request.question)
-        await _emit_agent_speak(
-            emit,
-            agent="Planner",
-            status="end",
-            steps=steps,
-            plan_count=len(plan_items),
-            deterministic=True,
-        )
-        return plan_items
-
     # 班级成绩总览：优先于学校科目诊断
     if is_class_overview_query(request.question):
         plan_items = build_class_overview_plan_items(request.question)
@@ -1117,9 +1118,22 @@ async def _run_planner_phase(
         )
         return plan_items
 
-    # 学校各班横向对比：确定性全校 3 步，禁止缩成单班诊断
+    # 学校各班横向对比：须先于群体特征（避免「班级+对比」被误判为群体特征）
     if is_school_class_comparison_query(request.question):
         plan_items = build_school_class_comparison_plan_items(request.question)
+        await _emit_agent_speak(
+            emit,
+            agent="Planner",
+            status="end",
+            steps=steps,
+            plan_count=len(plan_items),
+            deterministic=True,
+        )
+        return plan_items
+
+    # 群体特征（按班级/区县等）：在横向对比之后
+    if is_group_feature_query(request.question):
+        plan_items = build_group_feature_plan_items(request.question)
         await _emit_agent_speak(
             emit,
             agent="Planner",
@@ -1166,14 +1180,14 @@ async def _run_planner_phase(
             plan_items = build_individual_student_exam_plan_items(request.question)
         elif should_replace_with_tier_alert_plan(request.question, plan_items):
             plan_items = build_tier_alert_plan_items(request.question)
+        elif should_replace_with_school_class_comparison_plan(request.question, plan_items):
+            plan_items = build_school_class_comparison_plan_items(request.question)
         elif should_replace_with_group_feature_plan(request.question, plan_items):
             plan_items = build_group_feature_plan_items(request.question)
         elif should_replace_with_class_overview_plan(request.question, plan_items):
             plan_items = build_class_overview_plan_items(request.question)
         elif should_replace_with_comprehensive_plan(request.question, plan_items):
             plan_items = build_comprehensive_class_plan_items(request.question)
-        elif should_replace_with_school_class_comparison_plan(request.question, plan_items):
-            plan_items = build_school_class_comparison_plan_items(request.question)
         elif should_replace_with_school_exam_plan(request.question, plan_items):
             plan_items = build_school_subject_report_plan_items(request.question)
         else:
@@ -1210,6 +1224,12 @@ async def _run_planner_phase(
             len(plan_items),
         )
         plan_items = build_tier_alert_plan_items(request.question)
+    elif should_replace_with_school_class_comparison_plan(request.question, plan_items):
+        logger.info(
+            "planner class-comparison fallback: replacing %d plan(s) with school-wide 3-step",
+            len(plan_items),
+        )
+        plan_items = build_school_class_comparison_plan_items(request.question)
     elif should_replace_with_group_feature_plan(request.question, plan_items):
         logger.info(
             "planner group-feature fallback: replacing %d plan(s) with 2-step group feature plan",
@@ -1228,12 +1248,6 @@ async def _run_planner_phase(
             len(plan_items),
         )
         plan_items = build_comprehensive_class_plan_items(request.question)
-    elif should_replace_with_school_class_comparison_plan(request.question, plan_items):
-        logger.info(
-            "planner class-comparison fallback: replacing %d plan(s) with school-wide 3-step",
-            len(plan_items),
-        )
-        plan_items = build_school_class_comparison_plan_items(request.question)
     elif should_replace_with_school_exam_plan(request.question, plan_items):
         logger.info(
             "planner school-exam fallback: replacing %d plan(s) with school subject 3-step",
@@ -1715,19 +1729,37 @@ def _reconcile_summary_with_sub_phases(
     text: str,
     sub_phases: list[tuple[str, "_DataAnalystPhase"]],
 ) -> str:
-    """有 compute_score_stats 权威 KPI 时改写结论中的分数线/参考人数；否则原样返回。"""
-    from src.agent.education.summary_context import (
-        extract_stats_authority_data,
-        reconcile_summary_kpis,
-    )
+    """有报告/权威 KPI 时改写结论；无权威时清洗预览规模人数幻觉。"""
+    from src.agent.education.summary_context import reconcile_answer_with_artifacts
 
     tool_calls: list[dict[str, Any]] = []
+    reports: list[dict[str, Any]] = []
+    exec_results: list[dict[str, Any]] = []
     for _goal, phase in sub_phases:
-        tool_calls.extend(list(getattr(getattr(phase, "state", None), "tool_calls", None) or []))
-    stats = extract_stats_authority_data(tool_calls)
-    if not stats:
-        return text
-    return reconcile_summary_kpis(text, stats)
+        st = getattr(phase, "state", None)
+        tool_calls.extend(list(getattr(st, "tool_calls", None) or []))
+        reports.extend(list(getattr(st, "reports", None) or []))
+        er = getattr(st, "last_exec_result", None)
+        if isinstance(er, dict):
+            exec_results.append(
+                {
+                    "sql": getattr(st, "last_sql", None) or er.get("sql"),
+                    "row_count": er.get("row_count"),
+                    "columns": er.get("columns"),
+                    "sql_row_capped": er.get("sql_row_capped"),
+                }
+            )
+    return reconcile_answer_with_artifacts(
+        text,
+        tool_calls=tool_calls,
+        reports=reports,
+        exec_results=exec_results,
+    )
+
+
+def _reconcile_phase_answer(text: str, phase: "_DataAnalystPhase") -> str:
+    """单 Agent / 单 phase 结论后处理（与 team Summarizer 共用同一套权威对齐）。"""
+    return _reconcile_summary_with_sub_phases(text, [("", phase)])
 
 
 def _build_single_task_context(question: str, state: "_RunState") -> dict[str, Any]:
@@ -1771,7 +1803,6 @@ def _format_sub_tasks_block(
         format_education_pipeline_footer,
         format_sql_result_authority_notes,
         format_tool_expert_sub_task_block,
-        sql_looks_row_capped,
         truncate_keeping_kpi_lines,
     )
 
@@ -1798,10 +1829,12 @@ def _format_sub_tasks_block(
         columns = list(exec_result.get("columns") or [])
         rows = list(exec_result.get("rows") or [])
         row_count = int(exec_result.get("row_count") or len(rows))
-        sample_rows = rows[:_SAMPLE_ROWS_LIMIT]
-        sample_shown = len(sample_rows)
+        sample_shown = min(_SAMPLE_ROWS_LIMIT, row_count) if row_count else 0
         sql_text = phase.state.last_sql or ""
-        stats_block = extract_stats_authority_block(phase.state.tool_calls)
+        stats_block = extract_stats_authority_block(
+            phase.state.tool_calls,
+            reports=phase.state.reports,
+        )
         authority_notes = format_sql_result_authority_notes(
             sql=sql_text,
             row_count=row_count,
@@ -1812,19 +1845,10 @@ def _format_sub_tasks_block(
         final_snip = ""
         if final_ans.strip() and not is_tool_expert:
             final_snip = (
-                "\n查询结论（须优先照抄其中的人数/分数线）：\n"
+                "\n查询结论（须优先照抄其中的人数/分数线；若与上方权威 KPI 冲突，以权威 KPI 为准）：\n"
                 + truncate_keeping_kpi_lines(final_ans.strip(), limit=1200)
             )
 
-        sample_label = (
-            f"样例（仅预览前 {sample_shown} 行，禁止当班级总人数"
-            + (
-                "；SQL 含 LIMIT/OFFSET，返回行数更非全班"
-                if sql_looks_row_capped(sql_text)
-                else ""
-            )
-            + "）"
-        )
         block = (
             f"{header}\n"
             f"SQL:\n```sql\n{sql_text}\n```\n"
@@ -1833,7 +1857,12 @@ def _format_sub_tasks_block(
         )
         if stats_block:
             block += f"{stats_block}\n"
-        block += f"{sample_label}：\n{_format_sample_rows(columns, sample_rows)}"
+        # 任意提问：永不向 Summarizer 贴明细样例表，从输入侧消灭「数 20 行人头」
+        block += (
+            f"（明细样例已省略：共 {row_count} 行；"
+            "人数/率值以权威 KPI 或 AUTHORITATIVE_ROW_COUNT 为准，"
+            "禁止按预览行数写参考人数）\n"
+        )
         if final_snip:
             block += final_snip
         if is_tool_expert:
@@ -2175,6 +2204,25 @@ async def _maybe_emit_report(
         report_payload["report_type_label"] = str(data.get("report_type_label"))
     if payload.get("sub_task_index") is not None:
         report_payload["sub_task_index"] = payload.get("sub_task_index")
+    # 保留全量 KPI，供 Summarizer 权威块 / reconcile，避免预览 20 行污染结论
+    stats_meta = data.get("_stats")
+    if isinstance(stats_meta, dict) and (
+        stats_meta.get("count") is not None or stats_meta.get("avg") is not None
+    ):
+        report_payload["_stats"] = dict(stats_meta)
+    else:
+        for key in (
+            "TOTAL_COUNT",
+            "AVG_SCORE",
+            "PASS_RATE",
+            "EXCELLENT_RATE",
+            "STDEV",
+            "FULL_SCORE",
+            "MAX_SCORE",
+            "MIN_SCORE",
+        ):
+            if data.get(key) is not None and data.get(key) != "":
+                report_payload[key] = data.get(key)
     if state is not None:
         state.reports.append(dict(report_payload))
     await emit("report", report_payload)

@@ -1746,14 +1746,44 @@ def execute_sql(
     rows = result.get("rows", [])
     preview = _format_rows_as_markdown(columns, rows, EXECUTE_SQL_PREVIEW_ROWS)
     fix_hint = format_auto_fix_note(fixes, success=True) if fixes else ""
-    content = f"SQL 执行成功{fix_hint}，返回 {len(rows)} 行：\n\n{preview}"
+    row_count = len(rows)
+    preview_n = min(EXECUTE_SQL_PREVIEW_ROWS, row_count)
+    try:
+        from src.agent.education.summary_context import (
+            format_sql_result_authority_notes,
+            sql_looks_row_capped,
+        )
+
+        capped = sql_looks_row_capped(sql_run)
+        authority_notes = format_sql_result_authority_notes(
+            sql=sql_run,
+            row_count=row_count,
+            sample_shown=preview_n,
+        )
+    except Exception:
+        capped = bool(re.search(r"\bLIMIT\s+\d+|\bOFFSET\b", sql_run or "", re.I))
+        authority_notes = (
+            f"返回 {row_count} 行；预览仅前 {preview_n} 行。"
+            "**禁止**把预览行数写成班级/全体参考人数。"
+        )
+    content = (
+        f"SQL 执行成功{fix_hint}，返回 {row_count} 行：\n"
+        f"【人数口径】AUTHORITATIVE_ROW_COUNT={row_count}；"
+        f"PREVIEW_ROWS={preview_n}；SQL_ROW_CAPPED={str(capped).lower()}。"
+        f"**禁止**用 PREVIEW_ROWS / 样例表行数写参考人数；"
+        f"总人数以 AUTHORITATIVE_ROW_COUNT（且 SQL_ROW_CAPPED=false）"
+        f"或 compute_score_stats_tool.count / 报告 KPI 为准。\n"
+        f"{authority_notes}\n\n{preview}"
+    )
     return ToolResult(
         content=content,
         data={
             "sql": sql_run,
             "columns": columns,
             "rows": rows,
-            "row_count": len(rows),
+            "row_count": row_count,
+            "preview_rows": preview_n,
+            "sql_row_capped": capped,
             "fixes_applied": fixes,
         },
     )

@@ -102,7 +102,8 @@ def get_conversation(
     records = chat_crud.get_conversation_records(
         session=session,
         conversation_id=conversation_id,
-        user_id=current_user.id
+        user_id=current_user.id,
+        for_history_detail=True,
     )
 
     def _parse_json(value, default):

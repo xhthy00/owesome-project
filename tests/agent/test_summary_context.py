@@ -169,6 +169,7 @@ def test_sql_offset_authority_notes_forbid_page_as_class_size():
     )
     assert "count=52" in stats
     assert "及格线=45" in stats
+    assert "报告权威 KPI" in stats
 
 
 def test_format_sub_tasks_block_flags_offset_sample():
@@ -214,7 +215,9 @@ def test_format_sub_tasks_block_flags_offset_sample():
     assert "禁止当班级总人数" in block or "禁止" in block
     assert "count=52" in block
     assert "参考人数 52" in block
-    assert "样例（仅预览" in block
+    assert "明细样例已省略" in block
+    assert "报告权威 KPI" in block or "权威" in block
+    assert "| student_id |" not in block
 
 
 def test_truncate_keeping_kpi_lines_preserves_pass_line():
@@ -255,13 +258,34 @@ def test_reconcile_summary_kpis_noop_without_stats():
     assert reconcile_summary_kpis(draft, {}) == draft
 
 
-def test_reconcile_summary_kpis_does_not_touch_pass_rate():
+def test_reconcile_summary_kpis_rewrites_pass_rate_and_headcount():
     from src.agent.education.summary_context import reconcile_summary_kpis
 
-    draft = "及格率 80.00%，优秀率 0.00%，及格线 60 分。"
-    out = reconcile_summary_kpis(draft, {"pass_line": 70.0, "excellent_line": 85.0, "count": 20})
-    assert "及格率 80.00%" in out
-    assert "及格线 70.0" in out
+    draft = (
+        "年级参考人数20人，年级均分110.24，及格率91.07%，优秀率13.15%，"
+        "标准差15.91，及格线 60 分。"
+    )
+    out = reconcile_summary_kpis(
+        draft,
+        {
+            "count": 829,
+            "avg": 110.24,
+            "pass_rate": 99.16,
+            "excellent_rate": 94.45,
+            "stdev": 15.91,
+            "pass_line": 90.0,
+            "excellent_line": 127.5,
+            "full_score": 150,
+        },
+    )
+    assert "参考人数829人" in out or "参考人数 829 人" in out or "参考人数829" in out
+    assert "829" in out
+    assert "20人" not in out and "20 人" not in out
+    assert "及格率99.16%" in out or "及格率 99.16%" in out
+    assert "优秀率94.45%" in out or "优秀率 94.45%" in out
+    assert "及格线 90.0" in out
+    assert "91.07" not in out
+    assert "13.15" not in out
 
 
 def test_reconcile_summary_kpis_fixes_headcount_label():
@@ -275,3 +299,143 @@ def test_reconcile_summary_kpis_fixes_headcount_label():
     assert "参考人数为 52 人" in out
     assert "及格线 45.0" in out
     assert "优秀线 75.0" in out
+
+
+def test_extract_stats_prefers_report_html_over_preview_stats():
+    from src.agent.education.summary_context import extract_stats_authority_data
+
+    html = (
+        '<div class="edu-kpi"><div class="label">参考人数</div>'
+        '<div class="value">829</div></div>'
+        '<div class="edu-kpi"><div class="label">平均分</div>'
+        '<div class="value">110.24</div></div>'
+        '<div class="edu-kpi"><div class="label">及格率</div>'
+        '<div class="value">99.16%</div></div>'
+        '<div class="edu-kpi"><div class="label">优秀率</div>'
+        '<div class="value">94.45%</div></div>'
+    )
+    stats = extract_stats_authority_data(
+        [
+            {
+                "tool": "compute_score_stats_tool",
+                "success": True,
+                "content": "成绩统计完成：共 20 人",
+                "data": {
+                    "count": 20,
+                    "avg": 108.0,
+                    "pass_rate": 80.0,
+                    "excellent_rate": 10.0,
+                },
+            }
+        ],
+        reports=[{"title": "班级横向对比", "html": html}],
+    )
+    assert stats is not None
+    assert stats["count"] == 829
+    assert stats["pass_rate"] == 99.16
+    assert stats["excellent_rate"] == 94.45
+    assert stats["avg"] == 110.24
+
+
+def test_extract_stats_authority_block_uses_report_kpi_title():
+    from src.agent.education.summary_context import extract_stats_authority_block
+
+    stats = extract_stats_authority_block(
+        [
+            {
+                "tool": "compute_score_stats_tool",
+                "success": True,
+                "content": "成绩统计完成：共 52 人，均分 108.5，满分 150，及格线 45，优秀线 75，及格率 100%，优秀率 96.15%，标准差 21.73。",
+                "data": {
+                    "count": 52,
+                    "avg": 108.5,
+                    "full_score": 150,
+                    "pass_line": 45,
+                    "excellent_line": 75,
+                    "pass_rate": 100.0,
+                    "excellent_rate": 96.15,
+                },
+            }
+        ]
+    )
+    assert "报告权威 KPI" in stats
+    assert "count=52" in stats
+    assert "及格线=45" in stats
+
+
+def test_extract_exec_authority_ignores_limit_preview():
+    from src.agent.education.summary_context import (
+        extract_exec_authority_data,
+        extract_stats_authority_data,
+    )
+
+    assert (
+        extract_exec_authority_data(
+            sql="SELECT student_id, score FROM t LIMIT 20",
+            row_count=20,
+            columns=["student_id", "score"],
+        )
+        is None
+    )
+    auth = extract_exec_authority_data(
+        sql="SELECT student_id, score FROM t",
+        row_count=829,
+        columns=["student_id", "score"],
+    )
+    assert auth == {"count": 829}
+
+    # 纯 SQL：无报告时也能用 uncapped execute_sql 行数纠错
+    stats = extract_stats_authority_data(
+        [
+            {
+                "tool": "execute_sql",
+                "success": True,
+                "data": {
+                    "sql": "SELECT student_id, score FROM tb_score WHERE class='x'",
+                    "columns": ["student_id", "score"],
+                    "row_count": 829,
+                    "sql_row_capped": False,
+                },
+            }
+        ]
+    )
+    assert stats is not None
+    assert stats["count"] == 829
+
+
+def test_reconcile_loose_headcount_and_scrub_without_stats():
+    from src.agent.education.summary_context import (
+        reconcile_answer_with_artifacts,
+        reconcile_summary_kpis,
+        scrub_preview_headcount_claims,
+    )
+
+    draft = "本次共 20 人参考，20 名学生达标，所查看的 20 名表现中等。"
+    out = reconcile_summary_kpis(draft, {"count": 829})
+    assert "829" in out
+    assert "共 20 人" not in out
+    assert "20 名学生" not in out
+
+    scrubbed = scrub_preview_headcount_claims("年级参考人数20人，均分尚可。")
+    assert "20人" not in scrubbed
+    assert "预览" in scrubbed or "全量" in scrubbed
+
+    # 无权威时走 scrub；有 execute_sql 全量时改写
+    fixed = reconcile_answer_with_artifacts(
+        "参考人数为 20 人，及格率 80%。",
+        tool_calls=[
+            {
+                "tool": "execute_sql",
+                "success": True,
+                "data": {
+                    "sql": "SELECT student_id, score FROM t",
+                    "columns": ["student_id", "score"],
+                    "rows": [],
+                    "row_count": 829,
+                    "sql_row_capped": False,
+                },
+            }
+        ],
+    )
+    assert "829" in fixed
+    assert "20 人" not in fixed
