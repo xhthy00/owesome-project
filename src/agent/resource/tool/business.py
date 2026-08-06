@@ -1602,17 +1602,29 @@ def describe_table(
             filtered = schema_tables_for_user(session, user, datasource_id, [dict(match)])
             match = filtered[0] if filtered else match
 
-    fields = match.get("fields", [])
+    fields = list(match.get("fields", []) or [])
+    table_key = str(match.get("name") or table_name or "").split(".")[-1].lower()
+    # tb_school.s_name 可能仍存中文全称；对外只暴露脱敏 name/id，避免 Agent 选明文列
+    if table_key == "tb_school":
+        fields = [f for f in fields if str(f.get("name") or "").lower() != "s_name"]
     header = f"表 `{match['name']}`" + (f"（{match['comment']}）" if match.get("comment") else "")
     if not fields:
         content = header + "\n（无字段信息）"
     else:
         lines = [header, "", "| 字段 | 类型 | 注释 |", "| --- | --- | --- |"]
         for f in fields:
-            lines.append(f"| {f['name']} | {f.get('type', '')} | {f.get('comment', '')} |")
+            comment = f.get("comment", "") or ""
+            if table_key == "tb_school" and str(f.get("name") or "").lower() == "name":
+                comment = (comment + "；校名对外字段（脱敏码，与 id 一致），禁止改用 s_name").strip("；")
+            lines.append(f"| {f['name']} | {f.get('type', '')} | {comment} |")
+        if table_key == "tb_school":
+            lines.append("")
+            lines.append("说明：学校展示/过滤请用 `id` 或 `name`（脱敏码）；禁止查询明文列。")
         content = "\n".join(lines)
 
-    return ToolResult(content=content, data=match)
+    match_out = dict(match)
+    match_out["fields"] = fields
+    return ToolResult(content=content, data=match_out)
 
 
 @tool()
@@ -1647,6 +1659,11 @@ def sample_rows(
 
     if clause:
         try:
+            from src.agent.education.school_cipher import rewrite_sql_school_s_name
+
+            clause, _ = rewrite_sql_school_s_name(clause)
+            where_sql = f" WHERE {clause}" if clause else ""
+            sql = f"SELECT * FROM {quoted}{where_sql} LIMIT {limit}"
             _validate_read_only_select(sql, db_type)
         except ValueError as e:
             # 业务错误：返回 ToolResult 让 LLM 在 observation 里自修正；不抛。
@@ -1687,6 +1704,9 @@ def sample_rows(
     if not isinstance(result, dict):
         return ToolResult(content="采样失败：无结果", data=None)
 
+    from src.agent.education.school_cipher import strip_s_name_from_query_result
+
+    result = strip_s_name_from_query_result(result) or result
     columns = result.get("columns", [])
     rows = result.get("rows", [])
     header = f"`{table_name}` 采样 {len(rows)} 行" + (f"（WHERE {clause}）" if clause else "") + "："
@@ -1708,24 +1728,34 @@ def execute_sql(
     Args:
         sql: 要执行的 SELECT 语句；非只读会被拒绝。
     """
+    from src.agent.education.school_cipher import (
+        rewrite_sql_school_s_name,
+        strip_s_name_from_query_result,
+    )
     from src.datasource.service.execute_with_permission import execute_sql_with_permission_by_user_id
     from src.datasource.service.sql_auto_fix import format_auto_fix_note, run_sql_with_auto_fix
 
     db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
     fixes: list[str] = []
+    sql, s_name_rewritten = rewrite_sql_school_s_name(sql)
+    if s_name_rewritten:
+        fixes.append("school_s_name→name")
 
     if user_id is not None:
         success, message, result, sql_run = execute_sql_with_permission_by_user_id(
             user_id, datasource_id, workspace_oid, sql
         )
-        fixes = (result or {}).get("fixes_applied") if isinstance(result, dict) else []
+        extra = (result or {}).get("fixes_applied") if isinstance(result, dict) else []
+        if extra:
+            fixes = list(fixes) + list(extra)
     else:
         outcome = run_sql_with_auto_fix(sql, db_type=db_type, config=config)
         success = outcome.success
         message = outcome.message
         result = outcome.result if isinstance(outcome.result, dict) else None
         sql_run = outcome.sql_run
-        fixes = outcome.fixes_applied
+        if outcome.fixes_applied:
+            fixes = list(fixes) + list(outcome.fixes_applied)
         note = format_auto_fix_note(fixes, success=success)
         if note:
             message = f"{message} {note}" if not success else f"{message}{note}"
@@ -1735,6 +1765,9 @@ def execute_sql(
             content=f"SQL 执行失败：{message}",
             data={"sql": sql_run, "error": message, "fixes_applied": fixes},
         )
+
+    if isinstance(result, dict):
+        result = strip_s_name_from_query_result(result) or result
 
     if not isinstance(result, dict) or "rows" not in result:
         return ToolResult(
