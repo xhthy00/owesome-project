@@ -1347,6 +1347,48 @@ def test_aggregate_student_item_insights():
     assert out["B"]["weak_items"] == []
 
 
+def test_aggregate_student_item_insights_groups_by_subject():
+    """同名知识点跨科时应分开聚合，并产出 knowledge_by_subject。"""
+    from src.agent.education.comprehensive import aggregate_student_item_insights
+
+    rows = [
+        {
+            "student_id": "A",
+            "exam_name": "高二数学期末",
+            "subject_name": "数学",
+            "question_no": 1,
+            "knowledge_name": "函数",
+            "score_rate": 40,
+        },
+        {
+            "student_id": "A",
+            "exam_name": "高二物理期末",
+            "subject_name": "物理",
+            "question_no": 2,
+            "knowledge_name": "函数",
+            "score_rate": 80,
+        },
+        {
+            "student_id": "A",
+            "exam_name": "高二历史期末",
+            "subject_name": "历史",
+            "question_no": 3,
+            "knowledge_name": "梁启超与近代思想",
+            "score_rate": 30,
+        },
+    ]
+    out = aggregate_student_item_insights(rows, weak_threshold=60)
+    kn = out["A"]["knowledge_rows"]
+    assert len(kn) == 3
+    math_fn = next(r for r in kn if r["subject_name"] == "数学")
+    phy_fn = next(r for r in kn if r["subject_name"] == "物理")
+    assert math_fn["score_rate"] == 40.0
+    assert phy_fn["score_rate"] == 80.0
+    by_sub = out["A"]["knowledge_by_subject"]
+    assert set(by_sub) == {"数学", "物理", "历史"}
+    assert out["A"]["weak_items"][0].get("subject_name") in {"数学", "历史"}
+
+
 # ---- 意图识别：综合报告 ----------------------------------------------------
 
 

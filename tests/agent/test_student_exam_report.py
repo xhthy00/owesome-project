@@ -33,6 +33,87 @@ def test_extract_student_target_from_quoted_name():
     assert extract_student_target('分析"学生001"这几次考试的成绩') == "学生001"
 
 
+def test_student_personal_portrait_routes_to_student_profile():
+    """「生成学生: xxx的个人画像」→ 学生学情报告，而非科目诊断。"""
+    from src.agent.education.intent_router import (
+        classify_report_intent_sync,
+        plan_items_for_route,
+        should_use_deterministic_report_plan,
+    )
+    from src.agent.education.query_parse import is_individual_student_analysis_query
+    from src.agent.education.report_types import ReportType
+    from src.agent.expand.planner import coerce_plan_items_if_needed
+
+    q = "生成学生: GZ_19D9D68D_466917B9的个人画像"
+    assert is_individual_student_analysis_query(q) is True
+    route = classify_report_intent_sync(q)
+    assert route.needs_report is True
+    assert route.report_type == ReportType.STUDENT_PROFILE
+    assert should_use_deterministic_report_plan(q, route) is True
+    plans = plan_items_for_route(route, q)
+    blob = " ".join(p["sub_task"] for p in plans)
+    assert "build_student_exam_report_data_tool" in blob
+    assert "build_subject_diagnosis_sections_tool" in blob  # 禁止文案
+    assert "禁止" in blob
+    wrong = [
+        {"sub_task": "查成绩", "sub_task_agent": "DataAnalyst"},
+        {
+            "sub_task": "调 build_subject_diagnosis_sections_tool(render=true)",
+            "sub_task_agent": "ToolExpert",
+        },
+    ]
+    fixed = coerce_plan_items_if_needed(q, wrong)
+    fixed_blob = " ".join(p["sub_task"] for p in fixed)
+    assert "build_student_exam_report_data_tool" in fixed_blob
+    assert "调 build_subject_diagnosis_sections_tool(render=true)" not in fixed_blob
+
+
+def test_top_student_who_is_not_student_profile():
+    """「高二(6)班数学成绩最好的学生是谁」→ needs_report=false，事实计划。"""
+    from src.agent.education.intent_router import (
+        classify_report_intent_sync,
+        plan_items_for_route,
+        should_use_deterministic_report_plan,
+    )
+    from src.agent.education.orchestrator import ReportIntentResolver
+    from src.agent.education.query_parse import (
+        is_individual_student_analysis_query,
+        is_top_student_lookup_query,
+    )
+    from src.agent.education.report_types import ReportType
+    from src.agent.expand.planner import coerce_plan_items_if_needed
+
+    q = "高二(6)班数学成绩最好的学生是谁"
+    assert is_top_student_lookup_query(q) is True
+    assert extract_student_target(q) is None
+    assert is_individual_student_analysis_query(q) is False
+    route = classify_report_intent_sync(q)
+    assert route.needs_report is False
+    assert route.report_type is None
+    assert should_use_deterministic_report_plan(q, route) is True
+    plans = plan_items_for_route(route, q)
+    assert len(plans) == 1
+    assert plans[0]["sub_task_agent"] == "DataAnalyst"
+    blob = plans[0]["sub_task"]
+    assert "高二(6)班" in blob
+    assert "禁止" in blob and "报告" in blob
+    assert "build_class_overview" not in blob
+    wrong = [
+        {"sub_task": "查成绩", "sub_task_agent": "DataAnalyst"},
+        {
+            "sub_task": "调 build_class_overview_report_data_tool(class_name=高二(6)班, render=true)",
+            "sub_task_agent": "ToolExpert",
+        },
+    ]
+    fixed = coerce_plan_items_if_needed(q, wrong)
+    assert len(fixed) == 1
+    assert "build_class_overview" not in fixed[0]["sub_task"]
+    spec = ReportIntentResolver().resolve(q)
+    assert spec.report_type != ReportType.STUDENT_PROFILE
+    assert spec.filters.get("class_name") == "高二(6)班"
+    assert spec.filters.get("subject") == "数学"
+
+
 def test_extract_student_id_target():
     from src.agent.education.query_parse import extract_student_id_target, is_individual_student_analysis_query
 
@@ -353,6 +434,159 @@ def test_build_student_exam_includes_knowledge_detail_and_advice():
     assert "薄弱知识点" in data["KNOWLEDGE_INSIGHT"]
 
 
+def test_build_student_exam_subject_papers_use_bar_not_trend():
+    """各科各一张卷（伪多场）→ 柱状对比，禁止跨学科折线趋势。"""
+    papers = [
+        ("高二数学期末试卷", "数学", 29.0, 96.0),
+        ("高二英语期末试卷", "英语", 88.0, 127.0),
+        ("高二语文期末试卷", "语文", 55.0, 112.0),
+    ]
+    records = []
+    for exam, sub, score, peer in papers:
+        records.append({
+            "exam": exam,
+            "student": "学生001",
+            "subjects": {sub: score},
+            "total": score,
+        })
+        records.append({
+            "exam": exam,
+            "student": "学生009",
+            "subjects": {sub: peer},
+            "total": peer,
+        })
+    data = build_student_exam_data(records, "学生001", class_name="高二(6)班")
+    assert not data["IS_MULTI_EXAM_TREND"]
+    assert "单次考试" in data["EXAM_NAME"]
+    chart = data["TREND_LINE_CHART"]
+    assert '"type": "bar"' in chart or '"type":"bar"' in chart
+    assert '"type": "line"' not in chart and '"type":"line"' not in chart
+    assert "各科成绩对比" in chart or "该生得分" in chart
+    assert "单次考试成绩对比" in data["TOTAL_TREND_INSIGHT"]
+
+
+def test_build_student_exam_multi_exam_keeps_trend_line():
+    """同一科目跨多场 → 仍用折线趋势。"""
+    records = _sample_class_records()
+    data = build_student_exam_data(
+        records, "学生001", exam_order=["一模", "二模", "三模"], class_name="初三1班"
+    )
+    assert data["IS_MULTI_EXAM_TREND"] == "1"
+    chart = data["TREND_LINE_CHART"]
+    assert '"type": "line"' in chart or '"type":"line"' in chart
+
+
+def test_build_student_exam_knowledge_grouped_by_subject():
+    """多学科知识点应按科目分块，而非混在一张表。"""
+    records = _sample_class_records()
+    insight = {
+        "weak_items": [
+            {
+                "exam_name": "一模",
+                "subject_name": "数学",
+                "question_no": 12,
+                "knowledge_name": "导数",
+                "score_rate": 25.0,
+            },
+            {
+                "exam_name": "一模",
+                "subject_name": "历史",
+                "question_no": 3,
+                "knowledge_name": "梁启超与近代思想",
+                "score_rate": 30.0,
+            },
+        ],
+        "weak_knowledge": [
+            {
+                "knowledge_name": "导数",
+                "subject_name": "数学",
+                "score_rate": 25.0,
+                "question_count": 1,
+            },
+            {
+                "knowledge_name": "梁启超与近代思想",
+                "subject_name": "历史",
+                "score_rate": 30.0,
+                "question_count": 1,
+            },
+        ],
+        "strong_knowledge": [],
+        "knowledge_rows": [
+            {
+                "knowledge_name": "导数",
+                "subject_name": "数学",
+                "score_rate": 25.0,
+                "question_count": 1,
+            },
+            {
+                "knowledge_name": "集合",
+                "subject_name": "数学",
+                "score_rate": 90.0,
+                "question_count": 1,
+            },
+            {
+                "knowledge_name": "梁启超与近代思想",
+                "subject_name": "历史",
+                "score_rate": 30.0,
+                "question_count": 1,
+            },
+            {
+                "knowledge_name": "荒漠化治理",
+                "subject_name": "地理",
+                "score_rate": 40.0,
+                "question_count": 1,
+            },
+        ],
+        "knowledge_by_subject": {
+            "数学": [
+                {
+                    "knowledge_name": "导数",
+                    "subject_name": "数学",
+                    "score_rate": 25.0,
+                    "question_count": 1,
+                },
+                {
+                    "knowledge_name": "集合",
+                    "subject_name": "数学",
+                    "score_rate": 90.0,
+                    "question_count": 1,
+                },
+            ],
+            "历史": [
+                {
+                    "knowledge_name": "梁启超与近代思想",
+                    "subject_name": "历史",
+                    "score_rate": 30.0,
+                    "question_count": 1,
+                },
+            ],
+            "地理": [
+                {
+                    "knowledge_name": "荒漠化治理",
+                    "subject_name": "地理",
+                    "score_rate": 40.0,
+                    "question_count": 1,
+                },
+            ],
+        },
+    }
+    data = build_student_exam_data(
+        records,
+        "学生001",
+        exam_order=["一模", "二模", "三模"],
+        item_insight=insight,
+    )
+    table = data["KNOWLEDGE_TABLE"]
+    assert "<h4>数学</h4>" in table
+    assert "<h4>历史</h4>" in table
+    assert "<h4>地理</h4>" in table
+    assert "导数" in table and "荒漠化治理" in table
+    # 分科图嵌入 table，顶层 KNOWLEDGE_CHART 为空
+    assert not data["KNOWLEDGE_CHART"]
+    assert "data-edu-echart" in table
+    assert "数学·导数" in data["KNOWLEDGE_INSIGHT"] or "导数" in data["KNOWLEDGE_INSIGHT"]
+
+
 def test_extract_item_detail_rows_from_upstream_sql():
     from src.agent.education.query_parse import extract_item_detail_rows_from_report_data
 
@@ -487,3 +721,76 @@ def test_build_student_exam_uses_upstream_item_rows_without_datasource():
     assert "知识点薄弱" in (result.data.get("RECOMMENDATIONS") or "") or "导数" in (
         result.data.get("RECOMMENDATIONS") or ""
     )
+
+
+def test_build_student_exam_falls_back_when_upstream_is_overview_wide():
+    """上游 overview 宽表无 exam_name / 目标生被截断时，应回退拉 tb_score 长表。"""
+    from src.agent.education.tools import build_student_exam_report_data_tool
+
+    sid = "GZ_19D9D68D_466917B9"
+    # 模拟 Agent 查了 overview：无考试列，且截断预览不含目标生
+    report_data = {
+        "sub_tasks": [
+            {
+                "sub_task_agent": "DataAnalyst",
+                "exec_result": {
+                    "columns": [
+                        "student_id",
+                        "school_no",
+                        "yw",
+                        "sx",
+                        "yy",
+                        "total_3",
+                    ],
+                    "rows": [
+                        ["OTHER_STUDENT_1", 1, 120, 90, 100, 310],
+                        ["OTHER_STUDENT_2", 2, 110, 95, 105, 310],
+                    ],
+                    "row_count": 1620,
+                    "rows_truncated": True,
+                },
+            }
+        ]
+    }
+    fetched = {
+        "columns": ["exam_name", "student_id", "subject_name", "score", "class", "exam_time"],
+        "rows": [
+            ["2027届高二6月期末", sid, "语文", 55.0, "高二(6)班", "2026-06-01"],
+            ["2027届高二6月期末", sid, "数学", 29.0, "高二(6)班", "2026-06-01"],
+            ["2027届高二6月期末", sid, "英语", 88.0, "高二(6)班", "2026-06-01"],
+            ["2027届高二6月期末", "OTHER_STUDENT_1", "语文", 120.0, "高二(6)班", "2026-06-01"],
+            ["2027届高二6月期末", "OTHER_STUDENT_1", "数学", 90.0, "高二(6)班", "2026-06-01"],
+            ["2027届高二6月期末", "OTHER_STUDENT_1", "英语", 100.0, "高二(6)班", "2026-06-01"],
+        ],
+        "row_count": 6,
+        "class_name": "高二(6)班",
+    }
+
+    import src.agent.education.tools as tools_mod
+
+    original = tools_mod._fetch_class_score_long_table
+    tools_mod._fetch_class_score_long_table = lambda **_kwargs: fetched
+    try:
+        result = build_student_exam_report_data_tool._fn(
+            student_id=sid,
+            render=False,
+            datasource_id=1,
+            report_data=report_data,
+            tool_runtime_ctx={
+                "report_data": report_data,
+                "last_exec_result": report_data["sub_tasks"][0]["exec_result"],
+            },
+        )
+    finally:
+        tools_mod._fetch_class_score_long_table = original
+
+    assert result.data.get("error") != "missing input"
+    overview = str(result.data.get("OVERVIEW_INSIGHT") or "")
+    # 单场多科：按各科对比呈现，不再伪称「共 N 次考试」趋势
+    assert "3" in overview and ("科目" in overview or "单次考试" in overview)
+    assert not result.data.get("IS_MULTI_EXAM_TREND")
+    chart = str(result.data.get("TREND_LINE_CHART") or "")
+    assert '"type": "bar"' in chart or '"type":"bar"' in chart
+    table = str(result.data.get("SCORE_SUMMARY_TABLE") or "")
+    assert "2027届高二6月期末" in table
+    assert "55" in table and "29" in table and "88" in table

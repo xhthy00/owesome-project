@@ -2,7 +2,7 @@
 
 用 Fake LLM + monkeypatch 数据源底层，跑一次完整的 ReAct 链路：
     list_tables -> describe_table -> execute_sql -> terminate
-验证最终回复包含结论 + SQL，且每一步的 observation 都真的被回灌到下一轮 prompt。
+验证最终回复包含面向用户的结论，且每一步的 observation 都真的被回灌到下一轮 prompt。
 """
 
 from __future__ import annotations
@@ -86,7 +86,7 @@ def test_data_analyst_full_happy_path(monkeypatch):
             '{"thoughts": "数数用户", "tool": "execute_sql", "args": {"sql": "SELECT COUNT(*) AS total FROM users"}}',
             (
                 '{"thoughts": "结果已到手", "tool": "terminate", "args": '
-                '{"final_answer": "用户共有 42 人。\\n\\n```sql\\nSELECT COUNT(*) AS total FROM users\\n```"}}'
+                '{"final_answer": "用户共有 42 人。"}}'
             ),
         ]
     )
@@ -102,7 +102,7 @@ def test_data_analyst_full_happy_path(monkeypatch):
 
     assert reply.action_report.terminate is True
     assert "42 人" in reply.content
-    assert "SELECT COUNT(*) AS total FROM users" in reply.content
+    assert "SELECT" not in reply.content
     assert reply.rounds == 4
 
     assert executed_sqls == ["SELECT COUNT(*) AS total FROM users"]

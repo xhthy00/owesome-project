@@ -74,6 +74,34 @@ from src.agent.resource.tool.base import ToolResult
 from src.agent.resource.tool.function_tool import tool
 
 
+def _ctx_needs_report(tool_runtime_ctx: dict[str, Any] | None) -> bool | None:
+    """从 runtime ctx 读 needs_report；None 表示未知（不强制拦截）。"""
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    route_raw = ctx.get("report_route") or (ctx.get("constraints") or {}).get("report_route")
+    if isinstance(route_raw, dict) and "needs_report" in route_raw:
+        return bool(route_raw.get("needs_report"))
+    return None
+
+
+def _guard_report_when_fact_query(
+    tool_runtime_ctx: dict[str, Any] | None,
+    *,
+    tool_name: str,
+) -> ToolResult | None:
+    """needs_report=false 时拒绝报告工具，提示改用 SQL 回答。"""
+    needs = _ctx_needs_report(tool_runtime_ctx)
+    if needs is not False:
+        return None
+    return ToolResult(
+        content=(
+            f"本题不需要生成 HTML 报告（needs_report=false）。"
+            f"请用 execute_sql 按问题范围查询并用自然语言直接回答；"
+            f"勿再调 `{tool_name}`。"
+        ),
+        data={"error": "needs_report_false_use_sql_answer"},
+    )
+
+
 def _run_edu_sql(
     sql: str,
     *,
@@ -317,6 +345,36 @@ def _guess_long_table_fields(
     return exam_field, student_field, subject_field, score_field, total_field
 
 
+def _columns_support_exam_student_long_table(
+    columns: list[str],
+    *,
+    exam_field: str,
+    student_field: str,
+) -> bool:
+    """列是否足以按 exam×student 聚合（宽表 overview / KPI 无考试列时为 False）。"""
+    col_set = {str(c) for c in columns}
+    return bool(exam_field) and bool(student_field) and exam_field in col_set and student_field in col_set
+
+
+def _student_score_records_usable(
+    records: list[dict[str, Any]] | None,
+    target: str,
+) -> bool:
+    """records 是否已含目标学生且有有效分数（可生成学情表）。"""
+    from src.agent.education.comprehensive import _record_effective_total
+    from src.agent.education.query_parse import student_matches
+
+    sid = (target or "").strip()
+    if not records or not sid:
+        return False
+    for r in records:
+        if not student_matches(str(r.get("student") or ""), sid):
+            continue
+        if r.get("subjects") or _record_effective_total(r) is not None:
+            return True
+    return False
+
+
 def _aggregate_long_table_records(
     rows: list[list[Any]],
     columns: list[str],
@@ -328,6 +386,11 @@ def _aggregate_long_table_records(
     total_field: str,
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """长表 (exam×student×subject) → records；返回 (records, exam_order)。"""
+    if not _columns_support_exam_student_long_table(
+        columns, exam_field=exam_field, student_field=student_field
+    ):
+        return [], []
+
     idx = {c: i for i, c in enumerate(columns)}
 
     def _cell(row: list[Any], key: str, default: Any = None) -> Any:
@@ -1801,6 +1864,7 @@ def _fetch_subject_diagnosis_rows(
     errors: list[str] = []
     sql_logs: list[dict[str, Any]] = []
     last_detail_wc = ""
+    last_score_wc = ""
     want_class_compare = bool(school_name and not class_name and not student_id)
 
     def run_bundle(
@@ -1808,8 +1872,9 @@ def _fetch_subject_diagnosis_rows(
         where_clause_score: str,
         phase: str,
     ) -> tuple[list[dict], list[dict], list[float], float | None, list[str], list[dict[str, Any]]]:
-        nonlocal last_detail_wc
+        nonlocal last_detail_wc, last_score_wc
         last_detail_wc = where_clause_detail
+        last_score_wc = where_clause_score
         item_sql, knowledge_sql, score_sql, exam_id_sql = _diagnosis_sql_bundle(
             where_clause_detail,
             where_clause_score,
@@ -2016,6 +2081,58 @@ def _fetch_subject_diagnosis_rows(
                 f"知识点 {len(knowledge_class_rows)} 行"
             )
 
+    # 权威 KPI：对最终成绩 WHERE 做无 LIMIT 聚合（行级 score_sql 仍可能被 LIMIT 截断）
+    kpi_stats: dict[str, Any] | None = None
+    score_rows_incomplete = False
+    from src.agent.education.config import load_config
+    from src.agent.education.kpi_sql import (
+        build_kpi_aggregate_sql,
+        build_score_count_sql,
+        kpi_row_to_stats,
+    )
+
+    cfg = load_config()
+    wc = last_score_wc if last_score_wc else score_wc
+    kpi_sql = build_kpi_aggregate_sql(wc, cfg)
+    success, msg, result, sql_run = _run_edu_sql(
+        kpi_sql,
+        datasource_id=datasource_id,
+        workspace_oid=workspace_oid,
+        user_id=user_id,
+    )
+    row_count = len(result.get("rows") or []) if isinstance(result, dict) else 0
+    sql_logs.append(
+        {
+            "phase": "kpi_aggregate",
+            "label": "score_kpi",
+            "success": success,
+            "row_count": row_count,
+            "message": msg if not success else "",
+            "sql_preview": (sql_run or kpi_sql)[:600],
+        }
+    )
+    if success and isinstance(result, dict) and result.get("rows"):
+        cols = result.get("columns") or []
+        kpi_stats = kpi_row_to_stats(dict(zip(cols, result["rows"][0])), cfg)
+    count_sql = build_score_count_sql(wc)
+    ok_c, _, cres, _ = _run_edu_sql(
+        count_sql,
+        datasource_id=datasource_id,
+        workspace_oid=workspace_oid,
+        user_id=user_id,
+    )
+    if ok_c and isinstance(cres, dict) and cres.get("rows"):
+        try:
+            total = int(cres["rows"][0][0])
+            if len(score_rows) < total:
+                score_rows_incomplete = True
+                warnings.append(
+                    f"成绩明细行被截断（{len(score_rows)}/{total}），"
+                    "KPI 以库内聚合为准"
+                )
+        except (TypeError, ValueError, IndexError):
+            pass
+
     return {
         "item_rows": item_rows,
         "knowledge_rows": knowledge_rows,
@@ -2024,6 +2141,8 @@ def _fetch_subject_diagnosis_rows(
         "score_values": score_values,
         "score_rows": score_rows,
         "full_score": full_score,
+        "kpi_stats": kpi_stats,
+        "score_rows_incomplete": score_rows_incomplete,
         "warnings": warnings,
         "errors": errors,
         "sql_logs": sql_logs,
@@ -2496,9 +2615,15 @@ def _stats_from_fetch_bundle(
     fetch_data: dict[str, Any] | None,
     cfg: EducationConfig,
 ) -> dict[str, Any] | None:
-    """从 fetch 返回的 score_rows / score_result 计算 KPI。"""
+    """从 fetch 返回的 kpi_stats / score_rows / score_result 计算 KPI。
+
+    优先使用无 LIMIT 的库内聚合 ``kpi_stats``，避免行级截断污染人数与及格率。
+    """
     if not isinstance(fetch_data, dict):
         return None
+    agg = fetch_data.get("kpi_stats")
+    if isinstance(agg, dict) and agg.get("count") is not None:
+        return agg
     from src.agent.education.aggregation import prepare_score_rows_for_kpi
 
     score_rows = prepare_score_rows_for_kpi(fetch_data.get("score_rows") or [])
@@ -2541,6 +2666,9 @@ def _stats_from_fetch_bundle(
                         except (TypeError, ValueError, IndexError):
                             pass
     if not values:
+        return None
+    # 行级结果可能被 LIMIT 截断：若声明了 incomplete 则拒绝作为权威 KPI
+    if fetch_data.get("score_rows_incomplete"):
         return None
     return _compute_stats(values, cfg, fs_val)
 
@@ -2968,6 +3096,11 @@ def build_tier_alert_report_data_tool(
     )
 
     ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    blocked = _guard_report_when_fact_query(
+        ctx, tool_name="build_tier_alert_report_data_tool"
+    )
+    if blocked is not None:
+        return blocked
     rd = report_data if isinstance(report_data, dict) else ctx.get("report_data")
 
     resolved_rows = resolve_diagnostic_score_rows(
@@ -3197,13 +3330,29 @@ def build_group_feature_report_data_tool(
     )
 
     ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    blocked = _guard_report_when_fact_query(
+        ctx, tool_name="build_group_feature_report_data_tool"
+    )
+    if blocked is not None:
+        return blocked
     # 用户原问是「班级横向对比」时，禁止被误调成群体特征报告
     user_q = str(
         ctx.get("user_question")
         or (ctx.get("constraints") or {}).get("question")
         or ""
     )
-    if user_q and is_school_class_comparison_query(user_q):
+    route_raw = ctx.get("report_route") or (ctx.get("constraints") or {}).get("report_route")
+    route_type = ""
+    if isinstance(route_raw, dict):
+        route_type = str(route_raw.get("report_type") or "").strip()
+    elif user_q:
+        from src.agent.education.intent_router import classify_report_intent_sync
+
+        rt = classify_report_intent_sync(user_q).report_type
+        route_type = rt.value if rt else ""
+    if route_type == "grade_comparison" or (
+        user_q and is_school_class_comparison_query(user_q)
+    ):
         return ToolResult(
             content=(
                 "本题是「班级横向对比」而非「群体特征」。"
@@ -3365,6 +3514,11 @@ def build_trend_tracking_report_data_tool(
     )
 
     ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    blocked = _guard_report_when_fact_query(
+        ctx, tool_name="build_trend_tracking_report_data_tool"
+    )
+    if blocked is not None:
+        return blocked
     records, rows, columns, used_upstream = resolve_comprehensive_table_input(
         records=records,
         rows=rows,
@@ -3505,6 +3659,11 @@ def build_class_overview_report_data_tool(
     ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
     if ctx.get("user_id") is None and ctx.get("userid") is not None:
         ctx = {**ctx, "user_id": ctx.get("userid")}
+    blocked = _guard_report_when_fact_query(
+        ctx, tool_name="build_class_overview_report_data_tool"
+    )
+    if blocked is not None:
+        return blocked
     rd = report_data if isinstance(report_data, dict) else ctx.get("report_data")
     rd_out: dict[str, Any] = dict(rd) if isinstance(rd, dict) else {}
 
@@ -3706,6 +3865,11 @@ def build_comprehensive_report_data_tool(
     from src.agent.education.query_parse import resolve_comprehensive_table_input
 
     ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    blocked = _guard_report_when_fact_query(
+        ctx, tool_name="build_comprehensive_report_data_tool"
+    )
+    if blocked is not None:
+        return blocked
     records, rows, columns, used_upstream = resolve_comprehensive_table_input(
         records=records,
         rows=rows,
@@ -3981,6 +4145,7 @@ def _fetch_student_item_rows_direct(
     sql = (
         "SELECT sd.student_id AS student_id,\n"
         "       COALESCE(e.exam_name, '未知考试') AS exam_name,\n"
+        "       COALESCE(sc.subject_name, '') AS subject_name,\n"
         "       sd.question_no AS question_no,\n"
         "       COALESCE(kn.knowledge_name, '未关联知识点') AS knowledge_name,\n"
         f"       {full_score_expr} AS full_score,\n"
@@ -3993,7 +4158,7 @@ def _fetch_student_item_rows_direct(
         "LEFT JOIN tb_exam e ON sd.exam_id = e.id\n"
         "LEFT JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id"
         + where
-        + "\nORDER BY exam_name, sd.question_no\nLIMIT 20000"
+        + "\nORDER BY subject_name, exam_name, sd.question_no\nLIMIT 20000"
     )
     outcome = run_sql_with_auto_fix(sql, db_type=db_type, config=config)
     if not outcome.success:
@@ -4155,6 +4320,11 @@ def build_student_exam_report_data_tool(
         )
 
     ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    blocked = _guard_report_when_fact_query(
+        ctx, tool_name="build_student_exam_report_data_tool"
+    )
+    if blocked is not None:
+        return blocked
     records, rows, columns, _used_upstream = resolve_comprehensive_table_input(
         records=records,
         rows=rows,
@@ -4163,8 +4333,37 @@ def build_student_exam_report_data_tool(
         report_data=report_data or ctx.get("report_data"),
     )
 
-    # 上游缺失时：按班级（或学号反查班级）直接拉 tb_score 全班历次明细
-    if not records and not (rows and columns) and datasource_id:
+    def _aggregate_from_tabular(
+        tab_rows: list[list[Any]] | None,
+        tab_cols: list[str] | None,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        if not tab_rows or not tab_cols:
+            return [], []
+        ef, sf, subf, scf, tf = _guess_long_table_fields(
+            [str(c) for c in tab_cols],
+            exam_field=exam_field,
+            student_field=student_field,
+            subject_field=subject_field,
+            score_field=score_field,
+            total_field=total_field,
+        )
+        return _aggregate_long_table_records(
+            list(tab_rows),
+            [str(c) for c in tab_cols],
+            exam_field=ef,
+            student_field=sf,
+            subject_field=subf,
+            score_field=scf,
+            total_field=tf,
+        )
+
+    if not records and rows and columns:
+        records, exam_seen = _aggregate_from_tabular(rows, columns)
+        exam_order = exam_order or exam_seen
+
+    # 上游常是 overview 宽表（无 exam_name）或 LIMIT 截断导致目标生不在预览里：
+    # 有 datasource 时回退直查 tb_score 全班历次长表。
+    if datasource_id and not _student_score_records_usable(records, target):
         fetched = _fetch_class_score_long_table(
             datasource_id=int(datasource_id),
             class_name=class_name,
@@ -4178,8 +4377,10 @@ def build_student_exam_report_data_tool(
             columns = [str(c) for c in fetched["columns"]]
             if not class_name and fetched.get("class_name"):
                 class_name = str(fetched["class_name"])
+            records, exam_seen = _aggregate_from_tabular(rows, columns)
+            exam_order = exam_order or exam_seen
 
-    if not records and not (rows and columns):
+    if not records:
         return ToolResult(
             content=(
                 "build_student_exam_report_data_tool 失败：未找到上游学生×考试明细。"
@@ -4188,33 +4389,6 @@ def build_student_exam_report_data_tool(
             ),
             data={"error": "missing input"},
         )
-
-    if not records:
-        if not columns:
-            return ToolResult(
-                content="build_student_exam_report_data_tool 失败：columns 为空。",
-                data={"error": "empty columns"},
-            )
-        exam_field, student_field, subject_field, score_field, total_field = (
-            _guess_long_table_fields(
-                columns,
-                exam_field=exam_field,
-                student_field=student_field,
-                subject_field=subject_field,
-                score_field=score_field,
-                total_field=total_field,
-            )
-        )
-        records, exam_seen = _aggregate_long_table_records(
-            rows or [],
-            columns,
-            exam_field=exam_field,
-            student_field=student_field,
-            subject_field=subject_field,
-            score_field=score_field,
-            total_field=total_field,
-        )
-        exam_order = exam_order or exam_seen
 
     # 拉取该生全部考试小题/知识点（用于第四节明细与第六节建议）
     item_note = ""
@@ -4590,6 +4764,11 @@ def build_diagnostic_report_data_tool(
         )
 
     ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    blocked = _guard_report_when_fact_query(
+        ctx, tool_name="build_diagnostic_report_data_tool"
+    )
+    if blocked is not None:
+        return blocked
     fetch_data = resolve_subject_diagnosis_fetch_data(
         fetch_data if isinstance(fetch_data, dict) else None,
         report_data=report_data or ctx.get("report_data"),
@@ -5067,6 +5246,11 @@ def build_student_subject_diagnosis_tool(
             content="build_student_subject_diagnosis_tool 失败：student_id 为空。",
             data={"error": "missing student_id"},
         )
+    blocked = _guard_report_when_fact_query(
+        tool_runtime_ctx, tool_name="build_student_subject_diagnosis_tool"
+    )
+    if blocked is not None:
+        return blocked
     # 模糊表述不能写进 SQL / 报告标题
     if is_vague_exam_name(exam_name):
         exam_name = ""

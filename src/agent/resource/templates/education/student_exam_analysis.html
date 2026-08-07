@@ -111,8 +111,10 @@
       <p class="edu-sub"><strong>薄弱知识点清单：</strong>{{WEAK_KNOWLEDGE_LIST}}</p>
       <h3>（一）知识点掌握一览</h3>
       {{KNOWLEDGE_TABLE}}
+      {% if KNOWLEDGE_CHART %}
       <div id="knowledgeBar" class="edu-chart"></div>
       <script type="application/json" id="knowledgeBarData">{{KNOWLEDGE_CHART}}</script>
+      {% endif %}
       <h3>（二）低得分小题（按考试）</h3>
       {{WEAK_ITEM_TABLE}}
     </section>
@@ -151,6 +153,13 @@
       init('knowledgeBar', 'knowledgeBarData');
       init('scoreDist', 'scoreDistData');
       init('scatterPlot', 'scatterPlotData');
+      // 多学科知识点分块图（data-edu-echart）
+      document.querySelectorAll('script[data-edu-echart]').forEach(function (el) {
+        var target = el.getAttribute('data-edu-echart');
+        var raw = (el.textContent || '').trim();
+        if (!target || !raw) return;
+        try { echarts.init(document.getElementById(target)).setOption(JSON.parse(raw)); } catch (e) {}
+      });
     })();
   </script>
 </body>

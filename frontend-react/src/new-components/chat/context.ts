@@ -1,4 +1,5 @@
 import { createContext } from "react";
+import type { AgentMode } from "@/hooks/useChat";
 
 type ChatParam = { type: string; value?: string };
 
@@ -21,6 +22,8 @@ export type ChatContentContextType = {
   setModelValue: (v: string) => void;
   datasourceId: number;
   setDatasourceId: (id: number) => void;
+  agentMode: AgentMode;
+  setAgentMode: (mode: AgentMode) => void;
 };
 
 export const ChatContentContext = createContext<ChatContentContextType>({
@@ -41,5 +44,7 @@ export const ChatContentContext = createContext<ChatContentContextType>({
   setResourceValue: () => {},
   setModelValue: () => {},
   datasourceId: 1,
-  setDatasourceId: () => {}
+  setDatasourceId: () => {},
+  agentMode: "team",
+  setAgentMode: () => {}
 });

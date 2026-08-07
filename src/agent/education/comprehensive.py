@@ -110,9 +110,10 @@ def _resolve_exams(record_exam_order: list[str], exam_order: list[str] | None) -
 def _find_student_row(
     by_exam: dict[str, list[dict[str, Any]]], exam: str, name: str
 ) -> dict[str, Any] | None:
-    key = _normalize_student_key(name)
+    from src.agent.education.query_parse import student_matches
+
     for r in by_exam.get(exam, []):
-        if _normalize_student_key(str(r.get("student") or "")) == key:
+        if student_matches(str(r.get("student") or ""), name):
             return r
     return None
 
@@ -1013,7 +1014,8 @@ def aggregate_student_item_insights(
     """将逐人小题行聚合为 ``{student_id: insight}``（支持多场考试）。
 
     每行需含 ``student_id``（或 student）、``question_no``、``score_rate``、
-    可选 ``knowledge_name`` / ``exam_name``。多场考试时薄弱小题按考试分别保留。
+    可选 ``knowledge_name`` / ``exam_name`` / ``subject_name``。
+    有科目时按 (科目, 知识点) 聚合，避免多学科混在同一行；多场考试时薄弱小题按考试分别保留。
     """
     by_stu: dict[str, list[dict[str, Any]]] = {}
     for row in detail_rows:
@@ -1025,7 +1027,8 @@ def aggregate_student_item_insights(
     out: dict[str, dict[str, Any]] = {}
     for sid, rows in by_stu.items():
         weak_items: list[dict[str, Any]] = []
-        know_rates: dict[str, list[float]] = {}
+        # key: (subject_name, knowledge_name)
+        know_rates: dict[tuple[str, str], list[float]] = {}
         exam_names_seen: list[str] = []
         exam_set: set[str] = set()
         for r in rows:
@@ -1039,12 +1042,14 @@ def aggregate_student_item_insights(
             except (TypeError, ValueError):
                 rate_f = None
             kn = str(r.get("knowledge_name") or "").strip() or "未关联知识点"
+            sub = str(r.get("subject_name") or r.get("subject") or "").strip()
             if rate_f is not None:
-                know_rates.setdefault(kn, []).append(rate_f)
+                know_rates.setdefault((sub, kn), []).append(rate_f)
                 if rate_f < weak_threshold:
                     weak_items.append({
                         "question_no": r.get("question_no"),
                         "knowledge_name": kn,
+                        "subject_name": sub,
                         "score_rate": rate_f,
                         "exam_name": ename,
                     })
@@ -1060,12 +1065,31 @@ def aggregate_student_item_insights(
         capped.sort(key=lambda x: float(x.get("score_rate") or 0))
 
         know_avg = [
-            {"knowledge_name": k, "score_rate": round(sum(v) / len(v), 1), "question_count": len(v)}
-            for k, v in know_rates.items() if v
+            {
+                "knowledge_name": kn,
+                "subject_name": sub,
+                "score_rate": round(sum(v) / len(v), 1),
+                "question_count": len(v),
+            }
+            for (sub, kn), v in know_rates.items()
+            if v
         ]
-        know_avg.sort(key=lambda x: float(x["score_rate"]))
-        weak_knowledge = [k for k in know_avg if float(k["score_rate"]) < weak_threshold][:5]
-        strong_knowledge = [k for k in reversed(know_avg) if float(k["score_rate"]) >= 80][:3]
+        # 先按科目再按得分率，便于报告按学科分块
+        know_avg.sort(key=lambda x: (str(x.get("subject_name") or ""), float(x["score_rate"])))
+        weak_knowledge = [k for k in know_avg if float(k["score_rate"]) < weak_threshold][:8]
+        strong_knowledge = [
+            k for k in sorted(know_avg, key=lambda x: float(x["score_rate"]), reverse=True)
+            if float(k["score_rate"]) >= 80
+        ][:5]
+        # 按科目分组（供模板分科展示；无科目时仅一组）
+        by_subject: dict[str, list[dict[str, Any]]] = {}
+        subject_order: list[str] = []
+        for row in know_avg:
+            sub = str(row.get("subject_name") or "").strip() or "未分科"
+            if sub not in by_subject:
+                by_subject[sub] = []
+                subject_order.append(sub)
+            by_subject[sub].append(row)
         out[sid] = {
             "exam_name": "、".join(exam_names_seen) if exam_names_seen else exam_name,
             "exam_names": exam_names_seen,
@@ -1074,6 +1098,7 @@ def aggregate_student_item_insights(
             "strong_knowledge": strong_knowledge,
             "knowledge_rows": know_avg,
             "all_knowledge": know_avg,
+            "knowledge_by_subject": {s: by_subject[s] for s in subject_order},
         }
     return out
 

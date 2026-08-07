@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Any
 
 from src.agent.education.query_parse import find_upstream_fetch_data
+
+#: 率/分数类 KPI 对账容差（与格式化两位小数对齐）
+_KPI_FLOAT_TOLERANCE = 0.05
 
 _DIAGNOSIS_REPORT_TOOLS = frozenset({
     "build_subject_diagnosis_sections_tool",
@@ -185,6 +189,124 @@ _VIEWED_HEADCOUNT_RE = re.compile(r"(所查看的\s*)(\d+)(\s*名?)")
 _MD_TABLE_HEADCOUNT_RE = re.compile(
     r"(\|\s*(?:参考人数|班级人数|应考人数|实考人数)\s*\|\s*)(\d+)(\s*人?\s*\|)"
 )
+_MD_TABLE_AVG_RE = re.compile(
+    r"(\|\s*(?:均分|平均分)\s*\|\s*)(\d+(?:\.\d+)?)(\s*\|)"
+)
+_MD_TABLE_PASS_RATE_RE = re.compile(
+    r"(\|\s*及格率\s*\|\s*)(\d+(?:\.\d+)?)(?:\s*%)?(\s*\|)"
+)
+_MD_TABLE_EXCELLENT_RATE_RE = re.compile(
+    r"(\|\s*优秀率\s*\|\s*)(\d+(?:\.\d+)?)(?:\s*%)?(\s*\|)"
+)
+_MD_TABLE_FULL_SCORE_RE = re.compile(
+    r"(\|\s*(?:卷面)?满分\s*\|\s*)(\d+(?:\.\d+)?)(\s*(?:分)?\s*\|)"
+)
+_MD_TABLE_PASS_LINE_RE = re.compile(
+    r"(\|\s*及格线\s*\|\s*)(\d+(?:\.\d+)?)(\s*(?:分)?\s*\|)"
+)
+_MD_TABLE_EXCELLENT_LINE_RE = re.compile(
+    r"(\|\s*优秀线\s*\|\s*)(\d+(?:\.\d+)?)(\s*(?:分)?\s*\|)"
+)
+_MD_TABLE_STDEV_RE = re.compile(
+    r"(\|\s*标准差\s*\|\s*)(\d+(?:\.\d+)?)(\s*\|)"
+)
+
+
+@dataclass(frozen=True)
+class KpiClaimConflict:
+    """结论中某 KPI 声明与权威统计不一致。"""
+
+    field: str
+    claimed: float | int
+    authority: float | int
+    span: str = ""
+
+
+def _values_conflict(field: str, claimed: float, authority: float) -> bool:
+    if field == "count":
+        return int(round(claimed)) != int(round(authority))
+    return abs(float(claimed) - float(authority)) > _KPI_FLOAT_TOLERANCE
+
+
+def _iter_labeled_kpi_claims(text: str) -> list[tuple[str, float, str]]:
+    """从正文抽取带标签或 Markdown 表行的 KPI 声明 ``(field, value, span)``。"""
+    claims: list[tuple[str, float, str]] = []
+
+    def add(field: str, raw: str, span: str) -> None:
+        if field == "count":
+            v = _safe_int(raw)
+        else:
+            v = _safe_float(raw)
+        if v is None:
+            return
+        claims.append((field, float(v) if field != "count" else float(int(v)), span))
+
+    for m in _REF_HEADCOUNT_IN_TEXT_RE.finditer(text):
+        add("count", m.group(2), m.group(0))
+    for m in _MD_TABLE_HEADCOUNT_RE.finditer(text):
+        add("count", m.group(2), m.group(0))
+    for m in _AVG_IN_TEXT_RE.finditer(text):
+        add("avg", m.group(2), m.group(0))
+    for m in _MD_TABLE_AVG_RE.finditer(text):
+        add("avg", m.group(2), m.group(0))
+    for m in _PASS_RATE_IN_TEXT_RE.finditer(text):
+        add("pass_rate", m.group(2), m.group(0))
+    for m in _MD_TABLE_PASS_RATE_RE.finditer(text):
+        add("pass_rate", m.group(2), m.group(0))
+    for m in _EXCELLENT_RATE_IN_TEXT_RE.finditer(text):
+        add("excellent_rate", m.group(2), m.group(0))
+    for m in _MD_TABLE_EXCELLENT_RATE_RE.finditer(text):
+        add("excellent_rate", m.group(2), m.group(0))
+    for m in _STDEV_IN_TEXT_RE.finditer(text):
+        add("stdev", m.group(2), m.group(0))
+    for m in _MD_TABLE_STDEV_RE.finditer(text):
+        add("stdev", m.group(2), m.group(0))
+    for m in _PASS_LINE_IN_TEXT_RE.finditer(text):
+        add("pass_line", m.group(2), m.group(0))
+    for m in _MD_TABLE_PASS_LINE_RE.finditer(text):
+        add("pass_line", m.group(2), m.group(0))
+    for m in _EXCELLENT_LINE_IN_TEXT_RE.finditer(text):
+        add("excellent_line", m.group(2), m.group(0))
+    for m in _MD_TABLE_EXCELLENT_LINE_RE.finditer(text):
+        add("excellent_line", m.group(2), m.group(0))
+    for m in _FULL_SCORE_IN_TEXT_RE.finditer(text):
+        add("full_score", m.group(2), m.group(0))
+    for m in _MD_TABLE_FULL_SCORE_RE.finditer(text):
+        add("full_score", m.group(2), m.group(0))
+    return claims
+
+
+def audit_summary_kpi_claims(
+    text: str,
+    stats: dict[str, Any] | None,
+) -> list[KpiClaimConflict]:
+    """比对结论中的 KPI 声明与权威统计，返回冲突列表。"""
+    if not text or not stats:
+        return []
+    out: list[KpiClaimConflict] = []
+    for field, claimed, span in _iter_labeled_kpi_claims(text):
+        auth_raw = stats.get(field)
+        if auth_raw is None or auth_raw == "" or auth_raw == "-":
+            continue
+        if field == "count":
+            authority = _safe_int(auth_raw)
+        else:
+            authority = _safe_float(auth_raw)
+        if authority is None:
+            continue
+        if not _values_conflict(field, claimed, float(authority)):
+            continue
+        claimed_out: float | int = int(claimed) if field == "count" else claimed
+        auth_out: float | int = int(authority) if field == "count" else authority
+        out.append(
+            KpiClaimConflict(
+                field=field,
+                claimed=claimed_out,
+                authority=auth_out,
+                span=span[:80],
+            )
+        )
+    return out
 
 
 def _fmt_authority_score(value: Any) -> str:
@@ -436,8 +558,8 @@ def reconcile_summary_kpis(
 ) -> str:
     """用权威统计改写结论中的人数/分数线/均分/率，避免与报告 KPI 矛盾。
 
-    无权威统计或空文本时原样返回。覆盖带标签人数，以及「共 N 人 / N 名学生」等
-    预览规模误写（全模式通用后处理）。
+    无权威统计或空文本时原样返回。覆盖带标签人数、Markdown 指标表，以及
+    「共 N 人 / N 名学生」等预览规模误写（全模式通用后处理）。
     """
     if not text or not stats:
         return text or ""
@@ -446,9 +568,11 @@ def reconcile_summary_kpis(
     if stats.get("pass_line") is not None:
         pl = _fmt_authority_score(stats["pass_line"])
         out = _PASS_LINE_IN_TEXT_RE.sub(rf"\g<1>{pl}", out)
+        out = _MD_TABLE_PASS_LINE_RE.sub(rf"\g<1>{pl}\g<3>", out)
     if stats.get("excellent_line") is not None:
         el = _fmt_authority_score(stats["excellent_line"])
         out = _EXCELLENT_LINE_IN_TEXT_RE.sub(rf"\g<1>{el}", out)
+        out = _MD_TABLE_EXCELLENT_LINE_RE.sub(rf"\g<1>{el}\g<3>", out)
 
     count = _safe_int(stats.get("count"))
     if count is not None:
@@ -482,18 +606,75 @@ def reconcile_summary_kpis(
     if stats.get("avg") is not None:
         avg = _fmt_authority_metric(stats["avg"])
         out = _AVG_IN_TEXT_RE.sub(rf"\g<1>{avg}", out)
+        out = _MD_TABLE_AVG_RE.sub(rf"\g<1>{avg}\g<3>", out)
     if stats.get("stdev") is not None:
         sd = _fmt_authority_metric(stats["stdev"])
         out = _STDEV_IN_TEXT_RE.sub(rf"\g<1>{sd}", out)
+        out = _MD_TABLE_STDEV_RE.sub(rf"\g<1>{sd}\g<3>", out)
     if stats.get("pass_rate") is not None:
         pr = _fmt_authority_rate(stats["pass_rate"])
         out = _PASS_RATE_IN_TEXT_RE.sub(rf"\g<1>{pr}%", out)
+        out = _MD_TABLE_PASS_RATE_RE.sub(rf"\g<1>{pr}%\g<3>", out)
     if stats.get("excellent_rate") is not None:
         er = _fmt_authority_rate(stats["excellent_rate"])
         out = _EXCELLENT_RATE_IN_TEXT_RE.sub(rf"\g<1>{er}%", out)
+        out = _MD_TABLE_EXCELLENT_RATE_RE.sub(rf"\g<1>{er}%\g<3>", out)
     if stats.get("full_score") is not None:
         fs = _fmt_authority_metric(stats["full_score"])
         out = _FULL_SCORE_IN_TEXT_RE.sub(rf"\g<1>{fs}\g<3>", out)
+        out = _MD_TABLE_FULL_SCORE_RE.sub(rf"\g<1>{fs}\g<3>", out)
+    return out
+
+
+def _claimed_literal_pattern(claimed: float | int, *, field: str) -> re.Pattern[str]:
+    """生成与冲突 claimed 字面量精确匹配、带数字边界的正则。"""
+    if field == "count" or (
+        isinstance(claimed, float) and abs(claimed - round(claimed)) < 1e-9
+    ):
+        lit = str(int(round(float(claimed))))
+    else:
+        # 保留常见小数写法：91.07 / 91.070
+        lit = f"{float(claimed):.4f}".rstrip("0").rstrip(".")
+        if "." not in lit:
+            lit = str(int(round(float(claimed))))
+    escaped = re.escape(lit)
+    # 避免匹配更长数字的子串（如 91 不匹配 910）
+    return re.compile(rf"(?<![\d.]){escaped}(?![\d.])")
+
+
+def scrub_residual_conflicting_values(
+    text: str,
+    conflicts: list[KpiClaimConflict],
+    stats: dict[str, Any] | None,
+) -> str:
+    """清扫对账发现的错误 claimed 残留字面量，替换为权威格式化值。"""
+    if not text or not conflicts or not stats:
+        return text or ""
+
+    out = text
+    # 同一字段可能多处冲突，按 claimed 去重后替换
+    seen: set[tuple[str, str]] = set()
+    for c in conflicts:
+        # 人数字面量过短（如 20）全文替换易误伤班级号/分数，标签路径已覆盖
+        if c.field == "count":
+            continue
+        auth_raw = stats.get(c.field)
+        if auth_raw is None:
+            continue
+        key = (c.field, str(c.claimed))
+        if key in seen:
+            continue
+        seen.add(key)
+        if c.field == "count":
+            replacement = str(int(round(float(c.authority))))
+        elif c.field in ("pass_rate", "excellent_rate"):
+            replacement = _fmt_authority_rate(auth_raw)
+        elif c.field in ("pass_line", "excellent_line"):
+            replacement = _fmt_authority_score(auth_raw)
+        else:
+            replacement = _fmt_authority_metric(auth_raw)
+        pat = _claimed_literal_pattern(c.claimed, field=c.field)
+        out = pat.sub(replacement, out)
     return out
 
 
@@ -520,20 +701,82 @@ def scrub_preview_headcount_claims(text: str) -> str:
     return out
 
 
+_FACT_REF_COUNT_CLAUSE_RE = re.compile(
+    r"[，,]?\s*"
+    r"(?:本次)?(?:共\s*)?\d+\s*人(?:参考|应考|实考)"
+    r"(?:\s*[（(][^）)]*[）)])?"
+    r"[，,]?"
+)
+_FACT_LABELED_REF_COUNT_RE = re.compile(
+    r"[|*]?\s*(?:年级|班级|全校|全年级)?"
+    r"(?:参考人数|班级人数|应考人数|实考人数)\s*[|：:为是]?\s*\d+\s*人?\s*[|*]?"
+)
+
+
+def scrub_fact_answer_headcount_noise(text: str) -> str:
+    """事实问答后处理：去掉未询问的「参考人数 / 共N人参考」套话。"""
+    if not text:
+        return text or ""
+    out = _FACT_REF_COUNT_CLAUSE_RE.sub("", text)
+    out = _FACT_LABELED_REF_COUNT_RE.sub("", out)
+    out = re.sub(r"[（(]\s*权威统计口径\s*[）)]", "", out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip()
+
+
+def reconcile_answer_with_artifacts_detailed(
+    text: str,
+    *,
+    tool_calls: list[dict[str, Any]] | None = None,
+    reports: list[dict[str, Any]] | None = None,
+    exec_results: list[dict[str, Any]] | None = None,
+    fact_answer: bool = False,
+) -> tuple[str, list[KpiClaimConflict]]:
+    """全模式统一后处理，并返回改写前发现的 KPI 冲突（供日志/测试）。"""
+    if fact_answer:
+        # 事实问答：不用 execute_sql 行数当「班级参考人数」权威源（常为 Top-N）
+        stats = extract_stats_authority_data(
+            tool_calls, reports=reports, exec_results=None
+        )
+        if not stats:
+            return scrub_fact_answer_headcount_noise(
+                scrub_preview_headcount_claims(text)
+            ), []
+        conflicts = audit_summary_kpi_claims(text, stats)
+        out = reconcile_summary_kpis(text, stats)
+        out = scrub_residual_conflicting_values(out, conflicts, stats)
+        return scrub_fact_answer_headcount_noise(out), conflicts
+
+    stats = extract_stats_authority_data(
+        tool_calls, reports=reports, exec_results=exec_results
+    )
+    if not stats:
+        return scrub_preview_headcount_claims(text), []
+    conflicts = audit_summary_kpi_claims(text, stats)
+    out = reconcile_summary_kpis(text, stats)
+    out = scrub_residual_conflicting_values(out, conflicts, stats)
+    return out, conflicts
+
+
 def reconcile_answer_with_artifacts(
     text: str,
     *,
     tool_calls: list[dict[str, Any]] | None = None,
     reports: list[dict[str, Any]] | None = None,
     exec_results: list[dict[str, Any]] | None = None,
+    fact_answer: bool = False,
 ) -> str:
-    """全模式统一后处理：有权威 KPI 则改写，否则清洗预览规模人数幻觉。"""
-    stats = extract_stats_authority_data(
-        tool_calls, reports=reports, exec_results=exec_results
+    """全模式统一后处理：有权威 KPI 则对账改写，否则清洗预览规模人数幻觉。"""
+    out, _conflicts = reconcile_answer_with_artifacts_detailed(
+        text,
+        tool_calls=tool_calls,
+        reports=reports,
+        exec_results=exec_results,
+        fact_answer=fact_answer,
     )
-    if stats:
-        return reconcile_summary_kpis(text, stats)
-    return scrub_preview_headcount_claims(text)
+    return out
+
 
 def extract_stats_authority_block(
     tool_calls: list[dict[str, Any]] | None = None,
@@ -684,6 +927,8 @@ def format_education_pipeline_footer(report_data: dict[str, Any] | None) -> str:
 
 
 __all__ = [
+    "KpiClaimConflict",
+    "audit_summary_kpi_claims",
     "collect_education_artifacts",
     "extract_exec_authority_data",
     "extract_stats_authority_block",
@@ -693,8 +938,11 @@ __all__ = [
     "format_sql_result_authority_notes",
     "format_tool_expert_sub_task_block",
     "reconcile_answer_with_artifacts",
+    "reconcile_answer_with_artifacts_detailed",
     "reconcile_summary_kpis",
+    "scrub_fact_answer_headcount_noise",
     "scrub_preview_headcount_claims",
+    "scrub_residual_conflicting_values",
     "sql_looks_paginated",
     "sql_looks_row_capped",
     "truncate_keeping_kpi_lines",

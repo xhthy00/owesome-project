@@ -34,6 +34,44 @@ _STUDENT_PATTERNS = (
     re.compile(r"[「\"']([\u4e00-\u9fff]{2,4})[」\"']"),
 )
 
+#: 「学生XXX」中的无效姓名：疑问词/泛指，不是真实学生标识
+_INVALID_STUDENT_NAME_TOKENS = frozenset(
+    {
+        "是谁",
+        "哪个",
+        "哪位",
+        "什么",
+        "多少",
+        "如何",
+        "怎样",
+        "最好",
+        "最差",
+        "名单",
+        "人数",
+        "成绩",
+        "考试",
+        "报告",
+        "学情",
+        "分析",
+        "诊断",
+        "排名",
+    }
+)
+
+#: 「班内最高分/最好的学生是谁」——事实查询，不是已知名学生的学情报告
+_TOP_STUDENT_LOOKUP_HINTS = (
+    "最好的学生是谁",
+    "最高分是谁",
+    "谁的成绩最高",
+    "谁考得最好",
+    "谁考第一",
+    "第一名是谁",
+    "成绩最好的是谁",
+    "分数最高的学生",
+    "最高分的学生是谁",
+    "谁最高",
+)
+
 # 学号 token：字母/数字开头，允许 _.- ，且必须含数字（与「学生张三」中文名区分）
 _STUDENT_ID_TOKEN = r"(?=[A-Za-z0-9_.-]*\d)[A-Za-z0-9][A-Za-z0-9_.-]{3,63}"
 
@@ -118,20 +156,42 @@ def extract_student_target(question: str) -> str | None:
     q = (question or "").strip()
     if not q:
         return None
+    # 「最好的学生是谁」类：没有具名学生，禁止抽成「学生是谁」
+    if is_top_student_lookup_query(q):
+        return None
     for pat in _STUDENT_PATTERNS:
         m = pat.search(q)
-        if m:
-            raw = re.sub(r"\s+", "", m.group(1))
-            # 「学生张三」捕获组仅姓名 → 归一为完整称谓，便于匹配
-            if (
-                raw
-                and not raw.startswith("学生")
-                and re.fullmatch(r"[\u4e00-\u9fff]{2,4}", raw)
-                and "学生" + raw in re.sub(r"\s+", "", q)
-            ):
-                return "学生" + raw
-            return raw
+        if not m:
+            continue
+        raw = re.sub(r"\s+", "", m.group(1))
+        if not raw:
+            continue
+        name_only = raw[2:] if raw.startswith("学生") else raw
+        if name_only in _INVALID_STUDENT_NAME_TOKENS or raw in _INVALID_STUDENT_NAME_TOKENS:
+            continue
+        # 「学生张三」捕获组仅姓名 → 归一为完整称谓，便于匹配
+        if (
+            not raw.startswith("学生")
+            and re.fullmatch(r"[\u4e00-\u9fff]{2,4}", raw)
+            and "学生" + raw in re.sub(r"\s+", "", q)
+        ):
+            return "学生" + raw
+        return raw
     return None
+
+
+def is_top_student_lookup_query(question: str) -> bool:
+    """是否为「某班/某科成绩最好的学生是谁」这类排名事实查询（非具名学情报告）。"""
+    q = (question or "").strip()
+    if not q:
+        return False
+    if any(h in q for h in _TOP_STUDENT_LOOKUP_HINTS):
+        return True
+    if re.search(r"(?:最好|最高|第一名).{0,6}(?:学生|成绩|分数).{0,4}谁", q):
+        return True
+    if re.search(r"谁.{0,6}(?:最好|最高|第一)", q):
+        return True
+    return False
 
 
 def extract_exam_name_hint(question: str) -> str | None:
@@ -241,12 +301,19 @@ def is_individual_student_analysis_query(question: str) -> bool:
     q = (question or "").strip()
     if not q or is_citywide_analysis_query(q):
         return False
+    # 班内最高分是谁：走 SQL 事实查询，不走个人学情报告
+    if is_top_student_lookup_query(q):
+        return False
     if not extract_student_target(q):
         return False
     hints = (
         "成绩分析",
         "分析报告",
         "学情",
+        "个人画像",
+        "学生画像",
+        "个体画像",
+        "画像",
         "知识点",
         "薄弱",
         "加强",
@@ -1637,6 +1704,7 @@ __all__ = [
     "extract_student_id_target",
     "extract_student_target",
     "is_individual_student_analysis_query",
+    "is_top_student_lookup_query",
     "is_multi_exam_student_analysis_query",
     "is_vague_exam_name",
     "extract_student_target",

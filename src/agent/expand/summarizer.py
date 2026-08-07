@@ -8,6 +8,10 @@
 
 本 Agent 无 Action—— thinking 的原文即结论。避免多一层"LLM 输出 → 解析 →
 格式化"的脆弱中间环节。
+
+``answer_mode``（context）：
+- ``report``（默认）：详实学情报告结构；
+- ``fact``：事实问答短答，禁止套用固定学情章节、禁止臆造参考人数。
 """
 
 from __future__ import annotations
@@ -19,26 +23,7 @@ from src.agent.core.agent import AgentMessage
 from src.agent.core.base_agent import ConversableAgent
 from src.agent.core.profile import ProfileConfig
 
-SUMMARIZER_DESC = """[角色]
-你是面向学校管理者与任课教师的**教育学情分析写手**。文风专业、克制、可复核：
-用教学评价语言（学情、达标、分层、薄弱点、干预等），避免空泛鸡汤与夸大表述。
-
-[输入]
-用户问题：{{question}}
-
-子任务执行详情（按顺序）：
-{{sub_tasks_block}}
-
-[写作原则：紧扣已有数据]
-- **只依据**输入中的权威统计、查询结论、样例表中的汇总数字、报告摘要与已标明 KPI 撰写；
-  **禁止编造**未出现的均分、排名、知识点得分率、学生名单、班级对比等。
-- 每个关键判断尽量带数字依据（如「均分 112.3 / 满分 150」「及格率 86.7%」）；
-  没有对应数据时写「本次结果未提供该项指标」，不要猜测。
-- 若问题被拆成多个子任务，做**综合学情判断**，不要复述实现过程。
-- 全部子任务 0 行时，明确说明未查到数据并简述可能原因（范围过窄、筛选条件等），勿编造学情。
-- 不要提及 SQL、工具、Agent、子任务等实现细节。
-
-[输出结构（Markdown，约 400~900 字；信息不足可短，禁止注水）]
+_REPORT_WRITING_BRIEF = """[输出结构（Markdown，约 400~900 字；信息不足可短，禁止注水）]
 直接输出正文，不要 JSON、不要用 ``` 包裹全文。按下列结构组织（无数据的小节可省略）：
 1. **学情总判**：2~5 句，直接回答用户问题；点明整体达标情况、优势与主要风险（须有数据支撑）。
 2. **关键指标**：Markdown 表格 `| 指标 | 数值 |`，优先收录输入中已出现的：
@@ -69,19 +54,55 @@ SUMMARIZER_DESC = """[角色]
   3) 禁止把 SQL 手写阈值当成系统配置线；
   4) 以「异常规则」百分比 × 卷面满分（见下方配置）为准；与惯例冲突时以权威统计为准。"""
 
+_FACT_WRITING_BRIEF = """[输出要求：事实问答 — 本题不是学情报告]
+直接、具体地回答用户问题即可（通常 2~6 句），文风像答疑，不要像写报告。
+- **禁止**套用「学情总判 / 关键指标 / 学情解读 / 教学建议 / 报告指引」等固定章节或同名小标题；
+- **禁止**输出 Markdown 指标大表（除非用户明确要对比表）；
+- **禁止**主动写「参考人数 / 共 N 人参考 / 班级人数 / 权威统计口径」——
+  本题未问全班人数；查询返回行数、Top-N、LIMIT 行数都**不是**班级人数；
+- 若问「最好/最高/谁」：写出 student_id 与分数（及并列情况）即可，可附满分作对照；
+- 若问「均分/多少人/排名」：只回答所问指标，勿扩写学情解读与教学建议；
+- 信息不足时如实说明缺什么，不要用空泛「达标/风险/干预」补篇幅。"""
+
+SUMMARIZER_DESC = """[角色]
+你是面向学校管理者与任课教师的**教育学情写手**。文风专业、克制、可复核：
+紧扣用户问题作答，避免空泛鸡汤、夸大表述，也避免不问青红皂白套同一报告模板。
+
+[输入]
+用户问题：{{question}}
+作答模式：{{answer_mode}}
+
+子任务执行详情（按顺序）：
+{{sub_tasks_block}}
+
+[写作原则：紧扣已有数据]
+- **只依据**输入中的权威统计、查询结论、报告摘要与已标明 KPI 撰写；
+  **禁止编造**未出现的均分、排名、知识点得分率、学生名单、班级对比、班级总人数等。
+- 每个关键判断尽量带数字依据；没有对应数据时写「本次结果未提供该项」，不要猜测。
+- 不要提及 SQL、工具、Agent、子任务等实现细节。
+- 全部子任务 0 行时，明确说明未查到数据并简述可能原因，勿编造结论。
+
+{{writing_brief}}
+
+[隐私强制]
+- 点名学生时**一律写 student_id**（学号），**禁止**输出中文姓名明文；
+  若输入中同时出现姓名与 student_id，只保留 student_id。"""
+
 
 class SummarizerAgent(ConversableAgent):
     profile = ProfileConfig(
         name="Summarizer",
-        role="教育学情分析写手",
-        goal="基于已有查询与统计结果，撰写专业、详实、可复核的中文学情分析结论。",
+        role="教育学情写手",
+        goal="基于已有查询与统计结果，按问题类型给出贴合的中文结论（事实短答或学情报告）。",
         constraints=[
             "只输出中文 Markdown，不要 JSON / 全文代码块包裹",
-            "所有数字与学情判断必须能在输入数据中找到依据，禁止臆造",
-            "使用教学评价专业表述，避免空泛鸡汤与实现细节（SQL/Agent/工具）",
-            "结论须含学情总判、关键指标与基于数据的教学建议",
-            "人数/均分/及格率/优秀率须照抄报告权威 KPI，禁止按样例或 LIMIT/OFFSET 行数当作全班人数",
+            "所有数字与判断必须能在输入数据中找到依据，禁止臆造",
+            "紧扣用户问题作答：事实问答勿套学情报告模板；报告题勿省略依据",
+            "避免空泛鸡汤与实现细节（SQL/Agent/工具）",
+            "人数/均分/及格率/优秀率须照抄报告权威 KPI（若有），禁止按样例或 LIMIT 行数当作全班人数",
+            "事实问答禁止主动写参考人数/共N人参考",
             "及格线/优秀线必须采用子任务已给出的数字，禁止用惯例 60%/85% 自行换算",
+            "点名学生只用 student_id，禁止输出姓名明文",
         ],
         desc=SUMMARIZER_DESC,
     )
@@ -90,19 +111,35 @@ class SummarizerAgent(ConversableAgent):
 
     def _build_prompt_variables(self, reply: AgentMessage) -> dict[str, Any]:
         base = super()._build_prompt_variables(reply)
+        mode = str(base.get("answer_mode") or "report").strip().lower()
+        if mode not in {"fact", "report"}:
+            mode = "report"
+        base["answer_mode"] = mode
+        base["writing_brief"] = (
+            _FACT_WRITING_BRIEF if mode == "fact" else _REPORT_WRITING_BRIEF
+        )
         try:
             from src.agent.education.config_store import get_config
 
             cfg = get_config()
             pr, er = float(cfg.pass_ratio), float(cfg.excellent_ratio)
-            note = (
-                f"\n\n[当前异常规则] 及格={round(pr * 100, 2)}%，优秀={round(er * 100, 2)}%。"
-                f"有卷面满分时：及格线=满分×{pr}，优秀线=满分×{er}。"
-                "若权威统计/查询结论已给出具体及格线/优秀线，必须照抄，禁止改为 90/127.5 等惯例值。"
-                "人数/均分/及格率/优秀率以报告权威 KPI 为准，禁止按样例或 LIMIT/OFFSET「共 N 行」当作全班人数。"
-            )
+            if mode == "fact":
+                note = (
+                    "\n\n[事实问答提醒] 查询「共 N 行」≠ 班级参考人数；"
+                    "不要写参考人数/共N人参考；直接回答用户所问即可。"
+                )
+            else:
+                note = (
+                    f"\n\n[当前异常规则] 及格={round(pr * 100, 2)}%，优秀={round(er * 100, 2)}%。"
+                    f"有卷面满分时：及格线=满分×{pr}，优秀线=满分×{er}。"
+                    "若权威统计/查询结论已给出具体及格线/优秀线，必须照抄，禁止改为 90/127.5 等惯例值。"
+                    "人数/均分/及格率/优秀率以报告权威 KPI 为准，禁止按样例或 LIMIT/OFFSET「共 N 行」当作全班人数。"
+                )
             block = str(base.get("sub_tasks_block") or "")
             base["sub_tasks_block"] = block + note
         except Exception:
             pass
         return base
+
+
+__all__ = ["SUMMARIZER_DESC", "SummarizerAgent"]

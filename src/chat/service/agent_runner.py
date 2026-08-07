@@ -239,6 +239,8 @@ class _RunConstraints:
     target_classes: list[str] | None = None
     #: 用户 education 权限摘要（edu_role / school / class_names 等）。
     edu_scope: dict[str, Any] | None = None
+    #: 意图路由结果（report_type / confidence / source），供工具守卫读取。
+    report_route: dict[str, Any] | None = None
 
     def to_context(self) -> dict[str, Any]:
         ctx: dict[str, Any] = {
@@ -258,12 +260,15 @@ class _RunConstraints:
             ctx["target_classes"] = list(self.target_classes)
         if self.edu_scope:
             ctx["edu_scope"] = dict(self.edu_scope)
+        if self.report_route:
+            ctx["report_route"] = dict(self.report_route)
         return ctx
 
     @classmethod
     def from_context(cls, raw: dict[str, Any] | None) -> "_RunConstraints":
         data = raw if isinstance(raw, dict) else {}
         tc = data.get("target_classes")
+        rr = data.get("report_route")
         return cls(
             locked_tables=list(data.get("locked_tables") or []),
             required_keywords=list(data.get("required_keywords") or []),
@@ -274,6 +279,7 @@ class _RunConstraints:
             target_school=data.get("target_school"),
             target_classes=list(tc) if isinstance(tc, list) else None,
             edu_scope=dict(data["edu_scope"]) if isinstance(data.get("edu_scope"), dict) else None,
+            report_route=dict(rr) if isinstance(rr, dict) else None,
         )
 
 
@@ -658,6 +664,11 @@ async def _run_team_stream_legacy(
     await emit("chart", {"chart_type": chart_type, "chart_config": chart_config})
 
     default_summary = last_good_phase.reply.content if last_good_phase.reply else ""
+    rr = shared_constraints.report_route if shared_constraints else None
+    needs_report = True
+    if isinstance(rr, dict) and "needs_report" in rr:
+        needs_report = bool(rr.get("needs_report"))
+    fact_answer = not needs_report
     summary_text = await _run_summarizer_multi(
         question=request.question,
         sub_phases=sub_phases,
@@ -666,19 +677,23 @@ async def _run_team_stream_legacy(
         fallback=default_summary,
         report_data=upstream_report_data,
         steps=all_steps,
+        fact_answer=fact_answer,
     )
     await emit("summary", {"content": summary_text})
 
-    await _run_ad_hoc_report_phase(
-        question=request.question,
-        summary_text=summary_text,
-        sub_phases=sub_phases,
-        llm_client=llm_client,
-        emit=emit,
-        steps=all_steps,
-        report_data=upstream_report_data,
-        chart_type=chart_type,
-    )
+    # needs_report=false：只需自然语言结论，禁止再生成自主报告
+    if needs_report:
+        await _run_ad_hoc_report_phase(
+            question=request.question,
+            summary_text=summary_text,
+            sub_phases=sub_phases,
+            llm_client=llm_client,
+            emit=emit,
+            steps=all_steps,
+            report_data=upstream_report_data,
+            chart_type=chart_type,
+            report_route=rr if isinstance(rr, dict) else None,
+        )
 
     if not persist:
         return 0
@@ -790,6 +805,8 @@ async def _run_data_analyst_phase(
     state.tool_runtime_ctx["workspace_oid"] = workspace_oid
     state.tool_runtime_ctx["user_question"] = request.question
     state.tool_runtime_ctx["user_id"] = current_user_id
+    if constraints is not None and constraints.report_route:
+        state.tool_runtime_ctx["report_route"] = dict(constraints.report_route)
 
     if llm_client is None:
         llm_client = LangChainLlmClient()
@@ -899,6 +916,8 @@ async def _run_tool_expert_phase(
     state.tool_runtime_ctx["workspace_oid"] = workspace_oid
     state.tool_runtime_ctx["user_question"] = request.question
     state.tool_runtime_ctx["user_id"] = current_user_id
+    if constraints is not None and constraints.report_route:
+        state.tool_runtime_ctx["report_route"] = dict(constraints.report_route)
     # ToolExpert 本阶段通常不再 execute_sql；把上游 DataAnalyst 的完整明细
     # 写入 tool_runtime_ctx，供综合/学生报告工具空参读取（禁止 LLM 手抄 200+ 行）。
     if constraints and isinstance(constraints.report_data, dict):
@@ -1021,54 +1040,22 @@ async def _run_planner_phase(
     steps: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, str]]:
     """跑 Planner 得到 sub_task 列表。失败一律回落 [原问题]，不抛。"""
-    from src.agent.education.query_parse import (
-        is_citywide_analysis_query,
-        is_class_overview_query,
-        is_group_feature_query,
-        is_individual_student_analysis_query,
-        is_multi_exam_class_analysis_query,
-        is_school_class_comparison_query,
-        is_school_exam_report_query,
-        is_tier_alert_query,
+    from src.agent.education.intent_router import (
+        classify_report_intent,
+        coerce_plan_to_route,
+        plan_items_for_route,
+        should_use_deterministic_report_plan,
     )
-    from src.agent.expand.planner import (
-        build_citywide_team_plan_items,
-        build_class_overview_plan_items,
-        build_comprehensive_class_plan_items,
-        build_group_feature_plan_items,
-        build_individual_student_exam_plan_items,
-        build_school_class_comparison_plan_items,
-        build_school_subject_report_plan_items,
-        build_tier_alert_plan_items,
-        coerce_plan_items_if_needed,
-        should_replace_with_citywide_plan,
-        should_replace_with_class_overview_plan,
-        should_replace_with_comprehensive_plan,
-        should_replace_with_group_feature_plan,
-        should_replace_with_individual_student_plan,
-        should_replace_with_school_class_comparison_plan,
-        should_replace_with_school_exam_plan,
-        should_replace_with_tier_alert_plan,
-    )
+    from src.agent.expand.planner import coerce_plan_items_if_needed
 
     await _emit_agent_speak(emit, agent="Planner", status="start", steps=steps)
 
-    # 全市学情报告：确定性 3 步计划，跳过 Planner LLM（避免超时/回落单任务）
-    if is_citywide_analysis_query(request.question):
-        plan_items = build_citywide_team_plan_items(request.question)
-        await _emit_agent_speak(
-            emit,
-            agent="Planner",
-            status="end",
-            steps=steps,
-            plan_count=len(plan_items),
-            deterministic=True,
-        )
-        return plan_items
+    route = await classify_report_intent(request.question, llm_client)
+    if constraints is not None:
+        constraints.report_route = route.to_dict()
 
-    # 单个学生得分/知识点：确定性 2 步，避免被当成「简单查询」只出总分
-    if is_individual_student_analysis_query(request.question):
-        plan_items = build_individual_student_exam_plan_items(request.question)
+    if should_use_deterministic_report_plan(request.question, route):
+        plan_items = plan_items_for_route(route, request.question)
         await _emit_agent_speak(
             emit,
             agent="Planner",
@@ -1076,84 +1063,9 @@ async def _run_planner_phase(
             steps=steps,
             plan_count=len(plan_items),
             deterministic=True,
-        )
-        return plan_items
-
-    # 班级多场考试：确定性走 comprehensive，避免误入单科诊断导致人次累加、无对比
-    if is_multi_exam_class_analysis_query(request.question):
-        plan_items = build_comprehensive_class_plan_items(request.question)
-        await _emit_agent_speak(
-            emit,
-            agent="Planner",
-            status="end",
-            steps=steps,
-            plan_count=len(plan_items),
-            deterministic=True,
-        )
-        return plan_items
-
-    # 临界生/分层预警：优先于学校科目诊断
-    if is_tier_alert_query(request.question):
-        plan_items = build_tier_alert_plan_items(request.question)
-        await _emit_agent_speak(
-            emit,
-            agent="Planner",
-            status="end",
-            steps=steps,
-            plan_count=len(plan_items),
-            deterministic=True,
-        )
-        return plan_items
-
-    # 班级成绩总览：优先于学校科目诊断
-    if is_class_overview_query(request.question):
-        plan_items = build_class_overview_plan_items(request.question)
-        await _emit_agent_speak(
-            emit,
-            agent="Planner",
-            status="end",
-            steps=steps,
-            plan_count=len(plan_items),
-            deterministic=True,
-        )
-        return plan_items
-
-    # 学校各班横向对比：须先于群体特征（避免「班级+对比」被误判为群体特征）
-    if is_school_class_comparison_query(request.question):
-        plan_items = build_school_class_comparison_plan_items(request.question)
-        await _emit_agent_speak(
-            emit,
-            agent="Planner",
-            status="end",
-            steps=steps,
-            plan_count=len(plan_items),
-            deterministic=True,
-        )
-        return plan_items
-
-    # 群体特征（按班级/区县等）：在横向对比之后
-    if is_group_feature_query(request.question):
-        plan_items = build_group_feature_plan_items(request.question)
-        await _emit_agent_speak(
-            emit,
-            agent="Planner",
-            status="end",
-            steps=steps,
-            plan_count=len(plan_items),
-            deterministic=True,
-        )
-        return plan_items
-
-    # 学校科目/多维报告：确定性 3 步，避免 LLM 漏拆或缩成单班
-    if is_school_exam_report_query(request.question):
-        plan_items = build_school_subject_report_plan_items(request.question)
-        await _emit_agent_speak(
-            emit,
-            agent="Planner",
-            status="end",
-            steps=steps,
-            plan_count=len(plan_items),
-            deterministic=True,
+            needs_report=route.needs_report,
+            report_type=route.report_type.value if route.report_type else None,
+            route_source=route.source,
         )
         return plan_items
 
@@ -1174,24 +1086,9 @@ async def _run_planner_phase(
         logger.warning("planner failed: %s", e)
         await _emit_agent_speak(emit, agent="Planner", status="error", steps=steps, error=str(e))
         plan_items = [{"sub_task": request.question, "sub_task_agent": "DataAnalyst"}]
-        if should_replace_with_citywide_plan(request.question, plan_items):
-            plan_items = build_citywide_team_plan_items(request.question)
-        elif should_replace_with_individual_student_plan(request.question, plan_items):
-            plan_items = build_individual_student_exam_plan_items(request.question)
-        elif should_replace_with_tier_alert_plan(request.question, plan_items):
-            plan_items = build_tier_alert_plan_items(request.question)
-        elif should_replace_with_school_class_comparison_plan(request.question, plan_items):
-            plan_items = build_school_class_comparison_plan_items(request.question)
-        elif should_replace_with_group_feature_plan(request.question, plan_items):
-            plan_items = build_group_feature_plan_items(request.question)
-        elif should_replace_with_class_overview_plan(request.question, plan_items):
-            plan_items = build_class_overview_plan_items(request.question)
-        elif should_replace_with_comprehensive_plan(request.question, plan_items):
-            plan_items = build_comprehensive_class_plan_items(request.question)
-        elif should_replace_with_school_exam_plan(request.question, plan_items):
-            plan_items = build_school_subject_report_plan_items(request.question)
-        else:
-            plan_items = coerce_plan_items_if_needed(request.question, plan_items)
+        plan_items = coerce_plan_items_if_needed(
+            request.question, plan_items, route=route
+        )
         return plan_items
 
     ar = reply.action_report
@@ -1209,53 +1106,8 @@ async def _run_planner_phase(
         sub_task_agent = "ToolExpert" if raw_agent == "ToolExpert" else "DataAnalyst"
         plan_items.append({"sub_task": p, "sub_task_agent": sub_task_agent})
 
-    if should_replace_with_citywide_plan(request.question, plan_items):
-        logger.info("planner citywide fallback: replacing %d plan(s) with deterministic 3-step plan", len(plan_items))
-        plan_items = build_citywide_team_plan_items(request.question)
-    elif should_replace_with_individual_student_plan(request.question, plan_items):
-        logger.info(
-            "planner individual-student fallback: replacing %d plan(s) with 2-step diagnosis",
-            len(plan_items),
-        )
-        plan_items = build_individual_student_exam_plan_items(request.question)
-    elif should_replace_with_tier_alert_plan(request.question, plan_items):
-        logger.info(
-            "planner tier-alert fallback: replacing %d plan(s) with 2-step tier alert plan",
-            len(plan_items),
-        )
-        plan_items = build_tier_alert_plan_items(request.question)
-    elif should_replace_with_school_class_comparison_plan(request.question, plan_items):
-        logger.info(
-            "planner class-comparison fallback: replacing %d plan(s) with school-wide 3-step",
-            len(plan_items),
-        )
-        plan_items = build_school_class_comparison_plan_items(request.question)
-    elif should_replace_with_group_feature_plan(request.question, plan_items):
-        logger.info(
-            "planner group-feature fallback: replacing %d plan(s) with 2-step group feature plan",
-            len(plan_items),
-        )
-        plan_items = build_group_feature_plan_items(request.question)
-    elif should_replace_with_class_overview_plan(request.question, plan_items):
-        logger.info(
-            "planner class-overview fallback: replacing %d plan(s) with 2-step class overview plan",
-            len(plan_items),
-        )
-        plan_items = build_class_overview_plan_items(request.question)
-    elif should_replace_with_comprehensive_plan(request.question, plan_items):
-        logger.info(
-            "planner multi-exam fallback: replacing %d plan(s) with comprehensive 2-step",
-            len(plan_items),
-        )
-        plan_items = build_comprehensive_class_plan_items(request.question)
-    elif should_replace_with_school_exam_plan(request.question, plan_items):
-        logger.info(
-            "planner school-exam fallback: replacing %d plan(s) with school subject 3-step",
-            len(plan_items),
-        )
-        plan_items = build_school_subject_report_plan_items(request.question)
-    else:
-        plan_items = coerce_plan_items_if_needed(request.question, plan_items)
+    plan_items = coerce_plan_items_if_needed(request.question, plan_items, route=route)
+    plan_items = coerce_plan_to_route(request.question, plan_items, route)
 
     await _emit_agent_speak(
         emit,
@@ -1263,6 +1115,9 @@ async def _run_planner_phase(
         status="end",
         steps=steps,
         plan_count=len(plan_items),
+        needs_report=route.needs_report,
+        report_type=route.report_type.value if route.report_type else None,
+        route_source=route.source,
     )
     return plan_items
 
@@ -1325,12 +1180,16 @@ async def _run_summarizer_multi(
     fallback: str,
     report_data: dict[str, Any] | None = None,
     steps: list[dict[str, Any]] | None = None,
+    fact_answer: bool = False,
 ) -> str:
     """把 N 个 sub_task 的结果综合成一段中文结论。失败回落 ``fallback``。"""
-    sub_tasks_block = _format_sub_tasks_block(sub_phases, report_data=report_data)
+    sub_tasks_block = _format_sub_tasks_block(
+        sub_phases, report_data=report_data, fact_answer=fact_answer
+    )
     context = {
         "question": question,
         "sub_tasks_block": sub_tasks_block,
+        "answer_mode": "fact" if fact_answer else "report",
     }
     await _emit_agent_speak(emit, agent="Summarizer", status="start", steps=steps)
     try:
@@ -1348,10 +1207,14 @@ async def _run_summarizer_multi(
         await _emit_agent_speak(
             emit, agent="Summarizer", status="error", steps=steps, error=str(e)
         )
-        return _reconcile_summary_with_sub_phases(fallback, sub_phases)
+        return _reconcile_summary_with_sub_phases(
+            fallback, sub_phases, fact_answer=fact_answer
+        )
 
     content = (reply.content or "").strip()
-    reconciled = _reconcile_summary_with_sub_phases(content or fallback, sub_phases)
+    reconciled = _reconcile_summary_with_sub_phases(
+        content or fallback, sub_phases, fact_answer=fact_answer
+    )
     preview = reconciled.replace("\n", " ").strip()[:160]
     await _emit_agent_speak(
         emit,
@@ -1361,6 +1224,51 @@ async def _run_summarizer_multi(
         summary_preview=preview,
     )
     return reconciled
+
+
+def _sub_phases_have_html_report_output(
+    sub_phases: list[tuple[str, "_DataAnalystPhase"]],
+) -> bool:
+    """子任务是否已产出 HTML 报告（含仅出现在 tool_calls、尚未写入 state.reports）。
+
+    前端会从 tool_result 抽出学科诊断等报告；若此处漏判，AdHoc 会再推
+    「自主分析报告」，UI 默认展示最新一份，表现为诊断报告被覆盖。
+    """
+    for _, phase in sub_phases:
+        if phase.state.reports:
+            return True
+        for tc in phase.state.tool_calls or []:
+            if not isinstance(tc, dict):
+                continue
+            if tc.get("success") is False:
+                continue
+            data = tc.get("data")
+            if not isinstance(data, dict) or data.get("error"):
+                continue
+            html = str(data.get("html") or "").strip()
+            if not html:
+                continue
+            if data.get("output_type") == "html":
+                return True
+            tool = str(tc.get("tool") or "")
+            if tool == "render_html_report" or tool.startswith("build_"):
+                return True
+    return False
+
+
+def _should_skip_ad_hoc_report(
+    sub_phases: list[tuple[str, "_DataAnalystPhase"]],
+    report_route: dict[str, Any] | None = None,
+) -> bool:
+    """已有预设/教育 HTML，或正式学情路由已走教育工具链时，禁止再写自主分析报告。"""
+    if _sub_phases_have_html_report_output(sub_phases):
+        return True
+    rt = ""
+    if isinstance(report_route, dict):
+        rt = str(report_route.get("report_type") or "").strip()
+    if rt and any(_phase_has_education_tools(p) for _, p in sub_phases):
+        return True
+    return False
 
 
 async def _run_ad_hoc_report_phase(
@@ -1373,13 +1281,15 @@ async def _run_ad_hoc_report_phase(
     steps: list[dict[str, Any]] | None = None,
     report_data: dict[str, Any] | None = None,
     chart_type: str | None = None,
+    report_route: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """无预设 HTML 报告时，由 LLM 决定是否围绕结论自主撰写报告。
 
-    已有 ``phase.state.reports`` 则整段跳过。失败 / generate=false 均不出报告。
+    已有 ``phase.state.reports``、教育工具 HTML，或正式学情路由已走教育工具链时跳过。
+    失败 / generate=false 均不出报告。
     agent_speak 复用 Charter（少改四卡 UI），detail 标明自主分析报告。
     """
-    if any(p.state.reports for _, p in sub_phases):
+    if _should_skip_ad_hoc_report(sub_phases, report_route=report_route):
         return []
 
     sub_block = _format_sub_tasks_block(sub_phases, report_data=report_data)
@@ -1728,9 +1638,11 @@ def _ensure_ad_hoc_echarts_runtime(html: str) -> str:
 def _reconcile_summary_with_sub_phases(
     text: str,
     sub_phases: list[tuple[str, "_DataAnalystPhase"]],
+    *,
+    fact_answer: bool = False,
 ) -> str:
     """有报告/权威 KPI 时改写结论；无权威时清洗预览规模人数幻觉。"""
-    from src.agent.education.summary_context import reconcile_answer_with_artifacts
+    from src.agent.education.summary_context import reconcile_answer_with_artifacts_detailed
 
     tool_calls: list[dict[str, Any]] = []
     reports: list[dict[str, Any]] = []
@@ -1749,12 +1661,21 @@ def _reconcile_summary_with_sub_phases(
                     "sql_row_capped": er.get("sql_row_capped"),
                 }
             )
-    return reconcile_answer_with_artifacts(
+    reconciled, conflicts = reconcile_answer_with_artifacts_detailed(
         text,
         tool_calls=tool_calls,
         reports=reports,
         exec_results=exec_results,
+        fact_answer=fact_answer,
     )
+    if conflicts:
+        logger.info(
+            "summary kpi conflicts fixed: %s",
+            "; ".join(
+                f"{c.field}:{c.claimed}->{c.authority}" for c in conflicts[:20]
+            ),
+        )
+    return reconciled
 
 
 def _reconcile_phase_answer(text: str, phase: "_DataAnalystPhase") -> str:
@@ -1791,6 +1712,7 @@ def _format_sub_tasks_block(
     sub_phases: list[tuple[str, "_DataAnalystPhase"]],
     *,
     report_data: dict[str, Any] | None = None,
+    fact_answer: bool = False,
 ) -> str:
     """把 N 个 sub_task 执行详情拼成 Summarizer 的 {{sub_tasks_block}} 变量。
 
@@ -1831,23 +1753,39 @@ def _format_sub_tasks_block(
         row_count = int(exec_result.get("row_count") or len(rows))
         sample_shown = min(_SAMPLE_ROWS_LIMIT, row_count) if row_count else 0
         sql_text = phase.state.last_sql or ""
-        stats_block = extract_stats_authority_block(
-            phase.state.tool_calls,
-            reports=phase.state.reports,
-        )
-        authority_notes = format_sql_result_authority_notes(
-            sql=sql_text,
-            row_count=row_count,
-            sample_shown=sample_shown,
-        )
+        stats_block = ""
+        if not fact_answer:
+            stats_block = extract_stats_authority_block(
+                phase.state.tool_calls,
+                reports=phase.state.reports,
+            )
+        if fact_answer:
+            authority_notes = (
+                f"⚠️ 事实问答：下列「共 {row_count} 行」仅为本次查询返回行数"
+                "（可能含 Top-N / 并列 / LIMIT），**禁止**写成参考人数/共N人参考/班级人数；"
+                "直接依据查询结论回答用户问题即可。"
+            )
+        else:
+            authority_notes = format_sql_result_authority_notes(
+                sql=sql_text,
+                row_count=row_count,
+                sample_shown=sample_shown,
+            )
         # DataAnalyst 的 terminate 结论也注入（保留 KPI 行），避免只剩样例表
         final_ans = (phase.reply.content if phase.reply else "") or ""
         final_snip = ""
         if final_ans.strip() and not is_tool_expert:
-            final_snip = (
-                "\n查询结论（须优先照抄其中的人数/分数线；若与上方权威 KPI 冲突，以权威 KPI 为准）：\n"
-                + truncate_keeping_kpi_lines(final_ans.strip(), limit=1200)
-            )
+            if fact_answer:
+                final_snip = (
+                    "\n查询结论（事实问答：优先照抄其中的 student_id/分数等直接答案；"
+                    "忽略其中的参考人数/共N人参考套话）：\n"
+                    + truncate_keeping_kpi_lines(final_ans.strip(), limit=1200)
+                )
+            else:
+                final_snip = (
+                    "\n查询结论（须优先照抄其中的人数/分数线；若与上方权威 KPI 冲突，以权威 KPI 为准）：\n"
+                    + truncate_keeping_kpi_lines(final_ans.strip(), limit=1200)
+                )
 
         block = (
             f"{header}\n"
@@ -1858,18 +1796,21 @@ def _format_sub_tasks_block(
         if stats_block:
             block += f"{stats_block}\n"
         # 任意提问：永不向 Summarizer 贴明细样例表，从输入侧消灭「数 20 行人头」
-        block += (
-            f"（明细样例已省略：共 {row_count} 行；"
-            "人数/率值以权威 KPI 或 AUTHORITATIVE_ROW_COUNT 为准，"
-            "禁止按预览行数写参考人数）\n"
-        )
+        if fact_answer:
+            block += f"（明细已省略：共 {row_count} 行；勿把行数写成班级人数）\n"
+        else:
+            block += (
+                f"（明细样例已省略：共 {row_count} 行；"
+                "人数/率值以权威 KPI 或 AUTHORITATIVE_ROW_COUNT 为准，"
+                "禁止按预览行数写参考人数）\n"
+            )
         if final_snip:
             block += final_snip
         if is_tool_expert:
             block += f"\n\n{tool_block}"
         blocks.append(block)
 
-    footer = format_education_pipeline_footer(report_data)
+    footer = "" if fact_answer else format_education_pipeline_footer(report_data)
     body = "\n\n".join(blocks)
     if footer:
         return f"{body}\n\n{footer}"
@@ -2247,33 +2188,9 @@ def _report_fingerprint(html: str) -> str:
 
 def _report_html_is_sparse(html: str) -> bool:
     """空壳 / KPI 未填充的报告：不推送到前端下拉框。"""
-    text = (html or "").strip()
-    if not text:
-        return True
-    empty_signals = (
-        "tb_score）未查到匹配记录",
-        "成绩表（tb_score）未查到",
-        "KPI 将显示为空",
-        "KPI 与分数段分布为空",
-        "成绩为空——KPI",
-        "HTML 为空",
-    )
-    if any(s in text for s in empty_signals):
-        # 仍含充实小题/档案表时放行
-        has_body = (
-            text.count("<tr") >= 8
-            or "archive-card" in text
-            or "edu-diag-chip" in text
-            or "advice-list" in text
-        )
-        if not has_body:
-            return True
-    # KPI 卡片大量为「-」且无明显数据表
-    dash_kpi = len(re.findall(r'class="value">\s*-\s*</div>', text))
-    dash_kpi += len(re.findall(r"class='value'>\s*-\s*</div>", text))
-    if dash_kpi >= 3 and text.count("<tr") < 5:
-        return True
-    return False
+    from src.agent.education.report_quality import report_html_is_sparse
+
+    return report_html_is_sparse(html)
 
 
 # --------------------------------------------------------------------------- #

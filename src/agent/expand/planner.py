@@ -95,11 +95,11 @@ PLANNER_DESC = """[你的职责]
   "用 education/<模板名>.html 模板组装 HTML 报告（数据取上游子任务）"。
 
 - 班级总览报告（class_overview）：
-  ["查询该班每位学生各科分数（SQL 须含 student_id/姓名、subject、score、exam_score；禁止只查班级 KPI 聚合）", "查询该班在年级中的排名位置",
+  ["查询该班每位学生各科分数（SQL 须含 student_id、subject、score、exam_score；禁止只查班级 KPI 聚合）", "查询该班在年级中的排名位置",
    {"task": "用 education/class_overview.html 模板组装 HTML 报告（数据取上游子任务；STUDENT_ARCHIVE_TABLE 由工具自动从上游成绩明细生成，勿手填空表）", "sub_task_agent": "ToolExpert"}]
 - **学校/班级 + 成绩总览/班级总览**（如「扬州中学高三(10)班连淮扬镇数学成绩总览」）——
   **只拆 2 个子任务**，走班级总览，**禁止**走科目诊断 fetch+sections：
-  ["查询该班【考试】【科目】每位学生得分（SQL 须含 student_id/姓名、score、exam_score；禁止只查 KPI）",
+  ["查询该班【考试】【科目】每位学生得分（SQL 须含 student_id、score、exam_score；禁止只查 KPI）",
    {"task": "调 build_class_overview_report_data_tool(class_name=【班级】, subject_name=【科目】, render=true) 生成班级总览 HTML；**禁止** build_subject_diagnosis_sections_tool；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 - 年级对比报告（grade_comparison）/ **学校 + 各班横向多维对比**
   （如「扬州中学在连淮扬镇数学考试中各个班级的横向多维对比分析」）——
@@ -123,7 +123,7 @@ PLANNER_DESC = """[你的职责]
   **严禁** DataAnalyst 自行写 tb_score_detail JOIN SQL；**严禁**跳过 fetch 直接 render。
 - **单个学生 + 单次考试 + 科目/知识点分析**（问题含学号/STU/学生编号/「学生001」）——
   **只拆 2 个子任务**，**禁止**走下方「学校/班级科目诊断」的 fetch+sections 三步：
-  ["查询该学生【学号/姓名】在【考试】【科目】的整体成绩（分数、班级/年级排名、与班级/年级均分对照）",
+  ["查询该学生【学号】在【考试】【科目】的整体成绩（分数、班级/年级排名、与班级/年级均分对照）",
    {"task": "调 build_student_subject_diagnosis_tool(student_id=【学号】, subject_name=【科目】, exam_name=【考试】, render=true) 组装该学生个人知识点分析报告；完成后 terminate。**禁止** build_subject_diagnosis_sections_tool", "sub_task_agent": "ToolExpert"}]
   **严禁**为班级/全校生成 subject_diagnosis 聚合报告。
 - 个体画像/趋势/预警/群体对比同理，分别用 education/student_exam_analysis.html、
@@ -131,12 +131,12 @@ PLANNER_DESC = """[你的职责]
 - **班级 + 成绩走势/进退步（趋势跟踪，非综合复盘）**
   （如「扬州中学高三(10)班数学成绩走势与进退步分析」）——
   **只拆 2 个子任务**，走 **趋势报告**（`trend_tracking`）：
-  ["查询该班历次【科目】各场考试均分与个人进退（SQL 须含 exam_name、student_id/姓名、score、exam_score；按考试时间排序；禁止只查一场）",
+  ["查询该班历次【科目】各场考试均分与个人进退（SQL 须含 exam_name、student_id、score、exam_score；按考试时间排序；禁止只查一场）",
    {"task": "调 build_trend_tracking_report_data_tool(class_name=【班级】, subject_name=【科目】, render=true) 生成【成绩趋势报告】（均分折线+明细表+进退步解读）；**禁止** render_html_report 手填 / build_comprehensive_report_data_tool；完成后 terminate", "sub_task_agent": "ToolExpert"}]
   **区分**：问的是「走势 / 进退步 / 趋势 / 折线」且**未**说「综合分析 / 综合报告 / 所有考试 / 多次考试综合」→ 用本条；不要默认改成综合分析。
 - **班级/学校 + 临界生/分层预警报告**（如「扬州中学高三(10)班数学临界生预警报告」）——
   **只拆 2 个子任务**，走分层预警，**禁止**走科目诊断 fetch+sections：
-  ["查询该班【科目】每位学生得分（SQL 须含 student_id/姓名、score、exam_score；有上次成绩则带 prev_score）",
+  ["查询该班【科目】每位学生得分（SQL 须含 student_id、score、exam_score；有上次成绩则带 prev_score）",
    {"task": "调 build_tier_alert_report_data_tool(class_name=【班级】, subject_name=【科目】, render=true) 生成分层预警 HTML（临界生/退步/偏科）；**禁止** build_subject_diagnosis_sections_tool；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 - **学校 + 按班级/区县等群体对比特征**（如「扬州中学连淮扬镇数学考试按班级群体对比特征」；
   问句须含「群体特征/按班级群体」等**明确**口径。
@@ -151,12 +151,12 @@ PLANNER_DESC = """[你的职责]
   **严禁**为其他学生（如学生009）额外增加子任务或报告。
 - **班级 + 所有/历次/多次考试「综合分析」**（如「扬州中学高三(11)班所有数学考试综合分析」）——
   **只拆 2 个子任务**，走综合报告（9 维复盘），**禁止**走科目诊断 fetch+sections：
-  ["查询该班历次考试每位学生【科目】分数（SQL 须含 exam_name、student_id/姓名、score、exam_score；禁止只查 KPI 聚合、禁止只查一场）",
+  ["查询该班历次考试每位学生【科目】分数（SQL 须含 exam_name、student_id、score、exam_score；禁止只查 KPI 聚合、禁止只查一场）",
    {"task": "调 build_comprehensive_report_data_tool(class_name=【班级】) 生成多次考试综合分析 HTML；**禁止** build_subject_diagnosis_sections_tool；完成后 terminate", "sub_task_agent": "ToolExpert"}]
   **勿把**仅含「走势 / 进退步」的问法扩成综合分析；用户要综合复盘时应含「综合分析 / 综合报告」或明确「所有/历次/多次考试」范围。
 - 多次考试综合分析报告（comprehensive，含 9 个维度：整体概览/各科趋势/相关性/
   分布/进退步 TOP/偏科/单科之最/总分轨迹/学生档案）——仅当问题点名综合分析时使用：
-  ["查询该班历次考试每位学生分数（SQL 须含 exam_name、student_id/姓名、score；禁止只查班级 KPI 聚合）",
+  ["查询该班历次考试每位学生分数（SQL 须含 exam_name、student_id、score；禁止只查班级 KPI 聚合）",
    {"task": "调 build_comprehensive_report_data_tool(class_name=【班级】) 一步生成综合分析 HTML（进步/退步 TOP5 与每位学生档案由工具自动计算）；**禁止** render_html_report / 手填模板；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 - 结构化诊断报告（diagnostic_report，一般性/特殊性/动态性三节）：
   ["查询【范围】成绩明细（含 class/district/subject）用于聚合",
@@ -333,8 +333,56 @@ def build_school_class_comparison_plan_items(question: str) -> list[dict[str, st
     ]
 
 
+def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
+    """事实查询：仅 DataAnalyst，禁止生成任何 HTML 报告。"""
+    from src.agent.education.orchestrator import _extract_class_name, _extract_subject
+    from src.agent.education.query_parse import extract_school_target
+
+    q = (question or "").strip()
+    school = extract_school_target(q) or ""
+    class_name = _extract_class_name(q) or ""
+    subject = _plan_subject_name(q) or (_extract_subject(q) or "")
+    exam = _plan_exam_name(q)
+    scope_bits = []
+    if school:
+        scope_bits.append(f"学校【{school}】")
+    if class_name:
+        scope_bits.append(f"班级【{class_name}】")
+    if subject:
+        scope_bits.append(f"科目【{subject}】")
+    if exam:
+        scope_bits.append(f"考试【{exam}】")
+    scope = "、".join(scope_bits) if scope_bits else "问题中的范围"
+    return [
+        {
+            "sub_task": (
+                f"用 SQL 直接回答用户问题（范围：{scope}）。"
+                "WHERE 必须按问题中的班级/学校/科目/考试过滤（有则过滤）；"
+                "涉及学生时 SELECT **仅用 student_id**（或 sc.student_id / st.id 学号），"
+                "以及 score、exam_score、class 等；"
+                "**禁止** SELECT/展示姓名明文（xm、name、student_name、真实姓名）；"
+                "结论里点名学生时**一律写 student_id**，禁止写中文姓名。"
+                "只回答用户所问（如最高分是谁/多少分）；"
+                "**禁止**写「参考人数/共N人参考/班级人数」——"
+                "Top-N、LIMIT、返回行数都不是全班人数；"
+                "**禁止**套用学情总判/关键指标/教学建议长文。"
+                "用一两段自然语言给出结论即可。"
+                "**禁止**调任何 build_*_report / render_html / 学情报告工具；"
+                "**禁止**生成 HTML 报告；答完即 terminate。"
+                f"原问：{q}"
+            ),
+            "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
+        },
+    ]
+
+
+def build_top_student_lookup_plan_items(question: str) -> list[dict[str, str]]:
+    """兼容旧名：已并入 build_fact_query_plan_items。"""
+    return build_fact_query_plan_items(question)
+
+
 def build_individual_student_exam_plan_items(question: str) -> list[dict[str, str]]:
-    """单个学生分析：单场 → 知识点诊断；多次/这几次 → 趋势对比报告。"""
+    """单个学生分析：单场 → 知识点诊断；多次/这几次/个人画像 → 趋势对比报告。"""
     from src.agent.education.query_parse import (
         extract_student_target,
         is_multi_exam_student_analysis_query,
@@ -348,8 +396,10 @@ def build_individual_student_exam_plan_items(question: str) -> list[dict[str, st
         exam = ""
     subject_arg = f", subject_name={subject}" if subject else ""
     subject_disp = f"【{subject}】" if subject else ""
+    q = question or ""
+    wants_portrait = any(h in q for h in ("个人画像", "学生画像", "个体画像"))
 
-    if is_multi_exam_student_analysis_query(question):
+    if is_multi_exam_student_analysis_query(question) or wants_portrait:
         subject_label = subject_disp or "各科"
         return [
             {
@@ -369,6 +419,7 @@ def build_individual_student_exam_plan_items(question: str) -> list[dict[str, st
                     "组装该生**多次考试**学情 HTML（须体现：具体考试次数、历次得分明细、"
                     "多次均分、与班级第1名差距、成绩趋势）；完成后 terminate。"
                     "**禁止** build_student_subject_diagnosis_tool；"
+                    "**禁止** build_subject_diagnosis_sections_tool；"
                     "**禁止** exam_name 填「这几次」"
                 ),
                 "sub_task_agent": _TOOL_EXPERT_AGENT,
@@ -409,7 +460,7 @@ def build_comprehensive_class_plan_items(question: str) -> list[dict[str, str]]:
         {
             "sub_task": (
                 f"查询【{class_name}】历次{subject_label}考试每位学生分数"
-                "（SQL 须含 exam_name、student_id/姓名、score、exam_score；"
+                "（SQL 须含 exam_name、student_id、score、exam_score；"
                 "须带出该班全部相关考试，禁止只查班级 KPI 聚合、禁止只查单场）"
             ),
             "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
@@ -454,7 +505,7 @@ def build_tier_alert_plan_items(question: str) -> list[dict[str, str]]:
         {
             "sub_task": (
                 f"查询【{school_l}】【{class_l}】在【{exam_l}】{subject_l}每位学生得分"
-                "（SQL 须含 student_id/姓名、score、exam_score；"
+                "（SQL 须含 student_id、score、exam_score；"
                 "有上次同科成绩则带 prev_score；禁止只查 KPI 聚合）"
             ),
             "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
@@ -547,7 +598,7 @@ def build_trend_tracking_plan_items(question: str) -> list[dict[str, str]]:
         {
             "sub_task": (
                 f"查询【{school_l}】【{class_l}】历次{subject_l}考试每位学生分数"
-                "（SQL 须含 exam_name、student_id/姓名、subject_name、score、exam_score；"
+                "（SQL 须含 exam_name、student_id、subject_name、score、exam_score；"
                 "按考试时间排序；禁止只查一场、禁止只查 KPI 聚合）"
             ),
             "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
@@ -607,7 +658,7 @@ def build_class_overview_plan_items(question: str) -> list[dict[str, str]]:
         {
             "sub_task": (
                 f"查询【{school_l}】【{class_l}】在【{exam_l}】{subject_l}每位学生得分"
-                "（SQL 须含 student_id/姓名、score、exam_score；禁止只查班级 KPI 聚合）"
+                "（SQL 须含 student_id、score、exam_score；禁止只查班级 KPI 聚合）"
             ),
             "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
         },
@@ -731,85 +782,28 @@ def should_replace_with_class_overview_plan(
 def coerce_plan_items_if_needed(
     question: str,
     plan_items: list[dict[str, str]],
+    *,
+    route: Any | None = None,
 ) -> list[dict[str, str]]:
-    """学校报告 / 个人得分 / 多场考试 / 各班对比 / 分层预警 / 群体特征 / 班级总览 / 趋势修正。"""
-    from src.agent.education.query_parse import (
-        is_class_overview_query,
-        is_group_feature_query,
-        is_multi_exam_class_analysis_query,
-        is_school_class_comparison_query,
-        is_school_exam_report_query,
-        is_tier_alert_query,
-        is_trend_tracking_query,
+    """按意图路由纠正 LLM 计划；无 route 时同步分类后再对齐。"""
+    from src.agent.education.intent_router import (
+        ReportRoute,
+        classify_report_intent_sync,
+        coerce_plan_to_route,
+        should_use_deterministic_report_plan,
     )
 
     q = (question or "").strip()
-    if should_replace_with_individual_student_plan(q, plan_items):
-        logger.info(
-            "planner individual-student coerce: expanding to 2-step student subject diagnosis"
-        )
-        return build_individual_student_exam_plan_items(q)
-    if should_replace_with_trend_tracking_plan(q, plan_items):
-        logger.info(
-            "planner trend-tracking coerce: replacing %d plan(s) with trend_tracking 2-step",
-            len(plan_items),
-        )
-        return build_trend_tracking_plan_items(q)
-    if should_replace_with_tier_alert_plan(q, plan_items):
-        logger.info(
-            "planner tier-alert coerce: replacing %d plan(s) with tier_alert 2-step",
-            len(plan_items),
-        )
-        return build_tier_alert_plan_items(q)
-    # 班级横向对比须先于群体特征：避免 LLM 把「横向对比」拆成 group_feature
-    if should_replace_with_school_class_comparison_plan(q, plan_items):
-        logger.info(
-            "planner class-comparison coerce: replacing %d plan(s) with school-wide 3-step",
-            len(plan_items),
-        )
-        return build_school_class_comparison_plan_items(q)
-    if should_replace_with_group_feature_plan(q, plan_items):
-        logger.info(
-            "planner group-feature coerce: replacing %d plan(s) with group_feature 2-step",
-            len(plan_items),
-        )
-        return build_group_feature_plan_items(q)
-    if should_replace_with_class_overview_plan(q, plan_items):
-        logger.info(
-            "planner class-overview coerce: replacing %d plan(s) with class_overview 2-step",
-            len(plan_items),
-        )
-        return build_class_overview_plan_items(q)
-    if should_replace_with_comprehensive_plan(q, plan_items):
-        logger.info(
-            "planner multi-exam coerce: replacing %d plan(s) with comprehensive 2-step",
-            len(plan_items),
-        )
-        return build_comprehensive_class_plan_items(q)
-    if should_replace_with_school_exam_plan(q, plan_items):
-        logger.info(
-            "planner school-exam coerce: replacing %d plan(s) with school subject 3-step",
-            len(plan_items),
-        )
-        return build_school_subject_report_plan_items(q)
-    if (
-        is_multi_exam_class_analysis_query(q)
-        or is_school_class_comparison_query(q)
-        or is_tier_alert_query(q)
-        or is_group_feature_query(q)
-        or is_class_overview_query(q)
-        or is_trend_tracking_query(q)
-    ):
-        return plan_items
-    if not is_school_exam_report_query(q):
-        return plan_items
-    if len(plan_items) <= 1 and (
-        not plan_items or (plan_items[0].get("sub_task") or "").strip() == q
-    ):
-        logger.info(
-            "planner school-report coerce: expanding single plan to 3-step school subject report"
-        )
-        return build_school_subject_report_plan_items(q)
+    if isinstance(route, ReportRoute):
+        resolved = route
+    else:
+        resolved = classify_report_intent_sync(q)
+
+    if not resolved.needs_report:
+        return coerce_plan_to_route(q, plan_items, resolved)
+
+    if should_use_deterministic_report_plan(q, resolved):
+        return coerce_plan_to_route(q, plan_items, resolved)
     return plan_items
 
 

@@ -3,7 +3,8 @@
 Summarizer 无 Action：thinking 的原文即结论。主要验证：
 - LLM 输出被原样回填到 reply.content；
 - Profile desc 含 runner 会注入的模板变量；
-- prompt 里确实替换了 context 变量。
+- prompt 里确实替换了 context 变量；
+- 事实问答 / 报告题使用不同写作 brief。
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ def _run(coro):
 def _ctx(**overrides):
     base = {
         "question": "本月订单最多的三个用户",
+        "answer_mode": "report",
         "sub_tasks_block": (
             "### 子任务 1：本月订单最多的三个用户\n"
             "SQL:\n```sql\nSELECT user_id, COUNT(*) AS n FROM orders GROUP BY 1 ORDER BY n DESC LIMIT 3\n```\n"
@@ -83,28 +85,53 @@ def test_summarizer_prompt_injects_context_variables():
     assert "SELECT user_id, COUNT(*)" in system_msg
     assert "{{question}}" not in system_msg
     assert "{{sub_tasks_block}}" not in system_msg
+    assert "{{writing_brief}}" not in system_msg
 
 
 def test_summarizer_desc_has_required_template_vars():
-    for var in ("{{question}}", "{{sub_tasks_block}}"):
+    for var in ("{{question}}", "{{sub_tasks_block}}", "{{writing_brief}}", "{{answer_mode}}"):
         assert var in SUMMARIZER_DESC, f"Summarizer desc missing {var}"
 
 
-def test_summarizer_desc_forbids_offset_page_as_class_size():
-    assert "OFFSET" in SUMMARIZER_DESC
-    assert "样例" in SUMMARIZER_DESC
-    assert "权威统计" in SUMMARIZER_DESC
+def test_summarizer_report_mode_has_edu_structure():
+    llm = _ScriptedLlm("ok")
+    agent = SummarizerAgent(llm_client=llm)
+    _run(
+        agent.generate_reply(
+            received_message=AgentMessage(
+                content="q", role="user", context=_ctx(answer_mode="report")
+            ),
+            sender=UserProxyAgent(),
+        )
+    )
+    system_msg = llm.calls[0][0]["content"]
+    assert "学情总判" in system_msg
+    assert "关键指标" in system_msg
+    assert "教学建议" in system_msg
+    assert "OFFSET" in system_msg or "LIMIT" in system_msg
 
 
-def test_summarizer_desc_requires_detailed_edu_structure():
-    """结论须为详实教育学情结构，紧扣已有数据。"""
-    assert "先给结论（1~2 句）" not in SUMMARIZER_DESC
-    assert "简述依据（≤ 3 句）" not in SUMMARIZER_DESC
-    assert "教育学情" in SUMMARIZER_DESC
-    assert "学情总判" in SUMMARIZER_DESC
-    assert "关键指标" in SUMMARIZER_DESC
-    assert "学情解读" in SUMMARIZER_DESC
-    assert "教学建议" in SUMMARIZER_DESC
-    assert "紧扣已有数据" in SUMMARIZER_DESC or "只依据" in SUMMARIZER_DESC
-    assert "禁止编造" in SUMMARIZER_DESC
-    assert "400~900" in SUMMARIZER_DESC
+def test_summarizer_fact_mode_forbids_report_template():
+    llm = _ScriptedLlm("最高分为 STU1，124 分。")
+    agent = SummarizerAgent(llm_client=llm)
+    _run(
+        agent.generate_reply(
+            received_message=AgentMessage(
+                content="高二(6)班数学成绩最好的学生",
+                role="user",
+                context=_ctx(
+                    question="高二(6)班数学成绩最好的学生",
+                    answer_mode="fact",
+                    sub_tasks_block="共 5 行（Top-N）",
+                ),
+            ),
+            sender=UserProxyAgent(),
+        )
+    )
+    system_msg = llm.calls[0][0]["content"]
+    assert "事实问答" in system_msg
+    assert "禁止**套用「学情总判" in system_msg or "禁止套用「学情总判" in system_msg
+    assert "参考人数" in system_msg  # 出现在禁止项里
+    assert "作答模式：fact" in system_msg
+    # 报告题专属长结构不应出现在 fact brief
+    assert "400~900" not in system_msg

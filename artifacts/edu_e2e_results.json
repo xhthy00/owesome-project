@@ -1,0 +1,1115 @@
+{
+  "meta": {
+    "datasource_id": 1,
+    "user_id": 4,
+    "workspace_oid": 1,
+    "bank": "/Users/tanghaoyu/develop/git-repo/owner/awesome-project/tests/agent/fixtures/edu_e2e_questions.json",
+    "timeout_sec": 480.0,
+    "finished_at": "2026-08-06T23:18:46"
+  },
+  "summary": {
+    "total": 22,
+    "pass": 8,
+    "pass_rate": 0.364,
+    "route_ok": 22,
+    "route_ok_rate": 1.0,
+    "e2e_ok": 8,
+    "e2e_ok_rate": 0.364,
+    "fail_reason_totals": {
+      "wrong_report_type": 9,
+      "missing_report": 5
+    },
+    "categories": {
+      "class_overview": {
+        "total": 2,
+        "pass": 0,
+        "pass_rate": 0.0,
+        "route_ok": 2,
+        "route_ok_rate": 1.0,
+        "e2e_ok": 0,
+        "e2e_ok_rate": 0.0,
+        "fail_reasons": {
+          "wrong_report_type": 2
+        }
+      },
+      "comprehensive": {
+        "total": 2,
+        "pass": 0,
+        "pass_rate": 0.0,
+        "route_ok": 2,
+        "route_ok_rate": 1.0,
+        "e2e_ok": 0,
+        "e2e_ok_rate": 0.0,
+        "fail_reasons": {
+          "missing_report": 1,
+          "wrong_report_type": 1
+        }
+      },
+      "diagnostic_report": {
+        "total": 2,
+        "pass": 0,
+        "pass_rate": 0.0,
+        "route_ok": 2,
+        "route_ok_rate": 1.0,
+        "e2e_ok": 0,
+        "e2e_ok_rate": 0.0,
+        "fail_reasons": {
+          "wrong_report_type": 1,
+          "missing_report": 1
+        }
+      },
+      "fact_kpi": {
+        "total": 2,
+        "pass": 2,
+        "pass_rate": 1.0,
+        "route_ok": 2,
+        "route_ok_rate": 1.0,
+        "e2e_ok": 2,
+        "e2e_ok_rate": 1.0,
+        "fail_reasons": {}
+      },
+      "fact_lookup": {
+        "total": 2,
+        "pass": 2,
+        "pass_rate": 1.0,
+        "route_ok": 2,
+        "route_ok_rate": 1.0,
+        "e2e_ok": 2,
+        "e2e_ok_rate": 1.0,
+        "fail_reasons": {}
+      },
+      "grade_comparison": {
+        "total": 2,
+        "pass": 0,
+        "pass_rate": 0.0,
+        "route_ok": 2,
+        "route_ok_rate": 1.0,
+        "e2e_ok": 0,
+        "e2e_ok_rate": 0.0,
+        "fail_reasons": {
+          "wrong_report_type": 2
+        }
+      },
+      "group_feature": {
+        "total": 2,
+        "pass": 0,
+        "pass_rate": 0.0,
+        "route_ok": 2,
+        "route_ok_rate": 1.0,
+        "e2e_ok": 0,
+        "e2e_ok_rate": 0.0,
+        "fail_reasons": {
+          "missing_report": 2
+        }
+      },
+      "student_profile": {
+        "total": 2,
+        "pass": 2,
+        "pass_rate": 1.0,
+        "route_ok": 2,
+        "route_ok_rate": 1.0,
+        "e2e_ok": 2,
+        "e2e_ok_rate": 1.0,
+        "fail_reasons": {}
+      },
+      "subject_diagnosis": {
+        "total": 2,
+        "pass": 0,
+        "pass_rate": 0.0,
+        "route_ok": 2,
+        "route_ok_rate": 1.0,
+        "e2e_ok": 0,
+        "e2e_ok_rate": 0.0,
+        "fail_reasons": {
+          "wrong_report_type": 1,
+          "missing_report": 1
+        }
+      },
+      "tier_alert": {
+        "total": 2,
+        "pass": 1,
+        "pass_rate": 0.5,
+        "route_ok": 2,
+        "route_ok_rate": 1.0,
+        "e2e_ok": 1,
+        "e2e_ok_rate": 0.5,
+        "fail_reasons": {
+          "wrong_report_type": 1
+        }
+      },
+      "trend_tracking": {
+        "total": 2,
+        "pass": 1,
+        "pass_rate": 0.5,
+        "route_ok": 2,
+        "route_ok_rate": 1.0,
+        "e2e_ok": 1,
+        "e2e_ok_rate": 0.5,
+        "fail_reasons": {
+          "wrong_report_type": 1
+        }
+      }
+    }
+  },
+  "results": [
+    {
+      "id": "fact_top_01",
+      "category": "fact_lookup",
+      "question": "高二(6)班数学成绩最好的学生是谁",
+      "elapsed_s": 46.15,
+      "event_count": 42,
+      "route_ok": true,
+      "e2e_ok": true,
+      "pass": true,
+      "fail_reasons": [],
+      "route": {
+        "needs_report": false,
+        "report_type": null,
+        "confidence": 0.7,
+        "reason": "无明确报告意图，事实查询",
+        "source": "fallback"
+      },
+      "report_type_got": null,
+      "report_types": [],
+      "tools": [
+        "find_related_tables",
+        "describe_table",
+        "sample_rows",
+        "execute_sql",
+        "compute_score_stats_tool",
+        "terminate"
+      ],
+      "summary_preview": "高二(6)班数学成绩最好的学生是 **student_id: GZ_3C1DEFC0_1018D222**，数学成绩为 **137.0 分**。\n\n（注：该班数学参考人数共5人，满分100分，及格线60分，优秀线85分；本次最高分137.0分远超满分，说明可能是原始成绩未按标准分换算，实际作答水平以系统记录为准。）\n\n```sql\nSELECT anon_stu_id, sx AS score \nFROM tb_score_overview \nWHERE bj = '高二(6)班' AND sx IS NOT NULL \nORDER BY sx DESC \nLIMIT 1\n```\n<think> 用户问的是高二(6)班数学成绩最好的学生是谁。  根据查询结果： - 高二(6)班数学成绩最好的学生是 student_id: GZ_3C1DEFC0_1018D222 - 数学成绩为 137.0",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 0,
+      "html_lens": []
+    },
+    {
+      "id": "fact_top_02",
+      "category": "fact_lookup",
+      "question": "高二(6)班高二数学期末试卷谁分数最高",
+      "elapsed_s": 46.34,
+      "event_count": 42,
+      "route_ok": true,
+      "e2e_ok": true,
+      "pass": true,
+      "fail_reasons": [],
+      "route": {
+        "needs_report": false,
+        "report_type": null,
+        "confidence": 0.7,
+        "reason": "无明确报告意图，事实查询",
+        "source": "fallback"
+      },
+      "report_type_got": null,
+      "report_types": [],
+      "tools": [
+        "find_related_tables",
+        "describe_table",
+        "describe_table",
+        "sample_rows",
+        "execute_sql",
+        "terminate"
+      ],
+      "summary_preview": "高二(6)班在「高二数学期末试卷」中，最高分为 **124.0 分**（卷面满分 150 分），获得者是 **student_id: GZ_19D9D68D_717DDA77**。\n\n```sql\nSELECT sc.student_id, sc.score, sc.exam_score, sc.class, e.exam_name\nFROM tb_score sc\nJOIN tb_exam e ON sc.exam_id = e.id\nWHERE sc.exam_id = 6 AND sc.class = '高二(6)班' AND sc.subject_name = '数学'\nORDER BY sc.score DESC\nLIMIT 1\n```\n<think> 高二(6)班在「高二数学期末试卷」中，最高分为 **124.0 分**（卷面满分 150 分），获得者是 **student_i",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 0,
+      "html_lens": []
+    },
+    {
+      "id": "fact_kpi_01",
+      "category": "fact_kpi",
+      "question": "高二(6)班高二数学期末试卷均分是多少",
+      "elapsed_s": 30.46,
+      "event_count": 34,
+      "route_ok": true,
+      "e2e_ok": true,
+      "pass": true,
+      "fail_reasons": [],
+      "route": {
+        "needs_report": false,
+        "report_type": null,
+        "confidence": 0.7,
+        "reason": "无明确报告意图，事实查询",
+        "source": "fallback"
+      },
+      "report_type_got": null,
+      "report_types": [],
+      "tools": [
+        "find_related_tables",
+        "describe_table",
+        "execute_sql",
+        "terminate"
+      ],
+      "summary_preview": "高二(6)班高二数学期末试卷均分为 **80.61分**（参考人数1620人）。\n\n```sql\nSELECT ROUND(AVG(sx), 2) AS avg_sx, COUNT(*) AS stu_count\nFROM tb_score_overview\nWHERE bj = '高二(6)班'\n  AND exam_name LIKE '%期末%'\n  AND sx IS NOT NULL\n```\n<think> 用户问的是高二(6)班高二数学期末试卷均分是多少。  根据查询结果： - 均分为 80.61分 -（但这是查询返回的行数，不应该写成参考人数）  按照要求： 1. 直接回答均分是多少 2. 不写参考人数/共N人参考 3. 不套用学情报告模板 4. 简单回答即可 </think>  高二(6)班高二数学期\n<think>\n用户问的是高二(6)班高二数学期末试卷均分是多少。\n\n根",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 0,
+      "html_lens": []
+    },
+    {
+      "id": "fact_kpi_02",
+      "category": "fact_kpi",
+      "question": "高二(6)班高二数学期末试卷及格率多少",
+      "elapsed_s": 66.6,
+      "event_count": 70,
+      "route_ok": true,
+      "e2e_ok": true,
+      "pass": true,
+      "fail_reasons": [],
+      "route": {
+        "needs_report": false,
+        "report_type": null,
+        "confidence": 0.7,
+        "reason": "无明确报告意图，事实查询",
+        "source": "fallback"
+      },
+      "report_type_got": null,
+      "report_types": [],
+      "tools": [
+        "find_related_tables",
+        "describe_table",
+        "sample_rows",
+        "describe_table",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "calculate",
+        "terminate"
+      ],
+      "summary_preview": "高二(6)班在2027届高二6月期末考试中，数学科目共有1620人参考，752人及格（分数≥90分），**及格率为46.42%**。\n\n（满分150分，及格线按60%计算为90分）\n<think> 用户问的是高二(6)班高二数学期末试卷的及格率。  根据子任务SQL查询结果： - 总人数：1620人 - 及格人数（分数≥90分）：752人 - 及格率：46.42%  需要注意的关键点： 1. 这是事实问答，不是学情报告 2. 及格线按60%计算，满分150分，所以及格线是90分 3. 用户没有问参\n<think>\n用户问的是高二(6)班高二数学期末试卷的及格率。\n\n根据子任务SQL查询结果：\n- 总人数：1620人\n- 及格人数（分数≥90分）：752人\n- 及格率：46.42%\n\n需要注意的关键点：\n1. 这是事实问答，不是学情报告\n2. 及格线按60%计算，满分150分，所以及格线是9",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 0,
+      "html_lens": []
+    },
+    {
+      "id": "stu_portrait_01",
+      "category": "student_profile",
+      "question": "生成学生: GZ_19D9D68D_466917B9的个人画像",
+      "elapsed_s": 90.47,
+      "event_count": 47,
+      "route_ok": true,
+      "e2e_ok": true,
+      "pass": true,
+      "fail_reasons": [],
+      "route": {
+        "needs_report": true,
+        "report_type": "student_profile",
+        "confidence": 0.95,
+        "reason": "硬约束个体学生分析",
+        "source": "hard"
+      },
+      "report_type_got": "student_profile",
+      "report_types": [
+        "student_profile",
+        "student_profile"
+      ],
+      "tools": [
+        "resolve_score_schema",
+        "describe_table",
+        "execute_sql",
+        "execute_sql",
+        "build_student_exam_report_data_tool",
+        "build_student_exam_report_data_tool"
+      ],
+      "summary_preview": "GZ_19D9D68D_466917B9 考试分析报告已渲染完成（HTML 25465 字符；已融合小题/知识点 119 条、知识点点位约 48）。报告已自动推送到前端，直接调 terminate 结束即可。\n任务已完成，无需再调用其他工具。\nGZ_19D9D68D_466917B9 考试分析报告已渲染完成（HTML 25431 字符；已融合小题/知识点 119 条、知识点点位约 48）。报告已自动推送到前端，直接调 terminate 结束即可。\n任务已完成，无需再调用其他工具。\n<think> Let me analyze the input data carefully:  1. **User Question**: Generate a personal profile for student GZ_19D9D68D_466917B9 2. **Mode**: report 3. ",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 2,
+      "html_lens": [
+        25465,
+        25431
+      ]
+    },
+    {
+      "id": "stu_portrait_02",
+      "category": "student_profile",
+      "question": "分析学生GZ_19D9D68D_466917B9这几次考试的成绩，形成学情报告",
+      "elapsed_s": 103.83,
+      "event_count": 75,
+      "route_ok": true,
+      "e2e_ok": true,
+      "pass": true,
+      "fail_reasons": [],
+      "route": {
+        "needs_report": true,
+        "report_type": "student_profile",
+        "confidence": 0.95,
+        "reason": "硬约束个体学生分析",
+        "source": "hard"
+      },
+      "report_type_got": "student_profile",
+      "report_types": [
+        "student_profile",
+        "student_profile"
+      ],
+      "tools": [
+        "list_tables",
+        "describe_table",
+        "describe_table",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "compute_score_stats_tool",
+        "build_student_exam_report_data_tool",
+        "build_student_exam_report_data_tool"
+      ],
+      "summary_preview": "学生GZ_19D9D68D_466917B9 考试分析报告已渲染完成（HTML 25456 字符；已融合小题/知识点 119 条、知识点点位约 48）。报告已自动推送到前端，直接调 terminate 结束即可。\n任务已完成，无需再调用其他工具。\nGZ_19D9D68D_466917B9 考试分析报告已渲染完成（HTML 21270 字符；已融合小题/知识点 119 条、知识点点位约 48）。报告已自动推送到前端，直接调 terminate 结束即可。\n任务已完成，无需再调用其他工具。\n<think> 根据子任务执行结果，我需要为学生 GZ_19D9D68D_466917B9 撰写学情报告。让我整理已有数据：  **权威 KPI：** - 参考人数 count=335 - 均分 51.0（满分150） - 及格线 90.0（按异常规则 150.0×60.0%） - 优秀线 127.5（按异",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 2,
+      "html_lens": [
+        25456,
+        21270
+      ]
+    },
+    {
+      "id": "subj_diag_01",
+      "category": "subject_diagnosis",
+      "question": "高二(6)班高二数学期末试卷详细分析",
+      "elapsed_s": 127.07,
+      "event_count": 119,
+      "route_ok": true,
+      "e2e_ok": false,
+      "pass": false,
+      "fail_reasons": [
+        "wrong_report_type:got='自主分析报告'"
+      ],
+      "route": {
+        "needs_report": true,
+        "report_type": "subject_diagnosis",
+        "confidence": 0.55,
+        "reason": "打分兜底",
+        "source": "fallback"
+      },
+      "report_type_got": "自主分析报告",
+      "report_types": [
+        "自主分析报告"
+      ],
+      "tools": [
+        "find_related_tables",
+        "describe_table",
+        "describe_table",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "describe_table",
+        "execute_sql",
+        "sample_rows",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "fetch_subject_diagnosis_data_tool",
+        "terminate",
+        "build_subject_diagnosis_sections_tool"
+      ],
+      "summary_preview": "SQL 执行成功，返回 0 行：\n【人数口径】AUTHORITATIVE_ROW_COUNT=0；PREVIEW_ROWS=0；SQL_ROW_CAPPED=true。**禁止**用 PREVIEW_ROWS / 样例表行数写参考人数；总人数以 AUTHORITATIVE_ROW_COUNT（且 SQL_ROW_CAPPED=false）或 compute_score_stats_tool.count / 报告 KPI 为准。\n⚠️ 本 SQL 含 LIMIT 截断：下列「共 0 行」仅为本次返回行数，**禁止**当作班级/全体参考人数；总人数须用 compute_score_stats 的 count、无 LIMIT/OFFSET 的 COUNT(*)/明细全量查询，或权威统计块中的 count。\n\n| xx |\n| --- |\n（0 行）\nfetch_subject_diagnosis",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 1,
+      "html_lens": [
+        7406
+      ]
+    },
+    {
+      "id": "subj_diag_02",
+      "category": "subject_diagnosis",
+      "question": "高三(10)班高三5月模拟数学试卷科目诊断报告",
+      "elapsed_s": 148.8,
+      "event_count": 119,
+      "route_ok": true,
+      "e2e_ok": false,
+      "pass": false,
+      "fail_reasons": [
+        "missing_report"
+      ],
+      "route": {
+        "needs_report": true,
+        "report_type": "subject_diagnosis",
+        "confidence": 0.55,
+        "reason": "打分兜底",
+        "source": "fallback"
+      },
+      "report_type_got": null,
+      "report_types": [],
+      "tools": [
+        "find_related_tables",
+        "describe_table",
+        "describe_table",
+        "sample_rows",
+        "sample_rows",
+        "execute_sql",
+        "sample_rows",
+        "sample_rows",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "tool_call",
+        "fetch_subject_diagnosis_data_tool",
+        "terminate",
+        "build_subject_diagnosis_sections_tool"
+      ],
+      "summary_preview": "SQL 执行成功，返回 0 行：\n【人数口径】AUTHORITATIVE_ROW_COUNT=0；PREVIEW_ROWS=0；SQL_ROW_CAPPED=false。**禁止**用 PREVIEW_ROWS / 样例表行数写参考人数；总人数以 AUTHORITATIVE_ROW_COUNT（且 SQL_ROW_CAPPED=false）或 compute_score_stats_tool.count / 报告 KPI 为准。\n权威行数：共 0 行（无 LIMIT/OFFSET 时可作为明细人数；若另有权威统计块，以统计块的 count 为准）。\n\n| bj | xx | full_score | student_count | avg_score | min_score | max_score |\n| --- | --- | --- | --- | --- | --- | --- |\n",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 0,
+      "html_lens": []
+    },
+    {
+      "id": "class_ov_01",
+      "category": "class_overview",
+      "question": "高二(6)班班级成绩总览",
+      "elapsed_s": 135.12,
+      "event_count": 62,
+      "route_ok": true,
+      "e2e_ok": false,
+      "pass": false,
+      "fail_reasons": [
+        "wrong_report_type:got='自主分析报告'"
+      ],
+      "route": {
+        "needs_report": true,
+        "report_type": "class_overview",
+        "confidence": 0.9,
+        "reason": "班级总览探测器",
+        "source": "fallback"
+      },
+      "report_type_got": "自主分析报告",
+      "report_types": [
+        "自主分析报告"
+      ],
+      "tools": [
+        "list_tables",
+        "describe_table",
+        "describe_table",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "terminate",
+        "build_class_overview_report_data_tool"
+      ],
+      "summary_preview": "## 高二(6)班成绩明细查询结果\n\n**查询范围**：GZ_19D9D68D 学校 高二(6)班\n**参考人数**：56 名学生\n**成绩记录**：336 条\n\n### 科目统计汇总\n\n| 科目 | 参考人数 | 平均分 | 最低分 | 最高分 | 满分 |\n|------|---------|-------|-------|-------|------|\n| 语文 | 56 | 112.1 | 55.0 | 126.0 | - |\n| 数学 | 56 | 96.3 | 29.0 | 124.0 | - |\n| 英语 | 56 | 127.4 | 88.0 | 143.0 | - |\n| 历史 | 56 | 76.1 | 50.0 | 83.0 | 100.0 |\n| 地理 | 56 | 68.3 | 43.0 | 87.0 | 100.0 |\n| 政治 | 55 | 67.7 | 33",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 1,
+      "html_lens": [
+        7171
+      ]
+    },
+    {
+      "id": "class_ov_02",
+      "category": "class_overview",
+      "question": "高三(10)班高三5月模拟数学成绩总览",
+      "elapsed_s": 137.98,
+      "event_count": 78,
+      "route_ok": true,
+      "e2e_ok": false,
+      "pass": false,
+      "fail_reasons": [
+        "wrong_report_type:got='自主分析报告'"
+      ],
+      "route": {
+        "needs_report": true,
+        "report_type": "class_overview",
+        "confidence": 0.9,
+        "reason": "班级总览探测器",
+        "source": "fallback"
+      },
+      "report_type_got": "自主分析报告",
+      "report_types": [
+        "自主分析报告"
+      ],
+      "tools": [
+        "find_related_tables",
+        "describe_table",
+        "execute_sql",
+        "sample_rows",
+        "tool_call",
+        "execute_sql",
+        "tool_call",
+        "execute_sql",
+        "execute_sql",
+        "compute_score_stats_tool",
+        "terminate",
+        "build_class_overview_report_data_tool"
+      ],
+      "summary_preview": "## 查询结果\n\n**考试信息**：高三5月模拟数学试卷（2026-05-06）\n\n**统计摘要**：\n| 指标 | 数值 |\n|------|------|\n| 参考人数 | 46 人 |\n| 卷面满分 | 150.0 |\n| 均分 | 109.81 |\n| 及格线 | 90.0（满分×60%） |\n| 优秀线 | 127.5（满分×85%） |\n| 及格率 | 93.62% |\n| 优秀率 | 8.51% |\n| 标准差 | 12.6 |\n\n**学生得分明细**（部分示例）：\n| student_id | 得分 | 排名参考 |\n|------------|------|----------|\n| GZ_19D9D68D_05335BA0 | 116.0 | |\n| GZ_19D9D68D_076EE72D | 115.0 | |\n| GZ_19D9D68D_0D32ABEF | 12",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 1,
+      "html_lens": [
+        7015
+      ]
+    },
+    {
+      "id": "grade_cmp_01",
+      "category": "grade_comparison",
+      "question": "高三各个班级在高三5月模拟数学试卷的横向对比分析",
+      "elapsed_s": 204.41,
+      "event_count": 94,
+      "route_ok": true,
+      "e2e_ok": false,
+      "pass": false,
+      "fail_reasons": [
+        "wrong_report_type:got='自主分析报告'"
+      ],
+      "route": {
+        "needs_report": true,
+        "report_type": "grade_comparison",
+        "confidence": 0.75,
+        "reason": "打分兜底",
+        "source": "fallback"
+      },
+      "report_type_got": "自主分析报告",
+      "report_types": [
+        "自主分析报告"
+      ],
+      "tools": [
+        "find_related_tables",
+        "resolve_score_schema",
+        "sample_rows",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "compute_score_stats_tool",
+        "aggregate_dimension_tool",
+        "build_chart_option_tool",
+        "build_group_feature_report_data_tool",
+        "build_chart_option_tool",
+        "render_html_report",
+        "build_class_overview_report_data_tool",
+        "terminate",
+        "build_subject_diagnosis_sections_tool"
+      ],
+      "summary_preview": "班级总览报告已渲染（高三年级（16班））。\n任务已完成，无需再调用其他工具。\n<minimax:tool_call>\n<invoke name=\"fetch_subject_diagnosis_data_tool\">\n<parameter name=\"school_name\">该校</parameter>\n<parameter name=\"subject_name\">数学</parameter>\n<parameter name=\"exam_name\">模拟</parameter>\n</invoke>\n</minimax:tool_call>\n科目诊断报告已渲染完成（小题 0 条，知识点 0 个，薄弱 0 个、735 条成绩、HTML 19668 字符）。\n报告已自动推送到前端。\n**禁止**再调 select_report_template / build_chart_option / r",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 1,
+      "html_lens": [
+        9014
+      ]
+    },
+    {
+      "id": "grade_cmp_02",
+      "category": "grade_comparison",
+      "question": "高三各个班级高三5月模拟数学试卷横向多维分析",
+      "elapsed_s": 170.29,
+      "event_count": 118,
+      "route_ok": true,
+      "e2e_ok": false,
+      "pass": false,
+      "fail_reasons": [
+        "wrong_report_type:got='自主分析报告'"
+      ],
+      "route": {
+        "needs_report": true,
+        "report_type": "grade_comparison",
+        "confidence": 0.75,
+        "reason": "打分兜底",
+        "source": "fallback"
+      },
+      "report_type_got": "自主分析报告",
+      "report_types": [
+        "自主分析报告"
+      ],
+      "tools": [
+        "find_related_tables",
+        "describe_table",
+        "sample_rows",
+        "sample_rows",
+        "describe_table",
+        "sample_rows",
+        "describe_table",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "sample_rows",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "tool_call",
+        "fetch_subject_diagnosis_data_tool",
+        "terminate",
+        "build_subject_diagnosis_sections_tool"
+      ],
+      "summary_preview": "SQL 执行成功，返回 45 行：\n【人数口径】AUTHORITATIVE_ROW_COUNT=45；PREVIEW_ROWS=20；SQL_ROW_CAPPED=false。**禁止**用 PREVIEW_ROWS / 样例表行数写参考人数；总人数以 AUTHORITATIVE_ROW_COUNT（且 SQL_ROW_CAPPED=false）或 compute_score_stats_tool.count / 报告 KPI 为准。\n权威行数：共 45 行（无 LIMIT/OFFSET 时可作为明细人数；若另有权威统计块，以统计块的 count 为准）。\n样例仅预览前 20 行（非全量），**禁止**按样例表「数人头」写班级人数，**禁止**写「所查看的 20 名」充当整体结论。\n\n| xh | xx |\n| --- | --- |\n| 1 | A01扬州中学 |\n| 2 | A02扬大",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 1,
+      "html_lens": [
+        7013
+      ]
+    },
+    {
+      "id": "comp_01",
+      "category": "comprehensive",
+      "question": "高三(10)班历次数学考试综合分析报告",
+      "elapsed_s": 88.35,
+      "event_count": 49,
+      "route_ok": true,
+      "e2e_ok": false,
+      "pass": false,
+      "fail_reasons": [
+        "missing_report"
+      ],
+      "route": {
+        "needs_report": true,
+        "report_type": "comprehensive",
+        "confidence": 0.9,
+        "reason": "多场综合探测器",
+        "source": "fallback"
+      },
+      "report_type_got": null,
+      "report_types": [],
+      "tools": [
+        "find_related_tables",
+        "describe_table",
+        "describe_table",
+        "execute_sql",
+        "build_comprehensive_report_data_tool",
+        "build_comprehensive_report_data_tool"
+      ],
+      "summary_preview": "综合分析报告已渲染完成（92 条记录、2 次考试、HTML 72602 字符，已融合 46 人、2 场考试小题诊断）（已自动改用完整 SQL 结果，避免 preview 截断）。报告已自动推送到前端，直接调 terminate 结束即可。\n任务已完成，无需再调用其他工具。\n综合分析报告已渲染完成（92 条记录、2 次考试、HTML 72601 字符，已融合 46 人、2 场考试小题诊断）（已自动改用完整 SQL 结果，避免 preview 截断）。报告已自动推送到前端，直接调 terminate 结束即可。\n任务已完成，无需再调用其他工具。\n<think> 用户需要一份高三(10)班历次数学考试的综合分析报告。根据子任务执行结果，我获得了以下信息：  1. 子任务1查询结果：共92条记录，涉及46人、2场考试 2. 子任务2已生成综合分析HTML报告  关键数据： - 参考人数：92条明细",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 0,
+      "html_lens": []
+    },
+    {
+      "id": "comp_02",
+      "category": "comprehensive",
+      "question": "高二(6)班所有考试综合分析",
+      "elapsed_s": 125.02,
+      "event_count": 73,
+      "route_ok": true,
+      "e2e_ok": false,
+      "pass": false,
+      "fail_reasons": [
+        "wrong_report_type:got='自主分析报告'"
+      ],
+      "route": {
+        "needs_report": true,
+        "report_type": "comprehensive",
+        "confidence": 0.9,
+        "reason": "多场综合探测器",
+        "source": "fallback"
+      },
+      "report_type_got": "自主分析报告",
+      "report_types": [
+        "自主分析报告"
+      ],
+      "tools": [
+        "find_related_tables",
+        "resolve_score_schema",
+        "describe_table",
+        "describe_table",
+        "sample_rows",
+        "execute_sql",
+        "execute_sql",
+        "tool_call",
+        "execute_sql",
+        "build_comprehensive_report_data_tool",
+        "build_comprehensive_report_data_tool"
+      ],
+      "summary_preview": "综合分析报告已渲染完成（336 条记录、7 次考试、HTML 88650 字符，已融合 1198 人、1 场考试小题诊断）（已自动改用完整 SQL 结果，避免 preview 截断）。报告已自动推送到前端，直接调 terminate 结束即可。\n任务已完成，无需再调用其他工具。\n综合分析报告已渲染完成（336 条记录、7 次考试、HTML 88250 字符）（已自动改用完整 SQL 结果，避免 preview 截断）。报告已自动推送到前端，直接调 terminate 结束即可。\n任务已完成，无需再调用其他工具。\n<think> 用户要求对高二(6)班进行所有考试的综合分析。根据子任务执行结果：  1. 子任务1查询了336条记录，涵盖7次考试的分数明细 2. 子任务2已生成综合分析HTML报告（88650/88250字符）  关键数据： - 参考人数：336条明细记录 - 考试次数：7次 ",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 1,
+      "html_lens": [
+        5874
+      ]
+    },
+    {
+      "id": "tier_01",
+      "category": "tier_alert",
+      "question": "高二(6)班数学临界生预警报告",
+      "elapsed_s": 142.08,
+      "event_count": 123,
+      "route_ok": true,
+      "e2e_ok": true,
+      "pass": true,
+      "fail_reasons": [],
+      "route": {
+        "needs_report": true,
+        "report_type": "tier_alert",
+        "confidence": 0.9,
+        "reason": "分层预警探测器",
+        "source": "fallback"
+      },
+      "report_type_got": "tier_alert",
+      "report_types": [
+        "tier_alert"
+      ],
+      "tools": [
+        "resolve_score_schema",
+        "execute_sql",
+        "describe_table",
+        "execute_sql",
+        "execute_sql",
+        "describe_table",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "compute_score_stats_tool",
+        "execute_sql",
+        "execute_sql",
+        "terminate",
+        "build_tier_alert_report_data_tool",
+        "execute_sql",
+        "describe_table",
+        "execute_sql",
+        "execute_sql",
+        "build_tier_alert_report_data_tool"
+      ],
+      "summary_preview": "## 高二(6)班数学成绩明细查询结果\n\n### 数据范围\n- **考试**：高二数学期末试卷（2026-06-06），卷面满分 150.0\n- **班级**：高二(6)班\n- **科目**：数学\n- **参考人数**：56 人\n\n### 整体统计\n| 指标 | 数值 |\n|------|------|\n| 平均分 | 96.27 |\n| 最低分 | 29.0 |\n| 最高分 | 124.0 |\n| 标准差 | 19.08 |\n| **及格线** | **90.0**（满分×60%） |\n| **优秀线** | **127.5**（满分×85%） |\n| **及格人数/率** | 41 人 / 73.2% |\n| **优秀人数/率** | 0 人 / 0.0% |\n\n### 学生得分明细（按分数降序）\n| student_id | 本次得分 | exam_score |\n|--------",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 1,
+      "html_lens": [
+        8188
+      ]
+    },
+    {
+      "id": "tier_02",
+      "category": "tier_alert",
+      "question": "高三(10)班高三5月模拟数学分层预警",
+      "elapsed_s": 175.5,
+      "event_count": 66,
+      "route_ok": true,
+      "e2e_ok": false,
+      "pass": false,
+      "fail_reasons": [
+        "wrong_report_type:got='自主分析报告'"
+      ],
+      "route": {
+        "needs_report": true,
+        "report_type": "tier_alert",
+        "confidence": 0.9,
+        "reason": "分层预警探测器",
+        "source": "fallback"
+      },
+      "report_type_got": "自主分析报告",
+      "report_types": [
+        "自主分析报告"
+      ],
+      "tools": [
+        "find_related_tables",
+        "describe_table",
+        "describe_table",
+        "execute_sql",
+        "execute_sql",
+        "compute_score_stats_tool",
+        "execute_sql",
+        "terminate",
+        "build_tier_alert_report_data_tool"
+      ],
+      "summary_preview": "## 高三(10)班 — 高三5月模拟数学成绩明细\n\n**考试信息**：高三5月模拟数学试卷（2026-05-06）\n**参考人数**：46 人\n**卷面满分**：150 分\n**及格线**：90.0（150×60%）\n**优秀线**：127.5（150×85%）\n\n**整体统计**：均分 111.43，标准差 9.59，及格率 95.65%（44/46），优秀率 2.17%（1/46）。\n\n**完整得分明细（按名次降序）**：\n\n| 排名 | student_id | score | 得分率% | prev_score | score_change |\n|---:|---|---:|---:|---:|---:|\n| 1 | GZ_19D9D68D_ECA50AD4 | 134.0 | 89.3 | — | — |\n| 2 | GZ_19D9D68D_3137DD4B | 126.0 |",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 1,
+      "html_lens": [
+        7156
+      ]
+    },
+    {
+      "id": "trend_01",
+      "category": "trend_tracking",
+      "question": "高二(6)班历次成绩趋势分析",
+      "elapsed_s": 102.72,
+      "event_count": 63,
+      "route_ok": true,
+      "e2e_ok": true,
+      "pass": true,
+      "fail_reasons": [],
+      "route": {
+        "needs_report": true,
+        "report_type": "trend_tracking",
+        "confidence": 0.9,
+        "reason": "趋势探测器",
+        "source": "fallback"
+      },
+      "report_type_got": "trend_tracking",
+      "report_types": [
+        "trend_tracking"
+      ],
+      "tools": [
+        "find_related_tables",
+        "describe_table",
+        "describe_table",
+        "execute_sql",
+        "sample_rows",
+        "execute_sql",
+        "execute_sql",
+        "terminate",
+        "build_trend_tracking_report_data_tool"
+      ],
+      "summary_preview": "根据您的需求，已完成查询。高二(6)班共有 **336 条成绩明细**，涉及 **7 场考试**，涵盖数学、英语、语文、历史、地理、政治、生物共 7 个科目。\n\n以下是查询历次考试每位学生分数的完整 SQL：\n\n```sql\nSELECT \n  e.exam_name, \n  sc.student_id, \n  sc.subject_name, \n  sc.score, \n  sc.exam_score,\n  sc.exam_time\nFROM tb_score sc\nJOIN tb_exam e ON sc.exam_id = e.id\nWHERE sc.school_id = 'GZ_19D9D68D' \n  AND sc.class = '高二(6)班'\nORDER BY sc.exam_time ASC, sc.student_id ASC, sc.subject_name ASC",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 1,
+      "html_lens": [
+        5983
+      ]
+    },
+    {
+      "id": "trend_02",
+      "category": "trend_tracking",
+      "question": "高三(10)班数学成绩走势与进退步",
+      "elapsed_s": 108.73,
+      "event_count": 62,
+      "route_ok": true,
+      "e2e_ok": false,
+      "pass": false,
+      "fail_reasons": [
+        "wrong_report_type:got='自主分析报告'"
+      ],
+      "route": {
+        "needs_report": true,
+        "report_type": "trend_tracking",
+        "confidence": 0.9,
+        "reason": "趋势探测器",
+        "source": "fallback"
+      },
+      "report_type_got": "自主分析报告",
+      "report_types": [
+        "自主分析报告"
+      ],
+      "tools": [
+        "resolve_score_schema",
+        "describe_table",
+        "describe_table",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "terminate",
+        "build_trend_tracking_report_data_tool"
+      ],
+      "summary_preview": "## 查询结论\n\n该校**高三(10)班**在2次数学考试中的学生分数明细如下：\n\n| 考试名称 | 考试时间 | 参考人数 | 卷面满分 | 均分 | 最低分 | 最高分 |\n|---------|---------|---------|---------|------|-------|-------|\n| 高三3月数学试卷 | 2026-03-06 | 46人 | 150分 | 103.2分 | 65分 | 135分 |\n| 高三5月模拟数学试卷 | 2026-05-06 | 46人 | 150分 | 111.4分 | 88分 | 134分 |\n\n### 整体走势\n- **均分提升**：从103.2分上升至111.4分，提升8.2分\n- **最低分提升**：从65分上升至88分，提升23分\n- **最高分略有下降**：从135分降至134分，下降1分\n- **整体进步明显**：班级数学",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 1,
+      "html_lens": [
+        6652
+      ]
+    },
+    {
+      "id": "group_01",
+      "category": "group_feature",
+      "question": "扬州中学高三5月模拟数学试卷按班级群体对比特征",
+      "elapsed_s": 158.18,
+      "event_count": 83,
+      "route_ok": true,
+      "e2e_ok": false,
+      "pass": false,
+      "fail_reasons": [
+        "missing_report"
+      ],
+      "route": {
+        "needs_report": true,
+        "report_type": "group_feature",
+        "confidence": 0.9,
+        "reason": "群体特征探测器",
+        "source": "fallback"
+      },
+      "report_type_got": null,
+      "report_types": [],
+      "tools": [
+        "find_related_tables",
+        "describe_table",
+        "describe_table",
+        "sample_rows",
+        "sample_rows",
+        "sample_rows",
+        "execute_sql",
+        "execute_sql",
+        "compute_score_stats_tool",
+        "execute_sql",
+        "execute_sql",
+        "terminate",
+        "build_group_feature_report_data_tool"
+      ],
+      "summary_preview": "已查询扬州中学（GZ_19D9D68D）模拟数学考试学生得分明细。\n\n**数据范围**：\n- 学校：扬州中学（school_id: GZ_19D9D68D）\n- 考试：高三5月模拟数学试卷（exam_id=22，2026-05-06）、高三3月数学试卷（exam_id=13，2026-03-06）\n- 科目：数学\n- 满分：150分\n- 参考人数：共1472人次\n\n**最终SQL**：\n```sql\nSELECT \n    sc.student_id,\n    sc.class,\n    sc.score,\n    sc.exam_score\nFROM tb_score sc\nJOIN tb_exam e ON sc.exam_id = e.id\nWHERE sc.school_id = 'GZ_19D9D68D'\n  AND sc.subject_name = '数学'\n  AND sc",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 0,
+      "html_lens": []
+    },
+    {
+      "id": "group_02",
+      "category": "group_feature",
+      "question": "扬州中学连淮扬镇数学考试按班级群体对比特征",
+      "elapsed_s": 92.16,
+      "event_count": 87,
+      "route_ok": true,
+      "e2e_ok": false,
+      "pass": false,
+      "fail_reasons": [
+        "missing_report"
+      ],
+      "route": {
+        "needs_report": true,
+        "report_type": "group_feature",
+        "confidence": 0.9,
+        "reason": "群体特征探测器",
+        "source": "fallback"
+      },
+      "report_type_got": null,
+      "report_types": [],
+      "tools": [
+        "find_related_tables",
+        "describe_table",
+        "describe_table",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "sample_rows",
+        "sample_rows",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "terminate",
+        "terminate"
+      ],
+      "summary_preview": "**查询结果：无法找到目标考试**\n\n经过对数据库的全面检索（tb_exam表中共搜索了以下关键词组合）：\n- 精确匹配：'%扬州中学连淮扬镇%' → 0条\n- 模糊匹配：'%扬州%' / '%连淮扬镇%' / '%镇%' / '%连%' / '%淮%' → 0条\n\n**结论**：当前数据源中不存在名为「扬州中学连淮扬镇」的考试。\n\n**数据库现有考试样例**（供参考）：\n- 高二数学期末试卷（exam_id=6, 满分150.0）\n- 高二物理/生物/政治/历史/地理期末试卷\n- 高三5月模拟数学/语文/英语/物理/化学试卷\n\n**建议**：\n1. 请确认考试全称是否正确（如有错别字或遗漏）\n2. 可提供考试关键词（如「期末」「模拟」）帮我在数据库中搜索匹配项\n3. 或提供学生所在班级/考试时间范围以便精确定位\n\n---  \n已执行SQL（供参考）：\n```sql\nSELECT id, ",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 0,
+      "html_lens": []
+    },
+    {
+      "id": "diag_01",
+      "category": "diagnostic_report",
+      "question": "帮我分析全市的高二数学期末质量检测成绩，形成详细报告",
+      "elapsed_s": 210.36,
+      "event_count": 99,
+      "route_ok": true,
+      "e2e_ok": false,
+      "pass": false,
+      "fail_reasons": [
+        "wrong_report_type:got='自主分析报告'"
+      ],
+      "route": {
+        "needs_report": true,
+        "report_type": "diagnostic_report",
+        "confidence": 0.95,
+        "reason": "硬约束全市/结构化诊断",
+        "source": "hard"
+      },
+      "report_type_got": "自主分析报告",
+      "report_types": [
+        "自主分析报告"
+      ],
+      "tools": [
+        "find_related_tables",
+        "describe_table",
+        "describe_table",
+        "sample_rows",
+        "describe_table",
+        "describe_table",
+        "execute_sql",
+        "execute_sql",
+        "compute_score_stats_tool",
+        "execute_sql",
+        "compute_score_stats_tool",
+        "execute_sql",
+        "terminate",
+        "fetch_subject_diagnosis_data_tool",
+        "terminate",
+        "build_diagnostic_report_data_tool"
+      ],
+      "summary_preview": "## 全市高二数学期末质量检测成绩分析报告\n\n### 一、考试概况\n| 指标 | 数值 |\n|------|------|\n| 参考人数 | 829 人 |\n| 卷面满分 | 150 分 |\n| 及格线（≥60%） | 90.0 分 |\n| 优秀线（≥85%） | 127.5 分 |\n| 全市均分 | 110.24 分 |\n| 全市标准差 | 15.91 分 |\n| 全市及格率 | 91.07% |\n| 全市优秀率 | 13.15% |\n| 最高分 | 148.0 分 |\n| 最低分 | 29.0 分 |\n\n### 二、班级维度对比（17个班级，按均分降序）\n\n| 班级 | 人数 | 均分 | 标准差 | 最高分 | 最低分 | 及格率 | 优秀率 |\n|------|------|------|--------|--------|--------|--------|--------|\n|",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 1,
+      "html_lens": [
+        6976
+      ]
+    },
+    {
+      "id": "diag_02",
+      "category": "diagnostic_report",
+      "question": "高二数学结构化诊断报告",
+      "elapsed_s": 165.57,
+      "event_count": 115,
+      "route_ok": true,
+      "e2e_ok": false,
+      "pass": false,
+      "fail_reasons": [
+        "missing_report"
+      ],
+      "route": {
+        "needs_report": true,
+        "report_type": "diagnostic_report",
+        "confidence": 0.95,
+        "reason": "硬约束全市/结构化诊断",
+        "source": "hard"
+      },
+      "report_type_got": null,
+      "report_types": [],
+      "tools": [
+        "find_related_tables",
+        "describe_table",
+        "describe_table",
+        "sample_rows",
+        "execute_sql",
+        "describe_table",
+        "sample_rows",
+        "describe_table",
+        "execute_sql",
+        "compute_score_stats_tool",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "execute_sql",
+        "calculate",
+        "fetch_subject_diagnosis_data_tool",
+        "terminate",
+        "execute_sql",
+        "build_subject_diagnosis_sections_tool"
+      ],
+      "summary_preview": "计算结果：`755/829*100` = **91.0735826296743**\n【小题/知识点查询完成】\n\n- 小题明细（tb_score_detail）：19 题 ✓\n- 知识点汇总：18 个 ✓\n- 学生成绩（tb_score）：829 条 ✓\n- 班级横向对比小题：323 行 ✓\n- 班级横向对比知识点：306 行 ✓\n- 考试已收敛至 exam_id=6（参与人数最多）\n\n**本步 fetch 成功，请进入下一步**：\n- 若为「科目诊断报告（班级/学校聚合）」→ 调 `build_subject_diagnosis_sections_tool(render=true)`\n- 若为「全市结构化诊断报告」→ 调 `build_diagnostic_report_data_tool(render=true)`\n\n工具链将自动读取本轮 fetch 结果，禁止重复查询。\n科目诊断报告已",
+      "error": null,
+      "errors": [],
+      "timed_out": false,
+      "report_count": 0,
+      "html_lens": []
+    }
+  ]
+}

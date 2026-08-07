@@ -1,0 +1,185 @@
+{
+  "meta": {
+    "datasource_id_default": 1,
+    "datasource_name": "exam",
+    "notes": "实体对齐 DS=1（前端 .env 的 12 在本机库不存在）。用户 tanghaoyu(uid=4) 绑定学校 GZ_19D9D68D；高二(6)班可用，高三(10)班常因学校权限校验被拦截。"
+  },
+  "questions": [
+    {
+      "id": "fact_top_01",
+      "category": "fact_lookup",
+      "question": "高二(6)班数学成绩最好的学生是谁",
+      "expect_needs_report": false,
+      "expect_report_type": null,
+      "forbid_tools": [
+        "build_class_overview_report_data_tool",
+        "build_subject_diagnosis_sections_tool",
+        "build_student_exam_report_data_tool"
+      ]
+    },
+    {
+      "id": "fact_top_02",
+      "category": "fact_lookup",
+      "question": "高二(6)班高二数学期末试卷谁分数最高",
+      "expect_needs_report": false,
+      "expect_report_type": null
+    },
+    {
+      "id": "fact_kpi_01",
+      "category": "fact_kpi",
+      "question": "高二(6)班高二数学期末试卷均分是多少",
+      "expect_needs_report": false,
+      "expect_report_type": null
+    },
+    {
+      "id": "fact_kpi_02",
+      "category": "fact_kpi",
+      "question": "高二(6)班高二数学期末试卷及格率多少",
+      "expect_needs_report": false,
+      "expect_report_type": null
+    },
+    {
+      "id": "stu_portrait_01",
+      "category": "student_profile",
+      "question": "生成学生: GZ_19D9D68D_466917B9的个人画像",
+      "expect_needs_report": true,
+      "expect_report_type": "student_profile",
+      "expect_tools_any": [
+        "build_student_exam_report_data_tool",
+        "build_student_subject_diagnosis_tool"
+      ],
+      "forbid_tools": ["build_subject_diagnosis_sections_tool"]
+    },
+    {
+      "id": "stu_portrait_02",
+      "category": "student_profile",
+      "question": "分析学生GZ_19D9D68D_466917B9这几次考试的成绩，形成学情报告",
+      "expect_needs_report": true,
+      "expect_report_type": "student_profile",
+      "expect_tools_any": ["build_student_exam_report_data_tool"]
+    },
+    {
+      "id": "subj_diag_01",
+      "category": "subject_diagnosis",
+      "question": "高二(6)班高二数学期末试卷详细分析",
+      "expect_needs_report": true,
+      "expect_report_type": "subject_diagnosis",
+      "expect_tools_any": [
+        "build_subject_diagnosis_sections_tool",
+        "fetch_subject_diagnosis_data_tool"
+      ]
+    },
+    {
+      "id": "subj_diag_02",
+      "category": "subject_diagnosis",
+      "question": "高三(10)班高三5月模拟数学试卷科目诊断报告",
+      "expect_needs_report": true,
+      "expect_report_type": "subject_diagnosis"
+    },
+    {
+      "id": "class_ov_01",
+      "category": "class_overview",
+      "question": "高二(6)班班级成绩总览",
+      "expect_needs_report": true,
+      "expect_report_type": "class_overview",
+      "expect_tools_any": ["build_class_overview_report_data_tool"]
+    },
+    {
+      "id": "class_ov_02",
+      "category": "class_overview",
+      "question": "高三(10)班高三5月模拟数学成绩总览",
+      "expect_needs_report": true,
+      "expect_report_type": "class_overview"
+    },
+    {
+      "id": "grade_cmp_01",
+      "category": "grade_comparison",
+      "question": "高三各个班级在高三5月模拟数学试卷的横向对比分析",
+      "expect_needs_report": true,
+      "expect_report_type": "grade_comparison"
+    },
+    {
+      "id": "grade_cmp_02",
+      "category": "grade_comparison",
+      "question": "高三各个班级高三5月模拟数学试卷横向多维分析",
+      "expect_needs_report": true,
+      "expect_report_type": "grade_comparison"
+    },
+    {
+      "id": "comp_01",
+      "category": "comprehensive",
+      "question": "高三(10)班历次数学考试综合分析报告",
+      "expect_needs_report": true,
+      "expect_report_type": "comprehensive",
+      "expect_tools_any": ["build_comprehensive_report_data_tool"]
+    },
+    {
+      "id": "comp_02",
+      "category": "comprehensive",
+      "question": "高二(6)班所有考试综合分析",
+      "expect_needs_report": true,
+      "expect_report_type": "comprehensive"
+    },
+    {
+      "id": "tier_01",
+      "category": "tier_alert",
+      "question": "高二(6)班数学临界生预警报告",
+      "expect_needs_report": true,
+      "expect_report_type": "tier_alert",
+      "expect_tools_any": ["build_tier_alert_report_data_tool"]
+    },
+    {
+      "id": "tier_02",
+      "category": "tier_alert",
+      "question": "高三(10)班高三5月模拟数学分层预警",
+      "expect_needs_report": true,
+      "expect_report_type": "tier_alert"
+    },
+    {
+      "id": "trend_01",
+      "category": "trend_tracking",
+      "question": "高二(6)班历次成绩趋势分析",
+      "expect_needs_report": true,
+      "expect_report_type": "trend_tracking",
+      "expect_tools_any": ["build_trend_tracking_report_data_tool"]
+    },
+    {
+      "id": "trend_02",
+      "category": "trend_tracking",
+      "question": "高三(10)班数学成绩走势与进退步",
+      "expect_needs_report": true,
+      "expect_report_type": "trend_tracking"
+    },
+    {
+      "id": "group_01",
+      "category": "group_feature",
+      "question": "扬州中学高三5月模拟数学试卷按班级群体对比特征",
+      "expect_needs_report": true,
+      "expect_report_type": "group_feature",
+      "expect_tools_any": ["build_group_feature_report_data_tool"],
+      "notes": "库内学校名为脱敏码，中文校名可能无匹配；用于观察群体特征路径缺陷"
+    },
+    {
+      "id": "group_02",
+      "category": "group_feature",
+      "question": "扬州中学连淮扬镇数学考试按班级群体对比特征",
+      "expect_needs_report": true,
+      "expect_report_type": "group_feature"
+    },
+    {
+      "id": "diag_01",
+      "category": "diagnostic_report",
+      "question": "帮我分析全市的高二数学期末质量检测成绩，形成详细报告",
+      "expect_needs_report": true,
+      "expect_report_type": "diagnostic_report",
+      "notes": "全市范围依赖区县字段；可能无数据"
+    },
+    {
+      "id": "diag_02",
+      "category": "diagnostic_report",
+      "question": "高二数学结构化诊断报告",
+      "expect_needs_report": true,
+      "expect_report_type": "diagnostic_report"
+    }
+  ]
+}

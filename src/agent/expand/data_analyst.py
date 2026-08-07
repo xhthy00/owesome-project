@@ -6,12 +6,12 @@
     round 2: describe_table users  -> 看到列信息
     round 3: sample_rows users     -> 看到真实数据
     round 4: execute_sql SELECT …  -> 拿到结果
-    round 5: terminate {...}       -> 给出最终答案（含 SQL + 结论）
-
+    round 5: terminate {...}       -> 给出面向用户的中文结论
 关键设计：
 - Prompt 强制 JSON 输出，与 ToolAction 解析器完美对齐；
 - 明确告诉模型"工具失败也是有效 observation，不要重复同一个错误"；
-- terminate 的 final_answer 约定包含"结论 + SQL + 关键数字"，便于前端直接展示。
+- terminate 的 final_answer 只写给人看的结论与关键数字；SQL 已由 execute_sql
+  落在工具轨迹里，不要再贴进结论。
 """
 
 from __future__ import annotations
@@ -58,10 +58,10 @@ DATA_ANALYST_DESC = """[分析范围约束]
    工具**求值——LLM 心算易错，沙盒求值器结论可验证。例：
    拿到 `去年 1000 / 今年 1234` 后不要直接写"增长 23.4%"，先调
    `calculate("(1234-1000)/1000*100")` 再引用结果。
-5. 当已能回答用户问题，调用 `terminate`，``final_answer`` 里包含：
-   - 一段中文结论（先结论后依据）；
-   - 最终使用的 SQL（用 ```sql 代码块 包裹）；
-   - 若适用，关键数值摘要（如 "共 37 条，Top1 为 …"）。
+5. 当已能回答用户问题，调用 `terminate`，``final_answer`` 只写**面向教师/管理者**的内容：
+   - 一段中文结论（先结论后依据，可用「统计依据」分点列出人数/满分/及格线等）；
+   - 若适用，关键数值摘要（如 "共 37 条，Top1 为 …"）；
+   - **禁止**粘贴 SQL、表名拼装过程、工具名、代码块；SQL 已由 `execute_sql` 记录，无需再抄。
 6. 当用户要求“可视化报告/分析报告/图表页面/HTML 报告”时，优先调用
    `render_html_report` 产出 HTML，再 `terminate` 简短说明已生成报告。
    报告类任务在调用 `render_html_report` 前不要直接 terminate。
@@ -125,6 +125,10 @@ DATA_ANALYST_DESC = """[分析范围约束]
 9. **人数口径**：班级概览须查该班该场该科**全部**学生得分（含 exam_score），
    **禁止**用 `OFFSET` 翻页拼全班；**禁止**随意 `LIMIT` 截断全班明细
    （Top-N 排行除外，且 Top-N 结论不得写成「参考人数=N」）。
+10. **隐私（强制）**：对外结论与 SQL **禁止**输出学生姓名明文
+   （`xm` / `name` / `student_name` / 真实中文名）。学生标识**一律用 student_id**
+   （`sc.student_id` 或 `tb_student.id`）；SELECT 不要带姓名列；final_answer /
+   总结里点名学生时只写 student_id。
    人数以无 OFFSET/LIMIT 的 SQL 结果行数 / `compute_score_stats_tool` 的
    count / 报告 KPI 为准。execute_sql 返回的 PREVIEW_ROWS（默认 20）**绝不是**参考人数。
 10. **terminate 必带 KPI**：教育学情结论中须明确写出「参考人数」「卷面满分」
@@ -142,6 +146,7 @@ class DataAnalystAgent(ReActAgent):
             "SQL 必须是只读 SELECT",
             "输出严格遵守 JSON 协议",
             "结论必须以工具执行结果为依据，不得臆造数据",
+            "terminate 的 final_answer 面向用户：禁止粘贴 SQL / 工具名 / 代码块",
         ],
         desc=DATA_ANALYST_DESC,
     )

@@ -19,7 +19,13 @@ import {
 import { Input, Pagination, message, Modal } from "antd";
 import React, { useRef } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { ExecutionStep, QueryResult, ReportPayload, formatReportDisplayTitle } from "@/hooks/useChat";
+import {
+  AgentMode,
+  ExecutionStep,
+  QueryResult,
+  ReportPayload,
+  formatReportDisplayTitle
+} from "@/hooks/useChat";
 import G2Chart, { G2ChartType } from "@/components/chat/G2Chart";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -52,6 +58,8 @@ type Props = {
   selectedStepId?: string;
   onSelectStep?: (stepId: string) => void;
   runMetrics?: RunMetrics | null;
+  /** team：专家团协作；agent：单分析助手扁平时间线 */
+  agentMode?: AgentMode;
   onPatchReport?: (
     report: ReportPayload,
     patch: { recommendationsText?: string; reviewStatus?: "pending" | "approved" }
@@ -108,8 +116,10 @@ export default function ChatExecutionPanel({
   selectedStepId,
   onSelectStep,
   runMetrics = null,
+  agentMode = "team",
   onPatchReport
 }: Props) {
+  const isSingleAgent = agentMode === "agent";
   const [activeTab, setActiveTab] = useState<"steps" | "summary">("steps");
   const [summaryThinkExpanded, setSummaryThinkExpanded] = useState(false);
   const [stepDetailExpanded, setStepDetailExpanded] = useState(true);
@@ -170,8 +180,9 @@ export default function ChatExecutionPanel({
 
   const selectedStepAgentLabel = useMemo(() => {
     if (!selectedStep) return "";
+    if (isSingleAgent) return "分析助手";
     return FLOW_AGENT_META[assignStepToAgent(selectedStep)].identity;
-  }, [selectedStep]);
+  }, [selectedStep, isSingleAgent]);
   const selectedStepTitleText = useMemo(
     () =>
       humanizeStepTitle(
@@ -487,37 +498,47 @@ export default function ChatExecutionPanel({
         <div className="flex min-w-0 items-center gap-2.5">
           <div className="flex shrink-0 items-center gap-2 text-sm font-semibold text-[#1f2937] dark:text-[#e2e8f0]">
             <img
-              src="/expert-team-avatar.png?v=2"
+              src={
+                isSingleAgent
+                  ? `${FLOW_AGENT_META.DataAnalyst.avatar}?v=1`
+                  : "/expert-team-avatar.png?v=2"
+              }
               alt=""
               width={28}
               height={28}
               className="h-7 w-7 shrink-0 rounded-lg object-cover shadow-sm ring-1 ring-[#dbeafe]"
             />
-            <span>专家团协作</span>
+            <span>{isSingleAgent ? "分析助手" : "专家团协作"}</span>
           </div>
-          <span className="hidden h-3.5 w-px shrink-0 bg-[#e2e8f0] sm:block dark:bg-[#334155]" />
-          <div className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5 text-[11px] text-[#94a3b8]">
-            {FLOW_AGENTS.map((agent, idx) => {
-              const active = activePipelineAgent(flowStatus) === agent;
-              const done = flowStatus[agent] === "done";
-              return (
-                <span key={agent} className="inline-flex items-center gap-1">
-                  {idx > 0 ? <span className="text-[#cbd5e1]">→</span> : null}
-                  <span
-                    className={
-                      active
-                        ? "font-semibold text-[#2563eb]"
-                        : done
-                          ? "text-[#64748b]"
-                          : "text-[#94a3b8]"
-                    }
-                  >
-                    {FLOW_PIPELINE_LABELS[agent]}
-                  </span>
-                </span>
-              );
-            })}
-          </div>
+          {!isSingleAgent ? (
+            <>
+              <span className="hidden h-3.5 w-px shrink-0 bg-[#e2e8f0] sm:block dark:bg-[#334155]" />
+              <div className="flex min-w-0 flex-wrap items-center gap-x-1 gap-y-0.5 text-[11px] text-[#94a3b8]">
+                {FLOW_AGENTS.map((agent, idx) => {
+                  const active = activePipelineAgent(flowStatus) === agent;
+                  const done = flowStatus[agent] === "done";
+                  return (
+                    <span key={agent} className="inline-flex items-center gap-1">
+                      {idx > 0 ? <span className="text-[#cbd5e1]">→</span> : null}
+                      <span
+                        className={
+                          active
+                            ? "font-semibold text-[#2563eb]"
+                            : done
+                              ? "text-[#64748b]"
+                              : "text-[#94a3b8]"
+                        }
+                      >
+                        {FLOW_PIPELINE_LABELS[agent]}
+                      </span>
+                    </span>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <span className="hidden text-[11px] text-[#94a3b8] sm:inline">思考 · 工具调用 · 结果</span>
+          )}
         </div>
         {showRunMetrics && runMetrics ? (
           <span className="run-metrics-blink shrink-0 text-[13px] font-bold tabular-nums">
@@ -528,13 +549,15 @@ export default function ChatExecutionPanel({
         ) : null}
       </div>
 
-      <AgentTeamStrip
-        statusMap={flowStatus}
-        actions={agentActions}
-        focusAgent={focusAgent}
-        onSelectAgent={onSelectAgent}
-        timerEpoch={`${selectedRunId ?? ""}:${runMetrics?.runStartedAt ?? 0}`}
-      />
+      {!isSingleAgent ? (
+        <AgentTeamStrip
+          statusMap={flowStatus}
+          actions={agentActions}
+          focusAgent={focusAgent}
+          onSelectAgent={onSelectAgent}
+          timerEpoch={`${selectedRunId ?? ""}:${runMetrics?.runStartedAt ?? 0}`}
+        />
+      ) : null}
 
       <div className="flex h-11 items-center border-b border-[#eceff5] px-5 dark:border-[#2f3441]">
         <button
@@ -563,6 +586,49 @@ export default function ChatExecutionPanel({
         {activeTab === "steps" ? (
           scopedSteps.length ? (
             <div className="flex min-h-0 flex-col gap-3">
+              {isSingleAgent ? (
+                <div className="space-y-1.5 rounded-xl border border-[#86efac] bg-white p-2 dark:bg-[#11131a]">
+                  {scopedSteps.map((step) => {
+                    const active = step.id === selectedStep?.id;
+                    return (
+                      <button
+                        key={step.id}
+                        type="button"
+                        onClick={() => onSelectStep?.(step.id)}
+                        className={`flex w-full items-start gap-2.5 rounded-lg border px-2.5 py-2 text-left ${
+                          active
+                            ? "border-[#86efac] bg-[#f0fdf4] dark:border-[#166534] dark:bg-[#052e16]"
+                            : "border-transparent hover:bg-[#f8fafc] dark:hover:bg-[#0f172a]"
+                        }`}
+                      >
+                        <span
+                          className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+                            step.status === "error"
+                              ? "bg-[#ef4444]"
+                              : step.status === "running"
+                                ? "bg-[#22c55e] animate-pulse"
+                                : "bg-[#86efac]"
+                          }`}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-xs font-medium text-[#0f172a] dark:text-[#e2e8f0]">
+                            {humanizeStepTitle(
+                              normalizeToText(step.title),
+                              normalizeToText(step.detail),
+                              step.status
+                            )}
+                          </div>
+                          {step.detail ? (
+                            <div className="mt-0.5 line-clamp-2 text-[11px] text-[#64748b]">
+                              {humanizeStepDetail(normalizeToText(step.detail))}
+                            </div>
+                          ) : null}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
               <div className="space-y-2">
                 {agentGroups.map((group) => {
                   const meta = FLOW_AGENT_META[group.agent];
@@ -639,6 +705,7 @@ export default function ChatExecutionPanel({
                   );
                 })}
               </div>
+              )}
 
               {selectedStep ? (
                 <div className="flex min-h-0 min-w-0 flex-col rounded-lg border border-[#e5e7eb] bg-white p-4 dark:border-[#2f3441] dark:bg-[#11131a]">
@@ -723,8 +790,14 @@ export default function ChatExecutionPanel({
               <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-2xl bg-white/70 text-3xl dark:bg-white/10">
                 <FileTextOutlined />
               </div>
-              <div className="text-base">等待专家团上场</div>
-              <div className="mt-2 text-sm">提问后，专家团将按角色接力完成分析</div>
+              <div className="text-base">
+                {isSingleAgent ? "等待分析助手开始" : "等待专家团上场"}
+              </div>
+              <div className="mt-2 text-sm">
+                {isSingleAgent
+                  ? "提问后，分析助手将依次完成思考、工具调用与结果整理"
+                  : "提问后，专家团将按角色接力完成分析"}
+              </div>
             </div>
           )
         ) : activeTab === "summary" ? (

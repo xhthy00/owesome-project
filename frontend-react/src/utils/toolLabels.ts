@@ -937,20 +937,70 @@ export function normalizeAssistantMarkdown(md: string): string {
   return out.join("\n");
 }
 
+/** 判断一段文本是否像 SQL（用于剥离无语言标记的代码块） */
+function looksLikeSql(body: string): boolean {
+  const t = body.trim();
+  if (!t) return false;
+  if (/^(WITH|SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP|EXPLAIN)\b/i.test(t)) return true;
+  return /\bSELECT\b[\s\S]*\bFROM\b/i.test(t) && /\b(WHERE|GROUP\s+BY|ORDER\s+BY|JOIN|LIMIT)\b/i.test(t);
+}
+
+/**
+ * 面向用户的结论里去掉专业技术 SQL：
+ * - ```sql ... ``` / 无语言标记但内容像 SQL 的代码块
+ * - 「SQL：」「最终 SQL」等标题及其后的裸 SELECT 段落
+ */
+export function stripTechnicalSql(text: string): string {
+  let out = (text || "").replace(/\r\n/g, "\n");
+
+  // fenced code blocks
+  out = out.replace(/```([^\n`]*)\n([\s\S]*?)```/g, (_m, lang: string, body: string) => {
+    const langKey = String(lang || "").trim().toLowerCase();
+    if (langKey === "sql" || langKey.startsWith("sql") || (!langKey && looksLikeSql(body))) {
+      return "";
+    }
+    return _m;
+  });
+
+  // 「SQL：」标题行（可带加粗）+ 后续连续 SQL 行
+  out = out.replace(
+    /(^|\n)#{0,3}\s*\*{0,2}\s*(最终\s*)?SQL\s*[：:]\s*\*{0,2}\s*\n+(?:```[\s\S]*?```|(?:[ \t]*(?:WITH|SELECT|FROM|WHERE|JOIN|LEFT|RIGHT|INNER|OUTER|GROUP|ORDER|HAVING|LIMIT|AND|OR|ON|AS|CASE|WHEN|THEN|END|COUNT|ROUND|COALESCE)[^\n]*\n?)+)/gi,
+    "$1"
+  );
+
+  // 文末裸 SQL 段落（前面已是中文结论）
+  out = out.replace(
+    /\n{1,2}(?:WITH\b[\s\S]*?\bSELECT\b[\s\S]*|\bSELECT\b[\s\S]*?\bFROM\b[\s\S]*)$/i,
+    (m) => (looksLikeSql(m) ? "" : m)
+  );
+
+  // 行内「SQL：SELECT ...」单行残留
+  out = out.replace(/(^|\n)\s*\*{0,2}SQL\s*[：:]\s*\*{0,2}\s*(?:WITH|SELECT)\b[^\n]*/gi, "$1");
+
+  return out
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .trim();
+}
+
 /** 左侧气泡只展示给人看的结论，过滤 SQL / think / 执行完成等过程垃圾 */
 export function pickCustomerAnswer(summary?: string, assistantContent?: string): string {
   const fromSummary = (summary || "").trim();
-  if (fromSummary) return normalizeAssistantMarkdown(splitThinkContent(fromSummary).plain);
+  if (fromSummary) {
+    return normalizeAssistantMarkdown(stripTechnicalSql(splitThinkContent(fromSummary).plain));
+  }
   const raw = (assistantContent || "").trim();
   if (!raw) return "";
   const { plain } = splitThinkContent(raw);
   if (!plain) return "";
-  if (/^SQL[（(]/i.test(plain)) return "";
-  if (/^执行完成[，,]/.test(plain)) return "";
-  if (/^思考[：:]/.test(plain)) return "";
-  if (/^\s*SELECT\b/i.test(plain)) return "";
-  if (/返回\s*\d+\s*行结果/.test(plain) && /SELECT\b/i.test(plain)) return "";
-  return normalizeAssistantMarkdown(plain);
+  const cleaned = stripTechnicalSql(plain);
+  if (!cleaned) return "";
+  if (/^SQL[（(]/i.test(cleaned)) return "";
+  if (/^执行完成[，,]/.test(cleaned)) return "";
+  if (/^思考[：:]/.test(cleaned)) return "";
+  if (/^\s*SELECT\b/i.test(cleaned)) return "";
+  if (/返回\s*\d+\s*行结果/.test(cleaned) && /SELECT\b/i.test(cleaned)) return "";
+  return normalizeAssistantMarkdown(cleaned);
 }
 
 export function extractThinkFromText(raw?: string): string {

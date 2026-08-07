@@ -1,6 +1,6 @@
 """意图识别 ↔ 确定性格径对齐回归。
 
-保证 ReportIntentResolver 与 query_parse 探测器、Planner 路由一致，
+保证 ReportIntentResolver 与 intent_router / Planner dispatch 同源，
 避免「认出了 A 报告、计划却走 B」或关键词误伤。
 """
 
@@ -8,6 +8,11 @@ from __future__ import annotations
 
 import pytest
 
+from src.agent.education.intent_router import (
+    classify_report_intent,
+    classify_report_intent_sync,
+    should_use_deterministic_report_plan,
+)
 from src.agent.education.orchestrator import ReportIntentResolver
 from src.agent.education.query_parse import (
     extract_exam_name_hint,
@@ -17,7 +22,6 @@ from src.agent.education.query_parse import (
     is_class_overview_query,
     is_group_feature_query,
     is_individual_student_analysis_query,
-    is_multi_exam_class_analysis_query,
     is_school_class_comparison_query,
     is_school_exam_report_query,
     is_tier_alert_query,
@@ -30,28 +34,32 @@ from src.agent.expand.planner import (
     build_school_class_comparison_plan_items,
     build_school_subject_report_plan_items,
     build_tier_alert_plan_items,
+    coerce_plan_items_if_needed,
 )
 
 
 def _route(question: str) -> str:
-    """与 agent_runner 同优先级的确定性格径标签。"""
-    if is_citywide_analysis_query(question):
-        return "citywide"
-    if is_individual_student_analysis_query(question):
-        return "individual"
-    if is_multi_exam_class_analysis_query(question):
-        return "multi-exam"
-    if is_tier_alert_query(question):
-        return "tier-alert"
-    if is_school_class_comparison_query(question):
-        return "class-comparison"
-    if is_group_feature_query(question):
-        return "group-feature"
-    if is_class_overview_query(question):
-        return "class-overview"
-    if is_school_exam_report_query(question):
-        return "school-exam"
-    return "llm"
+    """与 agent_runner 对齐：确定性 dispatch 标签，否则 llm。"""
+    route = classify_report_intent_sync(question)
+    if not route.needs_report:
+        return "fact"
+    if not should_use_deterministic_report_plan(question, route):
+        return "llm"
+    mapping = {
+        ReportType.DIAGNOSTIC_REPORT: "citywide"
+        if is_citywide_analysis_query(question)
+        else "diagnostic",
+        ReportType.STUDENT_PROFILE: "individual",
+        ReportType.COMPREHENSIVE: "multi-exam",
+        ReportType.TIER_ALERT: "tier-alert",
+        ReportType.GRADE_COMPARISON: "class-comparison",
+        ReportType.GROUP_FEATURE: "group-feature",
+        ReportType.CLASS_OVERVIEW: "class-overview",
+        ReportType.SUBJECT_DIAGNOSIS: "school-exam",
+        ReportType.TREND_TRACKING: "trend-tracking",
+    }
+    return mapping.get(route.report_type, "llm")
+
 
 @pytest.mark.parametrize(
     "question,report_type,route",
@@ -124,7 +132,7 @@ def _route(question: str) -> str:
         (
             "历次成绩趋势分析",
             ReportType.TREND_TRACKING,
-            "llm",
+            "trend-tracking",
         ),
         (
             "扬州中学高三(9)班数学诊断报告",
@@ -134,7 +142,7 @@ def _route(question: str) -> str:
         (
             "南京市第一中学数学结构化诊断报告",
             ReportType.DIAGNOSTIC_REPORT,
-            "llm",
+            "diagnostic",
         ),
         (
             "帮我分析全市数学详细分析",
@@ -152,6 +160,9 @@ def test_intent_aligned_with_plan_route(question, report_type, route):
     spec = ReportIntentResolver().resolve(question)
     assert spec.report_type == report_type
     assert _route(question) == route
+    sync = classify_report_intent_sync(question)
+    assert sync.needs_report is True
+    assert sync.report_type == report_type
 
 
 def test_bare_xueqing_report_not_student_profile():
@@ -260,8 +271,6 @@ def test_group_feature_plan_not_class_comparison():
 
 def test_class_horizontal_xueqing_not_group_feature():
     """「班级横向对比学情分析」必须是班级横向对比，不能落到群体特征。"""
-    from src.agent.expand.planner import coerce_plan_items_if_needed
-
     q = "扬州中学高二数学班级横向对比学情分析"
     assert is_group_feature_query(q) is False
     assert is_school_class_comparison_query(q) is True
@@ -320,3 +329,154 @@ def test_normalize_fullwidth_parentheses_for_class():
     req = ChatRequest(question=q, datasource_id=1)
     assert req.question == "扬州中学高三(10)班在连淮扬镇的数学考试考情分析"
     assert "（" not in req.question
+
+
+# ---- FakeLlm 意图路由 ---------------------------------------------------- #
+
+
+class _FakeLlm:
+    def __init__(self, payload: str | Exception):
+        self._payload = payload
+
+    async def chat(self, messages: list[dict[str, str]]) -> str:
+        if isinstance(self._payload, Exception):
+            raise self._payload
+        return self._payload
+
+
+def _run(coro):
+    import asyncio
+
+    return asyncio.run(coro)
+
+
+def test_llm_classify_grade_comparison_plan():
+    from src.agent.education.intent_router import plan_items_for_route
+
+    q = "扬州中学高二数学班级横向对比学情分析"
+    llm = _FakeLlm(
+        '{"needs_report":true,"report_type":"grade_comparison",'
+        '"confidence":0.91,"reason":"横向对比"}'
+    )
+    route = _run(classify_report_intent(q, llm))
+    assert route.needs_report is True
+    assert route.report_type == ReportType.GRADE_COMPARISON
+    assert route.source == "llm"
+    plans = plan_items_for_route(route, q)
+    blob = " ".join(p["sub_task"] for p in plans)
+    assert "build_subject_diagnosis_sections_tool" in blob
+    assert "build_group_feature_report_data_tool" not in blob
+    assert ReportIntentResolver().resolve(q, route=route).report_type == (
+        ReportType.GRADE_COMPARISON
+    )
+
+
+def test_llm_classify_group_feature_plan():
+    from src.agent.education.intent_router import plan_items_for_route
+
+    q = "扬州中学连淮扬镇数学考试按班级群体对比特征"
+    llm = _FakeLlm(
+        '{"needs_report":true,"report_type":"group_feature",'
+        '"confidence":0.88,"reason":"明确群体特征"}'
+    )
+    route = _run(classify_report_intent(q, llm))
+    assert route.needs_report is True
+    assert route.report_type == ReportType.GROUP_FEATURE
+    plans = plan_items_for_route(route, q)
+    blob = " ".join(p["sub_task"] for p in plans)
+    assert "build_group_feature_report_data_tool" in blob
+
+
+def test_llm_classify_fact_query_no_report():
+    from src.agent.education.intent_router import plan_items_for_route
+
+    q = "高二(6)班数学成绩最好的学生是谁"
+    llm = _FakeLlm(
+        '{"needs_report":false,"report_type":null,"confidence":0.9,"reason":"事实查询"}'
+    )
+    route = _run(classify_report_intent(q, llm))
+    assert route.needs_report is False
+    assert route.report_type is None
+    plans = plan_items_for_route(route, q)
+    assert len(plans) == 1
+    assert plans[0]["sub_task_agent"] == "DataAnalyst"
+    assert "build_" not in plans[0]["sub_task"] or "禁止" in plans[0]["sub_task"]
+    blob = plans[0]["sub_task"]
+    assert "student_id" in blob
+    assert "姓名" not in blob or "禁止" in blob
+    assert "禁止" in blob and ("xm" in blob or "姓名" in blob)
+
+
+def test_llm_failure_no_report_word_is_fact():
+    q = "高二(6)班数学均分多少"
+    route = _run(classify_report_intent(q, _FakeLlm(RuntimeError("boom"))))
+    assert route.needs_report is False
+    assert route.report_type is None
+
+
+def test_llm_failure_falls_back_to_valid_type():
+    q = "扬州中学高二数学班级横向对比学情分析"
+    route = _run(classify_report_intent(q, _FakeLlm(RuntimeError("boom"))))
+    assert route.needs_report is True
+    assert route.report_type == ReportType.GRADE_COMPARISON
+    assert route.source in {"fallback", "hard"}
+
+    bad_json = _run(classify_report_intent(q, _FakeLlm("not-json{{{")))
+    assert bad_json.report_type == ReportType.GRADE_COMPARISON
+
+    illegal = _run(
+        classify_report_intent(
+            q,
+            _FakeLlm(
+                '{"needs_report":true,"report_type":"not_a_type","confidence":1}'
+            ),
+        )
+    )
+    assert illegal.report_type == ReportType.GRADE_COMPARISON
+
+
+def test_hard_constraint_excludes_group_feature_from_llm():
+    """含横向对比且无群体特征时，即使 LLM 想选 group_feature 也会因候选收缩而失败→兜底。"""
+    q = "扬州中学高二数学班级横向对比学情分析"
+    llm = _FakeLlm(
+        '{"needs_report":true,"report_type":"group_feature",'
+        '"confidence":0.99,"reason":"误选"}'
+    )
+    route = _run(classify_report_intent(q, llm))
+    assert route.needs_report is True
+    assert route.report_type == ReportType.GRADE_COMPARISON
+
+
+def test_coerce_fact_query_rejects_report_plan():
+    q = "高二(6)班数学成绩最好的学生是谁"
+    wrong = [
+        {"sub_task": "查成绩", "sub_task_agent": "DataAnalyst"},
+        {
+            "sub_task": "调 build_class_overview_report_data_tool(class_name=高二(6)班, render=true)",
+            "sub_task_agent": "ToolExpert",
+        },
+    ]
+    fixed = coerce_plan_items_if_needed(q, wrong)
+    assert len(fixed) == 1
+    assert "build_class_overview" not in fixed[0]["sub_task"]
+    assert _route(q) == "fact"
+
+
+def test_resolver_planner_dispatch_consistent():
+    from src.agent.education.intent_router import plan_items_for_route
+
+    cases = [
+        "扬州中学高二数学班级横向对比学情分析",
+        "扬州中学连淮扬镇数学考试按班级群体对比特征",
+        "扬州中学高三(10)班连淮扬镇数学成绩总览",
+        "临界生预警报告",
+    ]
+    for q in cases:
+        route = classify_report_intent_sync(q)
+        assert route.needs_report is True
+        spec = ReportIntentResolver().resolve(q)
+        assert spec.report_type == route.report_type
+        plans = plan_items_for_route(route, q)
+        assert plans
+        blob = " ".join(p["sub_task"] for p in plans)
+        assert blob.strip()

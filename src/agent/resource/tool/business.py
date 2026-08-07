@@ -711,7 +711,25 @@ def _enrich_class_overview_archive(
 
     # 班级总览不再展示「每位学生详细档案与个性化建议」
     out["STUDENT_ARCHIVE_TABLE"] = ""
+    out.setdefault("SUBJECT_KPI_SECTIONS", "")
+    out.setdefault("IS_MULTI_SUBJECT", "")
+    _ensure_class_overview_section_labels(out)
     return out
+
+
+def _ensure_class_overview_section_labels(out: dict[str, Any]) -> None:
+    """预填章节标题/科目徽标，避免模板 {% if %}（Jinja 失败回退 regex 会原样漏出源码）。"""
+    multi = bool(str(out.get("IS_MULTI_SUBJECT") or "").strip())
+    out["SCORE_DIST_SECTION_TITLE"] = "总分与分科分数段" if multi else "分数段分布"
+    out["SCORE_DIST_SUBHEAD"] = "<h3>班级总分分数段</h3>" if multi else ""
+    out["SCORE_DIST_DETAIL_TITLE"] = "总分分数段明细" if multi else "分数段明细"
+    subj = str(out.get("SUBJECT_NAME") or "").strip()
+    if subj and subj not in ("全科", "-"):
+        out["SUBJECT_NAME_BADGE"] = f'<span class="edu-badge">{_html_escape(subj)}</span>'
+    else:
+        out["SUBJECT_NAME_BADGE"] = ""
+    out.setdefault("SUBJECT_KPI_SECTIONS", "")
+    out.setdefault("IS_MULTI_SUBJECT", "")
 
 
 _PLACEHOLDER_SUMMARY_HINTS = (
@@ -931,7 +949,11 @@ def _infer_full_score_for_segments(
 
 
 def _fill_class_overview_kpis_from_rows(out: dict[str, Any], rows: list[dict[str, Any]]) -> None:
-    """用成绩行补齐缺失 KPI / 强制重算分数段图与表。"""
+    """用成绩行补齐缺失 KPI / 强制重算分数段图与表。
+
+    多学科时：顶层改用「每生各科合计」口径，并按科输出分数段分块，避免把
+    不同满分科目的分数混进同一分数段（参考人数被科目数放大）。
+    """
     try:
         from src.agent.education.charts import build_chart_option
         from src.agent.education.config import EducationConfig
@@ -952,13 +974,17 @@ def _fill_class_overview_kpis_from_rows(out: dict[str, Any], rows: list[dict[str
     if not scores:
         return
 
-    full_score = _infer_full_score_for_segments(rows, scores, out)
     try:
         from src.agent.education.config_store import get_config
 
         cfg = get_config()
     except Exception:
         cfg = EducationConfig()
+
+    if _fill_class_overview_multi_subject(out, rows, cfg=cfg):
+        return
+
+    full_score = _infer_full_score_for_segments(rows, scores, out)
     stats = compute_score_stats(scores, cfg, full_score)
 
     kpi_map = {
@@ -979,6 +1005,8 @@ def _fill_class_overview_kpis_from_rows(out: dict[str, Any], rows: list[dict[str
 
     segments = stats.get("segments") or []
     out["_stats"] = stats
+    out["SUBJECT_KPI_SECTIONS"] = ""
+    out["IS_MULTI_SUBJECT"] = ""
     # 有成绩行时始终按正确满分重算图/表（覆盖 LLM 满分 100 的全 0 表）
     out["SCORE_DIST_CHART"] = build_chart_option(
         "score_distribution",
@@ -992,6 +1020,191 @@ def _fill_class_overview_kpis_from_rows(out: dict[str, Any], rows: list[dict[str
     # 供离散度说明使用
     if stats.get("full_score") is not None:
         out.setdefault("_FULL_SCORE", stats.get("full_score"))
+
+
+def _student_key_from_row(row: dict[str, Any]) -> str:
+    for k in ("student_id", "student_name", "student", "name", "学号"):
+        v = row.get(k)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    return ""
+
+
+def _group_score_rows_by_subject(
+    rows: list[dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    by_subj: dict[str, list[dict[str, Any]]] = {}
+    order: list[str] = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        sub = str(r.get("subject") or r.get("subject_name") or "").strip()
+        if not sub:
+            continue
+        raw = r.get("score")
+        if raw is None or raw == "":
+            continue
+        try:
+            float(raw)
+        except (TypeError, ValueError):
+            continue
+        if sub not in by_subj:
+            by_subj[sub] = []
+            order.append(sub)
+        by_subj[sub].append(r)
+    return {s: by_subj[s] for s in order}
+
+
+def _fill_class_overview_multi_subject(
+    out: dict[str, Any],
+    rows: list[dict[str, Any]],
+    *,
+    cfg: Any,
+) -> bool:
+    """多科时分科输出 KPI/分数段；顶层用每生各科合计。成功处理返回 True。"""
+    try:
+        from src.agent.education.charts import build_chart_option
+        from src.agent.education.stats import compute_score_stats
+        from src.agent.education.subject_diagnosis import build_segment_table_html
+    except Exception:
+        return False
+
+    by_subj = _group_score_rows_by_subject(rows)
+    if len(by_subj) < 2:
+        return False
+
+    subjects = list(by_subj.keys())
+    parts: list[str] = [
+        "<p class='edu-sub'>本场含多门学科，以下按科目分别展示核心指标与分数段；"
+        "上方「核心指标」为各科得分合计后的班级总分口径（人数=实际学生数）。</p>"
+    ]
+    breakdown_rows: list[dict[str, Any]] = []
+
+    for idx, sub in enumerate(subjects):
+        group = by_subj[sub]
+        sub_scores: list[float] = []
+        for r in group:
+            try:
+                sub_scores.append(float(r.get("score")))
+            except (TypeError, ValueError):
+                continue
+        if not sub_scores:
+            continue
+        full = _infer_full_score_for_segments(group, sub_scores, out)
+        st = compute_score_stats(sub_scores, cfg, full)
+        segments = st.get("segments") or []
+        chart_id = f"scoreDist_subj_{idx}"
+        chart = build_chart_option(
+            "score_distribution",
+            {"segments": segments, "pass_rate": st.get("pass_rate")},
+            title=f"{sub}分数段分布",
+        )
+        table = build_segment_table_html(segments, full_score=st.get("full_score"))
+        full_label = _fmt_metric(st.get("full_score"))
+        parts.append(
+            f'<div class="subject-kpi-block" data-subject="{_html_escape(sub)}">'
+            f"<h3>{_html_escape(sub)}"
+            f"<span class='edu-sub'>（满分 {full_label} · {st.get('count') or 0} 人）</span></h3>"
+            '<div class="edu-grid">'
+            f'<div class="edu-kpi"><div class="label">参考人数</div>'
+            f'<div class="value">{st.get("count") or 0}</div></div>'
+            f'<div class="edu-kpi"><div class="label">平均分</div>'
+            f'<div class="value">{_fmt_metric(st.get("avg"))}</div></div>'
+            f'<div class="edu-kpi ok"><div class="label">及格率</div>'
+            f'<div class="value">{_normalize_pct_display(_fmt_metric(st.get("pass_rate")))}</div></div>'
+            f'<div class="edu-kpi ok"><div class="label">优秀率</div>'
+            f'<div class="value">{_normalize_pct_display(_fmt_metric(st.get("excellent_rate")))}</div></div>'
+            f'<div class="edu-kpi"><div class="label">最高分</div>'
+            f'<div class="value">{_fmt_metric(st.get("max"))}</div></div>'
+            f'<div class="edu-kpi warn"><div class="label">最低分</div>'
+            f'<div class="value">{_fmt_metric(st.get("min"))}</div></div>'
+            "</div>"
+            f'<div id="{chart_id}" class="edu-chart"></div>'
+            f'<script type="application/json" data-edu-echart="{chart_id}">{chart}</script>'
+            f'<div class="segment-wrap"><h3>{_html_escape(sub)}分数段明细</h3>{table}</div>'
+            "</div>"
+        )
+        breakdown_rows.append({
+            "科目": sub,
+            "满分": st.get("full_score"),
+            "参考人数": st.get("count"),
+            "均分": st.get("avg"),
+            "最高": st.get("max"),
+            "最低": st.get("min"),
+            "及格率": _normalize_pct_display(_fmt_metric(st.get("pass_rate"))),
+            "优秀率": _normalize_pct_display(_fmt_metric(st.get("excellent_rate"))),
+            "标准差": st.get("stdev"),
+        })
+
+    if not breakdown_rows:
+        return False
+
+    # 顶层：每生各科合计，避免「参考人数=人次」
+    by_stu: dict[str, float] = {}
+    for r in rows:
+        sid = _student_key_from_row(r)
+        if not sid:
+            continue
+        raw = r.get("score")
+        try:
+            by_stu[sid] = by_stu.get(sid, 0.0) + float(raw)
+        except (TypeError, ValueError):
+            continue
+    total_scores = list(by_stu.values())
+    if not total_scores:
+        return False
+
+    subj_fulls: list[float] = []
+    for sub, group in by_subj.items():
+        sc = []
+        for r in group:
+            try:
+                sc.append(float(r.get("score")))
+            except (TypeError, ValueError):
+                continue
+        fs = _infer_full_score_for_segments(group, sc, out)
+        if fs is not None and fs > 0:
+            subj_fulls.append(float(fs))
+    total_full = sum(subj_fulls) if subj_fulls else _infer_full_score_for_segments(
+        rows, total_scores, out
+    )
+    total_stats = compute_score_stats(total_scores, cfg, total_full)
+
+    out["TOTAL_COUNT"] = str(total_stats.get("count") or len(total_scores))
+    out["AVG_SCORE"] = _fmt_metric(total_stats.get("avg"))
+    out["PASS_RATE"] = _fmt_metric(total_stats.get("pass_rate"))
+    out["EXCELLENT_RATE"] = _fmt_metric(total_stats.get("excellent_rate"))
+    out["GOOD_RATE"] = _fmt_metric(total_stats.get("good_rate"))
+    out["LOW_SCORE_RATE"] = _fmt_metric(total_stats.get("low_score_rate"))
+    out["MAX_SCORE"] = _fmt_metric(total_stats.get("max"))
+    out["MIN_SCORE"] = _fmt_metric(total_stats.get("min"))
+    out["STDEV"] = _fmt_metric(total_stats.get("stdev"))
+    out["VARIANCE"] = _fmt_metric(total_stats.get("variance"))
+    out["_stats"] = total_stats
+    if total_stats.get("full_score") is not None:
+        out["_FULL_SCORE"] = total_stats.get("full_score")
+
+    # 顶层保留「班级总分」分布；分科明细在 SUBJECT_KPI_SECTIONS
+    out["SCORE_DIST_CHART"] = build_chart_option(
+        "score_distribution",
+        {
+            "segments": total_stats.get("segments") or [],
+            "pass_rate": total_stats.get("pass_rate"),
+        },
+        title="班级总分分数段分布",
+    )
+    out["SEGMENT_TABLE"] = (
+        "<p class='edu-sub'>下列为各科得分合计后的总分分数段；各科明细见下方分科区块。</p>"
+        + build_segment_table_html(
+            total_stats.get("segments") or [],
+            full_score=total_stats.get("full_score"),
+        )
+    )
+    out["SUBJECT_KPI_SECTIONS"] = "".join(parts)
+    out["IS_MULTI_SUBJECT"] = "1"
+    out["SUBJECT_NAME"] = "、".join(subjects)
+    out["SUBJECT_BREAKDOWN"] = _list_of_dicts_to_table_html(breakdown_rows)
+    return True
 
 
 def _fill_dispersion_explain(out: dict[str, Any]) -> None:
@@ -1607,6 +1820,10 @@ def describe_table(
     # tb_school.s_name 可能仍存中文全称；对外只暴露脱敏 name/id，避免 Agent 选明文列
     if table_key == "tb_school":
         fields = [f for f in fields if str(f.get("name") or "").lower() != "s_name"]
+    from src.agent.education.student_privacy import filter_schema_fields
+
+    # xm/姓名等明文列对外隐藏，学生标识一律用 student_id
+    fields = filter_schema_fields(fields)
     header = f"表 `{match['name']}`" + (f"（{match['comment']}）" if match.get("comment") else "")
     if not fields:
         content = header + "\n（无字段信息）"
@@ -1620,6 +1837,14 @@ def describe_table(
         if table_key == "tb_school":
             lines.append("")
             lines.append("说明：学校展示/过滤请用 `id` 或 `name`（脱敏码）；禁止查询明文列。")
+        if any(
+            k in table_key
+            for k in ("score", "student", "exam", "overview")
+        ):
+            lines.append("")
+            lines.append(
+                "说明：学生标识请用 `student_id`（或学号列）；禁止查询/展示姓名明文（xm/姓名）。"
+            )
         content = "\n".join(lines)
 
     match_out = dict(match)
@@ -1705,8 +1930,10 @@ def sample_rows(
         return ToolResult(content="采样失败：无结果", data=None)
 
     from src.agent.education.school_cipher import strip_s_name_from_query_result
+    from src.agent.education.student_privacy import strip_student_names_from_query_result
 
     result = strip_s_name_from_query_result(result) or result
+    result = strip_student_names_from_query_result(result) or result
     columns = result.get("columns", [])
     rows = result.get("rows", [])
     header = f"`{table_name}` 采样 {len(rows)} 行" + (f"（WHERE {clause}）" if clause else "") + "："
@@ -1732,6 +1959,10 @@ def execute_sql(
         rewrite_sql_school_s_name,
         strip_s_name_from_query_result,
     )
+    from src.agent.education.student_privacy import (
+        rewrite_sql_student_name_cols,
+        strip_student_names_from_query_result,
+    )
     from src.datasource.service.execute_with_permission import execute_sql_with_permission_by_user_id
     from src.datasource.service.sql_auto_fix import format_auto_fix_note, run_sql_with_auto_fix
 
@@ -1740,6 +1971,9 @@ def execute_sql(
     sql, s_name_rewritten = rewrite_sql_school_s_name(sql)
     if s_name_rewritten:
         fixes.append("school_s_name→name")
+    sql, xm_rewritten = rewrite_sql_student_name_cols(sql)
+    if xm_rewritten:
+        fixes.append("xm→student_id")
 
     if user_id is not None:
         success, message, result, sql_run = execute_sql_with_permission_by_user_id(
@@ -1768,6 +2002,7 @@ def execute_sql(
 
     if isinstance(result, dict):
         result = strip_s_name_from_query_result(result) or result
+        result = strip_student_names_from_query_result(result) or result
 
     if not isinstance(result, dict) or "rows" not in result:
         return ToolResult(

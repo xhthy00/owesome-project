@@ -958,6 +958,73 @@ def test_inject_ad_hoc_charts_appends_section():
     assert "adhoc-chart-grid" in out
     assert "adhoc-chart-card" in out
 
+def test_should_skip_ad_hoc_when_tool_html_not_in_state_reports():
+    """学科诊断 HTML 仅在 tool_calls（未入 state.reports）时也应跳过 AdHoc。"""
+    from types import SimpleNamespace
+
+    from src.chat.service.agent_runner import _should_skip_ad_hoc_report
+
+    phase = SimpleNamespace(
+        state=SimpleNamespace(
+            reports=[],
+            tool_calls=[
+                {
+                    "tool": "build_subject_diagnosis_sections_tool",
+                    "success": True,
+                    "data": {
+                        "output_type": "html",
+                        "report_type": "subject_diagnosis",
+                        "report_type_label": "科目诊断报告",
+                        "title": "数学诊断报告",
+                        "html": "<html><body><div class='edu-card'>诊断正文</div></body></html>",
+                    },
+                }
+            ],
+        )
+    )
+    assert _should_skip_ad_hoc_report([("生成科目诊断", phase)]) is True
+    assert (
+        _should_skip_ad_hoc_report(
+            [("生成科目诊断", phase)],
+            report_route={"needs_report": True, "report_type": "subject_diagnosis"},
+        )
+        is True
+    )
+
+
+def test_should_skip_ad_hoc_when_formal_route_used_education_tools():
+    """正式学情路由已调教育工具（即使 HTML 被守卫拦下）也不再写自主分析报告。"""
+    from types import SimpleNamespace
+
+    from src.chat.service.agent_runner import _should_skip_ad_hoc_report
+
+    phase = SimpleNamespace(
+        state=SimpleNamespace(
+            reports=[],
+            tool_calls=[
+                {
+                    "tool": "fetch_subject_diagnosis_data_tool",
+                    "success": True,
+                    "data": {"item_rows": [], "knowledge_rows": []},
+                },
+                {
+                    "tool": "build_subject_diagnosis_sections_tool",
+                    "success": True,
+                    "data": {"error": "sparse"},
+                },
+            ],
+        )
+    )
+    assert _should_skip_ad_hoc_report([("诊断", phase)]) is False
+    assert (
+        _should_skip_ad_hoc_report(
+            [("诊断", phase)],
+            report_route={"needs_report": True, "report_type": "subject_diagnosis"},
+        )
+        is True
+    )
+
+
 def test_team_ad_hoc_skips_when_preset_report_exists(monkeypatch):
     """子任务已带 HTML 报告 → 不调用 AdHoc LLM。"""
     _patch_db(

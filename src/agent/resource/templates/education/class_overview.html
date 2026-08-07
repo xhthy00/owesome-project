@@ -112,6 +112,17 @@
       border: 1px dashed var(--edu-border);
       border-radius: 10px;
     }
+    .subject-kpi-block {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px dashed var(--edu-border);
+    }
+    .subject-kpi-block > h3 {
+      margin: 0 0 12px;
+      font-size: 15px;
+      color: var(--edu-text-lv1);
+    }
+    .subject-kpi-block .edu-sub { margin-left: 8px; font-weight: 400; }
 
     /* 表格：圆角容器 + 轻边框 */
     .edu-table-wrap {
@@ -302,6 +313,7 @@
         <span class="edu-badge">{{REPORT_TYPE}}</span>
         <span class="edu-badge">{{CLASS_NAME}}</span>
         <span class="edu-badge">{{EXAM_NAME}}</span>
+        {{SUBJECT_NAME_BADGE}}
         {{REPORT_TIME}}
       </p>
     </section>
@@ -332,7 +344,8 @@
     </section>
 
     <section class="edu-card">
-      <h2>分数段分布</h2>
+      <h2>{{SCORE_DIST_SECTION_TITLE}}</h2>
+      {{SCORE_DIST_SUBHEAD}}
       <div id="scoreDist" class="edu-chart"></div>
       <div id="scoreDistEmpty" class="edu-chart-empty">暂无分数段分布数据</div>
       <script type="application/json" id="scoreDistData">{{SCORE_DIST_CHART}}</script>
@@ -355,9 +368,10 @@
         })();
       </script>
       <div class="segment-wrap">
-        <h3>分数段明细</h3>
+        <h3>{{SCORE_DIST_DETAIL_TITLE}}</h3>
         <div>{{SEGMENT_TABLE}}</div>
       </div>
+      <div id="subjectKpiSections" class="subject-kpi-sections">{{SUBJECT_KPI_SECTIONS}}</div>
     </section>
 
     <section class="edu-card" id="subjectSection">
@@ -443,6 +457,13 @@
   </div>
   <script>
     (function () {
+      // 分科分数段图
+      document.querySelectorAll('script[data-edu-echart]').forEach(function (el) {
+        var target = el.getAttribute('data-edu-echart');
+        var raw = (el.textContent || '').trim();
+        if (!target || !raw) return;
+        try { echarts.init(document.getElementById(target)).setOption(JSON.parse(raw)); } catch (e) {}
+      });
       // 美化 LLM 注入的裸 table：加圆角容器与 edu-table 类
       document.querySelectorAll('.edu-container table').forEach(function (t) {
         t.classList.add('edu-table');

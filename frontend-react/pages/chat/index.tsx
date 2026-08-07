@@ -28,7 +28,9 @@ export default function ChatPage() {
     clearConversation,
     patchReport,
     datasourceId,
-    setDatasourceId
+    setDatasourceId,
+    agentMode,
+    setAgentMode
   } = useChat();
   const [conversations] = useState(initConversations);
   const [activeId] = useState("default");
@@ -140,9 +142,26 @@ export default function ChatPage() {
       setResourceValue,
       setModelValue,
       datasourceId,
-      setDatasourceId
+      setDatasourceId,
+      agentMode,
+      setAgentMode
     }),
-    [loading, send, stop, clearConversation, appInfo, temperatureValue, maxNewTokensValue, resourceValue, modelValue, messages, datasourceId, setDatasourceId]
+    [
+      loading,
+      send,
+      stop,
+      clearConversation,
+      appInfo,
+      temperatureValue,
+      maxNewTokensValue,
+      resourceValue,
+      modelValue,
+      messages,
+      datasourceId,
+      setDatasourceId,
+      agentMode,
+      setAgentMode
+    ]
   );
 
   return (
@@ -185,6 +204,7 @@ export default function ChatPage() {
                     selectedStepId={selectedStepId}
                     onSelectStep={setSelectedStepId}
                     runMetrics={runMetrics}
+                    agentMode={agentMode}
                     onPatchReport={patchReport}
                   />
                 </div>

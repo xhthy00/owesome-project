@@ -439,3 +439,125 @@ def test_reconcile_loose_headcount_and_scrub_without_stats():
     )
     assert "829" in fixed
     assert "20 人" not in fixed
+
+
+def test_audit_and_reconcile_markdown_kpi_table():
+    from src.agent.education.summary_context import (
+        audit_summary_kpi_claims,
+        reconcile_summary_kpis,
+    )
+
+    draft = (
+        "## 关键指标\n"
+        "| 指标 | 数值 |\n"
+        "| --- | --- |\n"
+        "| 参考人数 | 20 人 |\n"
+        "| 均分 | 108.5 |\n"
+        "| 及格率 | 91.07% |\n"
+        "| 优秀率 | 13.15% |\n"
+        "| 卷面满分 | 100 |\n"
+        "| 及格线 | 60 |\n"
+        "| 标准差 | 12.3 |\n"
+    )
+    stats = {
+        "count": 829,
+        "avg": 110.24,
+        "pass_rate": 99.16,
+        "excellent_rate": 94.45,
+        "full_score": 150,
+        "pass_line": 90.0,
+        "stdev": 15.91,
+    }
+    conflicts = audit_summary_kpi_claims(draft, stats)
+    fields = {c.field for c in conflicts}
+    assert "count" in fields
+    assert "pass_rate" in fields
+    assert "avg" in fields
+
+    out = reconcile_summary_kpis(draft, stats)
+    assert "| 参考人数 | 829" in out
+    assert "| 均分 | 110.24 |" in out
+    assert "| 及格率 | 99.16% |" in out
+    assert "| 优秀率 | 94.45% |" in out
+    assert "| 卷面满分 | 150" in out
+    assert "| 及格线 | 90.0" in out
+    assert "| 标准差 | 15.91 |" in out
+    assert not audit_summary_kpi_claims(out, stats)
+
+
+def test_reconcile_dual_narrative_and_md_table():
+    from src.agent.education.summary_context import (
+        audit_summary_kpi_claims,
+        reconcile_answer_with_artifacts_detailed,
+    )
+
+    draft = (
+        "年级及格率91.07%，表现尚可。\n"
+        "| 及格率 | 91.07% |\n"
+        "| 均分 | 100 |\n"
+    )
+    stats = {
+        "count": 829,
+        "avg": 110.24,
+        "pass_rate": 99.16,
+        "excellent_rate": 94.45,
+    }
+    # 通过 tool_calls 注入权威（compute_score_stats）
+    out, conflicts = reconcile_answer_with_artifacts_detailed(
+        draft,
+        tool_calls=[
+            {
+                "tool": "compute_score_stats_tool",
+                "success": True,
+                "content": "成绩统计完成",
+                "data": stats,
+            }
+        ],
+    )
+    assert any(c.field == "pass_rate" for c in conflicts)
+    assert "91.07" not in out
+    assert "及格率99.16%" in out or "及格率 99.16%" in out
+    assert "| 及格率 | 99.16% |" in out
+    assert "| 均分 | 110.24 |" in out
+    assert not audit_summary_kpi_claims(out, stats)
+
+
+def test_scrub_residual_conflicting_rate_token():
+    from src.agent.education.summary_context import (
+        KpiClaimConflict,
+        scrub_residual_conflicting_values,
+    )
+
+    # 标签已对齐，但叙述残留「约 91.07」
+    draft = "及格率 99.16%，约 91.07 的旧口径不再采用。"
+    stats = {"pass_rate": 99.16, "count": 829}
+    # 模拟审计阶段仍看到旧声明（在改写前）
+    conflicts = [
+        KpiClaimConflict(field="pass_rate", claimed=91.07, authority=99.16, span="及格率91.07%"),
+    ]
+    out = scrub_residual_conflicting_values(draft, conflicts, stats)
+    assert "91.07" not in out
+    assert "99.16" in out
+
+
+def test_audit_skips_missing_authority_fields():
+    from src.agent.education.summary_context import audit_summary_kpi_claims
+
+    draft = "及格率 80%，均分 100，参考人数为 50 人。"
+    # 仅有 count，不应对 pass_rate/avg 误报
+    conflicts = audit_summary_kpi_claims(draft, {"count": 50})
+    assert conflicts == []
+
+    conflicts2 = audit_summary_kpi_claims(draft, None)
+    assert conflicts2 == []
+
+
+def test_reconcile_detailed_no_stats_scrubs_preview():
+    from src.agent.education.summary_context import reconcile_answer_with_artifacts_detailed
+
+    out, conflicts = reconcile_answer_with_artifacts_detailed(
+        "年级参考人数20人，均分尚可。",
+        tool_calls=[],
+    )
+    assert conflicts == []
+    assert "20人" not in out

@@ -464,13 +464,28 @@ def test_orchestrator_class_overview_rank_info():
 
 
 def test_orchestrator_config_edu_sql_includes_exam_name_and_student():
-    captured = {}
+    captured: list[str] = []
 
     async def fake_execute(sql):
-        captured["sql"] = sql
+        captured.append(sql)
+        if "COUNT(*) AS cnt" in sql:
+            return {"columns": ["cnt"], "rows": [[1]], "row_count": 1}
+        if "AS avg" in sql and "pass_rate" in sql:
+            return {
+                "columns": [
+                    "count", "full_score", "avg", "median", "stdev", "min", "max",
+                    "pass_rate", "excellent_rate", "good_rate", "low_score_rate",
+                    "fail_rate", "seg_0_count", "seg_1_count", "seg_2_count",
+                    "seg_3_count", "seg_4_count",
+                ],
+                "rows": [[1, 150, 120, 120, None, 120, 120, 100, 0, 100, 0, 0, 0, 0, 0, 0, 1]],
+                "row_count": 1,
+            }
+        if "ORDER BY COUNT(*) DESC" in sql:
+            return {"columns": ["exam_id"], "rows": [["e1"]], "row_count": 1}
         return {
-            "columns": ["score", "exam_score"],
-            "rows": [[120, 150]],
+            "columns": ["score", "exam_score", "student_id", "student_name", "exam_name"],
+            "rows": [[120, 150, "S1", "S1", "期中"]],
             "row_count": 1,
         }
 
@@ -488,11 +503,11 @@ def test_orchestrator_config_edu_sql_includes_exam_name_and_student():
             )
         )
     )
-    sql = captured["sql"]
-    assert "exam_name" in sql
-    assert "student_id AS student_name" in sql or "student_name" in sql
-    assert "st.name" not in sql
-    assert "LIMIT 50000" in sql
+    score_sql = next(s for s in captured if "AS score" in s and "FROM tb_score" in s and "LIMIT" in s)
+    assert "exam_name" in score_sql
+    assert "student_id AS student_name" in score_sql or "student_name" in score_sql
+    assert "st.name" not in score_sql
+    assert "LIMIT 50000" in score_sql
 
 
 def test_orchestrator_locked_class_overrides_question_class():
@@ -522,13 +537,28 @@ def _config_edu_mapping() -> ScoreSchemaMapping:
 
 
 def test_orchestrator_config_edu_sql_includes_school_and_exam_score():
-    captured = {}
+    captured: list[str] = []
 
     async def fake_execute(sql):
-        captured["sql"] = sql
+        captured.append(sql)
+        if "ORDER BY COUNT(*) DESC" in sql and "exam_id" in sql:
+            return {"columns": ["exam_id"], "rows": [["e1"]], "row_count": 1}
+        if "COUNT(*) AS cnt" in sql and "pass_rate" not in sql:
+            return {"columns": ["cnt"], "rows": [[2]], "row_count": 1}
+        if "pass_rate" in sql:
+            return {
+                "columns": [
+                    "count", "full_score", "avg", "median", "stdev", "min", "max",
+                    "pass_rate", "excellent_rate", "good_rate", "low_score_rate",
+                    "fail_rate", "seg_0_count", "seg_1_count", "seg_2_count",
+                    "seg_3_count", "seg_4_count",
+                ],
+                "rows": [[2, 150, 127.5, 127.5, 10.6, 120, 135, 100, 0, 100, 0, 0, 0, 0, 0, 0, 2]],
+                "row_count": 1,
+            }
         return {
-            "columns": ["score", "exam_score"],
-            "rows": [[120, 150], [135, 150]],
+            "columns": ["score", "exam_score", "school_name", "exam_name"],
+            "rows": [[120, 150, "南京市第一中学", "期中"], [135, 150, "南京市第一中学", "期中"]],
             "row_count": 2,
         }
 
@@ -539,13 +569,71 @@ def test_orchestrator_config_edu_sql_includes_school_and_exam_score():
     res = _run(
         orch.run("分析【南京市第一中学】【高一(1)班】数学成绩")
     )
-    sql = captured["sql"]
-    assert "tb_school" in sql
-    assert "sch.name" in sql
-    assert "exam_score" in sql
-    assert "南京市第一中学" in sql
+    score_sql = next(
+        s for s in captured
+        if "FROM tb_score sc" in s and "AS score" in s and "LIMIT" in s
+    )
+    assert "tb_school" in score_sql
+    assert "sch.name" in score_sql
+    assert "exam_score" in score_sql
+    assert "南京市第一中学" in score_sql
+    assert res.error is None
+    assert res.stats["count"] == 2
     assert res.stats["full_score"] == 150
     assert res.stats["pass_rate"] == 100.0
+    # KPI 聚合 SQL 无行级 LIMIT
+    assert any(
+        "pass_rate" in s and "LIMIT" not in s.upper().replace("WITHIN GROUP", "")
+        for s in captured
+    )
+
+
+def test_orchestrator_kpi_ignores_truncated_score_rows():
+    """行级 LIMIT 截断时 TOTAL人数仍以无 LIMIT 聚合为准。"""
+    captured: list[str] = []
+
+    async def fake_execute(sql):
+        captured.append(sql)
+        if "ORDER BY COUNT(*) DESC" in sql and "GROUP BY sc.exam_id" in sql:
+            return {"columns": ["exam_id"], "rows": [["e1"]], "row_count": 1}
+        if "COUNT(*) AS cnt" in sql and "pass_rate" not in sql:
+            return {"columns": ["cnt"], "rows": [[1500]], "row_count": 1}
+        if "pass_rate" in sql:
+            return {
+                "columns": [
+                    "count", "full_score", "avg", "median", "stdev", "min", "max",
+                    "pass_rate", "excellent_rate", "good_rate", "low_score_rate",
+                    "fail_rate", "seg_0_count", "seg_1_count", "seg_2_count",
+                    "seg_3_count", "seg_4_count",
+                ],
+                "rows": [[1500, 100, 72.5, 70, 12.0, 30, 100, 80.0, 10.0, 40.0, 15.0, 20.0, 200, 300, 400, 300, 300]],
+                "row_count": 1,
+            }
+        # 故意只返回 1000 行，模拟 LIMIT 截断
+        return {
+            "columns": ["score", "exam_score", "student_id"],
+            "rows": [[90, 100, f"S{i}"] for i in range(1000)],
+            "row_count": 1000,
+        }
+
+    async def fake_schema():
+        return _config_edu_mapping()
+
+    from src.agent.education.report_types import ReportSpec
+
+    orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
+    res = _run(
+        orch.run_spec(
+            ReportSpec(
+                report_type=ReportType.CLASS_OVERVIEW,
+                filters={"class_name": "高一(1)班", "subject": "数学", "exam_id": "e1"},
+            )
+        )
+    )
+    assert res.error is None
+    assert res.stats["count"] == 1500
+    assert res.stats["pass_rate"] == 80.0
+    assert res.stats["count"] == 1500
 
 
 def test_orchestrator_subject_diagnosis_includes_item_table():
@@ -553,6 +641,21 @@ def test_orchestrator_subject_diagnosis_includes_item_table():
 
     async def fake_execute(sql):
         calls.append(sql)
+        if "ORDER BY COUNT(*) DESC" in sql and "GROUP BY sc.exam_id" in sql:
+            return {"columns": ["exam_id"], "rows": [["e1"]], "row_count": 1}
+        if "COUNT(*) AS cnt" in sql and "pass_rate" not in sql:
+            return {"columns": ["cnt"], "rows": [[1]], "row_count": 1}
+        if "pass_rate" in sql and "WITH base" in sql:
+            return {
+                "columns": [
+                    "count", "full_score", "avg", "median", "stdev", "min", "max",
+                    "pass_rate", "excellent_rate", "good_rate", "low_score_rate",
+                    "fail_rate", "seg_0_count", "seg_1_count", "seg_2_count",
+                    "seg_3_count", "seg_4_count",
+                ],
+                "rows": [[1, 150, 120, 120, None, 120, 120, 100, 0, 100, 0, 0, 0, 0, 0, 0, 1]],
+                "row_count": 1,
+            }
         if "tb_knowledge" in sql and "knowledge_name" in sql and "GROUP BY" in sql:
             return {
                 "columns": ["knowledge_name", "question_count", "score_rate"],

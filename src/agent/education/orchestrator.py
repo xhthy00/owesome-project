@@ -6,8 +6,8 @@ Orchestrator 擅长**结构已知**的报告：报告类型一旦识别，后续
 全部走领域工具，输出可复现。
 
 设计要点：
-- ``ReportIntentResolver``：纯规则的关键词匹配，把自然语言映射到 ``ReportSpec``。
-  识别失败时回退 ``class_overview``，保证总有产出。
+- ``ReportIntentResolver``：复用 ``intent_router.classify_report_intent_sync`` 选型，
+  再抽取 school/class/subject/exam filters；保证与 Planner 同源。
 - ``ReportOrchestrator``：依赖注入 ``execute_sql`` 与 ``resolve_schema`` 两个可替换
   的协程回调，便于单测用 mock 替换真实数据源；统计/图表/渲染复用 ``education``
   包内既有纯函数与 ``render_html_report``。
@@ -25,6 +25,19 @@ from typing import Any, Awaitable, Callable
 
 from src.agent.education.charts import build_chart_option
 from src.agent.education.config import EducationConfig, load_config
+from src.agent.education.diagnostic_report import build_diagnostic_data
+from src.agent.education.knowledge_tier import (
+    build_ability_tier_summary,
+    build_ability_tier_table_html,
+    build_question_type_table_html,
+)
+from src.agent.education.kpi_sql import (
+    append_exam_id_predicate,
+    build_kpi_aggregate_sql,
+    build_primary_exam_id_sql,
+    build_score_count_sql,
+    kpi_row_to_stats,
+)
 from src.agent.education.query_parse import (
     extract_district_target,
     extract_school_target,
@@ -32,12 +45,6 @@ from src.agent.education.query_parse import (
 )
 from src.agent.education.report_types import Audience, ReportSpec, ReportType
 from src.agent.education.schema_mapping import ScoreSchemaMapping, load_schema_from_config
-from src.agent.education.diagnostic_report import build_diagnostic_data
-from src.agent.education.knowledge_tier import (
-    build_ability_tier_summary,
-    build_ability_tier_table_html,
-    build_question_type_table_html,
-)
 from src.agent.education.stats import compute_item_metrics, compute_rankings, compute_score_stats, identify_at_risk_students
 from src.agent.education.subject_diagnosis import (
     build_diagnosis_recommendations,
@@ -49,7 +56,6 @@ from src.agent.education.subject_diagnosis import (
     knowledge_weighted_join,
 )
 from src.agent.education.templates import select_report_template
-
 logger = logging.getLogger(__name__)
 
 #: 执行 SQL 的回调签名：(sql) -> {"columns": [...], "rows": [[...], ...], "row_count": int}
@@ -57,39 +63,19 @@ ExecuteSqlFn = Callable[[str], Awaitable[dict[str, Any]]]
 #: 解析 schema 的回调签名：() -> ScoreSchemaMapping
 ResolveSchemaFn = Callable[[], Awaitable[ScoreSchemaMapping]]
 
+# 单场 KPI 报告：未指定考试时先锁定人数最多的一场，再聚合
+_SINGLE_EXAM_KPI_TYPES = frozenset(
+    {
+        ReportType.CLASS_OVERVIEW,
+        ReportType.SUBJECT_DIAGNOSIS,
+        ReportType.TIER_ALERT,
+        ReportType.GRADE_COMPARISON,
+        ReportType.GROUP_FEATURE,
+    }
+)
+
 
 # ---- 意图识别 ------------------------------------------------------------
-
-# 关键词 → ReportType。仅作「非专用探测器」场景的回落；顺序敏感：越具体越靠前。
-# 专用探测器（全市 / 个人 / 多场 / 各班对比 / 学校报告）优先于本表。
-_INTENT_KEYWORDS: list[tuple[ReportType, tuple[str, ...]]] = [
-    (ReportType.DIAGNOSTIC_REPORT, ("结构化诊断", "区域诊断报告", "诊断报告三节", "全市区县诊断")),
-    (ReportType.COMPREHENSIVE, (
-        "综合分析报告", "综合报告", "综合分析", "多次考试", "三次考试", "两次考试",
-        "纵向分析", "所有考试", "全部考试", "历次考试", "各次考试",
-        "所有数学考试", "所有语文考试",
-    )),
-    (ReportType.TIER_ALERT, ("预警", "临界生", "退步生", "偏科", "分层")),
-    (ReportType.TREND_TRACKING, ("趋势", "变化", "历次成绩", "历次", "走势", "进退步")),
-    (ReportType.STUDENT_PROFILE, ("学生个体", "个人报告", "该生", "这名学生", "这几次考试")),
-    # 群体特征须先于班级横向对比关键词回落（避免「对比」泛化）
-    (ReportType.GROUP_FEATURE, (
-        "群体特征", "群体对比特征", "对比特征", "按班级群体", "群体特征报告", "群体对比分析",
-    )),
-    # 各班横向对比须先于科目诊断
-    (ReportType.GRADE_COMPARISON, (
-        "年级对比", "各班对比", "班级对比", "年级排名", "班级排名",
-        "各个班级", "各班级", "横向对比", "横向分析", "横向多维", "多维对比", "多维分析",
-    )),
-    (ReportType.SUBJECT_DIAGNOSIS, (
-        "科目诊断", "科目分析", "学科诊断", "某科", "数学分析", "语文分析",
-        "小题", "逐题", "每一小题", "每一题", "知识点", "详细分析", "诊断报告",
-    )),
-    (ReportType.CLASS_OVERVIEW, (
-        "班级总览", "成绩总览", "班级成绩总览", "总览报告", "成绩概览", "班级成绩概览",
-        "班级报告", "班级分析", "班级成绩", "期中分析", "期末分析",
-    )),
-]
 
 _AUDIENCE_KEYWORDS: list[tuple[Audience, tuple[str, ...]]] = [
     (Audience.PARENT, ("家长", "给家长", "家长版")),
@@ -100,64 +86,33 @@ _AUDIENCE_KEYWORDS: list[tuple[Audience, tuple[str, ...]]] = [
 
 
 class ReportIntentResolver:
-    """把自然语言问题映射到 ``ReportSpec``（纯规则，无 LLM）。
+    """把自然语言问题映射到 ``ReportSpec``。
 
-    优先级与 ``agent_runner`` / Planner 确定性格径对齐：
-    全市 → 个人学生 → 成绩趋势 → 多场综合 → 分层预警 → 各班横向 → 群体特征 → 班级总览 →
-    结构化诊断 → 学校科目报告 → 关键词回落。
+    报告类型由 ``classify_report_intent_sync``（与 Planner 同源）决定；
+    本类只负责受众与 school/class/subject/exam 等 filters 抽取。
     """
 
-    def resolve(self, question: str, audience_hint: str | None = None) -> ReportSpec:
-        q = (question or "").strip()
-        from src.agent.education.query_parse import (
-            extract_student_target,
-            is_citywide_analysis_query,
-            is_class_overview_query,
-            is_individual_student_analysis_query,
-            is_multi_exam_class_analysis_query,
-            is_group_feature_query,
-            is_school_class_comparison_query,
-            is_school_exam_report_query,
-            is_structured_diagnostic_query,
-            is_tier_alert_query,
-            is_trend_tracking_query,
+    def resolve(
+        self,
+        question: str,
+        audience_hint: str | None = None,
+        *,
+        route: Any | None = None,
+    ) -> ReportSpec:
+        from src.agent.education.intent_router import (
+            ReportRoute,
+            classify_report_intent_sync,
         )
+        from src.agent.education.query_parse import is_citywide_analysis_query
 
-        if is_citywide_analysis_query(q):
-            report_type = ReportType.DIAGNOSTIC_REPORT
-        elif is_individual_student_analysis_query(q):
-            report_type = ReportType.STUDENT_PROFILE
-        elif is_trend_tracking_query(q):
-            report_type = ReportType.TREND_TRACKING
-        elif is_multi_exam_class_analysis_query(q):
-            report_type = ReportType.COMPREHENSIVE
-        elif is_tier_alert_query(q):
-            report_type = ReportType.TIER_ALERT
-        elif is_school_class_comparison_query(q):
-            report_type = ReportType.GRADE_COMPARISON
-        elif is_group_feature_query(q):
-            report_type = ReportType.GROUP_FEATURE
-        elif is_class_overview_query(q):
-            report_type = ReportType.CLASS_OVERVIEW
-        elif is_structured_diagnostic_query(q):
-            report_type = ReportType.DIAGNOSTIC_REPORT
-        elif is_school_exam_report_query(q):
-            report_type = ReportType.SUBJECT_DIAGNOSIS
-        elif "学情报告" in q and any(
-            h in q for h in ("孩子", "家长", "该生", "学生", "个人", "这名")
-        ):
-            # 无明确学号时的家长/个体学情（探测器要求 extract_student_target）
-            report_type = ReportType.STUDENT_PROFILE
-        elif extract_student_target(q) and any(
-            h in q for h in ("知识点", "成绩分析", "学情", "薄弱", "加强", "分析报告")
-        ):
-            report_type = ReportType.STUDENT_PROFILE
+        q = (question or "").strip()
+        if isinstance(route, ReportRoute):
+            resolved = route
         else:
-            report_type = ReportType.CLASS_OVERVIEW  # 兜底
-            for rt, keywords in _INTENT_KEYWORDS:
-                if any(k in q for k in keywords):
-                    report_type = rt
-                    break
+            resolved = classify_report_intent_sync(q)
+        # 同步 Spec 总要有类型；无报告意图时仅用于 filters，类型占位 class_overview
+        report_type = resolved.report_type or ReportType.CLASS_OVERVIEW
+
         audience = self._resolve_audience(q, audience_hint)
         # 简单的过滤条件抽取：班级名（初三/初二/高一...N班）、科目、考试名。
         filters: dict[str, str] = {}
@@ -352,11 +307,13 @@ class ReportOrchestrator:
 
         Phase 3 实现按报告类型的 SQL 模板化查询；为保持编排层可单测，SQL 由
         ``_build_sql`` 生成（基于 mapping），统计/图表走纯函数。
+
+        config_edu 单场 KPI：权威统计来自无 LIMIT 的库内聚合；行级拉取可截断，
+        但不得覆盖聚合 KPI。
         """
-        rows = await self._fetch_score_rows(spec, mapping)
-        scores = [float(r.get("score") or 0) for r in rows if r.get("score") is not None]
-        full_score = _resolve_full_score_from_rows(rows)
         from dataclasses import replace
+
+        from src.agent.education.aggregation import prepare_score_rows_for_kpi
 
         cfg = replace(self._config)
         # 分数段边界可来自 schema；及格/优秀比例以 config_store（异常规则库表）为准，
@@ -364,7 +321,55 @@ class ReportOrchestrator:
         bundle = load_schema_from_config()
         if bundle is not None and bundle.meta.score_segment_ratios:
             cfg.score_segment_ratios = list(bundle.meta.score_segment_ratios)
-        stats = compute_score_stats(scores, cfg, full_score)
+
+        work_spec = spec
+        stats: dict[str, Any] | None = None
+        kpi_authoritative = False
+        data_incomplete = False
+        if mapping.source == "config_edu" and mapping.mode == "normalized":
+            where = _config_edu_where_sql(spec, mapping)
+            if (
+                spec.report_type in _SINGLE_EXAM_KPI_TYPES
+                and not str(spec.filters.get("exam_name") or "").strip()
+                and not str(spec.filters.get("exam_id") or "").strip()
+            ):
+                primary = await self._fetch_primary_exam_id(where)
+                if primary:
+                    work_spec = replace(
+                        spec,
+                        filters={**spec.filters, "exam_id": primary},
+                    )
+                    where = append_exam_id_predicate(where, primary)
+            # 已锁定/指定考试时 KPI 走无 LIMIT 聚合；否则回退行级 prepare_score_rows_for_kpi
+            if str(
+                work_spec.filters.get("exam_id")
+                or work_spec.filters.get("exam_name")
+                or ""
+            ).strip():
+                stats = await self._fetch_kpi_stats(where, cfg)
+                kpi_authoritative = stats is not None
+
+        rows = await self._fetch_score_rows(work_spec, mapping)
+        if mapping.source == "config_edu" and mapping.mode == "normalized":
+            where_rows = _config_edu_where_sql(work_spec, mapping)
+            total = await self._fetch_score_count(where_rows)
+            if total is not None and len(rows) < total:
+                data_incomplete = True
+
+        if stats is None:
+            kpi_rows = prepare_score_rows_for_kpi(rows)
+            scores = [
+                float(r.get("score") or 0)
+                for r in kpi_rows
+                if r.get("score") is not None
+            ]
+            full_score = _resolve_full_score_from_rows(kpi_rows)
+            stats = compute_score_stats(scores, cfg, full_score)
+            # 行已截断时 Python KPI 不可信
+            if data_incomplete:
+                kpi_authoritative = False
+            else:
+                kpi_authoritative = True
 
         charts: dict[str, str] = {}
         if spec.include_charts:
@@ -406,6 +411,12 @@ class ReportOrchestrator:
             "SCORE_DIST_CHART": charts.get("SCORE_DIST_CHART", ""),
             "SUBJECT_RADAR_CHART": "",
             "SUBJECT_BREAKDOWN": "",
+            "SUBJECT_KPI_SECTIONS": "",
+            "IS_MULTI_SUBJECT": "",
+            "SUBJECT_NAME_BADGE": "",
+            "SCORE_DIST_SECTION_TITLE": "分数段分布",
+            "SCORE_DIST_SUBHEAD": "",
+            "SCORE_DIST_DETAIL_TITLE": "分数段明细",
             "RANK_INFO": "",
             "SEGMENT_TABLE": _segment_table(stats.get("segments", []), full_score=stats.get("full_score")),
             "ITEM_TABLE": "",
@@ -415,8 +426,10 @@ class ReportOrchestrator:
             "SUMMARY": "<p>由 ReportOrchestrator 自动生成。</p>",
             "RECOMMENDATIONS": "<p>结合 KPI 与分数段分布关注薄弱区间。</p>",
             "STUDENT_ARCHIVE_TABLE": "",
+            "DATA_INCOMPLETE": data_incomplete,
             "_stats": stats,
             "_charts": charts,
+            "_kpi_authoritative": kpi_authoritative,
         }
         data.update(_dispersion_fields(stats.get("stdev"), full_score=stats.get("full_score"), variance=stats.get("variance")))
         if spec.report_type == ReportType.CLASS_OVERVIEW and not data.get("SUBJECT_RADAR_CHART"):
@@ -424,6 +437,17 @@ class ReportOrchestrator:
                 from src.agent.resource.tool.business import _fill_class_overview_ability_portrait
 
                 _fill_class_overview_ability_portrait(data, rows)
+            except Exception:
+                pass
+        if spec.report_type == ReportType.CLASS_OVERVIEW and rows:
+            try:
+                from src.agent.resource.tool.business import (
+                    _ensure_class_overview_section_labels,
+                    _fill_class_overview_multi_subject,
+                )
+
+                _fill_class_overview_multi_subject(data, rows, cfg=cfg)
+                _ensure_class_overview_section_labels(data)
             except Exception:
                 pass
         if spec.report_type == ReportType.CLASS_OVERVIEW:
@@ -478,7 +502,7 @@ class ReportOrchestrator:
                 class_name=class_name,
                 exam_name=exam_name or "",
                 subject=subject or "",
-                full_score=full_score,
+                full_score=stats.get("full_score"),
             )
         return data
 
@@ -541,21 +565,10 @@ class ReportOrchestrator:
                 if bundle.get("score_rows"):
                     score_rows_for_archive = list(bundle["score_rows"])
                 used_chat_fetch = True
-                fetch_scores = [
-                    float(r["score"])
-                    for r in score_rows_for_archive
-                    if isinstance(r, dict) and r.get("score") is not None
-                ]
-                if fetch_scores:
-                    fs = full_score
-                    for r in score_rows_for_archive:
-                        if isinstance(r, dict) and r.get("exam_score") is not None:
-                            try:
-                                fs = float(r["exam_score"])
-                                break
-                            except (TypeError, ValueError):
-                                pass
-                    stats.update(compute_score_stats(fetch_scores, cfg, fs))
+                # 优先使用取数侧无 LIMIT 聚合 KPI；禁止用可能截断的 score_rows 覆盖权威 KPI
+                agg_stats = bundle.get("kpi_stats")
+                if isinstance(agg_stats, dict) and agg_stats.get("count"):
+                    stats.update(agg_stats)
                     data["TOTAL_COUNT"] = str(stats.get("count") or 0)
                     data["AVG_SCORE"] = _fmt(stats.get("avg"))
                     data["PASS_RATE"] = _fmt_pct(stats.get("pass_rate"))
@@ -584,7 +597,53 @@ class ReportOrchestrator:
                             },
                             title="分数段分布",
                         )
-                        data["SCORE_DIST_CHART"] = charts.get("SCORE_DIST_CHART", "")
+                        data["SCORE_DIST_CHART"] = charts["SCORE_DIST_CHART"]
+                    data["_kpi_authoritative"] = True
+                elif not data.get("_kpi_authoritative"):
+                    fetch_scores = [
+                        float(r["score"])
+                        for r in score_rows_for_archive
+                        if isinstance(r, dict) and r.get("score") is not None
+                    ]
+                    if fetch_scores:
+                        fs = full_score
+                        for r in score_rows_for_archive:
+                            if isinstance(r, dict) and r.get("exam_score") is not None:
+                                try:
+                                    fs = float(r["exam_score"])
+                                    break
+                                except (TypeError, ValueError):
+                                    pass
+                        stats.update(compute_score_stats(fetch_scores, cfg, fs))
+                        data["TOTAL_COUNT"] = str(stats.get("count") or 0)
+                        data["AVG_SCORE"] = _fmt(stats.get("avg"))
+                        data["PASS_RATE"] = _fmt_pct(stats.get("pass_rate"))
+                        data["EXCELLENT_RATE"] = _fmt_pct(stats.get("excellent_rate"))
+                        data["GOOD_RATE"] = _fmt_pct(stats.get("good_rate"))
+                        data["LOW_SCORE_RATE"] = _fmt_pct(stats.get("low_score_rate"))
+                        data["MAX_SCORE"] = _fmt(stats.get("max"))
+                        data["MIN_SCORE"] = _fmt(stats.get("min"))
+                        data["STDEV"] = _fmt(stats.get("stdev"))
+                        data["SEGMENT_TABLE"] = _segment_table(
+                            stats.get("segments", []), full_score=stats.get("full_score")
+                        )
+                        data.update(
+                            _dispersion_fields(
+                                stats.get("stdev"),
+                                full_score=stats.get("full_score"),
+                                variance=stats.get("variance"),
+                            )
+                        )
+                        if spec.include_charts:
+                            charts["SCORE_DIST_CHART"] = build_chart_option(
+                                "score_distribution",
+                                {
+                                    "segments": stats.get("segments", []),
+                                    "pass_rate": stats.get("pass_rate"),
+                                },
+                                title="分数段分布",
+                            )
+                            data["SCORE_DIST_CHART"] = charts["SCORE_DIST_CHART"]
             except Exception as e:  # noqa: BLE001
                 logger.warning("科目诊断 fetch 失败，回退编排 SQL: %s", e)
                 used_chat_fetch = False
@@ -1346,6 +1405,45 @@ class ReportOrchestrator:
         raw_rows = result.get("rows") or []
         return [dict(zip(cols, row)) for row in raw_rows]
 
+    async def _fetch_primary_exam_id(self, where_sql: str) -> str | None:
+        sql = build_primary_exam_id_sql(where_sql)
+        result = await self._execute_sql(sql)
+        rows = result.get("rows") or []
+        if not rows or rows[0] is None:
+            return None
+        val = rows[0][0] if isinstance(rows[0], (list, tuple)) else rows[0]
+        text = str(val or "").strip()
+        return text or None
+
+    async def _fetch_score_count(self, where_sql: str) -> int | None:
+        sql = build_score_count_sql(where_sql)
+        result = await self._execute_sql(sql)
+        rows = result.get("rows") or []
+        if not rows:
+            return None
+        try:
+            return int(rows[0][0] if isinstance(rows[0], (list, tuple)) else rows[0])
+        except (TypeError, ValueError, IndexError):
+            return None
+
+    async def _fetch_kpi_stats(
+        self,
+        where_sql: str,
+        cfg: EducationConfig,
+    ) -> dict[str, Any] | None:
+        sql = build_kpi_aggregate_sql(where_sql, cfg)
+        try:
+            result = await self._execute_sql(sql)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("KPI 聚合查询失败，回退行级统计: %s", e)
+            return None
+        cols = result.get("columns") or []
+        raw_rows = result.get("rows") or []
+        if not cols or not raw_rows:
+            return kpi_row_to_stats(None, cfg)
+        row = dict(zip(cols, raw_rows[0]))
+        return kpi_row_to_stats(row, cfg)
+
     def _build_sql(self, spec: ReportSpec, mapping: ScoreSchemaMapping) -> str:
         """按 mapping 生成只读 SELECT。"""
         if mapping.source == "config_edu" and mapping.mode == "normalized":
@@ -1402,16 +1500,9 @@ class ReportOrchestrator:
         where = _filters_to_where(filters, school_expr, class_expr, subject_expr, exam_expr)
         if where:
             sql += f"\nWHERE {where}"
-        # 全市/全区诊断等报告常超万人；5000 会截断参考人数与 KPI。
-        # 与 tools 诊断明细上限对齐，覆盖地市级单次考试规模。
-        limit = 50000 if spec.report_type in (
-            ReportType.STUDENT_PROFILE,
-            ReportType.TREND_TRACKING,
-            ReportType.COMPREHENSIVE,
-            ReportType.GRADE_COMPARISON,
-            ReportType.GROUP_FEATURE,
-            ReportType.DIAGNOSTIC_REPORT,
-        ) else 1000
+        # 行级拉取仅供档案/下钻；KPI 已由无 LIMIT 聚合负责。
+        # 安全上限防止超大结果集撑爆内存，截断时 DATA_INCOMPLETE=true 且不覆盖 KPI。
+        limit = 50000
         return sql + f"\nLIMIT {limit}"
 
     def _build_item_diagnosis_sql(self, spec: ReportSpec, mapping: ScoreSchemaMapping) -> str:
@@ -1561,6 +1652,28 @@ def _sql_escape(val: str) -> str:
     return (val or "").replace("'", "''")
 
 
+def _config_edu_where_sql(spec: ReportSpec, mapping: ScoreSchemaMapping) -> str:
+    """与 ``_build_sql_config_edu`` 相同的 WHERE 片段（可含 WHERE 关键字）。"""
+    f = mapping.fields
+    school_expr = f.get("school_name", "sch.name")
+    class_expr = f.get("class_name", "sc.class")
+    subject_expr = f.get("subject", "sc.subject_name")
+    exam_expr = f.get("exam_name", "e.exam_name")
+    filters = dict(spec.filters)
+    if spec.report_type in (
+        ReportType.STUDENT_PROFILE,
+        ReportType.TREND_TRACKING,
+        ReportType.COMPREHENSIVE,
+        ReportType.DIAGNOSTIC_REPORT,
+    ):
+        if not str(filters.get("exam_name") or "").strip() and not str(
+            filters.get("exam_id") or ""
+        ).strip():
+            filters.pop("exam_name", None)
+    where = _filters_to_where(filters, school_expr, class_expr, subject_expr, exam_expr)
+    return f"WHERE {where}" if where else ""
+
+
 def _split_exam_filter(raw: str) -> list[str]:
     """支持单场或 ``a;;b;;c`` 多场（分析工具多选考试）。"""
     text = (raw or "").strip()
@@ -1600,6 +1713,8 @@ def _filters_to_where(
             parts.append(f"({ors})")
         elif exam_names:
             parts.append(f"{exam_expr} LIKE '%{_sql_escape(exam_names[0])}%'")
+    if filters.get("exam_id"):
+        parts.append(f"sc.exam_id = '{_sql_escape(str(filters['exam_id']))}'")
     if filters.get("district"):
         parts.append(f"sch.district = '{_sql_escape(filters['district'])}'")
     return " AND ".join(parts)

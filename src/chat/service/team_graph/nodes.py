@@ -282,6 +282,11 @@ async def node_summarizer(state: TeamState, config: RunnableConfig) -> dict[str,
 
     default_summary = last_good_phase.reply.content if last_good_phase.reply else ""
     speak_steps: list[dict[str, Any]] = []
+    rr = (state.get("constraints_ctx") or {}).get("report_route")
+    needs_report = True
+    if isinstance(rr, dict) and "needs_report" in rr:
+        needs_report = bool(rr.get("needs_report"))
+    fact_answer = not needs_report
     summary_text = await _run_summarizer_multi(
         question=request.question,
         sub_phases=sub_phases,
@@ -290,19 +295,22 @@ async def node_summarizer(state: TeamState, config: RunnableConfig) -> dict[str,
         fallback=default_summary,
         report_data=state.get("upstream_report_data"),
         steps=speak_steps,
+        fact_answer=fact_answer,
     )
     await emit("summary", {"content": summary_text})
 
-    await _run_ad_hoc_report_phase(
-        question=request.question,
-        summary_text=summary_text,
-        sub_phases=sub_phases,
-        llm_client=llm,
-        emit=emit,
-        steps=speak_steps,
-        report_data=state.get("upstream_report_data"),
-        chart_type=state.get("chart_type"),
-    )
+    if needs_report:
+        await _run_ad_hoc_report_phase(
+            question=request.question,
+            summary_text=summary_text,
+            sub_phases=sub_phases,
+            llm_client=llm,
+            emit=emit,
+            steps=speak_steps,
+            report_data=state.get("upstream_report_data"),
+            chart_type=state.get("chart_type"),
+            report_route=rr if isinstance(rr, dict) else None,
+        )
     return {
         "summary_text": summary_text,
         "all_steps": list(state.get("all_steps") or []) + speak_steps,

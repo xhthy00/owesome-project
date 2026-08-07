@@ -57,10 +57,19 @@ export type QueryResult = {
   runId?: string;
 };
 
+export type AgentMode = "agent" | "team" | "legacy";
+
 type SendOptions = {
   datasourceId?: number;
   reportAudience?: string;
+  agentMode?: AgentMode;
 };
+
+const DEFAULT_AGENT_MODE: AgentMode = (() => {
+  const raw = (process.env.NEXT_PUBLIC_AGENT_MODE || "team").toLowerCase();
+  if (raw === "agent" || raw === "team" || raw === "legacy") return raw;
+  return "team";
+})();
 
 const asText = (value: unknown): string => {
   if (typeof value === "string") return value;
@@ -249,8 +258,8 @@ export function useChat() {
   const planDoneIdxRef = useRef<Set<number>>(new Set());
   const defaultDatasourceId = Number(process.env.NEXT_PUBLIC_DEFAULT_DATASOURCE_ID ?? 1);
   const [datasourceId, setDatasourceIdState] = useState<number>(defaultDatasourceId);
-  // 为了与 Vue 版本保持一致，这里固定使用 team 模式（Planner → 子任务 → 工具调用）。
-  const agentMode: "team" = "team";
+  // team：多 Agent 协作；agent：单 DataAnalyst。默认取 NEXT_PUBLIC_AGENT_MODE，可在界面切换。
+  const [agentMode, setAgentMode] = useState<AgentMode>(DEFAULT_AGENT_MODE);
   const [reportAudience, setReportAudience] = useState<string | undefined>(undefined);
 
   const setDatasourceId = useCallback((id: number) => {
@@ -325,6 +334,7 @@ export function useChat() {
       sendingRef.current = true;
       const targetDatasourceId = options?.datasourceId ?? datasourceId;
       const targetAudience = options?.reportAudience ?? reportAudience;
+      const targetAgentMode = options?.agentMode ?? agentMode;
       stop();
       const runId = genUUID();
       activeRunIdRef.current = runId;
@@ -410,7 +420,7 @@ export function useChat() {
             question: input,
             datasource_id: targetDatasourceId,
             conversation_id: convId,
-            agent_mode: agentMode,
+            agent_mode: targetAgentMode,
             enable_tool_agent: true,
             ...(targetAudience ? { report_audience: targetAudience } : {})
           },
@@ -1181,6 +1191,8 @@ export function useChat() {
     reportAudience,
     setReportAudience,
     datasourceId,
-    setDatasourceId
+    setDatasourceId,
+    agentMode,
+    setAgentMode
   };
 }

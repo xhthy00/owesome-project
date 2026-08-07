@@ -298,6 +298,68 @@ def test_format_rank_info_from_python_literal_string():
 
 
 
+def test_class_overview_template_no_jinja_control_tags():
+    """班级总览模板不得含 {% if %}，否则 Jinja 失败回退 regex 会把源码漏到页面。"""
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src/agent/resource/templates/education/class_overview.html"
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "{%" not in text
+    assert "{{SCORE_DIST_SECTION_TITLE}}" in text
+    assert "{{SUBJECT_NAME_BADGE}}" in text
+    assert "{{SUBJECT_KPI_SECTIONS}}" in text
+
+
+def test_enrich_multi_subject_splits_score_distribution():
+    """多科成绩不得混成同一分数段；应分科展示，顶层人数为实际学生数。"""
+    from src.agent.resource.tool.business import _enrich_class_overview_archive
+
+    # 2 名学生 × 3 科 = 6 行；混算会显示参考人数 6
+    rows = []
+    for sid, scores in [
+        ("S1", {"语文": 90, "数学": 120, "英语": 100}),
+        ("S2", {"语文": 70, "数学": 80, "英语": 85}),
+    ]:
+        for sub, sc in scores.items():
+            full = 150 if sub == "数学" else 100
+            rows.append([sid, sub, sc, full])
+
+    out = _enrich_class_overview_archive(
+        "education/class_overview.html",
+        {
+            "REPORT_TITLE": "高二(6)班班级总览报告",
+            "CLASS_NAME": "高二(6)班",
+            "EXAM_NAME": "期末",
+            "SUBJECT_NAME": "全科",
+        },
+        tool_runtime_ctx={
+            "last_exec_result": {
+                "columns": ["student_id", "subject", "score", "exam_score"],
+                "rows": rows,
+            }
+        },
+    )
+    assert out.get("IS_MULTI_SUBJECT") == "1"
+    assert out.get("TOTAL_COUNT") == "2"
+    sections = out.get("SUBJECT_KPI_SECTIONS") or ""
+    assert "数学" in sections and "语文" in sections and "英语" in sections
+    assert "data-edu-echart" in sections
+    assert "subject-kpi-block" in sections
+    breakdown = out.get("SUBJECT_BREAKDOWN") or ""
+    assert "<table" in breakdown.lower()
+    assert "数学" in breakdown
+    # 顶层图为总分口径
+    assert "总分" in (out.get("SCORE_DIST_CHART") or "") or "合计" in (
+        out.get("SEGMENT_TABLE") or ""
+    )
+    assert out.get("SCORE_DIST_SECTION_TITLE") == "总分与分科分数段"
+    assert "班级总分分数段" in (out.get("SCORE_DIST_SUBHEAD") or "")
+    assert "{%" not in (out.get("SCORE_DIST_SECTION_TITLE") or "")
+
+
 def test_build_student_archive_from_score_rows_still_works_for_other_reports():
     from src.agent.education.comprehensive import build_student_archive_from_score_rows
 

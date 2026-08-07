@@ -107,8 +107,11 @@
       <h2>知识点薄弱清单</h2>
       <p class="edu-sub"><strong>需优先补强：</strong>{{WEAK_KNOWLEDGE_LIST}}</p>
       {{KNOWLEDGE_INSIGHT}}
+      {{KNOWLEDGE_TABLE}}
+      {% if KNOWLEDGE_CHART %}
       <div id="knowledgeBar" class="edu-chart"></div>
       <script type="application/json" id="knowledgeBarData">{{KNOWLEDGE_CHART}}</script>
+      {% endif %}
       <h3>低得分小题</h3>
       {{WEAK_ITEM_TABLE}}
     </section>
@@ -146,6 +149,12 @@
       init('scatterPlot', 'scatterPlotData');
       init('trendLine', 'trendLineData');
       init('knowledgeBar', 'knowledgeBarData');
+      document.querySelectorAll('script[data-edu-echart]').forEach(function (el) {
+        var target = el.getAttribute('data-edu-echart');
+        var raw = (el.textContent || '').trim();
+        if (!target || !raw) return;
+        try { echarts.init(document.getElementById(target)).setOption(JSON.parse(raw)); } catch (e) {}
+      });
     })();
   </script>
 </body>
