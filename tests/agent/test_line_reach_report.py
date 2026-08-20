@@ -81,6 +81,59 @@ def test_mom_delta_people_and_rate():
     assert data["PREV_EXAM_NAME"] == "11月期中"
     assert "11月期中" in data["GENERAL_INSIGHT"]
     assert data["_stats"]["count"] == 100
+    assert "本科线本次" in data["SCHOOL_TABLE"]
+    assert "本科线上场" in data["SCHOOL_TABLE"]
+    assert "本科线增减" in data["SCHOOL_TABLE"]
+    assert "+10 人" in data["SCHOOL_TABLE"]
+    assert "-10 人" in data["SCHOOL_TABLE"]
+
+
+def test_school_reach_delta_vs_previous_exam():
+    extra_lines = ("特控线", "211线", "985线", "清北线", "南大线")
+    curr = [
+        _row(school_id="A01", candidates=80, reached_count=50),
+        _row(school_id="A02", candidates=120, reached_count=70, district="广陵区"),
+    ]
+    prev = [
+        _row(exam_name="11月期中", school_id="A01", candidates=100, reached_count=60),
+        _row(exam_name="11月期中", school_id="A02", candidates=90, reached_count=50, district="广陵区"),
+        _row(exam_name="11月期中", school_id="A03", candidates=40, reached_count=20, district="江都区"),
+    ]
+    for line_name in extra_lines:
+        curr.append(_row(school_id="A01", line_name=line_name, candidates=80, reached_count=10))
+        prev.append(
+            _row(
+                exam_name="11月期中",
+                school_id="A01",
+                line_name=line_name,
+                candidates=100,
+                reached_count=12,
+            )
+        )
+    data = build_line_reach_report_data(
+        curr,
+        prev,
+        exam_name="1月期末",
+        prev_exam_name="11月期中",
+    )
+    table = data["SCHOOL_TABLE"]
+    for line_name in ("本科线", "特控线", "211线", "985线", "清北线", "南大线"):
+        assert f"{line_name}本次" in table
+        assert f"{line_name}上场" in table
+        assert f"{line_name}增减" in table
+    assert "A01" in table
+    assert "A02" in table
+    assert "A03" in table
+    assert "-10 人" in table
+    assert "+20 人" in table
+    assert "-20 人" in table
+    assert "达线人数下降较多的学校" in data["GENERAL_INSIGHT"]
+    assert "A01" in data["GENERAL_INSIGHT"] or "A03" in data["GENERAL_INSIGHT"]
+    kpi = data["KPI_GRID"]
+    assert "211线达线人数" in kpi
+    assert "985线达线人数" in kpi
+    assert "清北线达线人数" in kpi
+    assert "南大线达线人数" in kpi
 
 
 def test_no_previous_exam_still_renders():

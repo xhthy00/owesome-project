@@ -38,7 +38,7 @@ __all__ = [
 
 TRACKS = ("物理类", "历史类")
 LINE_ORDER = ("特控线", "本科线", "体育线", "美术线", "音乐线", "211线", "985线", "清北线", "南大线")
-_FOCUS_LINES = ("特控线", "本科线")
+_FOCUS_LINES = ("特控线", "本科线", "211线", "985线", "清北线", "南大线")
 _LINE_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("清北线", ("清华北大", "清北", "清华", "北大")),
     ("985线", ("985线", "985")),
@@ -474,10 +474,6 @@ def _districts(rows: list[dict[str, Any]]) -> list[str]:
     return sorted({_str(r.get("district")) or "未知区县" for r in rows})
 
 
-def _schools(rows: list[dict[str, Any]]) -> list[str]:
-    return sorted({_str(r.get("school_id")) or "未知学校" for r in rows})
-
-
 def _hint(curr_n: int, prev_n: int | None, curr_rate: float, prev_rate: float | None) -> str:
     if prev_n is None or prev_rate is None:
         return "暂无上场对比"
@@ -508,7 +504,7 @@ def build_line_reach_report_data(
     scope_label: str = "全市",
     question: str = "",
 ) -> dict[str, Any]:
-    """组装全市达线分析模板 data。问句点名线种/各地区时按点名组织，不默认特控/本科。"""
+    """组装全市达线分析模板 data。问句点名线种时按点名组织，否则默认特控/本科/211/985/清北/南大。"""
     curr = [_normalize_indicator_row(r) for r in (curr_rows or []) if isinstance(r, dict)]
     prev = [_normalize_indicator_row(r) for r in (prev_rows or []) if isinstance(r, dict)]
     exam = _str(exam_name) or (curr[0]["exam_name"] if curr else "本次考试")
@@ -643,27 +639,69 @@ def build_line_reach_report_data(
         else "<p class='edu-sub'>暂无区县达线明细。</p>"
     )
 
-    school_names = _schools(curr)
+    school_ids = sorted(
+        {_str(r.get("school_id")) or "未知学校" for r in curr}
+        | ({_str(r.get("school_id")) or "未知学校" for r in prev} if has_prev else set())
+    )
+    if has_prev:
+        prev_tracks = _tracks(prev)
+        track_set = set(tracks) | set(prev_tracks)
+        tracks_for_school = [t for t in TRACKS if t in track_set] or sorted(track_set)
+    else:
+        tracks_for_school = tracks
     school_rows: list[list[str]] = []
+    school_drops: list[tuple[int, str]] = []
     school_headers = ["学校", "选科", "参考人数"]
     for line_name in focus:
-        school_headers += [f"{line_name}人数", f"{line_name}率"]
-    if school_names and focus:
-        for school in school_names:
-            for track in tracks:
+        if has_prev:
+            school_headers += [
+                f"{line_name}本次",
+                f"{line_name}上场",
+                f"{line_name}增减",
+                f"{line_name}率",
+            ]
+        else:
+            school_headers += [f"{line_name}人数", f"{line_name}率"]
+    if school_ids and focus:
+        for school in school_ids:
+            for track in tracks_for_school:
                 slice_rows = [
                     r for r in curr
                     if _str(r.get("school_id")) == school and _str(r.get("track")) == track
                 ]
-                if not slice_rows:
+                prev_slice = [
+                    r for r in prev
+                    if _str(r.get("school_id")) == school and _str(r.get("track")) == track
+                ] if has_prev else []
+                if not slice_rows and not prev_slice:
                     continue
                 row = [school, track, str(unique_candidates(slice_rows))]
                 for line_name in focus:
                     _, c_hit, c_rate = sum_reach(
                         _filter_rows(slice_rows, line_name=line_name)
                     )
-                    row += [str(c_hit), f"{c_rate:.1f}%"]
+                    if has_prev:
+                        _, p_hit, _p_rate = sum_reach(
+                            _filter_rows(prev_slice, line_name=line_name)
+                        )
+                        d_hit = c_hit - p_hit
+                        row += [
+                            str(c_hit),
+                            str(p_hit),
+                            _delta_html(d_hit, suffix=" 人"),
+                            f"{c_rate:.1f}%",
+                        ]
+                        if d_hit < 0:
+                            school_drops.append(
+                                (
+                                    d_hit,
+                                    f"{school}{track}{line_name} {_delta_html(d_hit, suffix=' 人')}",
+                                )
+                            )
+                    else:
+                        row += [str(c_hit), f"{c_rate:.1f}%"]
                 school_rows.append(row)
+        school_drops.sort()
     school_table = (
         _table(school_headers, school_rows, numeric_from=2)
         if school_rows
@@ -682,6 +720,12 @@ def build_line_reach_report_data(
             insight += "<p>人数下降较多：" + "；".join(x[1] for x in drops[:4]) + "。</p>"
         else:
             insight += f"<p>{line_label}达线人数较上场未出现明显下滑。</p>"
+        if school_drops:
+            insight += (
+                "<p>达线人数下降较多的学校："
+                + "；".join(x[1] for x in school_drops[:4])
+                + "。</p>"
+            )
     else:
         insight = (
             f"<p class='edu-insight-line'>{scope}【{exam}】{line_label}达线指标已汇总；"
@@ -691,6 +735,8 @@ def build_line_reach_report_data(
     recs = [f"按问句关注 {line_label}，区县/全市达线率用 SUM 后重算，避免学校达线率平均。"]
     if drops:
         recs.append("对人数下滑的选科/线种，结合区县明细定位薄弱校并安排专项复习。")
+    if school_drops:
+        recs.append("对达线人数下滑的学校，结合选科与线种定位薄弱环节并安排专项复习。")
     if has_prev:
         recs.append(f"环比口径为相邻两场（{prev_exam} → {exam}），人数与率均按 SUM 后重算。")
     recommendations = "<ul>" + "".join(f"<li>{x}</li>" for x in recs) + "</ul>"
