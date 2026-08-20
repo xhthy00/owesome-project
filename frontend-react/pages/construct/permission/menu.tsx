@@ -7,9 +7,11 @@ const routes = [
   { key: "explore", label: "探索广场" },
   { key: "skills", label: "技能" },
   { key: "analysis", label: "分析工具" },
+  { key: "line-reach", label: "达线看板" },
   { key: "report-history", label: "报告历史" },
   { key: "datasource", label: "数据源" },
   { key: "score-import", label: "成绩导入" },
+  { key: "fraction-bar", label: "预测分数线" },
   { key: "permission", label: "权限管理" },
   { key: "system", label: "日志管理" }
 ];
@@ -20,6 +22,7 @@ const permissionSubRoutes = [
   { key: "permission-users", label: "用户管理" },
   { key: "permission-workspaces", label: "工作空间" },
   { key: "permission-members", label: "成员管理" },
+  { key: "permission-privacy", label: "数据脱敏" },
   { key: "permission-menu", label: "菜单权限管理" }
 ];
 

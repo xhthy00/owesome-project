@@ -74,6 +74,10 @@ export interface MenuVisibilityMap {
   [menuKey: string]: boolean;
 }
 
+export interface EduPrivacySetting {
+  anonymize_display: boolean;
+}
+
 export const permissionApi = {
   listRoles: () => apiRequest<RoleItem[]>("/permission/roles"),
   listUserRoleGrants: () => apiRequest<UserRoleGrant[]>("/permission/grants/user-role"),
@@ -121,5 +125,11 @@ export const permissionApi = {
     apiRequest<void>("/permission/menu-visibility", {
       method: "POST",
       body: JSON.stringify({ menu_key: menuKey, visible })
+    }),
+  getEduPrivacy: () => apiRequest<EduPrivacySetting>("/permission/edu-privacy"),
+  setEduPrivacy: (anonymize_display: boolean) =>
+    apiRequest<EduPrivacySetting>("/permission/edu-privacy", {
+      method: "PUT",
+      body: JSON.stringify({ anonymize_display })
     })
 };

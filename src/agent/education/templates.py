@@ -27,6 +27,13 @@ _TEMPLATE_PATH: dict[ReportType, str] = {
     ReportType.GROUP_FEATURE: "education/group_feature.html",
     ReportType.COMPREHENSIVE: "education/comprehensive.html",
     ReportType.DIAGNOSTIC_REPORT: "education/diagnostic_report.html",
+    ReportType.LINE_REACH: "education/line_reach.html",
+    ReportType.SUBJECT_AVG: "education/bureau_analysis.html",
+    ReportType.ASSIGN_GRADE: "education/bureau_analysis.html",
+    ReportType.RANK_BUCKET: "education/bureau_analysis.html",
+    ReportType.CONTRIBUTION: "education/bureau_analysis.html",
+    ReportType.COMBO_REACH: "education/bureau_analysis.html",
+    ReportType.ELITE_ROSTER: "education/bureau_analysis.html",
 }
 
 #: 额外模板文件名 → ReportType（非主路径，但仍属上述标准类型）
@@ -149,7 +156,29 @@ _REQUIRED_KEYS: dict[ReportType, list[str]] = {
         "DISTRICT_SUMMARY", "AT_RISK_SUMMARY",
         "SUMMARY", "RECOMMENDATIONS",
     ],
+    ReportType.LINE_REACH: [
+        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME", "REPORT_TYPE",
+        "SCOPE", "EXAM_NAME", "PREV_EXAM_NAME", "SUBJECT_NAME",
+        "KPI_GRID", "DELTA_TABLE", "COMPARE_CHART",
+        "DISTRICT_TABLE", "DISTRICT_CHART", "SCHOOL_TABLE", "GENERAL_INSIGHT",
+        "SUMMARY", "RECOMMENDATIONS",
+    ],
+    ReportType.SUBJECT_AVG: [
+        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME", "REPORT_TYPE",
+        "SCOPE", "EXAM_NAME", "SUBJECT_NAME",
+        "KPI_GRID", "PRIMARY_TABLE", "SECONDARY_TABLE",
+        "PRIMARY_TITLE", "SECONDARY_TITLE", "GENERAL_INSIGHT",
+        "SUMMARY", "RECOMMENDATIONS",
+    ],
 }
+for _rt in (
+    ReportType.ASSIGN_GRADE,
+    ReportType.RANK_BUCKET,
+    ReportType.CONTRIBUTION,
+    ReportType.COMBO_REACH,
+    ReportType.ELITE_ROSTER,
+):
+    _REQUIRED_KEYS[_rt] = list(_REQUIRED_KEYS[ReportType.SUBJECT_AVG])
 
 
 def resolve_report_type_from_template(template: str) -> ReportType | None:

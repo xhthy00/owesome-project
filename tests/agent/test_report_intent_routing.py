@@ -22,6 +22,8 @@ from src.agent.education.query_parse import (
     is_class_overview_query,
     is_group_feature_query,
     is_individual_student_analysis_query,
+    is_line_reach_query,
+    is_line_reach_report_query,
     is_school_class_comparison_query,
     is_school_exam_report_query,
     is_tier_alert_query,
@@ -57,6 +59,7 @@ def _route(question: str) -> str:
         ReportType.CLASS_OVERVIEW: "class-overview",
         ReportType.SUBJECT_DIAGNOSIS: "school-exam",
         ReportType.TREND_TRACKING: "trend-tracking",
+        ReportType.LINE_REACH: "line_reach",
     }
     return mapping.get(route.report_type, "llm")
 
@@ -460,6 +463,54 @@ def test_coerce_fact_query_rejects_report_plan():
     assert len(fixed) == 1
     assert "build_class_overview" not in fixed[0]["sub_task"]
     assert _route(q) == "fact"
+
+
+def test_citywide_line_reach_is_report_not_diagnostic():
+    q = "全市2026届高三1月期末达线情况"
+    assert is_line_reach_query(q) is True
+    assert is_line_reach_report_query(q) is True
+    assert is_citywide_analysis_query(q) is False
+    assert _route(q) == "line_reach"
+    route = classify_report_intent_sync(q)
+    assert route.needs_report is True
+    assert route.report_type == ReportType.LINE_REACH
+    llm = _FakeLlm(
+        '{"needs_report":true,"report_type":"diagnostic_report",'
+        '"confidence":0.99,"reason":"全市"}'
+    )
+    llm_route = _run(classify_report_intent(q, llm))
+    assert llm_route.needs_report is True
+    assert llm_route.report_type == ReportType.LINE_REACH
+    spec = ReportIntentResolver().resolve(q)
+    assert spec.report_type == ReportType.LINE_REACH
+    assert spec.filters.get("question") == q
+    assert not spec.filters.get("exam_name")
+    wrong = [
+        {"sub_task": "查询全市成绩明细", "sub_task_agent": "DataAnalyst"},
+        {
+            "sub_task": "调 build_diagnostic_report_data_tool(scope_label=全市, render=true)",
+            "sub_task_agent": "ToolExpert",
+        },
+    ]
+    fixed = coerce_plan_items_if_needed(q, wrong)
+    blob = " ".join(p["sub_task"] for p in fixed)
+    assert "调 build_diagnostic_report_data_tool" not in blob
+    assert "build_line_reach_report_data_tool" in blob
+    assert "禁止" in blob
+    assert "tb_score_overview" in blob
+    assert is_citywide_analysis_query(
+        "帮我分析全市的江苏省高一上学期数学期末质量检测成绩，形成详细报告"
+    ) is True
+
+
+def test_narrow_line_reach_count_is_fact():
+    q = "邗江区物理类本科线达线人数"
+    assert is_line_reach_query(q) is True
+    assert is_line_reach_report_query(q) is False
+    assert _route(q) == "fact"
+    route = classify_report_intent_sync(q)
+    assert route.needs_report is False
+    assert route.report_type is None
 
 
 def test_resolver_planner_dispatch_consistent():

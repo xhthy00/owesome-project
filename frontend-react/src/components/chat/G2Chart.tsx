@@ -8,6 +8,11 @@ type Props = {
   columns: string[];
   rows: unknown[][];
   showLabel?: boolean;
+  /** 单色柱/条，关闭按类目着色与图例 */
+  accentColor?: string;
+  /** 数值标签后缀，如 % */
+  valueSuffix?: string;
+  height?: number;
 };
 
 const toNumber = (value: unknown): number | null => {
@@ -30,7 +35,15 @@ const isNumericColumn = (col: string, data: Record<string, unknown>[]): boolean 
   return true;
 };
 
-export default function G2Chart({ type, columns, rows, showLabel = false }: Props) {
+export default function G2Chart({
+  type,
+  columns,
+  rows,
+  showLabel = false,
+  accentColor,
+  valueSuffix = "",
+  height = 320
+}: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<Chart | null>(null);
 
@@ -66,16 +79,34 @@ export default function G2Chart({ type, columns, rows, showLabel = false }: Prop
     if (!containerRef.current) return;
     if (!inferred.chartData.length) return;
     const { xField, yField, chartData } = inferred;
+    const dashboard = Boolean(accentColor) && type !== "line" && type !== "pie";
+
+    const yValues = chartData.map((item) => toNumber(item[yField]) ?? 0);
+    const yMax = Math.max(0, ...yValues);
+    const domainMax =
+      yMax <= 0 ? 10 : Math.min(valueSuffix === "%" ? 100 : Number.POSITIVE_INFINITY, Math.ceil((yMax + 4) / 5) * 5);
 
     const chart = new Chart({
       container: containerRef.current,
       autoFit: true,
-      height: 320
+      height,
+      ...(dashboard
+        ? {
+            marginTop: 0,
+            paddingTop: 0,
+            paddingBottom: 8,
+            insetTop: showLabel ? 24 : 4
+          }
+        : {})
     });
     chartRef.current = chart;
     chart.theme({
       type: "classic",
-      axis: { labelFill: "#9ca3af", titleFill: "#9ca3af" }
+      axis: {
+        labelFill: dashboard ? "#475569" : "#9ca3af",
+        titleFill: dashboard ? "#94a3b8" : "#9ca3af",
+        labelFontSize: 12
+      }
     });
 
     if (type === "pie") {
@@ -94,15 +125,47 @@ export default function G2Chart({ type, columns, rows, showLabel = false }: Prop
         .encode("color", "category")
         .label({ text: "value", style: { fill: "#111827", fontSize: 11 } });
     } else {
-      const mark =
-        type === "line" ? chart.line() : chart.interval();
-      mark
-        .data(chartData)
-        .encode("x", xField)
-        .encode("y", yField)
-        .encode("color", xField);
+      const mark = type === "line" ? chart.line() : chart.interval();
+      mark.data(chartData).encode("x", xField).encode("y", yField);
+      if (dashboard) {
+        chart.legend(false);
+        mark.legend(false);
+        mark.style("fill", accentColor);
+        mark.scale("y", { domainMin: 0, domainMax, nice: false });
+        mark.scale("x", { padding: 0.12 });
+        mark.axis("x", { title: false, labelFill: "#475569", labelFontSize: 12 });
+        mark.axis("y", {
+          title: false,
+          labelFill: "#64748b",
+          labelFontSize: 11,
+          grid: true,
+          gridStroke: "#e8eef5"
+        });
+        mark.style("maxWidth", 120);
+        mark.style("minWidth", 48);
+        mark.style("radiusTopLeft", 6);
+        mark.style("radiusTopRight", 6);
+      } else {
+        mark.encode("color", xField);
+      }
       if (showLabel) {
-        mark.label({ text: yField, style: { fill: "#111827", fontSize: 11 } });
+        mark.label({
+          text: (d: Record<string, unknown>) => {
+            const n = toNumber(d[yField]);
+            return n == null ? "" : `${n}${valueSuffix}`;
+          },
+          dy: dashboard ? -12 : 0,
+          style: dashboard
+            ? {
+                fill: "#0f172a",
+                fontSize: 16,
+                fontWeight: 700,
+                stroke: "#ffffff",
+                lineWidth: 4,
+                paintOrder: "stroke"
+              }
+            : { fill: "#111827", fontSize: 11 }
+        });
       }
     }
 
@@ -112,7 +175,7 @@ export default function G2Chart({ type, columns, rows, showLabel = false }: Prop
       chart.destroy();
       chartRef.current = null;
     };
-  }, [inferred, type, showLabel]);
+  }, [inferred, type, showLabel, accentColor, valueSuffix, height]);
 
   useEffect(() => {
     return () => {
@@ -121,5 +184,5 @@ export default function G2Chart({ type, columns, rows, showLabel = false }: Prop
     };
   }, []);
 
-  return <div ref={containerRef} className="h-[320px] w-full" />;
+  return <div ref={containerRef} className="w-full" style={{ height }} />;
 }

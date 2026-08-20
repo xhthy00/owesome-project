@@ -156,8 +156,16 @@ def _score_distribution(data: dict[str, Any], title: str) -> dict[str, Any]:
 
 
 def _subject_radar(data: dict[str, Any], title: str) -> dict[str, Any]:
-    indicators = [{"name": name, "max": float(data.get("full_score", 100))}
-                  for name in (data.get("subjects") or [])]
+    subjects = list(data.get("subjects") or [])
+    default_max = float(data.get("full_score", 100) or 100)
+    maxes = data.get("maxes")
+    if isinstance(maxes, list) and len(maxes) == len(subjects):
+        indicators = [
+            {"name": name, "max": float(m if m is not None else default_max)}
+            for name, m in zip(subjects, maxes)
+        ]
+    else:
+        indicators = [{"name": name, "max": default_max} for name in subjects]
     values = list(data.get("values") or [])
     return {
         "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
@@ -166,7 +174,7 @@ def _subject_radar(data: dict[str, Any], title: str) -> dict[str, Any]:
         "series": [{
             "type": "radar",
             "data": [{"value": values, "name": data.get("series_name", "均分")}],
-            "areaStyle": {"opacity": 0.2},
+            "areaStyle": {"opacity": 0.25},
         }],
     }
 
@@ -284,21 +292,51 @@ def _group_compare_bar(data: dict[str, Any], title: str) -> dict[str, Any]:
 
 
 def _pie(data: dict[str, Any], title: str) -> dict[str, Any]:
-    """通用饼图：data={"items":[{"name","value","color?"},...]}。"""
+    """通用饼图：data={"items":[{"name","value","color?"},...]}。
+
+    图例置底；0 值扇区不画外侧标签/引导线，避免与图例挤在左上角重叠。
+    """
     items = data.get("items") or []
-    pie_data = [
-        {"name": it.get("name", ""), "value": it.get("value", 0),
-         **({"itemStyle": {"color": it["color"]}} if it.get("color") else {})}
-        for it in items
-    ]
+    pie_data: list[dict[str, Any]] = []
+    for it in items:
+        try:
+            value = float(it.get("value") or 0)
+        except (TypeError, ValueError):
+            value = 0.0
+        entry: dict[str, Any] = {
+            "name": str(it.get("name") or ""),
+            "value": value,
+            "label": {"show": value > 0},
+            "labelLine": {"show": value > 0},
+        }
+        if it.get("color"):
+            entry["itemStyle"] = {"color": it["color"]}
+        pie_data.append(entry)
     return {
-        "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
+        "title": {
+            "text": title,
+            "left": "center",
+            "top": 0,
+            "textStyle": {"fontSize": 14},
+        },
         "tooltip": {"trigger": "item", "formatter": "{b}: {c} 人 ({d}%)"},
-        "legend": {"top": 24},
+        "legend": {
+            "orient": "horizontal",
+            "bottom": 0,
+            "left": "center",
+            "itemGap": 16,
+        },
         "series": [{
             "type": "pie",
-            "radius": ["40%", "70%"],
-            "label": {"show": True, "formatter": "{b}: {c}人"},
+            "radius": ["36%", "58%"],
+            "center": ["50%", "48%"],
+            "avoidLabelOverlap": True,
+            "label": {
+                "show": True,
+                "formatter": "{b}: {c}人",
+                "position": "outside",
+            },
+            "labelLine": {"show": True, "length": 14, "length2": 10},
             "data": pie_data,
         }],
     }

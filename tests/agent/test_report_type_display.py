@@ -12,9 +12,9 @@ from src.agent.education.templates import (
 )
 
 
-def test_nine_standard_report_types_defined():
-    assert len(ReportType) == 9
-    assert len(REPORT_TYPE_LABELS) == 9
+def test_standard_report_types_defined():
+    assert len(ReportType) == 16
+    assert len(REPORT_TYPE_LABELS) == 16
     assert set(REPORT_TYPE_LABELS) == set(ReportType)
 
 
@@ -46,6 +46,7 @@ def test_resolve_and_ensure_report_type():
     assert resolve_report_type_from_template("education/trend_tracking.html") == ReportType.TREND_TRACKING
     assert resolve_report_type_from_template("education/student_exam_analysis.html") == ReportType.STUDENT_PROFILE
     assert resolve_report_type_from_template("education/comprehensive.html") == ReportType.COMPREHENSIVE
+    assert resolve_report_type_from_template("education/line_reach.html") == ReportType.LINE_REACH
 
     filled = ensure_report_type_in_data("education/tier_alert.html", {})
     assert filled["REPORT_TYPE"] == "分层预警报告"

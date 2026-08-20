@@ -63,6 +63,23 @@ def test_fact_query_plan_forbids_plaintext_names():
     assert "学情总判" in blob
 
 
+def test_fact_query_plan_allows_plaintext_when_anonymize_off():
+    from src.agent.education.privacy_mode import (
+        clear_anonymize_display_cache,
+        set_anonymize_display_cached,
+    )
+
+    set_anonymize_display_cached(False)
+    try:
+        plans = build_fact_query_plan_items("高二(6)班数学成绩最好的学生是谁")
+        blob = plans[0]["sub_task"]
+        assert "已关闭匿名脱敏" in blob
+        assert "xm" in blob
+        assert "禁止写中文姓名" not in blob
+    finally:
+        clear_anonymize_display_cache()
+
+
 def test_scrub_fact_answer_removes_fake_class_size():
     from src.agent.education.summary_context import scrub_fact_answer_headcount_noise
 

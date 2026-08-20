@@ -195,3 +195,56 @@ def test_qualify_keeps_school_class_on_tb_score_sample():
         'tb_score."school_id" = \'YZZX\'',
         'tb_score."class" IN (\'高三(10)班\')',
     ]
+
+
+def test_qualify_school_id_on_score_indicator():
+    from datasource.service.query_permission import qualify_edu_row_predicates
+
+    sql = "SELECT district, reached_count FROM tb_score_indicator WHERE line_name = '本科线'"
+    preds = ['"school_id" = \'YZZX\'']
+    qualified = qualify_edu_row_predicates(sql, preds, "pg")
+    assert qualified == ['tb_score_indicator."school_id" = \'YZZX\'']
+
+
+def test_qualify_drops_class_keeps_school_on_score_indicator():
+    from datasource.service.query_permission import qualify_edu_row_predicates
+
+    sql = "SELECT * FROM tb_score_indicator LIMIT 10"
+    preds = ['"school_id" = \'YZZX\'', '"class" IN (\'高三(10)班\')']
+    qualified = qualify_edu_row_predicates(sql, preds, "pg")
+    assert qualified == ['tb_score_indicator."school_id" = \'YZZX\'']
+
+
+def test_qualify_student_denied_on_score_indicator():
+    from datasource.service.query_permission import qualify_edu_row_predicates
+
+    sql = "SELECT * FROM tb_score_indicator"
+    preds = ['"student_id" = \'STU20240002\'']
+    qualified = qualify_edu_row_predicates(sql, preds, "pg")
+    assert qualified == ["1 = 0"]
+
+
+def test_qualify_overview_maps_xx_bj_anon():
+    from datasource.service.query_permission import qualify_edu_row_predicates
+
+    sql = "SELECT zf6m FROM tb_score_overview ov WHERE exam_name = '2026届高三5月模拟'"
+    preds = [
+        '"school_id" = \'YZZX\'',
+        '"class" IN (\'高三(10)班\')',
+        '"student_id" = \'GZ_ABC\'',
+    ]
+    qualified = qualify_edu_row_predicates(sql, preds, "pg")
+    assert qualified == [
+        'ov."xx" = \'YZZX\'',
+        'ov."bj" IN (\'高三(10)班\')',
+        'ov."anon_stu_id" = \'GZ_ABC\'',
+    ]
+
+
+def test_qualify_drops_scope_on_fraction_bar_only():
+    from datasource.service.query_permission import qualify_edu_row_predicates
+
+    sql = "SELECT exam_name, wl_score_bk FROM tb_fraction_bar LIMIT 10"
+    preds = ['"school_id" = \'YZZX\'', '"class" IN (\'高三(10)班\')']
+    qualified = qualify_edu_row_predicates(sql, preds, "pg")
+    assert qualified == []

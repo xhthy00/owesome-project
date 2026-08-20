@@ -1,6 +1,6 @@
 """报告类型 / 受众 / 报告规格。
 
-``ReportType`` 是当前系统的 **9 类标准学情报告** 枚举；生成报告时应在页头
+``ReportType`` 是当前系统的标准学情报告枚举；生成报告时应在页头
 角标 / 列表标题中显示对应中文名（见 ``REPORT_TYPE_LABELS``）。
 
 ``Audience`` 决定同一份数据的叙事风格（校长看宏观排名、家长看个体建议），
@@ -29,6 +29,13 @@ class ReportType(str, Enum):
     GROUP_FEATURE = "group_feature"          # 群体特征
     COMPREHENSIVE = "comprehensive"          # 多次考试综合分析报告
     DIAGNOSTIC_REPORT = "diagnostic_report"  # 结构化诊断报告（一般性/特殊性/动态性）
+    LINE_REACH = "line_reach"                # 全市达线情况分析（环比）
+    SUBJECT_AVG = "subject_avg"              # 区县/学校均分（三四五六门+九科）
+    ASSIGN_GRADE = "assign_grade"            # 再选科目 ABCDE
+    RANK_BUCKET = "rank_bucket"              # 高分位次桶
+    CONTRIBUTION = "contribution"            # 切线贡献分
+    COMBO_REACH = "combo_reach"              # 选科组合达线
+    ELITE_ROSTER = "elite_roster"            # 脱敏高分名单
 
 
 class Audience(str, Enum):
@@ -53,6 +60,13 @@ REPORT_TYPE_LABELS: dict[ReportType, str] = {
     ReportType.GROUP_FEATURE: "群体特征报告",
     ReportType.COMPREHENSIVE: "综合分析报告",
     ReportType.DIAGNOSTIC_REPORT: "结构化诊断报告",
+    ReportType.LINE_REACH: "全市达线分析",
+    ReportType.SUBJECT_AVG: "均分情况分析",
+    ReportType.ASSIGN_GRADE: "选考等级分析",
+    ReportType.RANK_BUCKET: "高分位次分析",
+    ReportType.CONTRIBUTION: "贡献分分析",
+    ReportType.COMBO_REACH: "选科组合达线",
+    ReportType.ELITE_ROSTER: "高分名单分析",
 }
 
 _KNOWN_TYPE_MARKERS: frozenset[str] = frozenset(

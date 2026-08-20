@@ -439,8 +439,16 @@ def test_load_schema_from_config_returns_tb_mapping():
     assert bundle is not None
     assert bundle.mapping.source == "config_edu"
     assert bundle.mapping.tables["score"] == "tb_score"
+    assert bundle.mapping.tables["exam_batch"] == "tb_exam_batch"
+    assert bundle.mapping.tables["fraction_bar"] == "tb_fraction_bar"
+    assert bundle.mapping.tables["score_indicator"] == "tb_score_indicator"
+    assert bundle.mapping.tables["score_overview"] == "tb_score_overview"
     assert bundle.mapping.fields["full_score"] == "sc.exam_score"
+    assert bundle.mapping.fields["exam_name"] == "COALESCE(eb.batch_name, e.exam_name)"
     assert bundle.meta.pass_ratio == 0.6
+    assert "tb_exam_batch" in bundle.meta.table_comments
+    assert "tb_fraction_bar" in bundle.meta.table_comments
+    assert "tb_score_overview" in bundle.meta.table_comments
 
 
 def test_validate_mapping_against_schema_warns_missing_tables():
@@ -933,7 +941,8 @@ def test_build_chart_option_tool_pie():
         build_chart_option_tool.execute(
             chart_type="pie",
             data={"items": [{"name": "进步", "value": 10, "color": "#2ecc71"},
-                            {"name": "退步", "value": 5, "color": "#e74c3c"}]},
+                            {"name": "退步", "value": 5, "color": "#e74c3c"},
+                            {"name": "稳定", "value": 0, "color": "#1677ff"}]},
             title="趋势分布",
         )
     )
@@ -941,6 +950,10 @@ def test_build_chart_option_tool_pie():
     parsed = json.loads(result.data["option"])
     assert parsed["series"][0]["type"] == "pie"
     assert parsed["series"][0]["data"][0]["name"] == "进步"
+    # 图例置底；0 值扇区不画外侧标签，避免与图例重叠
+    assert parsed["legend"]["bottom"] == 0
+    assert parsed["series"][0]["data"][2]["label"]["show"] is False
+    assert parsed["series"][0]["data"][0]["label"]["show"] is True
 
 
 def test_build_chart_option_tool_correlation_bar():
@@ -1877,6 +1890,8 @@ def test_diagnosis_where_clause_pair_uses_correct_exam_id_column():
     assert "LIMIT 50000" in score_sql
     assert "score DESC" not in score_sql
     assert "ORDER BY e.exam_time DESC" in score_sql
+    assert "tb_exam_batch" in score_sql
+    assert "COALESCE(eb.batch_name, e.exam_name)" in score_sql
 
 
 def test_diagnosis_sql_bundle_uses_weighted_knowledge_join():

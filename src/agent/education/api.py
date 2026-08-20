@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Optional
 
@@ -25,6 +26,7 @@ from src.agent.education import config_store
 from src.agent.education.config import config_to_public_dict
 from src.agent.education.orchestrator import ReportOrchestrator
 from src.agent.education.schema_mapping import (
+    EXAM_NAME_SQL,
     ScoreSchemaMapping,
     infer_normalized_mapping,
     infer_wide_mapping,
@@ -122,21 +124,26 @@ def _build_orchestrator(
     db_type, config, _ds_name = _load_datasource(datasource_id, workspace_oid)
 
     async def execute_sql(sql: str) -> dict:
-        success, msg, result, _sql_run = execute_sql_with_permission_by_user_id(
-            user_id, datasource_id, workspace_oid, sql
-        )
-        # 失败必须抛出，否则编排层会当成「0 行成绩」生成空壳报告。
-        if not success:
-            raise RuntimeError(msg or "SQL 执行失败")
-        if not isinstance(result, dict):
-            raise RuntimeError("SQL 执行结果格式异常")
-        if result.get("error"):
-            raise RuntimeError(str(result.get("error")))
-        return {
-            "columns": result.get("columns") or [],
-            "rows": result.get("rows") or [],
-            "row_count": result.get("row_count") or len(result.get("rows") or []),
-        }
+        import asyncio
+
+        def _run() -> dict:
+            success, msg, result, _sql_run = execute_sql_with_permission_by_user_id(
+                user_id, datasource_id, workspace_oid, sql
+            )
+            # 失败必须抛出，否则编排层会当成「0 行成绩」生成空壳报告。
+            if not success:
+                raise RuntimeError(msg or "SQL 执行失败")
+            if not isinstance(result, dict):
+                raise RuntimeError("SQL 执行结果格式异常")
+            if result.get("error"):
+                raise RuntimeError(str(result.get("error")))
+            return {
+                "columns": result.get("columns") or [],
+                "rows": result.get("rows") or [],
+                "row_count": result.get("row_count") or len(result.get("rows") or []),
+            }
+
+        return await asyncio.to_thread(_run)
 
     async def resolve_schema() -> ScoreSchemaMapping:
         bundle = load_schema_from_config()
@@ -281,7 +288,7 @@ async def diagnostic_report(
 
 # ---- 分析工具：按 ReportSpec 生成报告 --------------------------------------
 
-#: 分析工具允许的全部 9 类报告
+#: 分析工具允许的报告类型
 _GENERATE_REPORT_ALLOWED_TYPES = frozenset(
     {
         "class_overview",
@@ -293,6 +300,13 @@ _GENERATE_REPORT_ALLOWED_TYPES = frozenset(
         "group_feature",
         "comprehensive",
         "diagnostic_report",
+        "line_reach",
+        "subject_avg",
+        "assign_grade",
+        "rank_bucket",
+        "contribution",
+        "combo_reach",
+        "elite_roster",
     }
 )
 
@@ -660,7 +674,7 @@ async def _load_meta_options(
         if school_name and "school" not in exclude:
             parts.append(f"sch.name LIKE '%{_sql_quote(school_name)}%'")
         if exam_name and "exam" not in exclude:
-            parts.append(f"e.exam_name LIKE '%{_sql_quote(exam_name)}%'")
+            parts.append(f"{EXAM_NAME_SQL} LIKE '%{_sql_quote(exam_name)}%'")
         if class_name and "class" not in exclude:
             parts.append(f"sc.class LIKE '%{_sql_quote(class_name)}%'")
         if subject and "subject" not in exclude:
@@ -675,7 +689,8 @@ async def _load_meta_options(
     score_from = (
         "FROM tb_score sc "
         "JOIN tb_school sch ON sc.school_id = sch.id "
-        "JOIN tb_exam e ON sc.exam_id = e.id"
+        "JOIN tb_exam e ON sc.exam_id = e.id "
+        "LEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
     )
 
     schools = await _distinct_col(
@@ -690,11 +705,11 @@ async def _load_meta_options(
     )
     exams = await _distinct_col(
         execute,
-        "SELECT DISTINCT e.exam_name AS v "
+        "SELECT DISTINCT " + EXAM_NAME_SQL + " AS v "
         f"{score_from}"
         + _where(
             _filters(exclude={"exam"}),
-            "e.exam_name IS NOT NULL AND CAST(e.exam_name AS TEXT) <> ''",
+            f"{EXAM_NAME_SQL} IS NOT NULL AND CAST({EXAM_NAME_SQL} AS TEXT) <> ''",
         )
         + " ORDER BY v LIMIT 500",
     )
@@ -746,6 +761,393 @@ async def list_dimensions() -> dict:
     from src.agent.education.aggregation import DIMENSIONS
 
     return success_response({"dimensions": list(DIMENSIONS)})
+
+
+# ---- 预测线达线看板 --------------------------------------------------------
+
+
+def _ident(name: str) -> str:
+    """校验标识符。ASCII 列不加点号引号（兼容 MySQL）；中文列用双引号。"""
+    import re
+
+    raw = str(name or "").strip()
+    if not re.fullmatch(r"[A-Za-z_\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff]*", raw):
+        raise BadRequestException("非法列名")
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", raw):
+        return raw
+    return f'"{raw}"'
+
+
+_PRIVACY_COLS = frozenset({"xm", "s_name", "sfzh", "ksh", "xh"})
+_ALWAYS_PRIVACY_COLS = frozenset({"sfzh", "ksh"})
+
+
+def _select_list(columns: list[str]) -> str:
+    """显式列清单，剔除隐私列。关闭脱敏时保留 xm/xh/s_name。"""
+    from src.agent.education.privacy_mode import is_anonymize_display_enabled
+
+    drop = set(_PRIVACY_COLS) if is_anonymize_display_enabled() else set(_ALWAYS_PRIVACY_COLS)
+    keep: list[str] = []
+    for col in columns:
+        if str(col).lower() in drop:
+            continue
+        try:
+            keep.append(_ident(col))
+        except BadRequestException:
+            continue
+    if not keep:
+        return "*"
+    return ", ".join(keep)
+
+
+def _first_col(columns: list[str], candidates: tuple[str, ...]) -> str | None:
+    lower = {c.lower(): c for c in columns}
+    for cand in candidates:
+        if cand.lower() in lower:
+            return lower[cand.lower()]
+    return None
+
+
+async def _probe_columns(execute, table: str) -> list[str]:
+    table_sql = _ident(table)
+    try:
+        result = await execute(f"SELECT * FROM {table_sql} LIMIT 1")
+    except Exception:
+        return []
+    return [str(c) for c in (result.get("columns") or [])]
+
+
+async def _fetch_dicts(execute, sql: str) -> list[dict[str, Any]]:
+    from src.agent.education.line_reach import rows_as_dicts
+
+    try:
+        result = await execute(sql)
+    except Exception:
+        return []
+    return rows_as_dicts(result.get("columns") or [], result.get("rows") or [])
+
+
+def _track_sql_predicate(track_col: str | None, track: str) -> str:
+    if not track_col or not track:
+        return ""
+    c = _ident(track_col)
+    if "物理" in track:
+        return f"{c} LIKE '物%'"
+    if "历史" in track:
+        return f"({c} LIKE '史%' OR {c} LIKE '历%')"
+    return ""
+
+
+def _track_case_sql(track_col: str | None) -> str:
+    if not track_col:
+        return "''"
+    c = _ident(track_col)
+    return (
+        f"CASE WHEN {c} LIKE '物%' THEN '物理类' "
+        f"WHEN {c} LIKE '史%' OR {c} LIKE '历%' THEN '历史类' "
+        f"ELSE '' END"
+    )
+
+
+def _overview_agg_sql(
+    ov_cols: list[str],
+    bars: list[dict[str, Any]],
+    *,
+    exam_name: str,
+    track: str,
+) -> str | None:
+    """区县/学校/选科达线聚合 SQL；缺总分列时返回 None。
+
+    始终按选科分组，达线 CASE 只比较总分，便于一次查出全市/物理/历史。
+    """
+    if not ov_cols or not bars:
+        return None
+    total_col = _first_col(ov_cols, ("zf6m", "zf4m", "zf3m", "zf", "total", "total_score"))
+    if not total_col:
+        return None
+    district_col = _first_col(ov_cols, ("dq", "district", "qx"))
+    school_col = _first_col(ov_cols, ("xx", "school_id", "school"))
+    exam_col = _first_col(ov_cols, ("exam_name", "exam", "ksmc"))
+    track_col = _first_col(ov_cols, ("xkkm", "xkqk", "track", "xkfx"))
+    d_expr = (
+        f"COALESCE(CAST({_ident(district_col)} AS TEXT), '未知区县')"
+        if district_col
+        else "'未知区县'"
+    )
+    s_expr = (
+        f"COALESCE(CAST({_ident(school_col)} AS TEXT), '')" if school_col else "''"
+    )
+    t_ident = _ident(total_col)
+    reached = [
+        f"SUM(CASE WHEN {t_ident} >= {float(bar['threshold'])} THEN 1 ELSE 0 END) AS r{i}"
+        for i, bar in enumerate(bars)
+    ]
+    where: list[str] = []
+    if exam_name and exam_col:
+        where.append(f"{_ident(exam_col)} = '{_sql_quote(exam_name)}'")
+    track_pred = _track_sql_predicate(track_col, track) if track else ""
+    if track_pred:
+        where.append(track_pred)
+    where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+    return (
+        f"SELECT {d_expr} AS district, {s_expr} AS school_name, "
+        f"{_track_case_sql(track_col)} AS track, "
+        f"COUNT(*) AS candidates, {', '.join(reached)} "
+        f"FROM tb_score_overview{where_sql} "
+        f"GROUP BY 1, 2, 3 ORDER BY 1, 2, 3 LIMIT 5000"
+    )
+
+
+def _filter_bars(bars: list[dict[str, Any]], exam_name: str, track: str) -> list[dict[str, Any]]:
+    from src.agent.education.line_reach import filter_fraction_bars
+
+    return filter_fraction_bars(bars, exam_name=exam_name, track=track)
+
+
+async def _load_line_reach_bar_rows(execute) -> list[dict[str, Any]]:
+    return await _fetch_dicts(execute, "SELECT * FROM tb_fraction_bar LIMIT 500")
+
+
+@router.get("/dashboards/line-reach/meta")
+async def line_reach_meta(
+    datasource_id: int,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    """达线看板筛选项：考试、选科方向。"""
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.agent.education.line_reach import (
+        build_line_reach_payload,
+        can_access_line_reach,
+    )
+    from src.common.core.database import get_db_session
+    from system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
+        user = get_user_by_id(session, int(current_user.id))
+        scope = parse_edu_scope(user)
+    if not can_access_line_reach(scope):
+        return error_response(code=403, message="学生账号不可查看达线看板")
+
+    orch = _build_orchestrator(datasource_id, workspace_oid, user_id=int(current_user.id))
+    bar_rows = await _load_line_reach_bar_rows(orch._execute_sql)
+    payload = build_line_reach_payload(
+        bar_rows,
+        [],
+        scope=scope,
+    )
+    return success_response(
+        {
+            "accessible": True,
+            "exams": payload.get("exams") or [],
+            "tracks": payload.get("tracks") or [],
+            "lines": payload.get("lines") or [],
+        }
+    )
+
+
+@router.get("/dashboards/line-reach")
+async def line_reach_dashboard(
+    datasource_id: int,
+    exam_name: Optional[str] = None,
+    track: Optional[str] = None,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    """各地区预测线达线看板：全市 KPI + 区县表（可含学校展开）。"""
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.agent.education.line_reach import (
+        can_access_line_reach,
+        normalize_fraction_bars,
+        payload_from_school_agg,
+        remap_agg_rows,
+        rows_as_dicts,
+    )
+    from src.common.core.database import get_db_session
+    from system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
+        user = get_user_by_id(session, int(current_user.id))
+        scope = parse_edu_scope(user)
+    if not can_access_line_reach(scope):
+        return error_response(code=403, message="学生账号不可查看达线看板")
+
+    orch = _build_orchestrator(datasource_id, workspace_oid, user_id=int(current_user.id))
+    execute = orch._execute_sql
+    exam = (exam_name or "").strip()
+    track_v = (track or "").strip()
+    bar_rows, ov_cols = await asyncio.gather(
+        _load_line_reach_bar_rows(execute),
+        _probe_columns(execute, "tb_score_overview"),
+    )
+    bars_all = normalize_fraction_bars(bar_rows)
+    exams = sorted({str(b.get("exam_name") or "") for b in bars_all if b.get("exam_name")})
+    tracks = sorted({str(b.get("track") or "") for b in bars_all if b.get("track")})
+    if not exam and exams:
+        exam = exams[0]
+    use_bars = _filter_bars(bars_all, exam, "")
+    agg_sql = _overview_agg_sql(ov_cols, use_bars, exam_name=exam, track="")
+    agg_rows: list[dict[str, Any]] = []
+    if agg_sql:
+        result = await execute(agg_sql)
+        agg_rows = rows_as_dicts(result.get("columns") or [], result.get("rows") or [])
+
+    def _view(dest_bars: list[dict[str, Any]], view_track: str) -> dict[str, Any]:
+        rows = remap_agg_rows(agg_rows, use_bars, dest_bars)
+        return payload_from_school_agg(
+            rows,
+            dest_bars,
+            exam_name=exam,
+            track=view_track,
+            exams=exams,
+            tracks=tracks,
+        )
+
+    phys_bars = _filter_bars(use_bars, exam, "物理类")
+    hist_bars = _filter_bars(use_bars, exam, "历史类")
+    city = _view(use_bars, "")
+    physics = _view(phys_bars, "物理类")
+    history = _view(hist_bars, "历史类")
+
+    def _slice(p: dict[str, Any]) -> dict[str, Any]:
+        return {"lines": p.get("lines") or [], "kpis": p.get("kpis") or {}, "districts": p.get("districts") or []}
+
+    picked = city
+    if "物理" in track_v:
+        picked = physics
+    elif "历史" in track_v:
+        picked = history
+    payload = dict(picked)
+    payload["accessible"] = True
+    payload["views"] = {"all": _slice(city), "physics": _slice(physics), "history": _slice(history)}
+    return success_response(payload)
+
+
+class FractionBarLinePayload(BaseModel):
+    track: str = Field(..., description="物理类 / 历史类")
+    line_code: str = Field(..., description="tz/bk/ty/ms/yy/211/985/qb/nd")
+    threshold: Optional[float] = Field(None, description="分数线；空则清空该列")
+
+
+class FractionBarUpsertRequest(BaseModel):
+    datasource_id: int
+    exam_batch_id: Optional[int] = Field(None, description="tb_exam_batch.id；优先按批次写入")
+    exam_name: Optional[str] = Field(None, description="无 exam_batch_id 时的兜底考试名")
+    lines: list[FractionBarLinePayload] = Field(default_factory=list)
+
+
+class ScoreIndicatorRecomputeRequest(BaseModel):
+    datasource_id: int
+    exam_name: Optional[str] = Field(None, description="空则重算分数线表中全部考试")
+
+
+def _deny_student_line_tools(scope: Any) -> dict | None:
+    from src.agent.education.line_reach import can_access_line_reach
+
+    if not can_access_line_reach(scope):
+        return error_response(code=403, message="学生账号不可维护预测分数线")
+    return None
+
+
+@router.get("/fraction-bar")
+async def list_fraction_bar(
+    datasource_id: int,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    """列出 tb_fraction_bar 已有考试与可录入线种列。"""
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.agent.education.score_indicator import list_fraction_bars
+    from src.agent.resource.tool.business import _load_datasource
+    from src.common.core.database import get_db_session
+    from system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
+        user = get_user_by_id(session, int(current_user.id))
+        scope = parse_edu_scope(user)
+    denied = _deny_student_line_tools(scope)
+    if denied is not None:
+        return denied
+    db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
+    data = await asyncio.to_thread(list_fraction_bars, db_type, config)
+    return success_response(data)
+
+
+@router.put("/fraction-bar")
+async def upsert_fraction_bar(
+    req: FractionBarUpsertRequest,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    """新增或更新一场考试的预测分数线，并重算 tb_score_indicator。"""
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.agent.education.score_indicator import upsert_fraction_bar_and_recompute
+    from src.agent.resource.tool.business import _load_datasource
+    from src.common.core.database import get_db_session
+    from system.crud.crud_user import get_user_by_id
+
+    exam = (req.exam_name or "").strip()
+    if req.exam_batch_id is None and not exam:
+        raise BadRequestException("请选择考试")
+    with get_db_session() as session:
+        assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
+        user = get_user_by_id(session, int(current_user.id))
+        scope = parse_edu_scope(user)
+    denied = _deny_student_line_tools(scope)
+    if denied is not None:
+        return denied
+    db_type, config, _ = _load_datasource(req.datasource_id, workspace_oid)
+    lines = [x.model_dump() for x in req.lines]
+    try:
+        stats = await asyncio.to_thread(
+            upsert_fraction_bar_and_recompute,
+            db_type,
+            config,
+            exam_name=exam,
+            lines=lines,
+            exam_batch_id=req.exam_batch_id,
+        )
+    except ValueError as exc:
+        raise BadRequestException(str(exc)) from exc
+    except RuntimeError as exc:
+        raise BadRequestException(str(exc)) from exc
+    message = "分数线已保存"
+    if stats.get("empty_scores"):
+        message = "分数线已保存；该场暂无成绩，达线指标为空"
+    return success_response(stats, message=message)
+
+
+@router.post("/score-indicator/recompute")
+async def recompute_score_indicator(
+    req: ScoreIndicatorRecomputeRequest,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    """按考试重算 tb_score_indicator；exam_name 为空则回填全部已有分数线考试。"""
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.agent.education.score_indicator import recompute_exams
+    from src.agent.resource.tool.business import _load_datasource
+    from src.common.core.database import get_db_session
+    from system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
+        user = get_user_by_id(session, int(current_user.id))
+        scope = parse_edu_scope(user)
+    denied = _deny_student_line_tools(scope)
+    if denied is not None:
+        return denied
+    db_type, config, _ = _load_datasource(req.datasource_id, workspace_oid)
+    exam = (req.exam_name or "").strip()
+    names = [exam] if exam else None
+    try:
+        stats = await asyncio.to_thread(recompute_exams, db_type, config, names)
+    except RuntimeError as exc:
+        raise BadRequestException(str(exc)) from exc
+    return success_response(stats, message="达线指标已重算")
 
 
 # ---- 成绩导入 --------------------------------------------------------------
@@ -883,6 +1285,24 @@ async def execute_score_import(
     payload = import_result_to_dict(result)
     if t == "total":
         payload["anomaly_alerts_pending"] = True
+        exams = sorted(
+            {
+                str(getattr(row, "exam_name", "") or "").strip()
+                for row in (result.resolved_rows or [])
+                if str(getattr(row, "exam_name", "") or "").strip()
+            }
+        )
+        if exams:
+            try:
+                from src.agent.education.score_indicator import recompute_if_bars_exist
+
+                indicator_stats = recompute_if_bars_exist(db_type, config, exams)
+                if indicator_stats:
+                    payload["score_indicator"] = indicator_stats
+            except Exception:  # noqa: BLE001
+                import logging
+
+                logging.getLogger(__name__).exception("post-import score_indicator recompute failed")
     if alert_stats:
         payload["anomaly_alerts"] = alert_stats
     return success_response(payload, message="成绩导入成功")

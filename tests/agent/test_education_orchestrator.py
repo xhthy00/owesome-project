@@ -574,6 +574,8 @@ def test_orchestrator_config_edu_sql_includes_school_and_exam_score():
         if "FROM tb_score sc" in s and "AS score" in s and "LIMIT" in s
     )
     assert "tb_school" in score_sql
+    assert "tb_exam_batch" in score_sql
+    assert "COALESCE(eb.batch_name, e.exam_name)" in score_sql
     assert "sch.name" in score_sql
     assert "exam_score" in score_sql
     assert "南京市第一中学" in score_sql

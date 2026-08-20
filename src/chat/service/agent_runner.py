@@ -334,6 +334,26 @@ def _normalize_ident(v: str) -> str:
     return str(v or "").strip().strip("`\"").lower()
 
 
+# 考试批次/学校等维表只用于对照名称，describe 后不能把后续 SQL/报告锁死在这张表上。
+_NON_LOCKABLE_TABLES = frozenset(
+    {
+        "tb_exam_batch",
+        "tb_exam",
+        "tb_school",
+        "tb_student",
+        "tb_knowledge",
+        "tb_exam_question",
+        "tb_exam_question_knowledge",
+        "tb_fraction_bar",
+    }
+)
+
+
+def _is_lockable_table(table_name: str) -> bool:
+    name = _normalize_ident(table_name)
+    return bool(name) and name not in _NON_LOCKABLE_TABLES
+
+
 def _extract_sql_tables(sql: str) -> list[str]:
     out: list[str] = []
     for m in _SQL_TABLE_RE.finditer(sql or ""):
@@ -1973,7 +1993,12 @@ def _on_tool_result(state: _RunState, payload: dict[str, Any]) -> None:
     # 第 1 步：仅记录并传递锁表线索（describe_table 成功后锁定该表），后续步骤再做守卫拦截。
     if payload.get("tool") == "describe_table" and success and isinstance(data, dict):
         table_name = str(data.get("name") or "").strip()
-        if table_name and state.constraints is not None and table_name not in state.constraints.locked_tables:
+        if (
+            table_name
+            and _is_lockable_table(table_name)
+            and state.constraints is not None
+            and table_name not in state.constraints.locked_tables
+        ):
             state.constraints.locked_tables.append(table_name)
             if state.sub_task_index is not None:
                 state.constraints.source_sub_task_index = state.sub_task_index
@@ -2097,8 +2122,10 @@ async def _maybe_emit_report(
                     return
 
     if state is not None and state.constraints is not None:
+        tool = str(payload.get("tool") or "")
+        dedicated_report = tool.startswith("build_") and tool.endswith("_tool")
         locked = list(state.constraints.locked_tables or [])
-        if locked and not _sql_hits_locked_tables(state.last_sql or "", locked):
+        if locked and not dedicated_report and not _sql_hits_locked_tables(state.last_sql or "", locked):
             warn = (
                 f"报告已拦截：当前报告来源 SQL 未命中锁定表 {locked}。"
                 f" 当前 SQL={state.last_sql or '(空)'}"

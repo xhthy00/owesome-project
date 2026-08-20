@@ -199,13 +199,15 @@ def extract_exam_name_hint(question: str) -> str | None:
     q = normalize_fullwidth_parentheses((question or "").strip())
     if not q:
         return None
-    # 完整/半正式考试名
+    # 完整/半正式考试名（清洗班级/科目误吞，避免「班数学期末考试」）
     m = re.search(
         r"([\u4e00-\u9fff]{2,30}?(?:质量检测|模拟考试|学情检测|单元测验|期末考试|期中考试|检测试卷|调研测试))",
         q,
     )
     if m:
-        return m.group(1).strip("在的于对")
+        cleaned = _clean_exam_name_candidate(m.group(1))
+        if cleaned:
+            return cleaned
     for token in ("期中", "期末", "月考", "摸底", "模拟", "单元测验"):
         if token in q:
             return token
@@ -245,6 +247,15 @@ def _clean_exam_name_candidate(raw: str) -> str | None:
     for subj in _SUBJECT_NAME_TOKENS:
         if name.endswith(subj) and len(name) > len(subj):
             name = name[: -len(subj)]
+            break
+    # 「班数学期末考试」剥班后剩「数学期末考试」→ 再剥科目前缀
+    for subj in _SUBJECT_NAME_TOKENS:
+        if name.startswith(subj) and len(name) > len(subj):
+            rest = name[len(subj) :]
+            if rest and (
+                any(t in rest for t in ("期中", "期末", "月考", "摸底", "模拟", "联考", "统考", "检测", "考试"))
+            ):
+                name = rest
             break
     name = name.strip("的于对在")
     if not name or is_vague_exam_name(name):
@@ -356,6 +367,131 @@ _CITYWIDE_ANALYSIS_HINTS = (
     "分析报告",
     "形成报告",
 )
+_LINE_REACH_HINTS = (
+    "达线",
+    "预测线",
+    "分数线",
+    "特控线",
+    "本科线",
+    "体育线",
+    "美术线",
+    "音乐线",
+    "211线",
+    "985线",
+    "特招线",
+    "特招",
+)
+
+
+def is_line_reach_query(question: str) -> bool:
+    """是否涉及达线/预测线/分数线（事实问或报告都先命中本判定）。"""
+    q = (question or "").strip()
+    if not q:
+        return False
+    return any(h in q for h in _LINE_REACH_HINTS)
+
+
+_LINE_REACH_REPORT_HINTS = ("分析", "报告", "情况", "对比", "环比", "全市", "全域", "各区", "各县")
+_LINE_REACH_REPORT_STRONG = ("分析", "报告", "情况", "对比", "环比")
+_LINE_REACH_NARROW = ("人数", "达线率", "上线率", "上线人数")
+
+
+def is_line_reach_report_query(question: str) -> bool:
+    """全市/各区达线情况分析报告；窄问人数/率仍走事实查询。"""
+    q = (question or "").strip()
+    if not is_line_reach_query(q):
+        return False
+    if not any(h in q for h in _LINE_REACH_REPORT_HINTS):
+        return False
+    if any(h in q for h in _LINE_REACH_NARROW) and not any(
+        h in q for h in _LINE_REACH_REPORT_STRONG
+    ):
+        return False
+    return True
+
+
+def is_overview_total_query(question: str) -> bool:
+    """语数外三门/四门/六门/全科总分均分：走 tb_score_overview，不是单科 tb_score。"""
+    q = (question or "").strip()
+    if not q:
+        return False
+    if any(h in q for h in ("语数外", "语数英", "三门均分", "三门总均分", "三门总分")):
+        return True
+    if "三门" in q and any(h in q for h in ("均分", "排名", "总分")):
+        return True
+    if any(h in q for h in ("四门总均分", "四门均分", "四门总分", "zf4m")):
+        return True
+    if any(h in q for h in ("六门总均分", "六门均分", "六门总分", "全科总分", "zf6m", "zf3m")):
+        return True
+    return False
+
+
+def _has_reportish(question: str) -> bool:
+    return any(h in (question or "") for h in ("分析", "报告", "情况", "对比"))
+
+
+def is_subject_avg_report_query(question: str) -> bool:
+    """区县/学校均分情况报告；单班均分仍走班级总览。"""
+    q = (question or "").strip()
+    if not q or not _has_reportish(q):
+        return False
+    if not any(h in q for h in ("均分情况", "各科均分", "三门总均分", "六门总均分", "转换均分")):
+        return False
+    if any(h in q for h in ("各区", "各县", "各地区", "各校", "各学校", "全市", "尖子生班", "尖子班")):
+        return True
+    return "均分情况" in q
+
+
+def is_assign_grade_report_query(question: str) -> bool:
+    q = (question or "").strip()
+    if not q or not _has_reportish(q):
+        return False
+    return any(h in q for h in ("ABCDE", "选考等级", "等级赋分", "选考学科ABC"))
+
+
+def is_rank_bucket_report_query(question: str) -> bool:
+    q = (question or "").strip()
+    if not q or not _has_reportish(q):
+        return False
+    return "位次" in q
+
+
+def is_contribution_report_query(question: str) -> bool:
+    q = (question or "").strip()
+    if not q:
+        return False
+    return "贡献分" in q and _has_reportish(q)
+
+
+def is_combo_reach_report_query(question: str) -> bool:
+    q = (question or "").strip()
+    if not q or not _has_reportish(q):
+        return False
+    if "选科组合达线" in q or "各选择组合达线" in q:
+        return True
+    return "物化生" in q and "达线" in q and _has_reportish(q)
+
+
+def is_elite_roster_report_query(question: str) -> bool:
+    q = (question or "").strip()
+    if not q or not _has_reportish(q):
+        return False
+    return any(h in q for h in ("理前100", "文前30", "冲刺清北", "冲刺南大", "高分名单"))
+
+
+def is_bureau_report_query(question: str) -> bool:
+    q = (question or "").strip()
+    return any(
+        fn(q)
+        for fn in (
+            is_subject_avg_report_query,
+            is_assign_grade_report_query,
+            is_rank_bucket_report_query,
+            is_contribution_report_query,
+            is_combo_reach_report_query,
+            is_elite_roster_report_query,
+        )
+    )
 
 
 def is_citywide_analysis_query(question: str) -> bool:
@@ -366,6 +502,10 @@ def is_citywide_analysis_query(question: str) -> bool:
     if not any(m in q for m in _CITYWIDE_MARKERS):
         return False
     if extract_school_target(q):
+        return False
+    if is_line_reach_query(q):
+        return False
+    if is_bureau_report_query(q):
         return False
     return any(h in q for h in _CITYWIDE_ANALYSIS_HINTS) or ("分析" in q and "考试" in q)
 
@@ -570,6 +710,32 @@ def is_tier_alert_query(question: str) -> bool:
     if "预警" in q and any(h in q for h in ("临界", "退步", "偏科", "分层", "报告")):
         return True
     return False
+
+
+#: 班内后十/倒数十 + 中位 + 知识点 → 强制走 compare_knowledge_cohort_tool
+_KNOWLEDGE_COHORT_BOTTOM_HINTS = (
+    "最后十",
+    "最后10",
+    "后十名",
+    "后10名",
+    "倒数十",
+    "倒数10",
+    "最后十名",
+    "后十",
+)
+_KNOWLEDGE_COHORT_MEDIAN_HINTS = ("中位数", "中位", "中位组", "中位水平")
+_KNOWLEDGE_COHORT_KNOWLEDGE_HINTS = ("知识点", "知识掌握", "掌握方面")
+
+
+def is_knowledge_cohort_gap_query(question: str) -> bool:
+    """后十名与中位组在知识点掌握上的差距对比。"""
+    q = (question or "").strip()
+    if not q:
+        return False
+    has_bottom = any(h in q for h in _KNOWLEDGE_COHORT_BOTTOM_HINTS)
+    has_median = any(h in q for h in _KNOWLEDGE_COHORT_MEDIAN_HINTS)
+    has_kn = any(h in q for h in _KNOWLEDGE_COHORT_KNOWLEDGE_HINTS)
+    return has_bottom and has_median and has_kn
 
 
 #: 仅匹配明确「群体特征」口径，避免夺走「各班横向对比」等既有路由。
@@ -821,6 +987,8 @@ def student_matches(record_name: str, target: str) -> bool:
 
 def format_scope_constraints(constraints: dict[str, Any] | None) -> str:
     """从会话 constraints 生成 Agent 范围提示（DataAnalyst / ToolExpert / Planner 共用）。"""
+    from src.agent.education.privacy_mode import privacy_sql_instruction
+
     raw = constraints if isinstance(constraints, dict) else {}
     parts: list[str] = []
     edu = raw.get("edu_scope")
@@ -862,10 +1030,9 @@ def format_scope_constraints(constraints: dict[str, Any] | None) -> str:
         "报告/SQL 范围必须与用户数据权限及子任务描述一致；"
         "查成绩明细（tb_score / tb_score_detail）时 WHERE 须含学校/班级/学生等过滤，"
         "禁止默认查全量学生、全校或多校合并数据。"
-        "探查维表（tb_exam / tb_knowledge / tb_school 等）无需手写 school_id/class——"
+        "探查维表（tb_exam / tb_exam_batch / tb_fraction_bar / tb_knowledge / tb_school 等）无需手写 school_id/class——"
         "系统仅在成绩表上自动注入行级权限。"
-        "学校字段：展示与过滤只用 sch.name 或 sch.id / sc.school_id（脱敏码）；"
-        "**禁止** SELECT/引用 tb_school.s_name（可能含中文明文）。"
+        f"{privacy_sql_instruction()}"
         "范围：" + "；".join(parts)
     )
 
@@ -1710,12 +1877,23 @@ __all__ = [
     "extract_student_target",
     "format_scope_constraints",
     "is_citywide_analysis_query",
+    "is_line_reach_query",
+    "is_line_reach_report_query",
+    "is_subject_avg_report_query",
+    "is_assign_grade_report_query",
+    "is_rank_bucket_report_query",
+    "is_contribution_report_query",
+    "is_combo_reach_report_query",
+    "is_elite_roster_report_query",
+    "is_bureau_report_query",
+    "is_overview_total_query",
     "is_multi_exam_class_analysis_query",
     "is_trend_tracking_query",
     "is_school_class_comparison_query",
     "is_school_exam_report_query",
     "is_structured_diagnostic_query",
     "is_tier_alert_query",
+    "is_knowledge_cohort_gap_query",
     "is_group_feature_query",
     "is_class_overview_query",
     "infer_group_feature_dimension",

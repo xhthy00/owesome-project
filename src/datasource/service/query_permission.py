@@ -488,6 +488,9 @@ _EDU_SCOPE_FIELDS = ("school_id", "class", "student_id")
 _SCORE_TABLE_NAMES = frozenset({"tb_score", "score"})
 _DETAIL_TABLE_NAMES = frozenset({"tb_score_detail", "score_detail"})
 _STUDENT_TABLE_NAMES = frozenset({"tb_student", "student"})
+_INDICATOR_TABLE_NAMES = frozenset({"tb_score_indicator", "score_indicator"})
+_OVERVIEW_TABLE_NAMES = frozenset({"tb_score_overview", "score_overview"})
+_FRACTION_BAR_TABLE_NAMES = frozenset({"tb_fraction_bar", "fraction_bar"})
 
 
 def _table_alias_name(table: Any) -> str:
@@ -529,13 +532,28 @@ def _edu_scope_column(
     score_aliases: list[str],
     detail_aliases: list[str],
     student_aliases: list[str],
+    indicator_aliases: list[str],
+    overview_aliases: list[str],
     db_type: str,
 ) -> Optional[str]:
-    """教育权限列映射：school_id/class 仅 tb_score；student_id 优先 sc，其次 sd，再次 st.id。"""
+    """教育权限列映射：school_id/class 优先 tb_score；总览表为 xx/bj/anon_stu_id。
+
+    tb_score_indicator 仅有 school_id；class/student_id 不能挂在该表。
+    """
     q = "`" if db_type == "mysql" else '"'
-    if field in ("school_id", "class"):
+    if field == "school_id":
+        if indicator_aliases:
+            return f"{indicator_aliases[0]}.{q}school_id{q}"
         if score_aliases:
-            return f"{score_aliases[0]}.{q}{field}{q}"
+            return f"{score_aliases[0]}.{q}school_id{q}"
+        if overview_aliases:
+            return f"{overview_aliases[0]}.{q}xx{q}"
+        return None
+    if field == "class":
+        if score_aliases:
+            return f"{score_aliases[0]}.{q}class{q}"
+        if overview_aliases:
+            return f"{overview_aliases[0]}.{q}bj{q}"
         return None
     if field == "student_id":
         if score_aliases:
@@ -544,6 +562,8 @@ def _edu_scope_column(
             return f"{detail_aliases[0]}.{q}student_id{q}"
         if student_aliases:
             return f"{student_aliases[0]}.{q}id{q}"
+        if overview_aliases:
+            return f"{overview_aliases[0]}.{q}anon_stu_id{q}"
         return None
     return None
 
@@ -563,8 +583,9 @@ def _exists_score_guard(sd_alias: str, qualified_inner: str, db_type: str) -> st
 def qualify_edu_row_predicates(sql: str, predicates: list[str], db_type: str) -> list[str]:
     """为教育权限谓词补全正确表别名，避免 sd.school_id / st.student_id 等错误引用。
 
-    若 SQL 未涉及 tb_score / tb_score_detail（如只查 tb_exam），无法安全挂
+    若 SQL 未涉及成绩事实表（如只查 tb_exam / tb_fraction_bar），无法安全挂
     school_id/class：丢弃该谓词，避免把裸列注入维表导致 ``column "class" does not exist``。
+    tb_score_overview 用 xx/bj/anon_stu_id；tb_score_indicator 仅挂 school_id。
     """
     if not predicates:
         return predicates
@@ -572,8 +593,14 @@ def qualify_edu_row_predicates(sql: str, predicates: list[str], db_type: str) ->
     score_aliases = _find_table_aliases(sql, _SCORE_TABLE_NAMES, db_type)
     detail_aliases = _find_table_aliases(sql, _DETAIL_TABLE_NAMES, db_type)
     student_aliases = _find_table_aliases(sql, _STUDENT_TABLE_NAMES, db_type)
+    indicator_aliases = _find_table_aliases(sql, _INDICATOR_TABLE_NAMES, db_type)
+    overview_aliases = _find_table_aliases(sql, _OVERVIEW_TABLE_NAMES, db_type)
+    fraction_aliases = _find_table_aliases(sql, _FRACTION_BAR_TABLE_NAMES, db_type)
     q = "`" if db_type == "mysql" else '"'
     out: list[str] = []
+    fact_aliases = score_aliases or detail_aliases or student_aliases or overview_aliases
+    indicator_only = bool(indicator_aliases) and not fact_aliases
+    fraction_only = bool(fraction_aliases) and not fact_aliases and not indicator_aliases
 
     for pred in predicates:
         new_pred = pred
@@ -581,11 +608,22 @@ def qualify_edu_row_predicates(sql: str, predicates: list[str], db_type: str) ->
         for field in _EDU_SCOPE_FIELDS:
             if field not in pred:
                 continue
+            if fraction_only:
+                drop = True
+                break
+            if indicator_only and field == "student_id":
+                new_pred = "1 = 0"
+                break
+            if indicator_only and field == "class":
+                drop = True
+                continue
             col = _edu_scope_column(
                 field,
                 score_aliases=score_aliases,
                 detail_aliases=detail_aliases,
                 student_aliases=student_aliases,
+                indicator_aliases=indicator_aliases,
+                overview_aliases=overview_aliases,
                 db_type=db_type,
             )
             pattern = rf'(?<!\.){re.escape(q)}{field}{re.escape(q)}'

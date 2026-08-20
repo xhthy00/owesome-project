@@ -62,7 +62,40 @@ Team 模式 Planner 会拆 3 步查数 + 1 步 ToolExpert 组装；ToolExpert �
 
 ## 外部库 DDL
 
-见 [`docs/education_schema_ddl.sql`](education_schema_ddl.sql)：`tb_school.district`、`tb_exam_question.question_type`、`tb_knowledge.ability_level`、`tb_exam_question_knowledge`。
+见 [`docs/education_schema_ddl.sql`](education_schema_ddl.sql)：`tb_exam_batch`、`tb_exam.exam_batch_id`、`tb_fraction_bar`、`tb_score_indicator`、`tb_score_overview`、`tb_school.district`、`tb_exam_question.question_type`、`tb_knowledge.ability_level`、`tb_exam_question_knowledge`。
+
+### 考试批次与试卷
+
+- **批次** `tb_exam_batch`：用户口中的「考试」（如 `2026届高三5月模拟`）对应 `batch_name`；`exam_time` 为考试时间，达线报告上场/环比按本列取上一场。
+- **试卷** `tb_exam`：一批次下多科试卷；`exam_batch_id` 关联批次，`exam_score` 为该科卷面满分。
+- 问数过滤「XX考试」须 `JOIN tb_exam e ... LEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id`，按 `COALESCE(eb.batch_name, e.exam_name)` 过滤；禁止把单科试卷当成考试批次。
+
+### 预测线 / 达线 / 总览
+
+| 表 | 粒度 | 用途 |
+|----|------|------|
+| `tb_fraction_bar` | 一场批次一行 | 预测分数线阈值（`wl_score_*` 物理类、`ls_score_*` 历史类；物理美术列为 `wl_socre_ms`） |
+| `tb_score_indicator` | 批次×选科×学校×线种 | 达线人数 `reached_count`、参考人数 `candidates`、学校达线率 `reach_rate`。区县/全市须 `SUM` 后重算率，禁止 `AVG(reach_rate)` |
+| `tb_score_overview` | 一学生一场批次 | 全科总分 `zf6m`、选科 `xkkm`、学校 `xx`、区县 `dq`、班级 `bj`；科目/转换/等级 `yw`…`dldj`；应届 `xsxz`、校层 `xxlb`。学生标识只用 `anon_stu_id`，禁止 `xm`/`sfzh`/`ksh` |
+
+三表的 `exam_name` 均与 `tb_exam_batch.batch_name` 对齐；`tb_fraction_bar` / `tb_score_indicator` / `tb_score_overview` 的 `exam_batch_id` 关联批次。
+
+### 局端基础分析（扬州模考口径）
+
+离线「基础分析表」由 `tb_score_overview` 学生行重算，不导入汇总 Excel。
+
+| 口径 | 规则 |
+|------|------|
+| 特招线 | 等同特控线 |
+| 应届 | `xsxz = 在籍生`（排除市报生） |
+| 三/四/六门均分 | `AVG(zf3m/zf4m/zf6m)`，禁止再除以 3；报告默认分全员/理科（物理类）/文科（历史类） |
+| ABCDE | 聚合 `hxdj/swdj/zzdj/dldj` |
+| 位次前 N | 含并列（`zf6m ≥` 第 N 名分数） |
+| 贡献分 | 达线且总分等于切线分的学生各科均值 |
+| 尖子班 | 只认 `tb_elite_class`，不猜班级号 |
+| 高分名单 | 只出 `anon_stu_id`，禁止 xm/ksh/sfzh |
+
+报告类型：`subject_avg` / `assign_grade` / `rank_bucket` / `contribution` / `combo_reach` / `elite_roster`；达线报告 `line_reach` 含学校明细表。
 
 ### 题目 ↔ 知识点多对多
 

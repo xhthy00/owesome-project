@@ -41,6 +41,8 @@ export default function ChatPage() {
   const [selectedStepId, setSelectedStepId] = useState<string | undefined>(undefined);
   const prevConversationQuery = useRef<string | null>(null);
   const loadedConversationIdRef = useRef<number | null>(null);
+  /** 探索广场 ?q= 只消费一次，避免 send/router 引用变化把同一问发成多条会话 */
+  const consumedExploreQueryRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!executionSteps.length) {
@@ -61,18 +63,21 @@ export default function ChatPage() {
   }, [executionSteps]);
 
   useEffect(() => {
+    if (!router.isReady) return;
     const q = router.query.q;
     const ds = router.query.ds;
-    if (!router.isReady || !q) return;
-    const text = Array.isArray(q) ? q[0] : q;
+    if (!q) return;
+    const text = (Array.isArray(q) ? q[0] : q).trim();
     const dsValue = Array.isArray(ds) ? ds[0] : ds;
     const dsId = dsValue ? Number(dsValue) : undefined;
-    if (!text?.trim()) return;
+    if (!text) return;
+    if (consumedExploreQueryRef.current === text) return;
+    consumedExploreQueryRef.current = text;
     const resolvedDsId = dsId && !Number.isNaN(dsId) ? dsId : datasourceId;
     if (dsId && !Number.isNaN(dsId)) {
       setDatasourceId(dsId);
     }
-    void send(text.trim(), { datasourceId: resolvedDsId });
+    void send(text, { datasourceId: resolvedDsId });
     void router.replace("/chat", undefined, { shallow: true });
   }, [router, send, datasourceId, setDatasourceId]);
 

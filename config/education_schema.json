@@ -6,20 +6,30 @@
     "school": "tb_school",
     "student": "tb_student",
     "exam": "tb_exam",
+    "exam_batch": "tb_exam_batch",
     "score": "tb_score",
     "score_detail": "tb_score_detail",
     "exam_question": "tb_exam_question",
     "exam_question_knowledge": "tb_exam_question_knowledge",
-    "knowledge": "tb_knowledge"
+    "knowledge": "tb_knowledge",
+    "fraction_bar": "tb_fraction_bar",
+    "score_indicator": "tb_score_indicator",
+    "score_overview": "tb_score_overview",
+    "assign_band": "tb_assign_band",
+    "elite_class": "tb_elite_class"
   },
   "joins": [
     "tb_score sc JOIN tb_student st ON sc.student_id = st.id",
     "tb_score sc JOIN tb_school sch ON sc.school_id = sch.id",
     "tb_score sc JOIN tb_exam e ON sc.exam_id = e.id",
+    "tb_exam e LEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id",
     "tb_score_detail sd JOIN tb_exam_question eq ON sd.question_id = eq.id",
     "tb_exam_question eq LEFT JOIN tb_exam_question_knowledge eqk ON eqk.question_id = eq.id",
     "tb_exam_question_knowledge eqk LEFT JOIN tb_knowledge k ON k.id = eqk.knowledge_id",
-    "tb_score_detail sd JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id"
+    "tb_score_detail sd JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id",
+    "tb_score_overview ov LEFT JOIN tb_exam_batch eb ON ov.exam_batch_id = eb.id",
+    "tb_score_overview ov LEFT JOIN tb_fraction_bar fb ON fb.exam_name = ov.exam_name",
+    "tb_score_overview ov LEFT JOIN tb_score_indicator si ON si.exam_name = ov.exam_name AND si.school_id = ov.xx"
   ],
   "fields": {
     "student_id": "sc.student_id",
@@ -27,7 +37,8 @@
     "class_name": "sc.class",
     "school_name": "sch.name",
     "school_id": "sc.school_id",
-    "exam_name": "e.exam_name",
+    "exam_name": "COALESCE(eb.batch_name, e.exam_name)",
+    "paper_name": "e.exam_name",
     "exam_time": "sc.exam_time",
     "subject": "sc.subject_name",
     "score": "sc.score",
@@ -48,14 +59,21 @@
     "table_comments": {
     "tb_school": "学校维度表：id/name 为脱敏码；district 区县；禁止使用 s_name 明文列",
     "tb_student": "学生维度表（id 为学号，无姓名字段）",
-    "tb_exam": "考试维度表，exam_score 为该科卷面满分",
+    "tb_exam_batch": "考试批次表；用户说的「考试」= batch_name（如 2026届高三5月模拟）。exam_time 为考试时间，上场/环比按时间取上一场。一场批次含多科试卷",
+    "tb_exam": "试卷基础信息表（一科一份卷）；exam_score 该科卷面满分；subject 科目；exam_batch_id 关联批次。禁止把试卷当考试批次",
     "tb_score": "学生科目成绩事实表（一行=一学生一科目一次考试）",
     "tb_score_detail": "学生小题得分明细（逐题分析用）",
     "tb_exam_question": "试卷题目与分值（含 question_type 题型；knowledge_id 保留兼容，诊断只读关联表）",
     "tb_exam_question_knowledge": "题目-知识点多对多（weight>0；题内按 SUM(weight) 归一化拆分得分）",
-    "tb_knowledge": "知识点维度（含 ability_level 能力层级，无树结构）"
+    "tb_knowledge": "知识点维度（含 ability_level 能力层级，无树结构）",
+    "tb_fraction_bar": "预测分数线宽表：一行一场考试批次（exam_name=批次名）。wl_score_* 物理类、ls_score_* 历史类（tz特控/bk本科/ty体育/ms美术/yy音乐/211/985/qb清北/nd南大）。物理美术列为 wl_socre_ms（历史拼写）。只提供阈值，问达线人数/率须查 tb_score_indicator",
+    "tb_score_indicator": "预测线达线预计算长表：一行=考试批次×选科×学校×线种。exam_name 与批次名一致，exam_batch_id 关联 tb_exam_batch.id。达线人数 reached_count、参考人数 candidates、学校达线率 reach_rate。问区县/全市须 SUM(reached_count)/SUM(candidates) 重算率，禁止 AVG(reach_rate)。无学生名单",
+    "tb_score_overview": "学生考试总览宽表：一行=一学生一场批次。exam_name/exam_batch_id 对应批次；xx 学校码（如 A01，学校排名用本列 GROUP BY，不要用 tb_school.name 脱敏 token）；dq 区县；bj 班级；xkkm 选科组合（理科/物理类 LIKE '物%'）；zf6m 全科总分、zf4m 语数英+首选、zf3m 语数英三门总分（三门均分=AVG(zf3m)，禁止除以 3）。科目分 yw/sx/yy/wl/hx/sw/zz/ls/dl；作文/客观 ywzw/sxkg/yyzw；再选转换分 hxzh/swzh/zzzh/dlzh 与等级 hxdj/swdj/zzdj/dldj。xsxz 在籍生=应届（排除市报生）；xxlb 引领/支撑/发展校。学生标识只用 anon_stu_id。禁止 SELECT xm/sfzh/ksh。达线人数优先 tb_score_indicator。特招线=特控线",
+    "tb_assign_band": "再选科目 ABCDE 分档（一场×科目×等级）；有 overview.*dj 时直接聚合等级，不必重算",
+    "tb_elite_class": "尖子班名单：exam_name×school_id(xx)×class_name(bj)×track；88/89 均分按本表过滤，禁止猜班级号"
   },
   "dimension_samples": {
+    "exam_name": ["2026届高三5月模拟", "2026届高三1月期末", "2027届高二6月期末"],
     "school_name": ["南京市第一中学", "苏州市实验中学", "无锡市第一中学"],
     "district": ["鼓楼区", "玄武区", "秦淮区"],
     "class_name": ["高一(1)班", "高一(2)班"],

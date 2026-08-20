@@ -234,9 +234,9 @@ def test_generate_report_rejects_unsupported_type(monkeypatch):
 
 
 def test_generate_report_allows_phase2_types(monkeypatch):
-    """Phase2：9 类均在白名单内（此处抽测 trend / diagnostic）。"""
+    """Phase2：报告类型均在白名单内（此处抽测 trend / diagnostic / 达线）。"""
     client = _auth_client(monkeypatch)
-    for rt in ("trend_tracking", "diagnostic_report", "tier_alert"):
+    for rt in ("trend_tracking", "diagnostic_report", "tier_alert", "line_reach"):
         r = client.post(
             "/api/v1/education/generate-report",
             json={
@@ -541,3 +541,268 @@ def test_meta_options_school_scope_filters_schools():
     )
     assert opts["schools"] == ["扬州中学"]
     assert any("tb_score" in s for s in calls), "学校下拉必须经 tb_score 才能挂权限"
+
+
+# ---- 预测线达线看板 --------------------------------------------------------
+
+
+def _mock_line_reach_session(monkeypatch, *, edu_role: str = "bureau_admin"):
+    class _Sess:
+        def __enter__(self):
+            return SimpleNamespace()
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr("src.common.core.database.get_db_session", lambda: _Sess())
+    monkeypatch.setattr(
+        "system.crud.crud_user.get_user_by_id",
+        lambda session, uid: SimpleNamespace(
+            id=uid,
+            system_variables={"edu_role": edu_role},
+        ),
+    )
+
+
+def _line_reach_execute():
+    import re
+
+    async def fake_execute(sql: str):
+        s = sql.lower()
+        empty_probe = bool(re.search(r"\blimit\s+0\b", s))
+        if "tb_fraction_bar" in s:
+            cols = ["exam_name", "line_name", "threshold", "track"]
+            rows = [] if empty_probe else [
+                ["5月模考", "特控线", 480, "物理类"],
+                ["5月模考", "本科线", 400, "物理类"],
+            ]
+            return {"columns": cols, "rows": rows, "row_count": len(rows)}
+        if "tb_score_overview" in s:
+            if "group by" in s:
+                return {
+                    "columns": ["district", "school_name", "candidates", "r0", "r1"],
+                    "rows": [
+                        ["邗江区", "SCHOOL_A", 2, 1, 2],
+                        ["广陵区", "SCHOOL_B", 1, 0, 0],
+                        ["江都区", "SCHOOL_C", 1, 1, 1],
+                    ],
+                    "row_count": 3,
+                }
+            cols = ["student_id", "exam_name", "zf", "wl"]
+            rows = [] if empty_probe else [
+                ["s1", "5月模考", 500, 80],
+            ]
+            return {"columns": cols, "rows": rows, "row_count": len(rows)}
+        if "tb_score" in s:
+            return {
+                "columns": ["student_id", "school_id", "class"],
+                "rows": [
+                    ["s1", "sch-a", "1班"],
+                    ["s2", "sch-a", "1班"],
+                    ["s3", "sch-b", "2班"],
+                    ["s4", "sch-c", "3班"],
+                ],
+                "row_count": 4,
+            }
+        if "tb_school" in s:
+            return {
+                "columns": ["id", "district", "name"],
+                "rows": [
+                    ["sch-a", "邗江区", "SCHOOL_A"],
+                    ["sch-b", "广陵区", "SCHOOL_B"],
+                    ["sch-c", "江都区", "SCHOOL_C"],
+                ],
+                "row_count": 3,
+            }
+        return {"columns": [], "rows": [], "row_count": 0}
+
+    return fake_execute
+
+
+def test_line_reach_api_aggregates_districts(monkeypatch):
+    client = _auth_client(monkeypatch)
+    _mock_line_reach_session(monkeypatch, edu_role="bureau_admin")
+    sqls: list[str] = []
+    inner = _line_reach_execute()
+
+    async def wrapped(sql: str):
+        sqls.append(sql)
+        return await inner(sql)
+
+    monkeypatch.setattr(
+        "src.agent.education.api._build_orchestrator",
+        lambda *a, **k: SimpleNamespace(_execute_sql=wrapped),
+    )
+    r = client.get(
+        "/api/v1/education/dashboards/line-reach",
+        params={"datasource_id": 1, "exam_name": "5月模考", "track": "物理类"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["code"] == 200
+    data = body["data"]
+    assert data["accessible"] is True
+    assert data["kpis"]["candidates"] == 4
+    by_line = {x["line_name"]: x for x in data["kpis"]["by_line"]}
+    assert by_line["特控线"]["reached"] == 2
+    assert by_line["特控线"]["rate"] == 50.0
+    assert by_line["本科线"]["reached"] == 3
+    assert by_line["本科线"]["rate"] == 75.0
+    districts = {d["district"]: d for d in data["districts"]}
+    assert districts["邗江区"]["candidates"] == 2
+    dumped = str(data)
+    assert "xm" not in dumped
+    assert "s_name" not in dumped
+    fetch_sqls = [s for s in sqls if "LIMIT 0" not in s.upper()]
+    assert fetch_sqls
+    assert all("xm" not in s.lower().split("from")[0] for s in fetch_sqls)
+
+
+def test_line_reach_meta_lists_exams(monkeypatch):
+    client = _auth_client(monkeypatch)
+    _mock_line_reach_session(monkeypatch, edu_role="bureau_admin")
+    monkeypatch.setattr(
+        "src.agent.education.api._build_orchestrator",
+        lambda *a, **k: SimpleNamespace(_execute_sql=_line_reach_execute()),
+    )
+    r = client.get(
+        "/api/v1/education/dashboards/line-reach/meta",
+        params={"datasource_id": 1},
+    )
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert "5月模考" in data["exams"]
+    assert "物理类" in data["tracks"]
+    assert {x["line_name"] for x in data["lines"]} == {"特控线", "本科线"}
+
+
+def test_overview_agg_sql_citywide_scopes_each_bar():
+    from src.agent.education.api import _overview_agg_sql
+    import re
+
+    sql = _overview_agg_sql(
+        ["zf6m", "dq", "xx", "exam_name", "xkkm"],
+        [
+            {"line_name": "本科线", "threshold": 461, "track": "物理类"},
+            {"line_name": "本科线", "threshold": 453, "track": "历史类"},
+        ],
+        exam_name="5月模考",
+        track="",
+    )
+    assert sql is not None
+    assert "LIKE '物%'" in sql
+    assert "GROUP BY 1, 2, 3" in sql
+    sums = re.findall(r"SUM\(CASE WHEN (.*?) THEN", sql)
+    assert sums
+    assert all("LIKE" not in s for s in sums)
+
+
+def test_line_reach_api_student_forbidden(monkeypatch):
+    client = _auth_client(monkeypatch)
+    _mock_line_reach_session(monkeypatch, edu_role="student")
+    r = client.get(
+        "/api/v1/education/dashboards/line-reach",
+        params={"datasource_id": 1},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["code"] == 403
+    assert "学生" in (body.get("message") or "")
+
+
+def test_fraction_bar_put_recomputes(monkeypatch):
+    client = _auth_client(monkeypatch)
+    _mock_line_reach_session(monkeypatch, edu_role="bureau_admin")
+    captured: dict = {}
+
+    def fake_upsert(db_type, config, *, exam_name, lines, exam_batch_id=None):
+        captured["exam"] = exam_name
+        captured["lines"] = lines
+        captured["exam_batch_id"] = exam_batch_id
+        return {
+            "exam_name": exam_name,
+            "exam_batch_id": exam_batch_id,
+            "indicator_rows": 4,
+            "bar_count": 2,
+            "empty_scores": False,
+            "fraction_bar": "inserted",
+        }
+
+    monkeypatch.setattr(
+        "src.agent.education.score_indicator.upsert_fraction_bar_and_recompute",
+        fake_upsert,
+    )
+    r = client.put(
+        "/api/v1/education/fraction-bar",
+        json={
+            "datasource_id": 1,
+            "exam_batch_id": 12,
+            "exam_name": "5月模考",
+            "lines": [{"track": "物理类", "line_code": "bk", "threshold": 400}],
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["code"] == 200
+    assert body["data"]["indicator_rows"] == 4
+    assert captured["exam"] == "5月模考"
+    assert captured["exam_batch_id"] == 12
+
+
+def test_fraction_bar_put_requires_exam(monkeypatch):
+    client = _auth_client(monkeypatch)
+    _mock_line_reach_session(monkeypatch, edu_role="bureau_admin")
+    r = client.put(
+        "/api/v1/education/fraction-bar",
+        json={"datasource_id": 1, "lines": []},
+    )
+    assert r.status_code == 200
+    assert r.json()["code"] == 400
+
+
+def test_fraction_bar_student_forbidden(monkeypatch):
+    client = _auth_client(monkeypatch)
+    _mock_line_reach_session(monkeypatch, edu_role="student")
+    r = client.put(
+        "/api/v1/education/fraction-bar",
+        json={"datasource_id": 1, "exam_name": "5月模考", "lines": []},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["code"] == 403
+    assert "学生" in (body.get("message") or "")
+
+
+def test_fraction_bar_list_api(monkeypatch):
+    client = _auth_client(monkeypatch)
+    _mock_line_reach_session(monkeypatch, edu_role="bureau_admin")
+    monkeypatch.setattr(
+        "src.agent.education.score_indicator.list_fraction_bars",
+        lambda *a, **k: {
+            "columns": ["exam_name", "wl_score_bk"],
+            "line_catalog": [
+                {"line_code": "bk", "line_name": "本科线", "wl_column": "wl_score_bk", "ls_column": None}
+            ],
+            "exams": [{"exam_name": "5月模考", "exam_batch_id": 12, "lines": []}],
+            "batches": [{"id": 12, "batch_name": "5月模考"}],
+        },
+    )
+    r = client.get("/api/v1/education/fraction-bar", params={"datasource_id": 1})
+    assert r.status_code == 200
+    assert r.json()["data"]["exams"][0]["exam_name"] == "5月模考"
+    assert r.json()["data"]["batches"][0]["id"] == 12
+
+
+def test_score_indicator_recompute_api(monkeypatch):
+    client = _auth_client(monkeypatch)
+    _mock_line_reach_session(monkeypatch, edu_role="bureau_admin")
+    monkeypatch.setattr(
+        "src.agent.education.score_indicator.recompute_exams",
+        lambda *a, **k: {"exams": [{"exam_name": "5月模考", "indicator_rows": 3}], "skipped": [], "indicator_rows": 3},
+    )
+    r = client.post(
+        "/api/v1/education/score-indicator/recompute",
+        json={"datasource_id": 1, "exam_name": "5月模考"},
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["indicator_rows"] == 3

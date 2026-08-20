@@ -23,6 +23,7 @@ from src.agent.education.config import EducationConfig
 from src.agent.education.config_store import get_config as _get_effective_config
 from src.agent.education.report_types import Audience, ReportType, report_type_label
 from src.agent.education.schema_mapping import (
+    EXAM_NAME_SQL,
     ScoreSchemaMapping,
     infer_normalized_mapping,
     infer_wide_mapping,
@@ -1585,8 +1586,23 @@ def exam_name_like_candidates(exam_name: str) -> list[str]:
     m = re.search(r"((?:高|初)[一二三四五六七八九].+)$", raw)
     if m:
         add(m.group(1).strip())
+    # 清洗班级/科目误吞（班数学期末考试 → 期末考试）
+    try:
+        from src.agent.education.query_parse import _clean_exam_name_candidate
+
+        cleaned = _clean_exam_name_candidate(raw)
+        if cleaned:
+            add(cleaned)
+    except Exception:
+        pass
     if "期末" in raw:
+        add("期末")
+        add("期末考试")
         add("期末质量检测")
+    if "期中" in raw:
+        add("期中")
+        add("期中考试")
+        add("期中质量检测")
     return out
 
 
@@ -1623,7 +1639,7 @@ def _diagnosis_where_parts(
     elif exam_name and not skip_exam_name:
         cands = exam_name_like_candidates(exam_name)
         if cands:
-            ors = " OR ".join(f"e.exam_name LIKE '%{_esc(c)}%'" for c in cands)
+            ors = " OR ".join(f"{EXAM_NAME_SQL} LIKE '%{_esc(c)}%'" for c in cands)
             parts.append(f"({ors})")
     return parts
 
@@ -1674,7 +1690,7 @@ def _diagnosis_sql_bundle(
             f"{kn_join}"
             "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
-            "JOIN tb_exam e ON sc.exam_id = e.id"
+            "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
             + where_clause_detail
             + "\nORDER BY sd.question_no\nLIMIT 1000"
         )
@@ -1693,7 +1709,7 @@ def _diagnosis_sql_bundle(
             f"{kn_join}"
             "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
-            "JOIN tb_exam e ON sc.exam_id = e.id"
+            "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
             + where_clause_detail
             + f"\nGROUP BY sd.question_no, COALESCE(kn.knowledge_name, '未关联知识点'), "
             f"eq.question_type, {full_score_expr}\n"
@@ -1711,20 +1727,20 @@ def _diagnosis_sql_bundle(
         f"{w_join}"
         "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
-        "JOIN tb_exam e ON sc.exam_id = e.id"
+        "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
         + where_clause_detail
         + "\nGROUP BY COALESCE(k.knowledge_name, '未关联知识点'), k.ability_level\n"
         "ORDER BY score_rate ASC\nLIMIT 1000"
     )
     score_sql = (
         "SELECT sc.score AS score, sc.exam_score AS exam_score, sc.exam_id AS exam_id,\n"
-        "       e.exam_name AS exam_name, e.exam_time AS exam_time,\n"
+        "       " + EXAM_NAME_SQL + " AS exam_name, e.exam_time AS exam_time,\n"
         "       sc.class AS class, sc.class AS class_name, sc.student_id AS student_id,\n"
         "       sc.subject_name AS subject, sch.name AS school_name,\n"
         "       sch.district AS district\n"
         "FROM tb_score sc\n"
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
-        "JOIN tb_exam e ON sc.exam_id = e.id"
+        "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
         + where_clause_score
         # 勿按 score DESC：LIMIT 截断时会偏向高分，导致参考人数偏少、及格/优秀率虚高。
         + "\nORDER BY e.exam_time DESC\n"
@@ -1734,7 +1750,7 @@ def _diagnosis_sql_bundle(
         "SELECT DISTINCT sc.exam_id AS exam_id\n"
         "FROM tb_score sc\n"
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
-        "JOIN tb_exam e ON sc.exam_id = e.id"
+        "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
         + where_clause_score
         + "\nLIMIT 50"
     )
@@ -1766,7 +1782,7 @@ def _diagnosis_class_compare_sql(
         f"{kn_join}"
         "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
-        "JOIN tb_exam e ON sc.exam_id = e.id"
+        "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
         + where_clause_detail
         + f"\nGROUP BY sc.class, sd.question_no, COALESCE(kn.knowledge_name, '未关联知识点'), "
         f"eq.question_type, {full_score_expr}\n"
@@ -1784,7 +1800,7 @@ def _diagnosis_class_compare_sql(
         f"{w_join}"
         "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
-        "JOIN tb_exam e ON sc.exam_id = e.id"
+        "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
         + where_clause_detail
         + "\nGROUP BY sc.class, COALESCE(k.knowledge_name, '未关联知识点')\n"
         "ORDER BY knowledge_name, sc.class\nLIMIT 10000"
@@ -4074,7 +4090,7 @@ def _fetch_class_student_item_rows(
         exam_ors: list[str] = []
         for n in names:
             for c in exam_name_like_candidates(n):
-                exam_ors.append(f"e.exam_name LIKE '%{_esc(c)}%'")
+                exam_ors.append(f"{EXAM_NAME_SQL} LIKE '%{_esc(c)}%'")
         # 去重保持顺序
         seen_or: set[str] = set()
         uniq_ors: list[str] = []
@@ -4091,7 +4107,7 @@ def _fetch_class_student_item_rows(
     kn_join = knowledge_names_subquery_join(db_type)
     sql = (
         "SELECT sd.student_id AS student_id,\n"
-        "       e.exam_name AS exam_name,\n"
+        "       " + EXAM_NAME_SQL + " AS exam_name,\n"
         "       sd.question_no AS question_no,\n"
         "       COALESCE(kn.knowledge_name, '未关联知识点') AS knowledge_name,\n"
         f"       {full_score_expr} AS full_score,\n"
@@ -4103,9 +4119,9 @@ def _fetch_class_student_item_rows(
         f"{kn_join}"
         "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
-        "JOIN tb_exam e ON sc.exam_id = e.id"
+        "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
         + where
-        + "\nORDER BY sd.student_id, e.exam_name, sd.question_no\nLIMIT 50000"
+        + f"\nORDER BY sd.student_id, {EXAM_NAME_SQL}, sd.question_no\nLIMIT 50000"
     )
     outcome = run_sql_with_auto_fix(sql, db_type=db_type, config=config)
     if not outcome.success:
@@ -4144,7 +4160,7 @@ def _fetch_student_item_rows_direct(
     kn_join = knowledge_names_subquery_join(db_type)
     sql = (
         "SELECT sd.student_id AS student_id,\n"
-        "       COALESCE(e.exam_name, '未知考试') AS exam_name,\n"
+        "       COALESCE(" + EXAM_NAME_SQL + ", '未知考试') AS exam_name,\n"
         "       COALESCE(sc.subject_name, '') AS subject_name,\n"
         "       sd.question_no AS question_no,\n"
         "       COALESCE(kn.knowledge_name, '未关联知识点') AS knowledge_name,\n"
@@ -4156,6 +4172,7 @@ def _fetch_student_item_rows_direct(
         "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
         f"{kn_join}"
         "LEFT JOIN tb_exam e ON sd.exam_id = e.id\n"
+        "LEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id\n"
         "LEFT JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id"
         + where
         + "\nORDER BY subject_name, exam_name, sd.question_no\nLIMIT 20000"
@@ -4241,7 +4258,7 @@ def _fetch_class_score_long_table(
     )
     where = (" WHERE " + " AND ".join(parts)) if parts else ""
     sql = (
-        "SELECT e.exam_name AS exam_name,\n"
+        "SELECT " + EXAM_NAME_SQL + " AS exam_name,\n"
         "       sc.student_id AS student_id,\n"
         "       sc.subject_name AS subject_name,\n"
         "       sc.score AS score,\n"
@@ -4249,7 +4266,7 @@ def _fetch_class_score_long_table(
         "       e.exam_time AS exam_time\n"
         "FROM tb_score sc\n"
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
-        "JOIN tb_exam e ON sc.exam_id = e.id"
+        "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
         + where
         + "\nORDER BY e.exam_time, sc.student_id, sc.subject_name\nLIMIT 20000"
     )
@@ -5547,6 +5564,685 @@ def build_knowledge_tier_sections_tool(
     return ToolResult(content="能力层级/题型区块已生成。", data=data)
 
 
+def _knowledge_cohort_detail_sql(
+    where_clause_detail: str,
+    student_ids: list[str],
+    db_type: str = "pg",
+) -> str:
+    """后十/中位组学生 × 知识点加权得分 SQL。"""
+    full_score_expr = "COALESCE(eq.question_score, sd.question_score)"
+    w_join = knowledge_weighted_join()
+    w_score = "sd.score * COALESCE(eqk.w_norm, 1)"
+    w_full = f"{full_score_expr} * COALESCE(eqk.w_norm, 1)"
+    lits = ", ".join(f"'{_esc(str(x))}'" for x in student_ids if str(x).strip())
+    id_pred = f"sc.student_id IN ({lits})" if lits else "1=0"
+    extra = f" AND {id_pred}" if where_clause_detail else f" WHERE {id_pred}"
+    return (
+        "SELECT sc.student_id AS student_id,\n"
+        "       COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n"
+        f"       SUM({w_score}) AS score,\n"
+        f"       SUM({w_full}) AS full_score\n"
+        "FROM tb_score_detail sd\n"
+        "LEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n"
+        "    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\n"
+        f"{w_join}"
+        "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
+        "JOIN tb_school sch ON sc.school_id = sch.id\n"
+        "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
+        + where_clause_detail
+        + extra
+        + "\nGROUP BY sc.student_id, COALESCE(k.knowledge_name, '未关联知识点')\n"
+        "LIMIT 20000"
+    )
+
+
+@tool()
+def compare_knowledge_cohort_tool(
+    class_name: str = "",
+    subject_name: str = "",
+    exam_name: str = "",
+    school_name: str = "",
+    bottom_n: int = 10,
+    median_band: int = 2,
+    render: bool = True,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """班内后十名 vs 中位组：知识点掌握差距对比报告。
+
+    「中位数」= 按总分降序的中位名次 ± median_band 学生带；与最后 bottom_n 名
+    对比各知识点加权得分率（gap = 中位组 − 后十）。
+
+    Args:
+        class_name / subject_name / exam_name: 范围过滤（必填班级+科目为宜）。
+        bottom_n: 后 N 名，默认 10。
+        median_band: 中位名次两侧带宽，默认 2。
+        render: True 直接返回 HTML 报告载荷。
+    """
+    from src.agent.education.knowledge_cohort import (
+        build_knowledge_cohort_report_data,
+        compare_knowledge_by_cohort,
+        render_knowledge_cohort_html,
+        split_score_cohorts,
+    )
+    from src.agent.resource.tool.business import _load_datasource, _sanitize_report_html
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    blocked = _guard_report_when_fact_query(
+        ctx, tool_name="compare_knowledge_cohort_tool"
+    )
+    if blocked is not None:
+        return blocked
+
+    ds_id = datasource_id if datasource_id is not None else ctx.get("datasource_id")
+    ws_oid = workspace_oid if workspace_oid is not None else ctx.get("workspace_oid")
+    uid = user_id if user_id is not None else ctx.get("user_id")
+    if not ds_id:
+        return ToolResult(
+            content="compare_knowledge_cohort_tool 失败：缺少 datasource_id。",
+            data={"error": "missing datasource_id"},
+        )
+
+    from src.agent.education.query_parse import (
+        _clean_exam_name_candidate,
+        normalize_fullwidth_parentheses,
+    )
+
+    cls = normalize_fullwidth_parentheses((class_name or "").strip())
+    subject = (subject_name or "").strip()
+    exam_raw = (exam_name or "").strip()
+    exam = _clean_exam_name_candidate(exam_raw) or exam_raw
+    # 仍含「班」误吞时，回落短词，避免 LIKE '%班数学期末考试%' 空结果
+    if exam and "班" in exam:
+        for token in ("期末", "期中", "月考", "摸底", "模拟"):
+            if token in exam_raw or token in exam:
+                exam = token
+                break
+    school = (school_name or "").strip()
+    if not cls:
+        return ToolResult(
+            content="compare_knowledge_cohort_tool 失败：需要 class_name（如高二(6)班）。",
+            data={"error": "missing class_name"},
+        )
+
+    try:
+        db_type, _config, ds_name = _load_datasource(int(ds_id), ws_oid)
+    except Exception as e:
+        return ToolResult(
+            content=f"compare_knowledge_cohort_tool 失败：{e}",
+            data={"error": str(e)},
+        )
+
+    sql_logs: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    def _fetch_scores(
+        *,
+        exam_name_f: str = "",
+        exam_ids_f: list[str] | None = None,
+        skip_exam: bool = False,
+        phase: str,
+    ) -> list[dict[str, Any]]:
+        detail_wc, score_wc = _diagnosis_where_clause_pair(
+            school_name=school,
+            class_name=cls,
+            subject_name=subject,
+            exam_name=exam_name_f,
+            exam_ids=exam_ids_f,
+            skip_exam_name=skip_exam,
+        )
+        _, _, score_sql, _ = _diagnosis_sql_bundle(detail_wc, score_wc, db_type)
+        ok, msg, score_result, sql_run = _run_edu_sql(
+            score_sql,
+            datasource_id=int(ds_id),
+            workspace_oid=ws_oid,
+            user_id=uid,
+        )
+        sql_logs.append(
+            {
+                "label": f"score/{phase}",
+                "success": ok,
+                "row_count": len((score_result or {}).get("rows") or []) if score_result else 0,
+                "message": msg if not ok else "",
+                "sql_preview": (sql_run or score_sql)[:600],
+            }
+        )
+        if not ok:
+            return []
+        return _rows_to_dicts(score_result)
+
+    score_rows = _fetch_scores(exam_name_f=exam, phase="primary") if exam else []
+    if not score_rows and exam:
+        # 考试名过严（历史脏值「班数学期末考试」）→ 放宽到班级+科目
+        score_rows = _fetch_scores(skip_exam=True, phase="fallback_no_exam_name")
+        if score_rows:
+            warnings.append(f"考试名 `{exam_raw or exam}` 未命中，已按班级/科目放宽查询")
+    if not score_rows and not exam:
+        score_rows = _fetch_scores(skip_exam=True, phase="no_exam")
+
+    if score_rows:
+        from src.agent.education.aggregation import pick_primary_exam_id
+
+        exam_keys = {
+            str(r.get("exam_id") or "").strip()
+            for r in score_rows
+            if isinstance(r, dict) and str(r.get("exam_id") or "").strip()
+        }
+        if len(exam_keys) > 1:
+            primary = pick_primary_exam_id(score_rows)
+            if primary:
+                narrowed = _fetch_scores(
+                    exam_ids_f=[primary], skip_exam=True, phase="narrow_primary_exam"
+                )
+                if narrowed:
+                    score_rows = narrowed
+                    warnings.append(
+                        f"匹配到多场考试（{len(exam_keys)}），已收敛至 exam_id={primary}"
+                    )
+
+    if not score_rows:
+        report = build_knowledge_cohort_report_data(
+            class_name=cls,
+            subject_name=subject,
+            exam_name=exam or exam_raw,
+            cohorts={"n": 0, "bottom_ids": [], "median_ids": []},
+            compare_rows=[],
+        )
+        if not render:
+            return ToolResult(
+                content="未查到班内成绩，无法做知识点分层对比。",
+                data={**report, "sql_logs": sql_logs, "empty": True, "warnings": warnings},
+            )
+        safe_html = _sanitize_report_html(render_knowledge_cohort_html(report))
+        payload = {
+            "output_type": "html",
+            "title": report.get("title"),
+            "html": safe_html,
+            "mode": "inline",
+            "report_type": "knowledge_cohort",
+            "report_type_label": "知识点分层对比",
+            "chunks": [
+                {
+                    "output_type": "html",
+                    "title": report.get("title"),
+                    "content": safe_html,
+                }
+            ],
+            "sql_logs": sql_logs,
+            "warnings": warnings,
+            "empty": True,
+        }
+        return ToolResult(
+            content=(
+                f"未查到班内成绩（ds={ds_name}，class={cls}，subject={subject}，exam={exam}），"
+                "已返回空态提示。"
+            )
+            + "\n任务已完成，无需再调用其他工具。",
+            data=payload,
+            is_final=True,
+        )
+
+    # 明细 WHERE：优先用成绩行中的 exam_id，避免考试名再次过滤空
+    exam_ids_from_scores = sorted(
+        {
+            str(r.get("exam_id") or "").strip()
+            for r in score_rows
+            if isinstance(r, dict) and str(r.get("exam_id") or "").strip()
+        }
+    )
+    display_exam = exam or exam_raw
+    for r in score_rows:
+        if isinstance(r, dict) and str(r.get("exam_name") or "").strip():
+            display_exam = str(r.get("exam_name")).strip()
+            break
+
+    cohorts = split_score_cohorts(score_rows, bottom_n=bottom_n, median_band=median_band)
+    cohort_ids = list(
+        dict.fromkeys([*(cohorts.get("bottom_ids") or []), *(cohorts.get("median_ids") or [])])
+    )
+
+    def _fetch_details(phase: str, **where_kw: Any) -> list[dict[str, Any]]:
+        detail_wc, _ = _diagnosis_where_clause_pair(
+            school_name=school,
+            class_name=cls,
+            subject_name=subject,
+            **where_kw,
+        )
+        detail_sql = _knowledge_cohort_detail_sql(detail_wc, cohort_ids, db_type)
+        ok2, msg2, detail_result, sql_run2 = _run_edu_sql(
+            detail_sql,
+            datasource_id=int(ds_id),
+            workspace_oid=ws_oid,
+            user_id=uid,
+        )
+        sql_logs.append(
+            {
+                "label": f"knowledge_detail/{phase}",
+                "success": ok2,
+                "row_count": len((detail_result or {}).get("rows") or []) if detail_result else 0,
+                "message": msg2 if not ok2 else "",
+                "sql_preview": (sql_run2 or detail_sql)[:600],
+            }
+        )
+        return _rows_to_dicts(detail_result) if ok2 else []
+
+    detail_rows: list[dict[str, Any]] = []
+    if exam_ids_from_scores:
+        detail_rows = _fetch_details(
+            "by_exam_id", exam_ids=exam_ids_from_scores, skip_exam_name=True
+        )
+    if not detail_rows:
+        detail_rows = _fetch_details("by_exam_name", exam_name=exam, skip_exam_name=False)
+    if not detail_rows and exam:
+        detail_rows = _fetch_details("fallback_no_exam", skip_exam_name=True)
+        if detail_rows:
+            warnings.append("知识点明细已按班级/科目放宽查询")
+
+    msg2 = ""
+    for log in reversed(sql_logs):
+        if str(log.get("label") or "").startswith("knowledge_detail") and not log.get("success"):
+            msg2 = str(log.get("message") or "")
+            break
+
+    compare_rows = compare_knowledge_by_cohort(
+        detail_rows,
+        cohorts.get("bottom_ids") or [],
+        cohorts.get("median_ids") or [],
+    )
+    report = build_knowledge_cohort_report_data(
+        class_name=cls,
+        subject_name=subject,
+        exam_name=display_exam,
+        cohorts=cohorts,
+        compare_rows=compare_rows,
+    )
+
+    if not render:
+        return ToolResult(
+            content=(
+                f"知识点分层对比 data 已组装（成绩 {len(score_rows)} 人，"
+                f"明细 {len(detail_rows)} 行，知识点 {len(compare_rows)} 个）。"
+            ),
+            data={
+                **report,
+                "sql_logs": sql_logs,
+                "detail_rows": detail_rows,
+                "warnings": warnings,
+            },
+        )
+
+    safe_html = _sanitize_report_html(render_knowledge_cohort_html(report))
+    if not safe_html.strip():
+        return ToolResult(
+            content="知识点分层对比渲染失败：HTML 为空。",
+            data={"error": "empty html", **report, "sql_logs": sql_logs},
+        )
+
+    title = str(report.get("title") or "知识点分层对比")
+    payload: dict[str, Any] = {
+        "output_type": "html",
+        "title": title,
+        "html": safe_html,
+        "mode": "inline",
+        "report_type": "knowledge_cohort",
+        "report_type_label": "知识点分层对比",
+        "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
+        "sql_logs": sql_logs,
+        "warnings": warnings,
+        "cohorts": report.get("cohorts"),
+        "compare_rows": compare_rows,
+        "empty": bool(report.get("empty")),
+    }
+    warn_bits: list[str] = []
+    if msg2:
+        warn_bits.append(f"知识点明细查询警告：{msg2}")
+    if report.get("empty"):
+        warn_bits.append("无知识点关联数据，已给出空态提示")
+    if warnings:
+        warn_bits.extend(warnings)
+    warn = ("；" + "；".join(warn_bits)) if warn_bits else ""
+    return ToolResult(
+        content=(
+            f"知识点分层对比报告已渲染（ds={ds_name}，后十 {len(cohorts.get('bottom_ids') or [])} 人，"
+            f"中位组 {len(cohorts.get('median_ids') or [])} 人，知识点 {len(compare_rows)} 个"
+            f"，HTML {len(safe_html)} 字符）{warn}。"
+        )
+        + "\n任务已完成，无需再调用其他工具。",
+        data=payload,
+        is_final=True,
+    )
+
+
+@tool()
+def build_line_reach_report_data_tool(
+    exam_name: str = "",
+    render: bool = True,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """全市达线情况分析：从 tb_score_indicator 聚合人数/率，并对比上场考试。
+
+    按用户点名的线种（如 985/211/清北）和各地区组织报告，不要默认只出特控/本科。
+    考试场次对照 tb_exam_batch，由模型理解用户原问；不要只传「期末」这类短词。
+    **禁止**扫 tb_score_overview 学生明细、禁止改走结构化诊断。
+    区县/全市达线率按 SUM(reached_count)/SUM(candidates) 重算。
+    """
+    from src.agent.education.line_reach_report import (
+        build_line_reach_report_data,
+        exam_batch_select_sql,
+        indicator_select_sql,
+        ordered_exam_names,
+        pick_exam_for_question,
+        pick_previous_exam,
+        sql_result_to_dicts,
+    )
+    from src.agent.resource.tool.business import _render_template_html, _sanitize_report_html
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    blocked = _guard_report_when_fact_query(
+        ctx, tool_name="build_line_reach_report_data_tool"
+    )
+    if blocked is not None:
+        return blocked
+
+    ds_id = datasource_id if datasource_id is not None else ctx.get("datasource_id")
+    ws_oid = workspace_oid if workspace_oid is not None else ctx.get("workspace_oid")
+    uid = user_id if user_id is not None else ctx.get("user_id")
+    if not ds_id:
+        return ToolResult(
+            content="build_line_reach_report_data_tool 失败：缺少 datasource_id。",
+            data={"error": "missing datasource_id"},
+        )
+
+    exam_hint = (exam_name or "").strip()
+    user_q = str(
+        ctx.get("user_question")
+        or (ctx.get("constraints") or {}).get("question")
+        or ""
+    )
+    chat_fn = ctx.get("exam_pick_chat")
+    if not callable(chat_fn):
+        chat_fn = None
+
+    ok_b, msg_b, batch_res, _ = _run_edu_sql(
+        exam_batch_select_sql(),
+        datasource_id=int(ds_id),
+        workspace_oid=ws_oid,
+        user_id=uid,
+    )
+    names = ordered_exam_names(sql_result_to_dicts(batch_res if ok_b else None))
+    exam = pick_exam_for_question(
+        names, question=user_q, hint=exam_hint, chat_fn=chat_fn
+    )
+    prev_exam = pick_previous_exam(names, exam) if exam else None
+    if not exam:
+        return ToolResult(
+            content=(
+                "build_line_reach_report_data_tool 失败：未解析到考试名称，"
+                "且 tb_exam_batch 为空。"
+                + (f"（批次查询：{msg_b}）" if not ok_b and msg_b else "")
+            ),
+            data={"error": "missing exam_name"},
+        )
+
+    ok_c, msg_c, curr_res, _ = _run_edu_sql(
+        indicator_select_sql(exam),
+        datasource_id=int(ds_id),
+        workspace_oid=ws_oid,
+        user_id=uid,
+    )
+    if not ok_c:
+        return ToolResult(
+            content=f"读取 tb_score_indicator 失败：{msg_c}",
+            data={"error": msg_c or "indicator_query_failed"},
+        )
+    curr_rows = sql_result_to_dicts(curr_res)
+    prev_rows: list[dict[str, Any]] = []
+    if prev_exam:
+        ok_p, msg_p, prev_res, _ = _run_edu_sql(
+            indicator_select_sql(prev_exam),
+            datasource_id=int(ds_id),
+            workspace_oid=ws_oid,
+            user_id=uid,
+        )
+        if ok_p:
+            prev_rows = sql_result_to_dicts(prev_res)
+        else:
+            logger.warning("达线报告上场指标查询失败: %s", msg_p)
+
+    data = build_line_reach_report_data(
+        curr_rows,
+        prev_rows,
+        exam_name=exam,
+        prev_exam_name=prev_exam or "",
+        scope_label="全市",
+        question=user_q,
+    )
+    data["REPORT_TIME"] = _now_str()
+    if not render:
+        return ToolResult(content="全市达线分析 data 已组装。", data=data)
+
+    template_name = "education/line_reach.html"
+    title = data.get("REPORT_TITLE") or "全市达线情况分析"
+    try:
+        raw_html = _render_template_html(template_name, data)
+        safe_html = _sanitize_report_html(raw_html.strip())
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(content=f"达线分析报告渲染失败：{e}", data={"error": str(e)})
+    payload = {
+        "output_type": "html",
+        "title": title,
+        "html": safe_html,
+        "mode": "template",
+        "_stats": data.get("_stats") or {},
+        "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
+    }
+    return _html_report_tool_result(
+        f"全市达线情况分析已渲染（HTML {len(safe_html)} 字符）。",
+        payload,
+        report_type=ReportType.LINE_REACH,
+    )
+
+
+def _bureau_report_tool(
+    kind: str,
+    exam_name: str,
+    render: bool,
+    datasource_id: int | None,
+    workspace_oid: int | None,
+    user_id: int | None,
+    tool_runtime_ctx: dict[str, Any] | None,
+) -> ToolResult:
+    from src.agent.education.bureau_analysis import (
+        BUREAU_KINDS,
+        build_bureau_report_data,
+        elite_class_select_sql,
+        fraction_bar_select_sql,
+        overview_select_sql,
+    )
+    from src.agent.education.line_reach import normalize_fraction_bars
+    from src.agent.education.line_reach_report import (
+        exam_batch_select_sql,
+        ordered_exam_names,
+        pick_exam_for_question,
+        sql_result_to_dicts,
+    )
+    from src.agent.resource.tool.business import _render_template_html, _sanitize_report_html
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    tool_name = f"build_{kind}_report_data_tool"
+    blocked = _guard_report_when_fact_query(ctx, tool_name=tool_name)
+    if blocked is not None:
+        return blocked
+    ds_id = datasource_id if datasource_id is not None else ctx.get("datasource_id")
+    ws_oid = workspace_oid if workspace_oid is not None else ctx.get("workspace_oid")
+    uid = user_id if user_id is not None else ctx.get("user_id")
+    if not ds_id:
+        return ToolResult(content=f"{tool_name} 失败：缺少 datasource_id。", data={"error": "missing datasource_id"})
+    user_q = str(ctx.get("user_question") or (ctx.get("constraints") or {}).get("question") or "")
+    chat_fn = ctx.get("exam_pick_chat")
+    if not callable(chat_fn):
+        chat_fn = None
+    ok_b, msg_b, batch_res, _ = _run_edu_sql(
+        exam_batch_select_sql(), datasource_id=int(ds_id), workspace_oid=ws_oid, user_id=uid
+    )
+    names = ordered_exam_names(sql_result_to_dicts(batch_res if ok_b else None))
+    exam = pick_exam_for_question(names, question=user_q, hint=(exam_name or "").strip(), chat_fn=chat_fn)
+    if not exam:
+        return ToolResult(
+            content=f"{tool_name} 失败：未解析到考试名称。" + (f"（{msg_b}）" if not ok_b and msg_b else ""),
+            data={"error": "missing exam_name"},
+        )
+    ok_s, msg_s, stu_res, _ = _run_edu_sql(
+        overview_select_sql(exam), datasource_id=int(ds_id), workspace_oid=ws_oid, user_id=uid
+    )
+    if not ok_s:
+        return ToolResult(content=f"读取 tb_score_overview 失败：{msg_s}", data={"error": msg_s})
+    students = sql_result_to_dicts(stu_res)
+    bars: list[dict[str, Any]] = []
+    elite_keys: set[tuple[str, str]] = set()
+    if kind in {"contribution", "combo_reach"}:
+        ok_f, msg_f, bar_res, _ = _run_edu_sql(
+            fraction_bar_select_sql(exam), datasource_id=int(ds_id), workspace_oid=ws_oid, user_id=uid
+        )
+        if ok_f:
+            bars = normalize_fraction_bars(sql_result_to_dicts(bar_res))
+        else:
+            logger.warning("局端分析分数线查询失败: %s", msg_f)
+    if kind == "subject_avg":
+        ok_e, msg_e, elite_res, _ = _run_edu_sql(
+            elite_class_select_sql(exam), datasource_id=int(ds_id), workspace_oid=ws_oid, user_id=uid
+        )
+        if ok_e:
+            for row in sql_result_to_dicts(elite_res):
+                sid = str(row.get("school_id") or "").strip()
+                cls = str(row.get("class_name") or "").strip()
+                if sid and cls:
+                    elite_keys.add((sid, cls))
+        elif msg_e:
+            logger.warning("局端分析尖子班查询失败: %s", msg_e)
+    data = build_bureau_report_data(
+        kind, students, bars, exam_name=exam, question=user_q, elite_keys=elite_keys
+    )
+    data["REPORT_TIME"] = _now_str()
+    rt = BUREAU_KINDS[kind]
+    if not render:
+        return ToolResult(content=f"{report_type_label(rt)} data 已组装。", data=data)
+    try:
+        raw_html = _render_template_html("education/bureau_analysis.html", data)
+        safe_html = _sanitize_report_html(raw_html.strip())
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(content=f"{report_type_label(rt)}渲染失败：{e}", data={"error": str(e)})
+    title = data.get("REPORT_TITLE") or report_type_label(rt)
+    payload = {
+        "output_type": "html",
+        "title": title,
+        "html": safe_html,
+        "mode": "template",
+        "_stats": data.get("_stats") or {},
+        "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
+    }
+    return _html_report_tool_result(
+        f"{report_type_label(rt)}已渲染（HTML {len(safe_html)} 字符）。",
+        payload,
+        report_type=rt,
+    )
+
+
+@tool()
+def build_subject_avg_report_data_tool(
+    exam_name: str = "",
+    render: bool = True,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """区县/学校均分情况：三门/四门/六门与各科均分，可选排名、应届、尖子班。"""
+    return _bureau_report_tool(
+        "subject_avg", exam_name, render, datasource_id, workspace_oid, user_id, tool_runtime_ctx
+    )
+
+
+@tool()
+def build_assign_grade_report_data_tool(
+    exam_name: str = "",
+    render: bool = True,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """再选科目 ABCDE 人数与率（化学/生物/政治/地理），区县与学校两张表。"""
+    return _bureau_report_tool(
+        "assign_grade", exam_name, render, datasource_id, workspace_oid, user_id, tool_runtime_ctx
+    )
+
+
+@tool()
+def build_rank_bucket_report_data_tool(
+    exam_name: str = "",
+    render: bool = True,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """物理/历史方向高分位次桶（前10/20/50/…）及切线分，校前20只出排名串。"""
+    return _bureau_report_tool(
+        "rank_bucket", exam_name, render, datasource_id, workspace_oid, user_id, tool_runtime_ctx
+    )
+
+
+@tool()
+def build_contribution_report_data_tool(
+    exam_name: str = "",
+    render: bool = True,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """各预测线贡献分：切线分对应学生的各科均值（再选科目用转换分）。"""
+    return _bureau_report_tool(
+        "contribution", exam_name, render, datasource_id, workspace_oid, user_id, tool_runtime_ctx
+    )
+
+
+@tool()
+def build_combo_reach_report_data_tool(
+    exam_name: str = "",
+    render: bool = True,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """理科选科组合（物化生等）特控/本科达线人数与率。"""
+    return _bureau_report_tool(
+        "combo_reach", exam_name, render, datasource_id, workspace_oid, user_id, tool_runtime_ctx
+    )
+
+
+@tool()
+def build_elite_roster_report_data_tool(
+    exam_name: str = "",
+    render: bool = True,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """理前100/文前30脱敏名单：匿名学号、校码、分科全市名次。禁止姓名。"""
+    return _bureau_report_tool(
+        "elite_roster", exam_name, render, datasource_id, workspace_oid, user_id, tool_runtime_ctx
+    )
+
+
 # 暴露给 ``build_default_toolpack`` 的列表（与 business.py 工具并列）。
 EDUCATION_TOOLS = [
     resolve_score_schema,
@@ -5569,7 +6265,15 @@ EDUCATION_TOOLS = [
     cross_analyze_tool,
     build_citywide_exam_analysis_report_tool,
     build_diagnostic_report_data_tool,
+    build_line_reach_report_data_tool,
+    build_subject_avg_report_data_tool,
+    build_assign_grade_report_data_tool,
+    build_rank_bucket_report_data_tool,
+    build_contribution_report_data_tool,
+    build_combo_reach_report_data_tool,
+    build_elite_roster_report_data_tool,
     build_knowledge_tier_sections_tool,
+    compare_knowledge_cohort_tool,
 ]
 
 
@@ -5582,6 +6286,13 @@ __all__ = [
     "build_class_overview_report_data_tool",
     "build_trend_tracking_report_data_tool",
     "build_diagnostic_report_data_tool",
+    "build_line_reach_report_data_tool",
+    "build_subject_avg_report_data_tool",
+    "build_assign_grade_report_data_tool",
+    "build_rank_bucket_report_data_tool",
+    "build_contribution_report_data_tool",
+    "build_combo_reach_report_data_tool",
+    "build_elite_roster_report_data_tool",
     "build_group_feature_report_data_tool",
     "build_knowledge_tier_sections_tool",
     "build_student_exam_report_data_tool",
@@ -5589,6 +6300,7 @@ __all__ = [
     "build_subject_diagnosis_report_tool",
     "build_subject_diagnosis_sections_tool",
     "build_tier_alert_report_data_tool",
+    "compare_knowledge_cohort_tool",
     "compute_rankings_tool",
     "compute_score_stats_tool",
     "cross_analyze_tool",

@@ -43,6 +43,7 @@ _NEXT_TOOL_HINTS: dict[str, str] = {
         "组装留给下一步 ToolExpert"
     ),
     "build_diagnostic_report_data_tool": "`terminate`（报告已渲染）",
+    "build_line_reach_report_data_tool": "`terminate`（全市达线分析已渲染）",
     "build_comprehensive_report_data_tool": "`terminate`（综合报告已渲染，含进步/退步 TOP 与学生档案）",
     "build_student_exam_report_data_tool": "`terminate`（学生考试报告已渲染）",
     "build_subject_diagnosis_sections_tool": "`terminate`（sections 默认已渲染 HTML）",

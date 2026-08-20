@@ -43,7 +43,7 @@ import {
 } from "@/api/education";
 import { exportReportAsWord, sanitizeFileName } from "@/utils/exportReportWord";
 
-/** 分析工具已开放的全部 9 类报告 */
+/** 分析工具已开放的报告类型 */
 const OPEN_REPORT_TYPES = new Set([
   "class_overview",
   "grade_comparison",
@@ -53,7 +53,14 @@ const OPEN_REPORT_TYPES = new Set([
   "tier_alert",
   "group_feature",
   "comprehensive",
-  "diagnostic_report"
+  "diagnostic_report",
+  "line_reach",
+  "subject_avg",
+  "assign_grade",
+  "rank_bucket",
+  "contribution",
+  "combo_reach",
+  "elite_roster"
 ]);
 
 const AUDIENCE_OPTIONS = [
@@ -131,6 +138,15 @@ function fieldsForType(reportType: string): {
       return { class_name: true, subject: true, school_name: true };
     case "diagnostic_report":
       return { school_name: true, exam_name: true, exam_multi: true, subject: true };
+    case "line_reach":
+      return { exam_name: true };
+    case "subject_avg":
+    case "assign_grade":
+    case "rank_bucket":
+    case "contribution":
+    case "combo_reach":
+    case "elite_roster":
+      return { exam_name: true };
     default:
       return { class_name: true, exam_name: true };
   }

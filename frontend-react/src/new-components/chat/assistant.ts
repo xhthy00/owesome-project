@@ -23,7 +23,8 @@ const FOLLOWUPS_BY_TYPE: Record<string, string[]> = {
   tier_alert: ["查看需关注的学生名单", "生成班级总览报告", "查看成绩变化趋势"],
   group_feature: ["换一个分析维度", "生成综合分析报告", "查看班级对比"],
   comprehensive: ["下钻分析某个班级", "生成分层预警报告", "查看科目诊断"],
-  diagnostic_report: ["聚焦薄弱环节", "对比班级整体情况", "生成改进建议"]
+  diagnostic_report: ["聚焦薄弱环节", "对比班级整体情况", "生成改进建议"],
+  line_reach: ["对比各区本科线", "查看特控线人数变化", "生成区域诊断报告"]
 };
 
 const DEFAULT_FOLLOWUPS = ["换一个角度继续分析", "生成综合分析报告", "导出当前结论"];

@@ -19,6 +19,7 @@ from datasource.models.datasource import (  # noqa: F401
 from datasource.models.permission import DsPermission, DsRule  # noqa: F401
 from agent.education.models_anomaly import EduAnomalyConfig  # noqa: F401
 from agent.education.models_alert import EduAnomalyAlert  # noqa: F401
+from system.models.edu_privacy import SysEduPrivacy  # noqa: F401
 from system.models.menu_visible import SysMenuVisible  # noqa: F401
 from system.models.user import SysUser  # noqa: F401
 from system.models.workspace import SysUserWorkspace, SysWorkspace  # noqa: F401

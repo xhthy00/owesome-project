@@ -15,6 +15,7 @@ from datasource.models.datasource import CoreDatasource
 from datasource.models.permission import DsPermission
 from system.api.auth_deps import get_current_user
 from system.authz import can_manage_data_permissions, is_platform_admin
+from system.crud.crud_edu_privacy import get_anonymize_display, set_anonymize_display
 from system.crud.crud_menu_visible import get_visibility_map, set_visibility
 from system.models.user import SysUser
 from system.models.workspace import SysUserWorkspace
@@ -182,3 +183,36 @@ def save_menu_visibility(
         raise ForbiddenException("仅系统管理员可修改菜单可见性")
     set_visibility(session, payload.menu_key, payload.visible)
     return success_response(message="保存成功")
+
+
+class EduPrivacyPayload(BaseModel):
+    anonymize_display: bool
+
+
+@router.get("/edu-privacy")
+def get_edu_privacy(
+    session: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    """Return whether education queries/reports anonymize student/school PII."""
+    _ = current_user
+    return success_response(data={"anonymize_display": get_anonymize_display(session)})
+
+
+@router.put("/edu-privacy")
+def save_edu_privacy(
+    payload: EduPrivacyPayload,
+    session: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    """Toggle anonymized display. Only platform admins can modify."""
+    if not is_platform_admin(current_user):
+        raise ForbiddenException("仅系统管理员可修改匿名脱敏展示开关")
+    set_anonymize_display(session, payload.anonymize_display)
+    from src.agent.education.privacy_mode import set_anonymize_display_cached
+
+    set_anonymize_display_cached(payload.anonymize_display)
+    return success_response(
+        data={"anonymize_display": payload.anonymize_display},
+        message="保存成功",
+    )

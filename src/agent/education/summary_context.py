@@ -17,6 +17,7 @@ _DIAGNOSIS_REPORT_TOOLS = frozenset({
     "build_student_subject_diagnosis_tool",
     "build_diagnostic_report_data_tool",
     "build_citywide_exam_analysis_report_tool",
+    "build_line_reach_report_data_tool",
 })
 
 _SQL_OFFSET_RE = re.compile(r"\bOFFSET\b", re.IGNORECASE)

@@ -55,10 +55,21 @@ _REPORT_TYPE_DEFS: dict[ReportType, str] = {
     ReportType.GROUP_FEATURE: "明确「群体特征/按X群体」的分维画像，不是「班级横向对比」",
     ReportType.COMPREHENSIVE: "班级多次/历次考试综合复盘（九维）",
     ReportType.DIAGNOSTIC_REPORT: "全市或结构化区县诊断报告",
+    ReportType.LINE_REACH: "全市达线情况分析（人数/率 + 较上场环比），不是结构化诊断",
+    ReportType.SUBJECT_AVG: "区县/学校均分情况（三四五六门+各科），不是班级总览",
+    ReportType.ASSIGN_GRADE: "再选科目 ABCDE 等级人数与率",
+    ReportType.RANK_BUCKET: "物理/历史高分位次桶（前10/20/50/…）",
+    ReportType.CONTRIBUTION: "预测线贡献分（切线生各科均值）",
+    ReportType.COMBO_REACH: "理科选科组合特控/本科达线",
+    ReportType.ELITE_ROSTER: "理前100/文前30脱敏高分名单",
 }
 
 #: 兜底关键词表（仅在 needs_report=true 时用于选型）
 _FALLBACK_KEYWORDS: list[tuple[ReportType, tuple[str, ...]]] = [
+    (
+        ReportType.LINE_REACH,
+        ("达线情况", "达线分析", "达线报告", "达线环比", "预测线分析"),
+    ),
     (
         ReportType.COMPREHENSIVE,
         (
@@ -189,12 +200,20 @@ _POSITIVE_HINTS: dict[ReportType, tuple[str, ...]] = {
     ),
     ReportType.COMPREHENSIVE: ("综合分析", "综合报告", "综合复盘", "所有考试", "历次考试"),
     ReportType.DIAGNOSTIC_REPORT: ("全市", "结构化诊断", "区县诊断", "质量检测"),
+    ReportType.LINE_REACH: ("达线情况", "达线分析", "达线报告", "达线环比", "预测线分析"),
+    ReportType.SUBJECT_AVG: ("均分情况", "各科均分", "三门总均分", "六门总均分"),
+    ReportType.ASSIGN_GRADE: ("ABCDE", "选考等级", "等级赋分"),
+    ReportType.RANK_BUCKET: ("位次情况", "高分位次"),
+    ReportType.CONTRIBUTION: ("贡献分",),
+    ReportType.COMBO_REACH: ("选科组合达线", "各选择组合达线"),
+    ReportType.ELITE_ROSTER: ("理前100", "文前30", "冲刺清北", "冲刺南大"),
 }
 
 _NEGATIVE_HINTS: dict[ReportType, tuple[str, ...]] = {
     ReportType.GROUP_FEATURE: ("横向对比", "横向分析", "班级横向", "各班横向", "各个班级"),
     ReportType.CLASS_OVERVIEW: ("横向", "各班", "小题", "知识点", "预警", "群体特征"),
     ReportType.GRADE_COMPARISON: ("群体特征", "按班级群体", "临界生", "总览"),
+    ReportType.DIAGNOSTIC_REPORT: ("达线", "预测线", "分数线", "均分情况", "ABCDE", "位次", "贡献分"),
     ReportType.SUBJECT_DIAGNOSIS: (
         "横向对比",
         "各个班级",
@@ -207,7 +226,14 @@ _NEGATIVE_HINTS: dict[ReportType, tuple[str, ...]] = {
 }
 
 _TIE_BREAK: dict[ReportType, int] = {
-    ReportType.DIAGNOSTIC_REPORT: 90,
+    ReportType.LINE_REACH: 92,
+    ReportType.SUBJECT_AVG: 91,
+    ReportType.ASSIGN_GRADE: 90,
+    ReportType.RANK_BUCKET: 89,
+    ReportType.CONTRIBUTION: 88,
+    ReportType.COMBO_REACH: 87,
+    ReportType.ELITE_ROSTER: 86,
+    ReportType.DIAGNOSTIC_REPORT: 85,
     ReportType.STUDENT_PROFILE: 85,
     ReportType.COMPREHENSIVE: 80,
     ReportType.TREND_TRACKING: 75,
@@ -266,12 +292,40 @@ def _is_parent_child_xueqing(question: str) -> bool:
     )
 
 
+def _bureau_report_type(question: str) -> ReportType | None:
+    from src.agent.education.query_parse import (
+        is_assign_grade_report_query,
+        is_combo_reach_report_query,
+        is_contribution_report_query,
+        is_elite_roster_report_query,
+        is_rank_bucket_report_query,
+        is_subject_avg_report_query,
+    )
+
+    q = (question or "").strip()
+    if is_combo_reach_report_query(q):
+        return ReportType.COMBO_REACH
+    if is_elite_roster_report_query(q):
+        return ReportType.ELITE_ROSTER
+    if is_contribution_report_query(q):
+        return ReportType.CONTRIBUTION
+    if is_rank_bucket_report_query(q):
+        return ReportType.RANK_BUCKET
+    if is_assign_grade_report_query(q):
+        return ReportType.ASSIGN_GRADE
+    if is_subject_avg_report_query(q):
+        return ReportType.SUBJECT_AVG
+    return None
+
+
 def _candidate_pool(question: str) -> list[ReportType]:
     """规则硬约束：仅在需要报告时收缩候选类型。"""
     from src.agent.education.query_parse import (
         extract_school_target,
         is_citywide_analysis_query,
         is_individual_student_analysis_query,
+        is_line_reach_query,
+        is_line_reach_report_query,
         is_multi_exam_class_analysis_query,
         is_structured_diagnostic_query,
         is_tier_alert_query,
@@ -281,6 +335,13 @@ def _candidate_pool(question: str) -> list[ReportType]:
     q = (question or "").strip()
     all_types = list(ReportType)
 
+    bureau = _bureau_report_type(q)
+    if bureau is not None:
+        return [bureau]
+    if is_line_reach_report_query(q):
+        return [ReportType.LINE_REACH]
+    if is_line_reach_query(q):
+        return []
     if is_citywide_analysis_query(q) or is_structured_diagnostic_query(q):
         return [ReportType.DIAGNOSTIC_REPORT]
     if is_individual_student_analysis_query(q):
@@ -288,6 +349,16 @@ def _candidate_pool(question: str) -> list[ReportType]:
 
     candidates = set(all_types)
     candidates.discard(ReportType.DIAGNOSTIC_REPORT)
+    candidates.discard(ReportType.LINE_REACH)
+    for rt in (
+        ReportType.SUBJECT_AVG,
+        ReportType.ASSIGN_GRADE,
+        ReportType.RANK_BUCKET,
+        ReportType.CONTRIBUTION,
+        ReportType.COMBO_REACH,
+        ReportType.ELITE_ROSTER,
+    ):
+        candidates.discard(rt)
 
     has_class_compare = any(h in q for h in _CLASS_COMPARE_HINTS)
     has_explicit_group = any(h in q for h in _EXPLICIT_GROUP_HINTS)
@@ -425,6 +496,9 @@ def fallback_classify_report_intent(question: str) -> ReportRoute:
         is_class_overview_query,
         is_group_feature_query,
         is_individual_student_analysis_query,
+        is_knowledge_cohort_gap_query,
+        is_line_reach_query,
+        is_line_reach_report_query,
         is_multi_exam_class_analysis_query,
         is_school_class_comparison_query,
         is_school_exam_report_query,
@@ -443,6 +517,32 @@ def fallback_classify_report_intent(question: str) -> ReportRoute:
             source="fallback",
         )
 
+    bureau = _bureau_report_type(q)
+    if bureau is not None:
+        return ReportRoute(
+            needs_report=True,
+            report_type=bureau,
+            confidence=0.95,
+            reason="硬约束局端基础分析",
+            source="hard",
+        )
+    if is_line_reach_report_query(q):
+        return ReportRoute(
+            needs_report=True,
+            report_type=ReportType.LINE_REACH,
+            confidence=0.95,
+            reason="硬约束全市达线情况分析",
+            source="hard",
+        )
+    if is_line_reach_query(q):
+        return ReportRoute(
+            needs_report=False,
+            report_type=None,
+            confidence=0.95,
+            reason="达线/预测线走指标表事实查询",
+            source="hard",
+        )
+
     # 硬约束：全市/结构化/具名学生学情 → 需要报告
     if is_citywide_analysis_query(q) or is_structured_diagnostic_query(q):
         return ReportRoute(
@@ -458,6 +558,14 @@ def fallback_classify_report_intent(question: str) -> ReportRoute:
             report_type=ReportType.STUDENT_PROFILE,
             confidence=0.95,
             reason="硬约束个体学生分析",
+            source="hard",
+        )
+    if is_knowledge_cohort_gap_query(q):
+        return ReportRoute(
+            needs_report=True,
+            report_type=ReportType.SUBJECT_DIAGNOSIS,
+            confidence=0.95,
+            reason="硬约束知识点分层对比（后十 vs 中位组）",
             source="hard",
         )
 
@@ -507,6 +615,8 @@ def should_use_deterministic_report_plan(question: str, route: ReportRoute) -> b
         is_class_overview_query,
         is_group_feature_query,
         is_individual_student_analysis_query,
+        is_knowledge_cohort_gap_query,
+        is_line_reach_report_query,
         is_multi_exam_class_analysis_query,
         is_school_class_comparison_query,
         is_school_exam_report_query,
@@ -525,6 +635,7 @@ def should_use_deterministic_report_plan(question: str, route: ReportRoute) -> b
         (
             is_citywide_analysis_query(q),
             is_individual_student_analysis_query(q),
+            is_knowledge_cohort_gap_query(q),
             is_multi_exam_class_analysis_query(q),
             is_tier_alert_query(q),
             is_class_overview_query(q),
@@ -533,6 +644,7 @@ def should_use_deterministic_report_plan(question: str, route: ReportRoute) -> b
             is_school_exam_report_query(q),
             is_trend_tracking_query(q),
             is_structured_diagnostic_query(q),
+            is_line_reach_report_query(q),
             _is_parent_child_xueqing(q),
         )
     ):
@@ -555,8 +667,10 @@ def _build_classify_prompt(question: str, candidates: list[ReportType]) -> list[
         '{"needs_report":true或false,"report_type":"<枚举或null>",'
         '"confidence":0.0到1.0,"reason":"一句话"}\n'
         "规则：\n"
-        "- 事实查询（谁最高分、多少人、均分多少、排名第几、是谁）→ needs_report=false，"
+        "- 事实查询（谁最高分、多少人、均分多少、排名第几、是谁、达线人数/率）→ needs_report=false，"
         "report_type=null\n"
+        "- 达线/预测线人数或率（未要求分析报告）→ needs_report=false\n"
+        "- 全市/各区达线情况、达线分析/报告、环比 → line_reach，禁止出结构化诊断报告\n"
         "- 明确要报告/总览/诊断/横向对比/群体特征/预警/学情分析报告/个人画像 → needs_report=true，"
         "并从候选中选 report_type\n"
         "- 具名学生（学号/姓名）+ 个人画像/学情/个人报告 → student_profile，"
@@ -635,25 +749,63 @@ async def classify_report_intent(
     llm_client: Any | None = None,
 ) -> ReportRoute:
     """异步分类：优先 LLM，失败则规则兜底。"""
+    from src.agent.education.query_parse import (
+        is_citywide_analysis_query,
+        is_individual_student_analysis_query,
+        is_knowledge_cohort_gap_query,
+        is_line_reach_query,
+        is_line_reach_report_query,
+        is_structured_diagnostic_query,
+    )
+
     q = (question or "").strip()
+    bureau = _bureau_report_type(q)
+    if bureau is not None:
+        return ReportRoute(
+            needs_report=True,
+            report_type=bureau,
+            confidence=0.95,
+            reason="硬约束局端基础分析",
+            source="hard",
+        )
+    if is_line_reach_report_query(q):
+        return ReportRoute(
+            needs_report=True,
+            report_type=ReportType.LINE_REACH,
+            confidence=0.95,
+            reason="硬约束全市达线情况分析",
+            source="hard",
+        )
+    if is_line_reach_query(q):
+        return ReportRoute(
+            needs_report=False,
+            report_type=None,
+            confidence=0.95,
+            reason="达线/预测线走指标表事实查询",
+            source="hard",
+        )
+    if is_knowledge_cohort_gap_query(q):
+        return ReportRoute(
+            needs_report=True,
+            report_type=ReportType.SUBJECT_DIAGNOSIS,
+            confidence=0.95,
+            reason="硬约束知识点分层对比（后十 vs 中位组）",
+            source="hard",
+        )
+
     pool = _candidate_pool(q)
 
     # 硬约束单候选且问题带报告意图 → 直接报告
     if len(pool) == 1 and (
         _has_explicit_report_intent(q)
         or pool[0]
-        in {ReportType.DIAGNOSTIC_REPORT, ReportType.STUDENT_PROFILE}
+        in {ReportType.DIAGNOSTIC_REPORT, ReportType.STUDENT_PROFILE, ReportType.LINE_REACH}
     ):
-        from src.agent.education.query_parse import (
-            is_citywide_analysis_query,
-            is_individual_student_analysis_query,
-            is_structured_diagnostic_query,
-        )
-
         if (
             is_citywide_analysis_query(q)
             or is_structured_diagnostic_query(q)
             or is_individual_student_analysis_query(q)
+            or is_line_reach_report_query(q)
         ):
             return ReportRoute(
                 needs_report=True,
@@ -705,11 +857,23 @@ EXPECTED_PLAN_TOOLS: dict[ReportType, frozenset[str]] = {
     ReportType.GROUP_FEATURE: frozenset({"build_group_feature_report_data_tool"}),
     ReportType.COMPREHENSIVE: frozenset({"build_comprehensive_report_data_tool"}),
     ReportType.DIAGNOSTIC_REPORT: frozenset({"build_diagnostic_report_data_tool"}),
+    ReportType.LINE_REACH: frozenset({"build_line_reach_report_data_tool"}),
+    ReportType.SUBJECT_AVG: frozenset({"build_subject_avg_report_data_tool"}),
+    ReportType.ASSIGN_GRADE: frozenset({"build_assign_grade_report_data_tool"}),
+    ReportType.RANK_BUCKET: frozenset({"build_rank_bucket_report_data_tool"}),
+    ReportType.CONTRIBUTION: frozenset({"build_contribution_report_data_tool"}),
+    ReportType.COMBO_REACH: frozenset({"build_combo_reach_report_data_tool"}),
+    ReportType.ELITE_ROSTER: frozenset({"build_elite_roster_report_data_tool"}),
 }
 
 
 def plan_items_for_route(route: ReportRoute, question: str) -> list[dict[str, str]]:
     """按路由生成计划：无报告 → 事实查询；有报告 → 按类型 builder。"""
+    from src.agent.education.query_parse import is_knowledge_cohort_gap_query
+    from src.agent.expand.planner import build_knowledge_cohort_plan_items
+
+    if is_knowledge_cohort_gap_query(question or ""):
+        return build_knowledge_cohort_plan_items(question)
     if not route.needs_report:
         from src.agent.expand.planner import build_fact_query_plan_items
 
@@ -723,7 +887,10 @@ def plan_items_for_report_type(
     question: str,
 ) -> list[dict[str, str]]:
     """按报告类型生成确定性 Team 计划（调用方须已确认 needs_report）。"""
-    from src.agent.education.query_parse import is_citywide_analysis_query
+    from src.agent.education.query_parse import (
+        is_citywide_analysis_query,
+        is_knowledge_cohort_gap_query,
+    )
     from src.agent.expand.planner import (
         build_citywide_team_plan_items,
         build_class_overview_plan_items,
@@ -731,6 +898,8 @@ def plan_items_for_report_type(
         build_fact_query_plan_items,
         build_group_feature_plan_items,
         build_individual_student_exam_plan_items,
+        build_knowledge_cohort_plan_items,
+        build_line_reach_plan_items,
         build_school_class_comparison_plan_items,
         build_school_subject_report_plan_items,
         build_tier_alert_plan_items,
@@ -738,6 +907,8 @@ def plan_items_for_report_type(
     )
 
     q = question or ""
+    if is_knowledge_cohort_gap_query(q):
+        return build_knowledge_cohort_plan_items(q)
     if report_type is None:
         return build_fact_query_plan_items(q)
 
@@ -769,6 +940,21 @@ def plan_items_for_report_type(
         if is_citywide_analysis_query(q):
             return build_citywide_team_plan_items(q)
         return build_school_subject_report_plan_items(q)
+    if rt == ReportType.LINE_REACH:
+        return build_line_reach_plan_items(q)
+    tool_by_rt = {
+        ReportType.SUBJECT_AVG: "build_subject_avg_report_data_tool",
+        ReportType.ASSIGN_GRADE: "build_assign_grade_report_data_tool",
+        ReportType.RANK_BUCKET: "build_rank_bucket_report_data_tool",
+        ReportType.CONTRIBUTION: "build_contribution_report_data_tool",
+        ReportType.COMBO_REACH: "build_combo_reach_report_data_tool",
+        ReportType.ELITE_ROSTER: "build_elite_roster_report_data_tool",
+    }
+    tool = tool_by_rt.get(rt)
+    if tool:
+        from src.agent.expand.planner import build_bureau_plan_items
+
+        return build_bureau_plan_items(tool, q)
     return build_fact_query_plan_items(q)
 
 
@@ -777,13 +963,15 @@ def plan_matches_report_type(
     report_type: ReportType | None,
 ) -> bool:
     """当前计划是否已包含该报告类型的关键工具。"""
+    blob = " ".join(str(it.get("sub_task") or "") for it in (plan_items or []))
+    # 知识点分层对比优先：计划已含专用工具即视为匹配
+    if "compare_knowledge_cohort_tool" in blob:
+        return True
     if report_type is None:
-        blob = " ".join(str(it.get("sub_task") or "") for it in (plan_items or []))
         return "build_" not in blob or "禁止" in blob
     expected = EXPECTED_PLAN_TOOLS.get(report_type)
     if not expected:
         return True
-    blob = " ".join(str(it.get("sub_task") or "") for it in (plan_items or []))
     if report_type == ReportType.GRADE_COMPARISON:
         if "class_name=" in blob and "禁止传 class_name" not in blob:
             return False
@@ -810,6 +998,14 @@ def plan_is_fact_query(plan_items: list[dict[str, str]] | None) -> bool:
             "build_comprehensive_report_data_tool",
             "build_diagnostic_report_data_tool",
             "build_trend_tracking_report_data_tool",
+            "build_line_reach_report_data_tool",
+            "build_subject_avg_report_data_tool",
+            "build_assign_grade_report_data_tool",
+            "build_rank_bucket_report_data_tool",
+            "build_contribution_report_data_tool",
+            "build_combo_reach_report_data_tool",
+            "build_elite_roster_report_data_tool",
+            "compare_knowledge_cohort_tool",
             "render_html_report",
         )
     ):
@@ -823,6 +1019,16 @@ def coerce_plan_to_route(
     route: ReportRoute,
 ) -> list[dict[str, str]]:
     """若计划与路由不一致，替换为对应确定性计划。"""
+    from src.agent.education.query_parse import is_knowledge_cohort_gap_query
+
+    q = (question or "").strip()
+    if is_knowledge_cohort_gap_query(q):
+        blob = " ".join(str(it.get("sub_task") or "") for it in (plan_items or []))
+        if "compare_knowledge_cohort_tool" in blob:
+            return plan_items
+        logger.info("intent coerce: knowledge_cohort_gap → compare_knowledge_cohort_tool plan")
+        return plan_items_for_route(route, question)
+
     if not route.needs_report:
         if plan_is_fact_query(plan_items):
             return plan_items

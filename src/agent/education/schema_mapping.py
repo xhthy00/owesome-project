@@ -30,6 +30,13 @@ from typing import Any
 
 _DEFAULT_SCHEMA_CONFIG_PATH = Path("config/education_schema.json")
 
+#: 用户口中的「考试」= 批次；tb_exam 是批次下的单科试卷。
+EXAM_JOIN = (
+    "JOIN tb_exam e ON sc.exam_id = e.id\n"
+    "LEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
+)
+EXAM_NAME_SQL = "COALESCE(eb.batch_name, e.exam_name)"
+
 
 @dataclass
 class ScoreSchemaMapping:
@@ -124,6 +131,10 @@ def load_schema_from_config(path: Path | str | None = None) -> EducationSchemaBu
             if isinstance(v, list)
         },
     )
+    from src.agent.education.privacy_mode import overlay_schema_fields, overlay_table_comments
+
+    mapping.fields = overlay_schema_fields(mapping.fields)
+    meta.table_comments = overlay_table_comments(meta.table_comments)
     return EducationSchemaBundle(mapping=mapping, meta=meta)
 
 
@@ -270,6 +281,8 @@ def infer_normalized_mapping(schema: list[dict[str, Any]]) -> ScoreSchemaMapping
 
 
 __all__ = [
+    "EXAM_JOIN",
+    "EXAM_NAME_SQL",
     "EducationSchemaBundle",
     "EducationSchemaMeta",
     "ScoreSchemaMapping",

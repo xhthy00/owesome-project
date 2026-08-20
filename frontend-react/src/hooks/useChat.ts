@@ -92,6 +92,13 @@ const REPORT_TYPE_MARKERS = new Set([
   "group_feature",
   "comprehensive",
   "diagnostic_report",
+  "line_reach",
+  "subject_avg",
+  "assign_grade",
+  "rank_bucket",
+  "contribution",
+  "combo_reach",
+  "elite_roster",
   "班级总览报告",
   "班级横向对比报告",
   "科目诊断报告",
@@ -100,7 +107,14 @@ const REPORT_TYPE_MARKERS = new Set([
   "分层预警报告",
   "群体特征报告",
   "综合分析报告",
-  "结构化诊断报告"
+  "结构化诊断报告",
+  "全市达线分析",
+  "均分情况分析",
+  "选考等级分析",
+  "高分位次分析",
+  "贡献分分析",
+  "选科组合达线",
+  "高分名单分析"
 ]);
 
 /** 报告列表/预览标题：报告名称【报告类型】 */
@@ -336,6 +350,8 @@ export function useChat() {
       const targetAudience = options?.reportAudience ?? reportAudience;
       const targetAgentMode = options?.agentMode ?? agentMode;
       stop();
+      // stop() 会清 sendingRef；立刻重新占住，避免 effect 重跑时同一问再发一遍
+      sendingRef.current = true;
       const runId = genUUID();
       activeRunIdRef.current = runId;
       const userMsg: Message = { id: genUUID(), role: "user", content: asText(input), runId };

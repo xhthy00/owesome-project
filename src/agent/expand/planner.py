@@ -158,12 +158,15 @@ PLANNER_DESC = """[你的职责]
   分布/进退步 TOP/偏科/单科之最/总分轨迹/学生档案）——仅当问题点名综合分析时使用：
   ["查询该班历次考试每位学生分数（SQL 须含 exam_name、student_id、score；禁止只查班级 KPI 聚合）",
    {"task": "调 build_comprehensive_report_data_tool(class_name=【班级】) 一步生成综合分析 HTML（进步/退步 TOP5 与每位学生档案由工具自动计算）；**禁止** render_html_report / 手填模板；完成后 terminate", "sub_task_agent": "ToolExpert"}]
+- **全市达线情况分析**（如「全市2026届高三1月期末达线情况」）——
+  **只 1 个子任务**，走 `build_line_reach_report_data_tool`，查 tb_score_indicator，含较上场人数/率环比：
+  [{"task": "调 build_line_reach_report_data_tool(render=true) 生成全市达线分析 HTML；**禁止** describe_table / execute_sql / build_diagnostic_report_data_tool / 扫 tb_score_overview；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 - 结构化诊断报告（diagnostic_report，一般性/特殊性/动态性三节）：
   ["查询【范围】成绩明细（含 class/district/subject）用于聚合",
    {"task": "调 build_diagnostic_report_data_tool(scope_label=【范围】, exam_name=【考试】, subject_name=【科目】, render=true) 生成结构化诊断 HTML（勿手传 score_rows/fetch_data）", "sub_task_agent": "ToolExpert"}]
 - **全市 + 考试 + 科目成绩分析**（如「帮我分析全市的江苏省高一上学期数学期末质量检测成绩，形成详细报告」）——
   **拆 3 个子任务**，与学校科目诊断同构（先查数、再 fetch、再组装），**禁止**一步调用 `build_citywide_exam_analysis_report_tool`：
-  ["查询全市【XX考试】【XX科目】学生成绩 KPI 与明细（SQL 须 JOIN tb_school sch ON sc.school_id=sch.id JOIN tb_exam e ON sc.exam_id=e.id，SELECT sc.score, sc.exam_score, sc.class, sch.district, sch.name AS school_name, sc.student_id, sc.subject_name；按 subject_name 与 exam_name 过滤；全市范围**不传** school_name/class_name；**禁止** sch.s_name）",
+  ["查询全市【XX考试】【XX科目】学生成绩 KPI 与明细（SQL 须 JOIN tb_school sch ON sc.school_id=sch.id JOIN tb_exam e ON sc.exam_id=e.id LEFT JOIN tb_exam_batch eb ON e.exam_batch_id=eb.id，SELECT sc.score, sc.exam_score, sc.class, sch.district, sch.name AS school_name, sc.student_id, sc.subject_name；按 subject_name 与 COALESCE(eb.batch_name, e.exam_name) 过滤；全市范围**不传** school_name/class_name；**禁止** sch.s_name）",
    {"task": "调 fetch_subject_diagnosis_data_tool(subject_name=【科目】, exam_name=【考试】) 查询全市小题明细与知识点——**本步仅 fetch，禁止 render**；完成后 terminate（**禁止**调 build_diagnostic_report_data_tool）", "sub_task_agent": "ToolExpert"},
    {"task": "调 build_diagnostic_report_data_tool(scope_label=全市, exam_name=【考试】, subject_name=【科目】, render=true) **一步完成区县对比+分数段+小题/知识点+HTML**；**禁止**再调 fetch_subject_diagnosis_data_tool（工具自动读取上游成绩与 fetch 数据）；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 
@@ -203,9 +206,9 @@ def build_citywide_team_plan_items(question: str) -> list[dict[str, str]]:
         {
             "sub_task": (
                 f"查询全市【{exam_l}】【{subject_l}】学生成绩 KPI 与明细"
-                "（SQL 须 JOIN tb_school sch ON sc.school_id=sch.id JOIN tb_exam e ON sc.exam_id=e.id，"
+                "（SQL 须 JOIN tb_school sch ON sc.school_id=sch.id JOIN tb_exam e ON sc.exam_id=e.id LEFT JOIN tb_exam_batch eb ON e.exam_batch_id=eb.id，"
                 "SELECT sc.score, sc.exam_score, sc.class, sch.district, sch.name AS school_name, "
-                "sc.student_id, sc.subject_name；按 subject_name 与 exam_name 过滤；"
+                "sc.student_id, sc.subject_name；按 subject_name 与 COALESCE(eb.batch_name, e.exam_name) 过滤；"
                 "全市范围**不传** school_name/class_name；**禁止** sch.s_name；"
                 "**exam_name / subject_name 必须取自问题原文，禁止填「本次考试」「该科目」**）"
             ),
@@ -336,7 +339,11 @@ def build_school_class_comparison_plan_items(question: str) -> list[dict[str, st
 def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     """事实查询：仅 DataAnalyst，禁止生成任何 HTML 报告。"""
     from src.agent.education.orchestrator import _extract_class_name, _extract_subject
-    from src.agent.education.query_parse import extract_school_target
+    from src.agent.education.query_parse import (
+        extract_school_target,
+        is_line_reach_query,
+        is_overview_total_query,
+    )
 
     q = (question or "").strip()
     school = extract_school_target(q) or ""
@@ -353,19 +360,58 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     if exam:
         scope_bits.append(f"考试【{exam}】")
     scope = "、".join(scope_bits) if scope_bits else "问题中的范围"
+    line_reach_hint = ""
+    if is_line_reach_query(q):
+        line_reach_hint = (
+            "本题是达线/预测线查询：必须查 tb_score_indicator（exam_name=批次名）；"
+            "区县或全市须 SUM(reached_count)/SUM(candidates) 重算率，禁止 AVG(reach_rate)；"
+            "禁止扫 tb_score_overview 学生明细。"
+        )
+    overview_hint = ""
+    if not line_reach_hint and is_overview_total_query(q):
+        overview_hint = (
+            "本题是语数外三门/四门/六门总分均分："
+            "必须查 tb_score_overview；"
+            "语数外三门均分=AVG(zf3m)（三科总分的校均，约 300+，禁止除以 3，"
+            "禁止对 tb_score 语文/数学/英语 AVG(score) 当三门均分，禁止写满分150）；"
+            "四门=zf4m，六门/全科=zf6m；"
+            "理科=物理类（xkkm LIKE '物%'），文科=历史类（xkkm LIKE '史%' OR xkkm LIKE '历%'）；"
+            "学校用 xx 分组展示（官方表校码如 A01），不要 JOIN tb_school.name（脱敏 token）；"
+            "参考人数=COUNT(*)。"
+        )
+    from src.agent.education.privacy_mode import is_anonymize_display_enabled
+
+    if is_anonymize_display_enabled():
+        student_hint = (
+            "涉及学生时 SELECT **仅用 student_id**（或 sc.student_id / st.id 学号），"
+            "以及 score、exam_score、class 等；"
+            "**禁止** SELECT/展示姓名明文（xm、name、student_name、真实姓名）；"
+            "结论里点名学生时**一律写 student_id**，禁止写中文姓名。"
+        )
+    else:
+        student_hint = (
+            "当前已关闭匿名脱敏：涉及学生时可 SELECT xm（姓名）、xh/student_id（学号）、"
+            "sch.s_name（学校全称）；结论里可用姓名/学号/校名。"
+            "仍禁止 SELECT sfzh/ksh。"
+        )
     return [
         {
             "sub_task": (
                 f"用 SQL 直接回答用户问题（范围：{scope}）。"
+                f"{line_reach_hint}"
+                f"{overview_hint}"
                 "WHERE 必须按问题中的班级/学校/科目/考试过滤（有则过滤）；"
-                "涉及学生时 SELECT **仅用 student_id**（或 sc.student_id / st.id 学号），"
-                "以及 score、exam_score、class 等；"
-                "**禁止** SELECT/展示姓名明文（xm、name、student_name、真实姓名）；"
-                "结论里点名学生时**一律写 student_id**，禁止写中文姓名。"
+                f"{student_hint}"
                 "只回答用户所问（如最高分是谁/多少分）；"
-                "**禁止**写「参考人数/共N人参考/班级人数」——"
-                "Top-N、LIMIT、返回行数都不是全班人数；"
-                "**禁止**套用学情总判/关键指标/教学建议长文。"
+                + (
+                    ""
+                    if overview_hint
+                    else (
+                        "**禁止**写「参考人数/共N人参考/班级人数」——"
+                        "Top-N、LIMIT、返回行数都不是全班人数；"
+                    )
+                )
+                + "**禁止**套用学情总判/关键指标/教学建议长文。"
                 "用一两段自然语言给出结论即可。"
                 "**禁止**调任何 build_*_report / render_html / 学情报告工具；"
                 "**禁止**生成 HTML 报告；答完即 terminate。"
@@ -373,6 +419,38 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
             ),
             "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
         },
+    ]
+
+
+def build_line_reach_plan_items(question: str) -> list[dict[str, str]]:
+    """全市达线分析：直接渲染指标表报告，禁止扫学生明细。"""
+    return [
+        {
+            "sub_task": (
+                "调 build_line_reach_report_data_tool(render=true) "
+                "生成全市达线情况分析（含较上次考试人数/率环比）；"
+                "完成后 terminate。"
+                "**禁止** describe_table / execute_sql / "
+                "build_diagnostic_report_data_tool / 扫 tb_score_overview 学生明细"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        }
+    ]
+
+
+def build_bureau_plan_items(tool_name: str, question: str) -> list[dict[str, str]]:
+    """局端基础分析：从 tb_score_overview 重算，禁止套结构化诊断。"""
+    return [
+        {
+            "sub_task": (
+                f"调 {tool_name}(render=true) 生成局端基础分析报告；"
+                "完成后 terminate。"
+                "**禁止** build_diagnostic_report_data_tool / "
+                "build_class_overview_report_data_tool。"
+                f"原问：{question or ''}"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        }
     ]
 
 
@@ -515,6 +593,45 @@ def build_tier_alert_plan_items(question: str) -> list[dict[str, str]]:
                 f"调 build_tier_alert_report_data_tool({tool_args}render=true) "
                 "生成分层预警 HTML（临界生/大幅退步/偏科名单）；完成后 terminate。"
                 "**禁止** build_subject_diagnosis_sections_tool / fetch 渲染"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        },
+    ]
+
+
+def build_knowledge_cohort_plan_items(question: str) -> list[dict[str, str]]:
+    """班内后十 vs 中位组：知识点掌握差距（专用工具一键查数+渲染）。"""
+    from src.agent.education.orchestrator import _extract_class_name, _extract_subject
+    from src.agent.education.query_parse import extract_school_target
+
+    school = extract_school_target(question) or ""
+    class_name = _extract_class_name(question) or ""
+    subject = _plan_subject_name(question) or (_extract_subject(question) or "")
+    exam = _plan_exam_name(question)
+    scope_args: list[str] = []
+    if school:
+        scope_args.append(f"school_name={school}")
+    if class_name:
+        scope_args.append(f"class_name={class_name}")
+    if subject:
+        scope_args.append(f"subject_name={subject}")
+    if exam:
+        scope_args.append(f"exam_name={exam}")
+    tool_args = ", ".join(scope_args)
+    if tool_args:
+        tool_args = tool_args + ", "
+    class_l = class_name or "该班"
+    subject_l = subject or "问题中的科目"
+    exam_l = _plan_label(exam, missing="问题中的考试")
+    return [
+        {
+            "sub_task": (
+                f"调 compare_knowledge_cohort_tool({tool_args}"
+                "bottom_n=10, median_band=2, render=true) "
+                f"对比【{class_l}】【{exam_l}】【{subject_l}】最后十名与中位组的知识点得分率差距，"
+                "生成对比表+分组柱图 HTML；完成后 terminate。"
+                "**禁止** build_subject_diagnosis_sections_tool / build_subject_diagnosis_report_tool / "
+                "execute_sql 自行多步 JOIN 知识点"
             ),
             "sub_task_agent": _TOOL_EXPERT_AGENT,
         },

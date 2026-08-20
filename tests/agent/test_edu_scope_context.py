@@ -63,6 +63,8 @@ def test_format_scope_constraints_school_id_only_distinguishes_from_sch_name():
     assert "权限绑定学校ID=YZZX" in text
     assert "sc.school_id" in text
     assert "sch.name" in text
+    assert "禁止" in text
+    assert "s_name" in text
 
 
 def test_build_edu_aware_constraints_falls_back_to_school_id():

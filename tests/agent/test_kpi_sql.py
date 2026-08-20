@@ -61,6 +61,7 @@ def test_build_primary_exam_and_count_sql():
     p = build_primary_exam_id_sql("WHERE sc.subject_name LIKE '%数学%'")
     assert "ORDER BY COUNT(*) DESC" in p
     assert "LIMIT 1" in p
+    assert "tb_exam_batch" in p
     c = build_score_count_sql("WHERE sc.class LIKE '%1%'")
     assert "COUNT(*) AS cnt" in c
     assert "sc.score IS NOT NULL" in c

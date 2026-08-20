@@ -9,12 +9,13 @@ from __future__ import annotations
 from typing import Any
 
 from src.agent.education.config import EducationConfig
+from src.agent.education.schema_mapping import EXAM_JOIN
 from src.agent.education.stats import _seg_label, _seg_pairs
 
 SCORE_JOIN_FROM = (
     "FROM tb_score sc\n"
     "JOIN tb_school sch ON sc.school_id = sch.id\n"
-    "JOIN tb_exam e ON sc.exam_id = e.id"
+    f"{EXAM_JOIN}"
 )
 
 

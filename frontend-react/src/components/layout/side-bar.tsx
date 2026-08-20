@@ -4,8 +4,10 @@ import {
   BarChartOutlined,
   ControlOutlined,
   DatabaseOutlined,
+  FundViewOutlined,
   GlobalOutlined,
   HistoryOutlined,
+  LineChartOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MessageOutlined,
@@ -30,9 +32,11 @@ const routes = [
   { key: "explore", path: "/", label: "探索广场", icon: <GlobalOutlined /> },
   { key: "skills", path: "/construct/skills", label: "技能", icon: <ThunderboltOutlined /> },
   { key: "analysis", path: "/construct/analysis", label: "分析工具", icon: <BarChartOutlined /> },
+  { key: "line-reach", path: "/construct/education/line-reach", label: "达线看板", icon: <FundViewOutlined /> },
   { key: "report-history", path: "/construct/analysis/history", label: "报告历史", icon: <HistoryOutlined /> },
   { key: "datasource", path: "/construct/database", label: "数据源", icon: <DatabaseOutlined /> },
   { key: "score-import", path: "/construct/education/score-import", label: "成绩导入", icon: <UploadOutlined /> },
+  { key: "fraction-bar", path: "/construct/education/fraction-bar", label: "预测分数线", icon: <LineChartOutlined /> },
   { key: "anomaly-alerts", path: "/construct/education/anomaly-alerts", label: "异常提醒", icon: <AlertOutlined /> },
   { key: "anomaly-rules", path: "/construct/education/anomaly-rules", label: "异常规则", icon: <ControlOutlined /> },
   { key: "permission", path: "/construct/permission", label: "权限管理", icon: <SafetyCertificateOutlined /> },
@@ -45,6 +49,7 @@ const permissionSubRoutes = [
   { key: "permission-users", path: "/construct/permission/users", label: "用户管理" },
   { key: "permission-workspaces", path: "/construct/permission/workspaces", label: "工作空间" },
   { key: "permission-members", path: "/construct/permission/members", label: "成员管理" },
+  { key: "permission-privacy", path: "/construct/permission/privacy", label: "数据脱敏" },
   { key: "permission-menu", path: "/construct/permission/menu", label: "菜单权限管理" }
 ];
 
@@ -174,6 +179,9 @@ export default function SideBar() {
     }
     if (hideAnomalyAlerts) {
       list = list.filter((item) => item.key !== "anomaly-alerts");
+    }
+    if (eduRole === "student") {
+      list = list.filter((item) => item.key !== "line-reach" && item.key !== "fraction-bar");
     }
     return list;
   }, [isPlatformAdmin, menuVisibility, currentUser?.edu_scope?.edu_role]);

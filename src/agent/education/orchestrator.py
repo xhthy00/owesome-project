@@ -44,7 +44,12 @@ from src.agent.education.query_parse import (
     is_citywide_analysis_query,
 )
 from src.agent.education.report_types import Audience, ReportSpec, ReportType
-from src.agent.education.schema_mapping import ScoreSchemaMapping, load_schema_from_config
+from src.agent.education.schema_mapping import (
+    EXAM_JOIN,
+    EXAM_NAME_SQL,
+    ScoreSchemaMapping,
+    load_schema_from_config,
+)
 from src.agent.education.stats import compute_item_metrics, compute_rankings, compute_score_stats, identify_at_risk_students
 from src.agent.education.subject_diagnosis import (
     build_diagnosis_recommendations,
@@ -71,6 +76,17 @@ _SINGLE_EXAM_KPI_TYPES = frozenset(
         ReportType.TIER_ALERT,
         ReportType.GRADE_COMPARISON,
         ReportType.GROUP_FEATURE,
+    }
+)
+
+_BUREAU_TYPES = frozenset(
+    {
+        ReportType.SUBJECT_AVG,
+        ReportType.ASSIGN_GRADE,
+        ReportType.RANK_BUCKET,
+        ReportType.CONTRIBUTION,
+        ReportType.COMBO_REACH,
+        ReportType.ELITE_ROSTER,
     }
 )
 
@@ -122,9 +138,12 @@ class ReportIntentResolver:
         subject = _extract_subject(q)
         if subject:
             filters["subject"] = subject
-        exam_name = _extract_exam(q)
-        if exam_name:
-            filters["exam_name"] = exam_name
+        if report_type not in {ReportType.LINE_REACH} | _BUREAU_TYPES:
+            exam_name = _extract_exam(q)
+            if exam_name:
+                filters["exam_name"] = exam_name
+        else:
+            filters["question"] = q
         school_name = extract_school_target(q)
         if school_name:
             filters["school_name"] = school_name
@@ -133,6 +152,8 @@ class ReportIntentResolver:
             filters["district"] = district_name
         if is_citywide_analysis_query(q):
             filters["scope"] = "全市"
+        if report_type == ReportType.LINE_REACH and not filters.get("school_name"):
+            filters.setdefault("scope", "全市")
         return ReportSpec(
             report_type=report_type,
             audience=audience,
@@ -180,17 +201,22 @@ def _extract_subject(q: str) -> str | None:
 
 
 def _extract_exam(q: str) -> str | None:
-    from src.agent.education.query_parse import normalize_fullwidth_parentheses
+    from src.agent.education.query_parse import (
+        _clean_exam_name_candidate,
+        extract_exam_name_hint,
+        normalize_fullwidth_parentheses,
+    )
 
     text = normalize_fullwidth_parentheses(q or "")
     m = _EXAM_FULL_RE.search(text)
     if m:
-        return m.group(1).strip("在的于对")
+        cleaned = _clean_exam_name_candidate(m.group(1))
+        if cleaned:
+            return cleaned
+        # 如「班数学期末考试」清洗失败时，回落短词「期末」
     m = _EXAM_RE.search(text)
     if m:
         return m.group(1)
-    from src.agent.education.query_parse import extract_exam_name_hint
-
     return extract_exam_name_hint(text)
 
 
@@ -311,6 +337,11 @@ class ReportOrchestrator:
         config_edu 单场 KPI：权威统计来自无 LIMIT 的库内聚合；行级拉取可截断，
         但不得覆盖聚合 KPI。
         """
+        if spec.report_type == ReportType.LINE_REACH:
+            return await self._gather_line_reach(spec)
+        if spec.report_type in _BUREAU_TYPES:
+            return await self._gather_bureau_analysis(spec)
+
         from dataclasses import replace
 
         from src.agent.education.aggregation import prepare_score_rows_for_kpi
@@ -888,6 +919,131 @@ class ReportOrchestrator:
             f"<tbody>{''.join(rows)}</tbody></table>"
         )
         return f'<div class="edu-table-wrap">{inner}</div>'
+
+    async def _gather_line_reach(self, spec: ReportSpec) -> dict[str, Any]:
+        """全市达线分析：只读 tb_score_indicator，禁止扫学生明细。"""
+        from src.agent.education.line_reach_report import (
+            build_line_reach_report_data,
+            exam_batch_select_sql,
+            indicator_select_sql,
+            ordered_exam_names,
+            pick_exam_for_question,
+            pick_previous_exam,
+            sql_result_to_dicts,
+        )
+
+        exam_hint = str(spec.filters.get("exam_name") or "").strip()
+        question = str(spec.filters.get("question") or "").strip()
+        scope_label = (
+            str(spec.filters.get("scope") or "").strip()
+            or str(spec.filters.get("district") or "").strip()
+            or str(spec.filters.get("school_name") or "").strip()
+            or "全市"
+        )
+        batches: list[dict[str, Any]] = []
+        try:
+            batches = sql_result_to_dicts(await self._execute_sql(exam_batch_select_sql()))
+        except Exception:
+            logger.exception("达线报告：读取考试批次失败")
+        names = ordered_exam_names(batches)
+        exam_name = pick_exam_for_question(names, question=question, hint=exam_hint)
+        prev_exam = pick_previous_exam(names, exam_name) if exam_name else None
+
+        curr_rows: list[dict[str, Any]] = []
+        prev_rows: list[dict[str, Any]] = []
+        if exam_name:
+            try:
+                curr_rows = sql_result_to_dicts(
+                    await self._execute_sql(indicator_select_sql(exam_name))
+                )
+            except Exception:
+                logger.exception("达线报告：读取 tb_score_indicator 失败")
+        if prev_exam:
+            try:
+                prev_rows = sql_result_to_dicts(
+                    await self._execute_sql(indicator_select_sql(prev_exam))
+                )
+            except Exception:
+                logger.exception("达线报告：读取上场 tb_score_indicator 失败")
+        data = build_line_reach_report_data(
+            curr_rows,
+            prev_rows,
+            exam_name=exam_name,
+            prev_exam_name=prev_exam or "",
+            scope_label=scope_label,
+            question=question,
+        )
+        data["REPORT_TIME"] = _now_str()
+        return data
+
+    async def _gather_bureau_analysis(self, spec: ReportSpec) -> dict[str, Any]:
+        """局端基础分析：读 tb_score_overview 学生行重算，禁止用预聚合 Excel。"""
+        from src.agent.education.bureau_analysis import (
+            BUREAU_KINDS,
+            build_bureau_report_data,
+            elite_class_select_sql,
+            fraction_bar_select_sql,
+            overview_select_sql,
+        )
+        from src.agent.education.line_reach import normalize_fraction_bars
+        from src.agent.education.line_reach_report import (
+            exam_batch_select_sql,
+            ordered_exam_names,
+            pick_exam_for_question,
+            sql_result_to_dicts,
+        )
+
+        kind = next((k for k, rt in BUREAU_KINDS.items() if rt == spec.report_type), "subject_avg")
+        exam_hint = str(spec.filters.get("exam_name") or "").strip()
+        question = str(spec.filters.get("question") or "").strip()
+        names: list[str] = []
+        try:
+            names = ordered_exam_names(
+                sql_result_to_dicts(await self._execute_sql(exam_batch_select_sql()))
+            )
+        except Exception:
+            logger.exception("局端分析：读取考试批次失败")
+        exam_name = pick_exam_for_question(names, question=question, hint=exam_hint)
+        students: list[dict[str, Any]] = []
+        bars: list[dict[str, Any]] = []
+        elite_keys: set[tuple[str, str]] = set()
+        if exam_name:
+            try:
+                students = sql_result_to_dicts(
+                    await self._execute_sql(overview_select_sql(exam_name))
+                )
+            except Exception:
+                logger.exception("局端分析：读取 tb_score_overview 失败")
+            if kind in {"contribution", "combo_reach"}:
+                try:
+                    bars = normalize_fraction_bars(
+                        sql_result_to_dicts(
+                            await self._execute_sql(fraction_bar_select_sql(exam_name))
+                        )
+                    )
+                except Exception:
+                    logger.exception("局端分析：读取 tb_fraction_bar 失败")
+            if kind == "subject_avg":
+                try:
+                    for row in sql_result_to_dicts(
+                        await self._execute_sql(elite_class_select_sql(exam_name))
+                    ):
+                        sid = str(row.get("school_id") or "").strip()
+                        cls = str(row.get("class_name") or "").strip()
+                        if sid and cls:
+                            elite_keys.add((sid, cls))
+                except Exception:
+                    logger.exception("局端分析：读取 tb_elite_class 失败")
+        data = build_bureau_report_data(
+            kind,
+            students,
+            bars,
+            exam_name=exam_name,
+            question=question,
+            elite_keys=elite_keys,
+        )
+        data["REPORT_TIME"] = _now_str()
+        return data
 
     def _fill_diagnostic(
         self,
@@ -1473,7 +1629,7 @@ class ReportOrchestrator:
         subject_expr = f.get("subject", "sc.subject_name")
         class_expr = f.get("class_name", "sc.class")
         school_expr = f.get("school_name", "sch.name")
-        exam_expr = f.get("exam_name", "e.exam_name")
+        exam_expr = f.get("exam_name", EXAM_NAME_SQL)
         # tb_student 无姓名列（id 即学号），学生标识统一用 student_id
         sql = (
             f"SELECT {score_expr} AS score, {full_expr} AS exam_score,\n"
@@ -1484,7 +1640,7 @@ class ReportOrchestrator:
             f"       {exam_expr} AS exam_name\n"
             "FROM tb_score sc\n"
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
-            "JOIN tb_exam e ON sc.exam_id = e.id"
+            f"{EXAM_JOIN}"
         )
         # 多场考试类报告：未指定考试时不按单场过滤，便于趋势/综合/学生画像/诊断动态性；
         # 若表单已选考试（含多选 ``a;;b``），则按所选过滤。
@@ -1510,7 +1666,7 @@ class ReportOrchestrator:
         school_expr = f.get("school_name", "sch.name")
         class_expr = f.get("class_name", "sc.class")
         subject_expr = f.get("subject", "sc.subject_name")
-        exam_expr = f.get("exam_name", "e.exam_name")
+        exam_expr = f.get("exam_name", EXAM_NAME_SQL)
         kn_join = knowledge_names_subquery_join("pg")
         sql = (
             "SELECT sd.question_no,\n"
@@ -1525,7 +1681,7 @@ class ReportOrchestrator:
             f"{kn_join}"
             "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
-            "JOIN tb_exam e ON sc.exam_id = e.id"
+            f"{EXAM_JOIN}"
         )
         where = _filters_to_where(spec.filters, school_expr, class_expr, subject_expr, exam_expr)
         if where:
@@ -1542,7 +1698,7 @@ class ReportOrchestrator:
         school_expr = f.get("school_name", "sch.name")
         class_expr = f.get("class_name", "sc.class")
         subject_expr = f.get("subject", "sc.subject_name")
-        exam_expr = f.get("exam_name", "e.exam_name")
+        exam_expr = f.get("exam_name", EXAM_NAME_SQL)
         w_join = knowledge_weighted_join()
         full_score_expr = "COALESCE(eq.question_score, sd.question_score)"
         sql = (
@@ -1557,7 +1713,7 @@ class ReportOrchestrator:
             f"{w_join}"
             "JOIN tb_score sc ON sd.exam_id = sc.exam_id AND sd.student_id = sc.student_id\n"
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
-            "JOIN tb_exam e ON sc.exam_id = e.id"
+            f"{EXAM_JOIN}"
         )
         where = _filters_to_where(spec.filters, school_expr, class_expr, subject_expr, exam_expr)
         if where:
@@ -1658,7 +1814,7 @@ def _config_edu_where_sql(spec: ReportSpec, mapping: ScoreSchemaMapping) -> str:
     school_expr = f.get("school_name", "sch.name")
     class_expr = f.get("class_name", "sc.class")
     subject_expr = f.get("subject", "sc.subject_name")
-    exam_expr = f.get("exam_name", "e.exam_name")
+    exam_expr = f.get("exam_name", EXAM_NAME_SQL)
     filters = dict(spec.filters)
     if spec.report_type in (
         ReportType.STUDENT_PROFILE,

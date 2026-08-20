@@ -12,6 +12,7 @@ from src.templates.sql_gen_prompt import education_sql_training_block
 def test_is_education_question_positive():
     assert is_education_question("南京市第一中学高一(1)班数学平均分")
     assert is_education_question("生成班级学情报告")
+    assert is_education_question("邗江区本科线达线率")
 
 
 def test_is_education_question_negative():
@@ -22,6 +23,10 @@ def test_is_education_question_negative():
 def test_education_sql_training_contains_tb_score():
     block = education_sql_training_block()
     assert "tb_score" in block
+    assert "tb_score_indicator" in block
+    assert "tb_exam_batch" in block
+    assert "tb_fraction_bar" in block
+    assert "tb_score_overview" in block
     assert "exam_score * 0.6" in block
 
 
@@ -29,4 +34,7 @@ def test_build_education_prompt_extras():
     term, training = build_education_prompt_extras()
     assert "<terminologies>" in term
     assert "tb_exam.exam_score" in term
+    assert "tb_exam_batch.batch_name" in term
+    assert "tb_score_overview" in term
+    assert "tb_fraction_bar" in term
     assert "tb_score_detail" in training

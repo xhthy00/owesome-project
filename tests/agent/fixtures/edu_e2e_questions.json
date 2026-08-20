@@ -39,6 +39,189 @@
       "expect_report_type": null
     },
     {
+      "id": "fact_top_03",
+      "category": "fact_lookup",
+      "question": "高二(6)班高二数学期末试卷最低分是谁",
+      "expect_needs_report": false,
+      "expect_report_type": null,
+      "forbid_tools": [
+        "build_class_overview_report_data_tool",
+        "build_subject_diagnosis_sections_tool",
+        "build_student_exam_report_data_tool"
+      ]
+    },
+    {
+      "id": "fact_top_04",
+      "category": "fact_lookup",
+      "question": "高二(6)班高二数学期末试卷前5名是谁",
+      "expect_needs_report": false,
+      "expect_report_type": null
+    },
+    {
+      "id": "fact_top_05",
+      "category": "fact_lookup",
+      "question": "高三(10)班高三5月模拟数学试卷谁分数最高",
+      "expect_needs_report": false,
+      "expect_report_type": null,
+      "notes": "高三(10)班可能因学校权限被拦截，用于观察权限失败形态"
+    },
+    {
+      "id": "fact_kpi_03",
+      "category": "fact_kpi",
+      "question": "高二(6)班高二数学期末试卷最高分是多少",
+      "expect_needs_report": false,
+      "expect_report_type": null
+    },
+    {
+      "id": "fact_kpi_04",
+      "category": "fact_kpi",
+      "question": "高二(6)班高二数学期末试卷优秀率是多少",
+      "expect_needs_report": false,
+      "expect_report_type": null
+    },
+    {
+      "id": "fact_kpi_05",
+      "category": "fact_kpi",
+      "question": "高二(6)班高二数学期末试卷中位数是多少",
+      "expect_needs_report": false,
+      "expect_report_type": null
+    },
+    {
+      "id": "fact_kpi_06",
+      "category": "fact_kpi",
+      "question": "高二(6)班高二数学期末试卷标准差是多少",
+      "expect_needs_report": false,
+      "expect_report_type": null
+    },
+    {
+      "id": "fact_count_01",
+      "category": "fact_count",
+      "question": "高二(6)班高二数学期末试卷有多少人参考",
+      "expect_needs_report": false,
+      "expect_report_type": null,
+      "notes": "允许回答人数；勿附带未询问的额外套话"
+    },
+    {
+      "id": "fact_count_02",
+      "category": "fact_count",
+      "question": "高二(6)班高二数学期末试卷及格人数有多少",
+      "expect_needs_report": false,
+      "expect_report_type": null
+    },
+    {
+      "id": "fact_count_03",
+      "category": "fact_count",
+      "question": "高二(6)班高二数学期末试卷90分以上有几人",
+      "expect_needs_report": false,
+      "expect_report_type": null
+    },
+    {
+      "id": "fact_rank_01",
+      "category": "fact_rank",
+      "question": "学生GZ_19D9D68D_466917B9在高二数学期末试卷中排第几",
+      "expect_needs_report": false,
+      "expect_report_type": null,
+      "forbid_tools": ["build_student_exam_report_data_tool"]
+    },
+    {
+      "id": "fact_rank_02",
+      "category": "fact_rank",
+      "question": "学生GZ_19D9D68D_466917B9高二数学期末试卷考了多少分",
+      "expect_needs_report": false,
+      "expect_report_type": null,
+      "forbid_tools": ["build_student_exam_report_data_tool"]
+    },
+    {
+      "id": "fact_compare_01",
+      "category": "fact_compare",
+      "question": "高二(6)班和高二(5)班高二数学期末试卷均分差多少",
+      "expect_needs_report": false,
+      "expect_report_type": null,
+      "notes": "若高二(5)班无权限/无数据，观察澄清或空结果提示"
+    },
+    {
+      "id": "fact_compare_02",
+      "category": "fact_compare",
+      "question": "高二(6)班高二数学期末试卷均分比年级均分高多少",
+      "expect_needs_report": false,
+      "expect_report_type": null
+    },
+    {
+      "id": "fact_item_01",
+      "category": "fact_item",
+      "question": "高二(6)班高二数学期末试卷第3题得分率是多少",
+      "expect_needs_report": false,
+      "expect_report_type": null,
+      "forbid_tools": ["build_subject_diagnosis_sections_tool"]
+    },
+    {
+      "id": "fact_item_02",
+      "category": "fact_item",
+      "question": "高二(6)班高二数学期末试卷哪道题得分率最低",
+      "expect_needs_report": false,
+      "expect_report_type": null,
+      "forbid_tools": ["build_subject_diagnosis_sections_tool"]
+    },
+    {
+      "id": "fact_knowledge_01",
+      "category": "fact_knowledge",
+      "question": "高二(6)班高二数学期末试卷哪个知识点平均得分率最低",
+      "expect_needs_report": false,
+      "expect_report_type": null,
+      "forbid_tools": [
+        "build_subject_diagnosis_sections_tool",
+        "build_student_subject_diagnosis_tool"
+      ]
+    },
+    {
+      "id": "fact_segment_01",
+      "category": "fact_segment",
+      "question": "高二(6)班高二数学期末试卷各分数段人数分别是多少",
+      "expect_needs_report": false,
+      "expect_report_type": null,
+      "forbid_tools": ["build_class_overview_report_data_tool"]
+    },
+    {
+      "id": "fact_list_01",
+      "category": "fact_list",
+      "question": "列出高二(6)班高二数学期末试卷不及格的学生学号",
+      "expect_needs_report": false,
+      "expect_report_type": null,
+      "forbid_tools": ["build_tier_alert_report_data_tool"]
+    },
+    {
+      "id": "fact_list_02",
+      "category": "fact_list",
+      "question": "高二(6)班高二数学期末试卷成绩从高到低列出前10名学号和分数",
+      "expect_needs_report": false,
+      "expect_report_type": null
+    },
+    {
+      "id": "fact_exists_01",
+      "category": "fact_exists",
+      "question": "高二(6)班有没有参加过高二数学期末试卷",
+      "expect_needs_report": false,
+      "expect_report_type": null
+    },
+    {
+      "id": "fact_neg_01",
+      "category": "fact_lookup",
+      "question": "不要报告，只要告诉我高二(6)班高二数学期末试卷均分",
+      "expect_needs_report": false,
+      "expect_report_type": null,
+      "forbid_tools": [
+        "build_class_overview_report_data_tool",
+        "build_subject_diagnosis_sections_tool"
+      ]
+    },
+    {
+      "id": "fact_neg_02",
+      "category": "fact_lookup",
+      "question": "不是总览也不是诊断，高二(6)班数学最高分是谁",
+      "expect_needs_report": false,
+      "expect_report_type": null
+    },
+    {
       "id": "stu_portrait_01",
       "category": "student_profile",
       "question": "生成学生: GZ_19D9D68D_466917B9的个人画像",
@@ -180,6 +363,14 @@
       "question": "高二数学结构化诊断报告",
       "expect_needs_report": true,
       "expect_report_type": "diagnostic_report"
+    },
+    {
+      "id": "knowledge_cohort_01",
+      "category": "knowledge_cohort",
+      "question": "高二(6)班数学期末考试最后十名与中位数在知识点掌握方面的差距",
+      "expect_needs_report": true,
+      "expect_tools_any": ["compare_knowledge_cohort_tool"],
+      "notes": "考试名须抽成期末/期末考试，禁止「班数学期末考试」导致空成绩"
     }
   ]
 }

@@ -17,9 +17,11 @@ import pytest
 from src.agent.resource.tool import business as biz
 from src.chat.schemas import ChatRequest
 from src.chat.service.agent_runner import (
+    _is_lockable_table,
+    _maybe_emit_report,
+    _on_tool_result,
     _RunConstraints,
     _RunState,
-    _maybe_emit_report,
     _sql_hits_locked_tables,
     run_agent_stream,
 )
@@ -365,6 +367,55 @@ def test_sql_hits_locked_tables_helper():
     assert _sql_hits_locked_tables("SELECT * FROM chusan_zhengzhi LIMIT 10", ["chusan_zhengzhi"])
     assert _sql_hits_locked_tables("SELECT * FROM `chusan_zhengzhi` LIMIT 10", ["chusan_zhengzhi"])
     assert not _sql_hits_locked_tables("SELECT * FROM student_score LIMIT 10", ["chusan_zhengzhi"])
+
+
+def test_describe_exam_batch_does_not_lock_table():
+    assert _is_lockable_table("tb_exam_batch") is False
+    assert _is_lockable_table("tb_school") is False
+    assert _is_lockable_table("chusan_zhengzhi") is True
+    state = _RunState(
+        sub_task_index=0,
+        constraints=_RunConstraints(locked_tables=[], required_keywords=[]),
+    )
+    _on_tool_result(
+        state,
+        {
+            "tool": "describe_table",
+            "success": True,
+            "round": 1,
+            "data": {"name": "tb_exam_batch"},
+        },
+    )
+    assert state.constraints.locked_tables == []
+
+
+def test_line_reach_report_bypasses_exam_batch_table_lock():
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event: str, data: dict) -> None:
+        events.append((event, dict(data)))
+
+    state = _RunState(
+        sub_task_index=0,
+        constraints=_RunConstraints(
+            locked_tables=["tb_exam_batch"],
+            required_keywords=[],
+        ),
+    )
+    state.last_sql = "SELECT exam_name FROM tb_score_indicator LIMIT 10"
+    payload = {
+        "agent": "ToolExpert",
+        "tool": "build_line_reach_report_data_tool",
+        "data": {
+            "output_type": "html",
+            "title": "全市达线分析",
+            "mode": "inline",
+            "html": "<html><body><p>参考人数 17700</p></body></html>",
+        },
+    }
+    _run(_maybe_emit_report(payload, emit, state))
+    assert "report" in [e for e, _ in events]
+    assert "error" not in [e for e, _ in events]
 
 
 def test_report_is_blocked_when_sql_violates_locked_tables():

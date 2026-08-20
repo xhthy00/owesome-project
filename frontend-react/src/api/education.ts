@@ -458,6 +458,122 @@ export const educationApi = {
       throw new Error(body.message || "确认失败");
     }
     return body.data;
+  },
+
+  async getLineReachMeta(datasourceId: number): Promise<LineReachMeta> {
+    const params = new URLSearchParams();
+    params.set("datasource_id", String(datasourceId));
+    const resp = await fetch(`${getApiBaseUrl()}/education/dashboards/line-reach/meta?${params}`, {
+      headers: await authHeaders()
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json()) as { code?: number; message?: string; data?: LineReachMeta };
+    if ((body.code ?? 200) === 403) {
+      throw new Error(body.message || "无权查看达线看板");
+    }
+    if ((body.code ?? 200) !== 200 || !body.data) {
+      throw new Error(body.message || "加载筛选项失败");
+    }
+    return body.data;
+  },
+
+  async getLineReach(query: LineReachQuery): Promise<LineReachResult> {
+    const params = new URLSearchParams();
+    params.set("datasource_id", String(query.datasource_id));
+    if (query.exam_name) params.set("exam_name", query.exam_name);
+    if (query.track) params.set("track", query.track);
+    const resp = await fetch(`${getApiBaseUrl()}/education/dashboards/line-reach?${params}`, {
+      headers: await authHeaders()
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json()) as { code?: number; message?: string; data?: LineReachResult };
+    if ((body.code ?? 200) === 403) {
+      throw new Error(body.message || "无权查看达线看板");
+    }
+    if ((body.code ?? 200) !== 200 || !body.data) {
+      throw new Error(body.message || "加载达线看板失败");
+    }
+    return body.data;
+  },
+
+  async listFractionBar(datasourceId: number): Promise<FractionBarListResult> {
+    const params = new URLSearchParams();
+    params.set("datasource_id", String(datasourceId));
+    const resp = await fetch(`${getApiBaseUrl()}/education/fraction-bar?${params}`, {
+      headers: await authHeaders()
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: FractionBarListResult;
+    };
+    if ((body.code ?? 200) === 403) {
+      throw new Error(body.message || "无权维护预测分数线");
+    }
+    if ((body.code ?? 200) !== 200 || !body.data) {
+      throw new Error(body.message || "加载分数线失败");
+    }
+    return body.data;
+  },
+
+  async upsertFractionBar(payload: FractionBarUpsertPayload): Promise<{
+    exam_name: string;
+    indicator_rows: number;
+    empty_scores?: boolean;
+    message?: string;
+  }> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/fraction-bar`, {
+      method: "PUT",
+      headers: {
+        ...(await authHeaders()),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: { exam_name: string; indicator_rows: number; empty_scores?: boolean };
+    };
+    if ((body.code ?? 200) === 403) {
+      throw new Error(body.message || "无权维护预测分数线");
+    }
+    if ((body.code ?? 200) !== 200 || !body.data) {
+      throw new Error(body.message || "保存分数线失败");
+    }
+    return { ...body.data, message: body.message };
+  },
+
+  async recomputeScoreIndicator(
+    datasourceId: number,
+    examName?: string
+  ): Promise<{ indicator_rows: number; skipped?: string[] }> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/score-indicator/recompute`, {
+      method: "POST",
+      headers: {
+        ...(await authHeaders()),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        datasource_id: datasourceId,
+        exam_name: examName || undefined
+      })
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: { indicator_rows: number; skipped?: string[] };
+    };
+    if ((body.code ?? 200) === 403) {
+      throw new Error(body.message || "无权重算达线指标");
+    }
+    if ((body.code ?? 200) !== 200 || !body.data) {
+      throw new Error(body.message || "重算失败");
+    }
+    return body.data;
   }
 };
 
@@ -537,3 +653,113 @@ export type ReportConfigUpdate = {
   imbalance_score_gap?: number;
   anomaly_rules?: AnomalyRuleItem[];
 };
+
+export interface FractionBarLine {
+  track: string;
+  line_code: string;
+  line_name: string;
+  threshold: number | null;
+  column?: string;
+}
+
+export interface FractionBarLineCatalog {
+  line_code: string;
+  line_name: string;
+  wl_column?: string | null;
+  ls_column?: string | null;
+}
+
+export interface FractionBarExam {
+  exam_name: string;
+  exam_batch_id?: number | null;
+  lines: FractionBarLine[];
+}
+
+export interface ExamBatchOption {
+  id: number;
+  batch_name: string;
+}
+
+export interface FractionBarListResult {
+  columns: string[];
+  line_catalog: FractionBarLineCatalog[];
+  exams: FractionBarExam[];
+  batches: ExamBatchOption[];
+}
+
+export interface FractionBarUpsertPayload {
+  datasource_id: number;
+  exam_batch_id?: number | null;
+  exam_name?: string;
+  lines: Array<{ track: string; line_code: string; threshold: number | null }>;
+}
+
+export interface LineReachLineMeta {
+  line_name: string;
+  threshold: number;
+  label?: string;
+  track?: string;
+  line_key?: string;
+  threshold_note?: string;
+}
+
+export interface LineReachLineStat {
+  line_name: string;
+  threshold: number;
+  reached: number;
+  rate: number;
+  label?: string;
+  track?: string;
+  line_key?: string;
+  threshold_note?: string;
+}
+
+export interface LineReachSchoolRow {
+  school_id: string;
+  school_name: string;
+  candidates: number;
+  by_line: LineReachLineStat[];
+}
+
+export interface LineReachDistrictRow {
+  district: string;
+  candidates: number;
+  by_line: LineReachLineStat[];
+  schools: LineReachSchoolRow[];
+}
+
+export interface LineReachMeta {
+  accessible: boolean;
+  exams: string[];
+  tracks: string[];
+  lines: LineReachLineMeta[];
+}
+
+export interface LineReachQuery {
+  datasource_id: number;
+  exam_name?: string;
+  track?: string;
+}
+
+export interface LineReachView {
+  lines: LineReachLineMeta[];
+  kpis: { candidates: number; by_line: LineReachLineStat[] };
+  districts: LineReachDistrictRow[];
+}
+
+export interface LineReachResult {
+  accessible: boolean;
+  exam_name: string;
+  track: string;
+  exams: string[];
+  tracks: string[];
+  lines: LineReachLineMeta[];
+  kpis: { candidates: number; by_line: LineReachLineStat[] };
+  districts: LineReachDistrictRow[];
+  views?: {
+    all?: LineReachView;
+    physics?: LineReachView;
+    history?: LineReachView;
+  };
+  message?: string;
+}

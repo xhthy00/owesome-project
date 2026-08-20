@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{REPORT_TITLE}}</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    :root {
+      --edu-primary: #1677ff; --edu-primary-bg: #e6f4ff;
+      --edu-text-lv1: rgba(0,0,0,0.88); --edu-text-lv2: rgba(0,0,0,0.65); --edu-text-lv3: rgba(0,0,0,0.45);
+      --edu-border: #f0f0f0; --edu-success: #52c41a; --edu-warning: #faad14; --edu-error: #ff4d4f;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #f0f2f5; color: var(--edu-text-lv1); line-height: 1.6; }
+    .edu-container { max-width: 1080px; margin: 24px auto; padding: 0 16px 32px; }
+    .edu-card { background: #fff; border: 1px solid var(--edu-border); border-radius: 10px; padding: 22px 26px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+    h1 { margin: 0 0 8px; font-size: 22px; font-weight: 600; line-height: 1.4; }
+    h2 { margin: 0 0 14px; font-size: 17px; font-weight: 600; padding-bottom: 8px; border-bottom: 1px solid var(--edu-border); }
+    h3 { margin: 16px 0 10px; font-size: 15px; font-weight: 600; color: var(--edu-text-lv2); }
+    p { margin: 6px 0; line-height: 1.7; }
+    .edu-sub { color: var(--edu-text-lv3); font-size: 13px; margin-bottom: 12px; }
+    .edu-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; }
+    .edu-kpi { border: 1px solid var(--edu-border); border-radius: 8px; padding: 12px 14px; background: linear-gradient(180deg, #fafafa 0%, #fff 100%); }
+    .edu-kpi .label { font-size: 12px; color: var(--edu-text-lv3); }
+    .edu-kpi .value { margin-top: 6px; font-size: 20px; font-weight: 600; color: var(--edu-primary); font-variant-numeric: tabular-nums; }
+    .edu-chart { width: 100%; height: 340px; margin: 8px 0 4px; }
+    .edu-badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 12px; background: var(--edu-primary-bg); color: var(--edu-primary); margin-right: 6px; }
+    .edu-footer { color: var(--edu-text-lv3); font-size: 12px; text-align: right; margin-top: 8px; }
+    .edu-up { color: var(--edu-success); font-weight: 600; }
+    .edu-down { color: var(--edu-error); font-weight: 600; }
+    .edu-table-wrap { overflow-x: auto; margin: 12px 0; border: 1px solid var(--edu-border); border-radius: 8px; background: #fff; }
+    .edu-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 480px; }
+    .edu-table th, .edu-table td { border-bottom: 1px solid var(--edu-border); padding: 10px 14px; text-align: left; vertical-align: middle; }
+    .edu-table thead th { background: var(--edu-primary-bg); color: var(--edu-text-lv2); font-weight: 600; white-space: nowrap; }
+    .edu-table tbody tr:last-child td { border-bottom: none; }
+    .edu-table tbody tr:nth-child(even) td { background: #fafafa; }
+    .edu-table th.num, .edu-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .edu-insight-line { padding: 8px 12px; margin: 8px 0; background: #fafafa; border-left: 3px solid var(--edu-primary); border-radius: 0 6px 6px 0; }
+    .edu-list, .edu-card ul { margin: 10px 0; padding-left: 22px; }
+    .edu-list li, .edu-card ul li { margin: 8px 0; line-height: 1.65; }
+    @media (max-width: 860px) {
+      .edu-container { padding: 0 12px 24px; }
+      .edu-card { padding: 16px 14px; }
+    }
+    @media print {
+      body { background: #fff; }
+      .edu-card { box-shadow: none; break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="edu-container">
+    <section class="edu-card">
+      <h1>{{REPORT_TITLE}}</h1>
+      <p class="edu-sub">{{REPORT_SUBTITLE}}</p>
+      <p class="edu-sub">
+        <span class="edu-badge">{{REPORT_TYPE}}</span>
+        <span class="edu-badge">{{SCOPE}}</span>
+        <span class="edu-badge">{{EXAM_NAME}}</span>
+        <span class="edu-badge">上场 {{PREV_EXAM_NAME}}</span>
+        {{REPORT_TIME}}
+      </p>
+    </section>
+
+    <section class="edu-card">
+      <h2>核心指标</h2>
+      {{KPI_GRID}}
+      <div>{{GENERAL_INSIGHT}}</div>
+    </section>
+
+    <section class="edu-card">
+      <h2>较上次考试人数增减</h2>
+      <p class="edu-sub">各选科、各线种达线人数与达线率环比（率按 SUM 后重算，不用学校达线率平均）</p>
+      <div id="compareChart" class="edu-chart"></div>
+      <script type="application/json" id="compareChartData">{{COMPARE_CHART}}</script>
+      <script>
+        (function () {
+          var el = document.getElementById('compareChart');
+          var raw = (document.getElementById('compareChartData').textContent || '').trim();
+          if (!raw || raw === '{}' || raw === 'null') { if (el) el.style.display = 'none'; return; }
+          try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) { if (el) el.style.display = 'none'; }
+        })();
+      </script>
+      <div>{{DELTA_TABLE}}</div>
+    </section>
+
+    <section class="edu-card">
+      <h2>区县达线对比</h2>
+      <p class="edu-sub">各区本科线（或主线种）人数增减与达线率环比</p>
+      <div id="districtChart" class="edu-chart"></div>
+      <script type="application/json" id="districtChartData">{{DISTRICT_CHART}}</script>
+      <script>
+        (function () {
+          var el = document.getElementById('districtChart');
+          var raw = (document.getElementById('districtChartData').textContent || '').trim();
+          if (!raw || raw === '{}' || raw === 'null') { if (el) el.style.display = 'none'; return; }
+          try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) { if (el) el.style.display = 'none'; }
+        })();
+      </script>
+      <div>{{DISTRICT_TABLE}}</div>
+    </section>
+
+    <section class="edu-card">
+      <h2>学校达线明细</h2>
+      <p class="edu-sub">各校各选科达线人数与达线率（率按 SUM 后重算）</p>
+      <div>{{SCHOOL_TABLE}}</div>
+    </section>
+
+    <section class="edu-card">
+      <h2>总体分析</h2>
+      <div>{{SUMMARY}}</div>
+    </section>
+
+    <section class="edu-card">
+      <h2>改进建议</h2>
+      <div data-edu-section="recommendations">{{RECOMMENDATIONS}}</div>
+    </section>
+
+    <div class="edu-footer">Generated by awesome-project · 教育学情分析</div>
+  </div>
+</body>
+</html>

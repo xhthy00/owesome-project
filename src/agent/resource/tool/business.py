@@ -457,6 +457,10 @@ _EDU_TEMPLATE_DEDICATED_BUILDERS: dict[str, tuple[str, str]] = {
         "build_trend_tracking_report_data_tool(class_name=..., subject_name=..., render=true)",
         "use_build_trend_tracking_report_data_tool",
     ),
+    "line_reach": (
+        "build_line_reach_report_data_tool(exam_name=..., render=true)",
+        "use_build_line_reach_report_data_tool",
+    ),
 }
 
 
@@ -1389,8 +1393,9 @@ def _fill_class_overview_ability_portrait(
         except Exception:
             pass
 
-    # 2) 多科目：各科均分雷达
+    # 2) 多科目：各科得分率雷达（0–100），避免用「各科满分之和」当地轴导致图形缩在中心
     by_subj: dict[str, list[float]] = {}
+    by_subj_rows: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
         sub = str(r.get("subject") or r.get("subject_name") or "").strip()
         if not sub:
@@ -1400,21 +1405,33 @@ def _fill_class_overview_ability_portrait(
             continue
         try:
             by_subj.setdefault(sub, []).append(float(raw))
+            by_subj_rows.setdefault(sub, []).append(r)
         except (TypeError, ValueError):
             continue
     if len(by_subj) >= 2:
         subjects = sorted(by_subj.keys())
-        avgs = [round(sum(by_subj[s]) / len(by_subj[s]), 2) for s in subjects]
-        full = out.get("_FULL_SCORE") or _infer_full_score_for_segments(rows, [x for xs in by_subj.values() for x in xs], out) or 100
+        rates: list[float] = []
+        for s in subjects:
+            vals = by_subj[s]
+            avg = sum(vals) / len(vals)
+            full_s = (
+                _infer_full_score_for_segments(by_subj_rows.get(s) or [], vals, out)
+                or 100.0
+            )
+            rate = round(max(0.0, min(100.0, avg / float(full_s) * 100.0)), 1)
+            rates.append(rate)
+        multi_title = (
+            f"{class_name}各科能力画像".strip() if class_name else "各科目能力画像"
+        )
         out["SUBJECT_RADAR_CHART"] = build_chart_option(
             "subject_radar",
             {
                 "subjects": subjects,
-                "values": avgs,
-                "full_score": full,
-                "series_name": "均分",
+                "values": rates,
+                "full_score": 100,
+                "series_name": "得分率(%)",
             },
-            title=portrait_title or "各科目能力画像",
+            title=multi_title,
         )
         return
 
@@ -1817,13 +1834,13 @@ def describe_table(
 
     fields = list(match.get("fields", []) or [])
     table_key = str(match.get("name") or table_name or "").split(".")[-1].lower()
-    # tb_school.s_name 可能仍存中文全称；对外只暴露脱敏 name/id，避免 Agent 选明文列
-    if table_key == "tb_school":
-        fields = [f for f in fields if str(f.get("name") or "").lower() != "s_name"]
-    from src.agent.education.student_privacy import filter_schema_fields
+    from src.agent.education.privacy_mode import (
+        filter_display_fields,
+        is_anonymize_display_enabled,
+    )
 
-    # xm/姓名等明文列对外隐藏，学生标识一律用 student_id
-    fields = filter_schema_fields(fields)
+    fields = filter_display_fields(fields, table_key)
+    anon = is_anonymize_display_enabled()
     header = f"表 `{match['name']}`" + (f"（{match['comment']}）" if match.get("comment") else "")
     if not fields:
         content = header + "\n（无字段信息）"
@@ -1831,20 +1848,32 @@ def describe_table(
         lines = [header, "", "| 字段 | 类型 | 注释 |", "| --- | --- | --- |"]
         for f in fields:
             comment = f.get("comment", "") or ""
-            if table_key == "tb_school" and str(f.get("name") or "").lower() == "name":
+            if (
+                anon
+                and table_key == "tb_school"
+                and str(f.get("name") or "").lower() == "name"
+            ):
                 comment = (comment + "；校名对外字段（脱敏码，与 id 一致），禁止改用 s_name").strip("；")
             lines.append(f"| {f['name']} | {f.get('type', '')} | {comment} |")
         if table_key == "tb_school":
             lines.append("")
-            lines.append("说明：学校展示/过滤请用 `id` 或 `name`（脱敏码）；禁止查询明文列。")
+            if anon:
+                lines.append("说明：学校展示/过滤请用 `id` 或 `name`（脱敏码）；禁止查询明文列。")
+            else:
+                lines.append("说明：当前已关闭匿名脱敏，学校可用 `s_name`（中文全称）或 `name`/`id`（校码）。")
         if any(
             k in table_key
             for k in ("score", "student", "exam", "overview")
         ):
             lines.append("")
-            lines.append(
-                "说明：学生标识请用 `student_id`（或学号列）；禁止查询/展示姓名明文（xm/姓名）。"
-            )
+            if anon:
+                lines.append(
+                    "说明：学生标识请用 `student_id`（或学号列）；禁止查询/展示姓名明文（xm/姓名）。"
+                )
+            else:
+                lines.append(
+                    "说明：当前已关闭匿名脱敏，可查询 xm（姓名）、xh（学号）；仍禁止 sfzh/ksh。"
+                )
         content = "\n".join(lines)
 
     match_out = dict(match)
@@ -1884,9 +1913,9 @@ def sample_rows(
 
     if clause:
         try:
-            from src.agent.education.school_cipher import rewrite_sql_school_s_name
+            from src.agent.education.privacy_mode import apply_sql_privacy
 
-            clause, _ = rewrite_sql_school_s_name(clause)
+            clause, _ = apply_sql_privacy(clause)
             where_sql = f" WHERE {clause}" if clause else ""
             sql = f"SELECT * FROM {quoted}{where_sql} LIMIT {limit}"
             _validate_read_only_select(sql, db_type)
@@ -1929,11 +1958,9 @@ def sample_rows(
     if not isinstance(result, dict):
         return ToolResult(content="采样失败：无结果", data=None)
 
-    from src.agent.education.school_cipher import strip_s_name_from_query_result
-    from src.agent.education.student_privacy import strip_student_names_from_query_result
+    from src.agent.education.privacy_mode import apply_result_privacy
 
-    result = strip_s_name_from_query_result(result) or result
-    result = strip_student_names_from_query_result(result) or result
+    result = apply_result_privacy(result) or result
     columns = result.get("columns", [])
     rows = result.get("rows", [])
     header = f"`{table_name}` 采样 {len(rows)} 行" + (f"（WHERE {clause}）" if clause else "") + "："
@@ -1955,25 +1982,12 @@ def execute_sql(
     Args:
         sql: 要执行的 SELECT 语句；非只读会被拒绝。
     """
-    from src.agent.education.school_cipher import (
-        rewrite_sql_school_s_name,
-        strip_s_name_from_query_result,
-    )
-    from src.agent.education.student_privacy import (
-        rewrite_sql_student_name_cols,
-        strip_student_names_from_query_result,
-    )
+    from src.agent.education.privacy_mode import apply_result_privacy, apply_sql_privacy
     from src.datasource.service.execute_with_permission import execute_sql_with_permission_by_user_id
     from src.datasource.service.sql_auto_fix import format_auto_fix_note, run_sql_with_auto_fix
 
     db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
-    fixes: list[str] = []
-    sql, s_name_rewritten = rewrite_sql_school_s_name(sql)
-    if s_name_rewritten:
-        fixes.append("school_s_name→name")
-    sql, xm_rewritten = rewrite_sql_student_name_cols(sql)
-    if xm_rewritten:
-        fixes.append("xm→student_id")
+    sql, fixes = apply_sql_privacy(sql)
 
     if user_id is not None:
         success, message, result, sql_run = execute_sql_with_permission_by_user_id(
@@ -2001,8 +2015,7 @@ def execute_sql(
         )
 
     if isinstance(result, dict):
-        result = strip_s_name_from_query_result(result) or result
-        result = strip_student_names_from_query_result(result) or result
+        result = apply_result_privacy(result) or result
 
     if not isinstance(result, dict) or "rows" not in result:
         return ToolResult(

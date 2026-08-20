@@ -80,6 +80,41 @@ const TOOL_COPY: Record<string, ToolCopy> = {
     done: "诊断报告数据已就绪",
     error: "诊断报告数据未能完成"
   },
+  build_line_reach_report_data_tool: {
+    running: "助手正在汇总全市达线情况…",
+    done: "全市达线分析已就绪",
+    error: "全市达线分析未能完成"
+  },
+  build_subject_avg_report_data_tool: {
+    running: "助手正在汇总各区各校均分…",
+    done: "均分情况分析已就绪",
+    error: "均分情况分析未能完成"
+  },
+  build_assign_grade_report_data_tool: {
+    running: "助手正在统计选考等级…",
+    done: "选考等级分析已就绪",
+    error: "选考等级分析未能完成"
+  },
+  build_rank_bucket_report_data_tool: {
+    running: "助手正在统计高分位次…",
+    done: "高分位次分析已就绪",
+    error: "高分位次分析未能完成"
+  },
+  build_contribution_report_data_tool: {
+    running: "助手正在计算贡献分…",
+    done: "贡献分分析已就绪",
+    error: "贡献分分析未能完成"
+  },
+  build_combo_reach_report_data_tool: {
+    running: "助手正在统计选科组合达线…",
+    done: "选科组合达线已就绪",
+    error: "选科组合达线未能完成"
+  },
+  build_elite_roster_report_data_tool: {
+    running: "助手正在整理脱敏高分名单…",
+    done: "高分名单已就绪",
+    error: "高分名单未能完成"
+  },
   build_tier_alert_report_data_tool: {
     running: "助手正在生成分层预警数据…",
     done: "分层预警数据已就绪",
@@ -158,6 +193,13 @@ function inferToolCopy(key: string): ToolCopy | null {
   if (/subject_diagnosis_report/.test(key)) return TOOL_COPY.build_subject_diagnosis_report_tool;
   if (/subject_diagnosis_sections/.test(key)) return TOOL_COPY.build_subject_diagnosis_sections_tool;
   if (/subject_diagnosis|fetch_subject/.test(key)) return TOOL_COPY.fetch_subject_diagnosis_data_tool;
+  if (/line_reach/.test(key)) return TOOL_COPY.build_line_reach_report_data_tool;
+  if (/subject_avg/.test(key)) return TOOL_COPY.build_subject_avg_report_data_tool;
+  if (/assign_grade/.test(key)) return TOOL_COPY.build_assign_grade_report_data_tool;
+  if (/rank_bucket/.test(key)) return TOOL_COPY.build_rank_bucket_report_data_tool;
+  if (/contribution/.test(key)) return TOOL_COPY.build_contribution_report_data_tool;
+  if (/combo_reach/.test(key)) return TOOL_COPY.build_combo_reach_report_data_tool;
+  if (/elite_roster/.test(key)) return TOOL_COPY.build_elite_roster_report_data_tool;
   if (/diagnostic_report|citywide/.test(key)) return TOOL_COPY.build_diagnostic_report_data_tool;
   if (/tier_alert|knowledge_tier/.test(key)) return TOOL_COPY.build_tier_alert_report_data_tool;
   if (/group_feature/.test(key)) return TOOL_COPY.build_group_feature_report_data_tool;

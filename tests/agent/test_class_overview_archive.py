@@ -254,6 +254,44 @@ def test_enrich_fills_ability_portrait_radar():
     assert "能力画像" in chart or "数学" in chart
 
 
+def test_enrich_multi_subject_radar_uses_score_rate_scale():
+    """多科雷达应按得分率 0–100 缩放，不能用各科满分之和当地轴。"""
+    import json
+
+    from src.agent.resource.tool.business import _enrich_class_overview_archive
+
+    rows = []
+    for sid in ("S1", "S2", "S3"):
+        rows.extend([
+            [sid, "语文", 112, 150],
+            [sid, "数学", 86, 150],
+            [sid, "历史", 79, 100],
+        ])
+    out = _enrich_class_overview_archive(
+        "education/class_overview.html",
+        {
+            "CLASS_NAME": "高二(6)班",
+            "SUBJECT_RADAR_CHART": "",
+        },
+        tool_runtime_ctx={
+            "last_exec_result": {
+                "columns": ["student_id", "subject", "score", "exam_score"],
+                "rows": rows,
+            }
+        },
+    )
+    chart = out.get("SUBJECT_RADAR_CHART") or ""
+    assert "得分率" in chart
+    assert "各科能力画像" in chart
+    option = json.loads(chart)
+    indicators = option["radar"]["indicator"]
+    assert all(float(i.get("max") or 0) == 100 for i in indicators)
+    values = option["series"][0]["data"][0]["value"]
+    # 语文 112/150≈74.7、历史 79/100=79，应明显大于中心（不会全 <10）
+    assert min(values) > 40
+    assert max(values) < 100
+
+
 def test_format_rank_info_nested_scope_items_summary():
     from src.agent.resource.tool.business import _coerce_class_overview_structured_fields
 

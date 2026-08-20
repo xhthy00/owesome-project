@@ -153,6 +153,86 @@ GROUP BY grade
 ORDER BY grade
 LIMIT 1000;</suggestion-answer>
   </example>
+  <example>
+    <question>邗江区 2026届高三5月模拟数学均分</question>
+    <suggestion-answer>SELECT sch.district,
+       ROUND(AVG(sc.score), 2) AS avg_score,
+       COUNT(*) AS cnt
+FROM tb_score sc
+JOIN tb_school sch ON sc.school_id = sch.id
+JOIN tb_exam e ON sc.exam_id = e.id
+LEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id
+WHERE COALESCE(eb.batch_name, e.exam_name) LIKE '%2026届高三5月模拟%'
+  AND sch.district = '邗江区'
+  AND sc.subject_name = '数学'
+GROUP BY sch.district
+LIMIT 1000;
+-- 「XX考试」按 tb_exam_batch.batch_name 过滤，禁止把试卷名当成考试批次</suggestion-answer>
+  </example>
+  <example>
+    <question>2026届高三5月模拟物理类本科线是多少</question>
+    <suggestion-answer>SELECT exam_name, wl_score_bk AS threshold
+FROM tb_fraction_bar
+WHERE exam_name = '2026届高三5月模拟'
+LIMIT 10;
+-- 分数线阈值在 tb_fraction_bar；达线人数/率须查 tb_score_indicator</suggestion-answer>
+  </example>
+  <example>
+    <question>邗江区 2026届高三5月模拟全科总分均分</question>
+    <suggestion-answer>SELECT dq,
+       ROUND(AVG(zf6m), 2) AS avg_zf6m,
+       COUNT(*) AS cnt
+FROM tb_score_overview
+WHERE exam_name = '2026届高三5月模拟'
+  AND dq = '邗江区'
+GROUP BY dq
+LIMIT 1000;
+-- 全科总分用 tb_score_overview.zf6m；学生标识 anon_stu_id；禁止 xm/sfzh/ksh</suggestion-answer>
+  </example>
+  <example>
+    <question>2026届高三5月模拟理科语数外三门均分的学校排名</question>
+    <suggestion-answer>SELECT xx AS school,
+       COUNT(*) AS candidates,
+       ROUND(AVG(zf3m), 1) AS avg_zf3m
+FROM tb_score_overview
+WHERE exam_name = '2026届高三5月模拟'
+  AND xkkm LIKE '物%'
+GROUP BY xx
+ORDER BY avg_zf3m DESC
+LIMIT 1000;
+-- 语数外/三门均分=AVG(zf3m) 三科总分校均（约 350），禁止除以 3，禁止 tb_score 三科 AVG(score)
+-- 理科=物理类 xkkm LIKE '物%'；学校用 xx（如 A01），不要用 tb_school.name 脱敏码</suggestion-answer>
+  </example>
+  <example>
+    <question>邗江区物理类本科线达线人数和达线率</question>
+    <suggestion-answer>SELECT district,
+       track,
+       line_name,
+       SUM(candidates) AS candidates,
+       SUM(reached_count) AS reached_count,
+       ROUND(SUM(reached_count) * 100.0 / NULLIF(SUM(candidates), 0), 2) AS reach_rate
+FROM tb_score_indicator
+WHERE district = '邗江区'
+  AND track = '物理类'
+  AND line_name = '本科线'
+GROUP BY district, track, line_name
+LIMIT 1000;
+-- 达线查 tb_score_indicator；区县/全市必须 SUM 后重算率，禁止 AVG(reach_rate)</suggestion-answer>
+  </example>
+  <example>
+    <question>2026届高三1月期末各区特控线达线率对比</question>
+    <suggestion-answer>SELECT district,
+       line_name,
+       SUM(candidates) AS candidates,
+       SUM(reached_count) AS reached_count,
+       ROUND(SUM(reached_count) * 100.0 / NULLIF(SUM(candidates), 0), 2) AS reach_rate
+FROM tb_score_indicator
+WHERE exam_name = '2026届高三1月期末'
+  AND line_name = '特控线'
+GROUP BY district, line_name
+ORDER BY reach_rate DESC
+LIMIT 1000;</suggestion-answer>
+  </example>
 </sql-examples>"""
 
 
@@ -160,6 +240,16 @@ def education_terminologies_block() -> str:
     """返回教育学情术语块；及格/优秀比例注入当前异常规则配置。"""
     pr, er = _pass_excellent_ratios()
     pp, ep = round(pr * 100, 2), round(er * 100, 2)
+    try:
+        from src.agent.education.privacy_mode import privacy_sql_instruction
+
+        privacy_desc = privacy_sql_instruction()
+    except Exception:
+        privacy_desc = (
+            "学校字段：展示与过滤只用 sch.name 或 sch.id / sc.school_id（脱敏码）；"
+            "**禁止** SELECT/引用 tb_school.s_name。"
+            "学生标识只用 student_id / anon_stu_id；禁止 SELECT xm/xh/sfzh/ksh。"
+        )
     return f"""<terminologies>
   <terminology>
     <words><word>学校</word><word>机构</word><word>校区</word></words>
@@ -186,12 +276,32 @@ def education_terminologies_block() -> str:
     <description>每套卷子满分由 tb_exam.exam_score 或 tb_score.exam_score 记录，不同考试可能不同，禁止写死 100 或 150</description>
   </terminology>
   <terminology>
+    <words><word>考试</word><word>考试批次</word><word>这场考试</word><word>期中</word><word>期末</word><word>模拟</word></words>
+    <description>用户说的「XX考试」对应 tb_exam_batch.batch_name（如 2026届高三5月模拟），不是试卷名。必须 JOIN tb_exam e ON sc.exam_id = e.id LEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id，WHERE COALESCE(eb.batch_name, e.exam_name) LIKE '%考试名%'。tb_exam 是批次下的单科试卷（subject/exam_score）；禁止只用 e.exam_name 当批次过滤</description>
+  </terminology>
+  <terminology>
     <words><word>及格</word><word>优秀</word></words>
     <description>当前系统配置：及格={pp}%（ratio {pr}）、优秀={ep}%（ratio {er}）。及格线=exam_score×{pr}，优秀线=exam_score×{er}。禁止写死 0.6/0.85。KPI 须用 compute_score_stats_tool（或报告工具）按配置计算，回复中的及格线/优秀线必须与工具结果一致</description>
   </terminology>
   <terminology>
     <words><word>得分率</word><word>难度</word></words>
     <description>得分率 = AVG(sd.score) / question_score * 100；难度可近似为 1 - 得分率</description>
+  </terminology>
+  <terminology>
+    <words><word>语数外</word><word>语数英</word><word>三门</word><word>三门均分</word><word>三门总均分</word><word>四门</word><word>六门</word><word>理科</word><word>文科</word></words>
+    <description>语数外/三门均分=tb_score_overview.zf3m 的校均（三科总分，约 300–450，禁止除以 3，禁止写满分 150，禁止对 tb_score 语文/数学/英语 AVG(score)）。四门=zf4m，六门/全科总分=zf6m。理科=物理类（xkkm LIKE '物%'），文科=历史类（xkkm LIKE '史%' 或 LIKE '历%'）。学校排名 GROUP BY xx ORDER BY AVG(zf3m) DESC，校名用 xx（如 A01），不要用 tb_school.name 脱敏 token。参考人数 COUNT(*)</description>
+  </terminology>
+  <terminology>
+    <words><word>达线</word><word>预测线</word><word>特控线</word><word>本科线</word></words>
+    <description>达线人数/率查 tb_score_indicator（预计算长表，exam_name=批次名，exam_batch_id 关联 tb_exam_batch.id）。字段：exam_name、exam_batch_id、track 选科（物理类/历史类）、district 区县、school_id 学校、line_name 线种、threshold 分数线、candidates 参考人数、reached_count 达线人数、reach_rate 学校达线率。问区县或全市必须 SUM(reached_count)/SUM(candidates) 重算率，禁止 AVG(reach_rate)。**特招线=特控线**。分数线阈值在 tb_fraction_bar（宽表 wl_score_*/ls_score_*；物理美术列为 wl_socre_ms）。学生总分明细在 tb_score_overview（zf6m 全科总分、zf3m 语数英三门总分、zf4m 语数英+首选；xx 学校、dq 区县、bj 班级；学生标识只用 anon_stu_id，禁止 xm/sfzh/ksh）。应届=xsxz 为在籍生（排除市报生）。再选等级查 hxdj/swdj/zzdj/dldj；转换分 hxzh/swzh/zzzh/dlzh。选科组合达线按 xkkm（如物化生）对 zf6m 与分数线比较，不要把组合塌成物理类/历史类</description>
+  </terminology>
+  <terminology>
+    <words><word>特招线</word><word>应届</word><word>贡献分</word><word>位次</word><word>ABCDE</word></words>
+    <description>特招线=特控线。应届=tb_score_overview.xsxz 在籍生（排除市报生）。ABCDE 聚合 hxdj/swdj/zzdj/dldj。位次前N含并列（zf6m≥第N名分数）。贡献分=达该线且 zf6m 等于切线分的学生各科均值</description>
+  </terminology>
+  <terminology>
+    <words><word>姓名</word><word>学号</word><word>校名</word><word>脱敏</word></words>
+    <description>{privacy_desc}</description>
   </terminology>
 </terminologies>"""
 
