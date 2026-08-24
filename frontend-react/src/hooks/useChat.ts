@@ -57,6 +57,17 @@ export type QueryResult = {
   runId?: string;
 };
 
+export type ChartConfig = {
+  x?: string;
+  y?: string[];
+  title?: string;
+};
+
+export type ChartRecommendation = {
+  chartType?: string;
+  chartConfig?: ChartConfig;
+};
+
 export type AgentMode = "agent" | "team" | "legacy";
 
 type SendOptions = {
@@ -80,6 +91,16 @@ const asText = (value: unknown): string => {
   } catch {
     return String(value);
   }
+};
+
+const asChartConfig = (raw: unknown): ChartConfig | undefined => {
+  if (!raw || typeof raw !== "object") return undefined;
+  const obj = raw as Record<string, unknown>;
+  const x = typeof obj.x === "string" ? obj.x : "";
+  const y = Array.isArray(obj.y) ? obj.y.map((item) => asText(item)).filter(Boolean) : [];
+  const title = typeof obj.title === "string" ? obj.title : "";
+  if (!x && !y.length && !title) return undefined;
+  return { x, y, title };
 };
 
 const REPORT_TYPE_MARKERS = new Set([
@@ -246,6 +267,7 @@ export function useChat() {
   const [summaryByRunId, setSummaryByRunId] = useState<Record<string, string>>({});
   const [reports, setReports] = useState<ReportPayload[]>([]);
   const [queryResults, setQueryResults] = useState<QueryResult[]>([]);
+  const [chartByRunId, setChartByRunId] = useState<Record<string, ChartRecommendation>>({});
   const [loading, setLoading] = useState(false);
   const [activity, setActivity] = useState("");
   const [runMetrics, setRunMetrics] = useState<RunMetrics>(EMPTY_RUN_METRICS);
@@ -589,16 +611,21 @@ export function useChat() {
                 }
               ]);
             },
-            onChart: ({ chart_type }) => {
-              if (!chart_type) return;
+            onChart: ({ chart_type, chart_config }) => {
+              if (!chart_type && !chart_config) return;
               refreshProgress({ hasChartOrReport: true, charterDone: true });
               setActivity(humanizeTool("chart", "done"));
+              const rec: ChartRecommendation = {
+                chartType: chart_type || undefined,
+                chartConfig: asChartConfig(chart_config)
+              };
+              setChartByRunId((prev) => ({ ...prev, [runId]: rec }));
               setExecutionSteps((prev) => [
                 ...stripBootstrap(prev),
                 {
                   id: genUUID(),
                   title: "图表推荐",
-                  detail: `推荐图表类型: ${chart_type}`,
+                  detail: `推荐图表类型: ${chart_type || "table"}`,
                   status: "done",
                   runId,
                   section: "result"
@@ -1004,11 +1031,19 @@ export function useChat() {
     const nextMetricsByRunId: Record<string, RunMetrics> = {};
     const nextReports: ReportPayload[] = [];
     const nextQueryResults: QueryResult[] = [];
+    const nextChartByRunId: Record<string, ChartRecommendation> = {};
     const queryResultSignatures = new Set<string>();
 
     detail.records?.forEach((record) => {
       const recordRunId = `record-${record.id}`;
       nextMetricsByRunId[recordRunId] = metricsFromPersisted(record.total_tokens, record.elapsed_ms);
+      const loadedChart = asChartConfig(record.chart_config);
+      if (record.chart_type || loadedChart) {
+        nextChartByRunId[recordRunId] = {
+          chartType: record.chart_type || undefined,
+          chartConfig: loadedChart
+        };
+      }
       if (asText(record.question).trim()) {
         nextMessages.push({ id: `u-${record.id}`, role: "user", content: asText(record.question), runId: recordRunId });
       }
@@ -1121,6 +1156,7 @@ export function useChat() {
     setRunMetrics(EMPTY_RUN_METRICS);
     setReports(nextReports);
     setQueryResults(nextQueryResults);
+    setChartByRunId(nextChartByRunId);
     setLoading(false);
   }, []);
 
@@ -1133,6 +1169,7 @@ export function useChat() {
     setMetricsByRunId({});
     setReports([]);
     setQueryResults([]);
+    setChartByRunId({});
     setLoading(false);
     setActivity("");
     clearMetricsTimer();
@@ -1194,6 +1231,7 @@ export function useChat() {
     summaryByRunId,
     reports,
     queryResults,
+    chartByRunId,
     loading,
     activity,
     runMetrics,

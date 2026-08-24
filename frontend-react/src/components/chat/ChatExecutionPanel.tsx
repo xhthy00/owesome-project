@@ -21,12 +21,13 @@ import React, { useRef } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
   AgentMode,
+  ChartRecommendation,
   ExecutionStep,
   QueryResult,
   ReportPayload,
   formatReportDisplayTitle
 } from "@/hooks/useChat";
-import G2Chart, { G2ChartType } from "@/components/chat/G2Chart";
+import G2Chart, { G2ChartType, formatQuerySetLabel, inferChartFields, pickYField } from "@/components/chat/G2Chart";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -55,6 +56,7 @@ type Props = {
   summaryByRunId?: Record<string, string>;
   reports?: ReportPayload[];
   queryResults?: QueryResult[];
+  chartByRunId?: Record<string, ChartRecommendation>;
   selectedStepId?: string;
   onSelectStep?: (stepId: string) => void;
   runMetrics?: RunMetrics | null;
@@ -113,6 +115,7 @@ export default function ChatExecutionPanel({
   summaryByRunId = {},
   reports = [],
   queryResults = [],
+  chartByRunId = {},
   selectedStepId,
   onSelectStep,
   runMetrics = null,
@@ -289,23 +292,27 @@ export default function ChatExecutionPanel({
     return scopedQueryResults[selectedQueryIndex];
   }, [scopedQueryResults, selectedQueryIndex]);
   const queryDisplayLabels = useMemo(() => {
+    const total = scopedQueryResults.length;
     return scopedQueryResults.map((item, idx) => {
-      const cols = item.columns || [];
-      const metricCols = cols.length >= 2 ? cols.slice(1, 4) : cols.slice(0, 3);
-      const metricLabel = metricCols.filter(Boolean).join(" / ");
-      const sql = normalizeToText(item.sql).replace(/\s+/g, " ").trim();
-      const sqlBrief = sql
-        .replace(/^select\s+/i, "")
-        .replace(/\s+from\s+[\s\S]*$/i, "")
-        .slice(0, 40);
-      const main =
-        metricLabel ||
-        sqlBrief ||
-        `查询 ${idx + 1}`;
-      const prefix = idx === scopedQueryResults.length - 1 ? "最终查询" : `查询 ${idx + 1}`;
-      return `${prefix}：${main}`;
+      const isFinal = idx === total - 1;
+      const rec = isFinal && item.runId ? chartByRunId[item.runId] : undefined;
+      const cfg = rec?.chartConfig;
+      const xOverride = cfg?.x && item.columns.includes(cfg.x) ? cfg.x : undefined;
+      const yOverride = pickYField((cfg?.y || []).filter((col) => item.columns.includes(col)));
+      const fields = inferChartFields(item.columns, item.rows, {
+        xField: xOverride,
+        yField: yOverride
+      });
+      return formatQuerySetLabel({
+        xField: fields.xField,
+        yField: fields.yField,
+        chartTitle: cfg?.title,
+        isFinal,
+        index: idx,
+        total
+      });
     });
-  }, [scopedQueryResults]);
+  }, [scopedQueryResults, chartByRunId]);
   const activeQueryIndex = useMemo(() => {
     if (!scopedQueryResults.length) return -1;
     if (selectedQueryIndex < 0 || selectedQueryIndex >= scopedQueryResults.length) {
@@ -313,6 +320,18 @@ export default function ChatExecutionPanel({
     }
     return selectedQueryIndex;
   }, [scopedQueryResults, selectedQueryIndex]);
+  const chartFieldOverride = useMemo(() => {
+    if (!activeQuery || !scopedQueryResults.length) return { xField: undefined as string | undefined, yField: undefined as string | undefined };
+    const isFinalQuery = activeQuery === scopedQueryResults[scopedQueryResults.length - 1];
+    if (!isFinalQuery) return { xField: undefined, yField: undefined };
+    const rec = activeQuery.runId ? chartByRunId[activeQuery.runId] : undefined;
+    const cfg = rec?.chartConfig;
+    if (!cfg) return { xField: undefined, yField: undefined };
+    const cols = activeQuery.columns;
+    const xField = cfg.x && cols.includes(cfg.x) ? cfg.x : undefined;
+    const yCandidates = (cfg.y || []).filter((col) => cols.includes(col));
+    return { xField, yField: pickYField(yCandidates) };
+  }, [activeQuery, scopedQueryResults, chartByRunId]);
   const pagedRows = useMemo(() => {
     if (!activeQuery) return [];
     const start = (dataPage - 1) * pageSize;
@@ -972,7 +991,9 @@ export default function ChatExecutionPanel({
                   {resultTab === "chart" ? (
                     <div className="rounded-md border border-[#e5e7eb] p-3 dark:border-[#2f3441]">
                       <div className="mb-2 flex items-center justify-between">
-                        <div className="text-xs font-semibold text-[#344054] dark:text-[#cbd5e1]">图表展示</div>
+                        <div className="text-xs font-semibold text-[#344054] dark:text-[#cbd5e1]">
+                          {queryDisplayLabels[activeQueryIndex] || "图表展示"}
+                        </div>
                         <div className="flex items-center gap-1 rounded-md border border-[#d9e2ef] p-1 dark:border-[#334155]">
                           <button
                             onClick={() => setChartType("column")}
@@ -1014,6 +1035,8 @@ export default function ChatExecutionPanel({
                           columns={activeQuery.columns}
                           rows={activeQuery.rows}
                           showLabel={showChartLabel}
+                          xField={chartFieldOverride.xField}
+                          yField={chartFieldOverride.yField}
                         />
                       </div>
                     </div>

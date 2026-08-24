@@ -147,3 +147,15 @@ def test_charter_desc_has_required_template_vars():
     """防回归：Profile desc 必须含所有 runner 会注入的变量。"""
     for var in ("{{question}}", "{{sql}}", "{{columns}}", "{{row_count}}", "{{sample_rows}}"):
         assert var in CHARTER_DESC, f"Charter desc missing {var}"
+
+
+def test_charter_desc_prefers_question_metric_over_headcount():
+    """Y 轴须贴问题，禁止默认画参考人数，比率不与人数混轴。"""
+    for phrase in (
+        "用户问题关心的指标",
+        "参考人数",
+        "candidates",
+        "达线率",
+        "量纲不同",
+    ):
+        assert phrase in CHARTER_DESC, f"Charter desc missing {phrase!r}"

@@ -336,11 +336,64 @@ def build_school_class_comparison_plan_items(question: str) -> list[dict[str, st
     ]
 
 
+_GENERIC_DISTRICT_LABELS = frozenset({"各区", "各县", "各区县", "全区县", "各地区"})
+
+
+def _line_reach_fact_hint(
+    question: str,
+    *,
+    school: str,
+    class_name: str,
+    district: str,
+    citywide: bool,
+) -> str:
+    """按班/校/区/全市粒度给出达线事实查询的选表提示。"""
+    spec_district = district if district and district not in _GENERIC_DISTRICT_LABELS else ""
+    if class_name:
+        return (
+            "本题是班级达线/预测线查询（特招线=特控线）："
+            "必须用 tb_score_overview.**zf6m**（六门/全科总分）对 tb_fraction_bar 阈值现算达线；"
+            "**禁止**用 zf4m/zf3m 对照分数线（四门/三门分远低于六门线，会导致全员不达线）；"
+            "物理类对照 wl_score_*，历史类对照 ls_score_*，按学生 xkkm 分轨："
+            "xkkm LIKE '物%'→物理类，LIKE '史%' OR LIKE '历%'→历史类；"
+            "班内只有一个选科方向时**只报该方向**，禁止文理混报或套用另一方向分数线；"
+            "WHERE 必须按问题中的学校(xx)、班级(bj)过滤，人数/率只统计该班；"
+            "未点名考试则对照 tb_exam_batch 取最近一场；"
+            "禁止扫 tb_score_indicator（无班级粒度）、禁止套用全市达线 HTML 报告。"
+        )
+    if school or (spec_district and not citywide):
+        dist_hint = (
+            f"区县过滤用 district LIKE '%{spec_district.rstrip('区县')}%' "
+            f"（库内常是「{spec_district}」）；"
+            "禁止把「N月」里的「月」拼进区县名；"
+            if spec_district
+            else "按问句中的区县/学校过滤；"
+        )
+        return (
+            "本题是学校/区县达线查询（特招线=特控线）："
+            "优先查 tb_score_indicator，按 school_id/district 过滤；"
+            "校名须先经 tb_school 对齐（indicator.school_name 常是脱敏校码）；"
+            f"{dist_hint}"
+            "考试名对照 tb_exam_batch.batch_name，用 exam_name LIKE '%批次%'，"
+            "禁止臆造未出现在批次表中的精确全称；未点名考试则取最近一场；"
+            "空结果时先 DISTINCT exam_name/district 对照，禁止直接断言该区无数据；"
+            "区县达线率须 SUM(reached_count)/SUM(candidates)，禁止 AVG(reach_rate)；"
+            "禁止套用全市达线 HTML 报告。"
+        )
+    return (
+        "本题是达线/预测线查询：必须查 tb_score_indicator（exam_name=批次名）；"
+        "区县或全市须 SUM(reached_count)/SUM(candidates) 重算率，禁止 AVG(reach_rate)；"
+        "禁止扫 tb_score_overview 学生明细。"
+    )
+
+
 def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     """事实查询：仅 DataAnalyst，禁止生成任何 HTML 报告。"""
     from src.agent.education.orchestrator import _extract_class_name, _extract_subject
     from src.agent.education.query_parse import (
+        extract_district_target,
         extract_school_target,
+        is_line_reach_citywide_scope,
         is_line_reach_query,
         is_overview_total_query,
     )
@@ -350,11 +403,15 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     class_name = _extract_class_name(q) or ""
     subject = _plan_subject_name(q) or (_extract_subject(q) or "")
     exam = _plan_exam_name(q)
+    district = extract_district_target(q) or ""
+    spec_district = district if district and district not in _GENERIC_DISTRICT_LABELS else ""
     scope_bits = []
     if school:
         scope_bits.append(f"学校【{school}】")
     if class_name:
         scope_bits.append(f"班级【{class_name}】")
+    if spec_district:
+        scope_bits.append(f"区县【{spec_district}】")
     if subject:
         scope_bits.append(f"科目【{subject}】")
     if exam:
@@ -362,10 +419,12 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     scope = "、".join(scope_bits) if scope_bits else "问题中的范围"
     line_reach_hint = ""
     if is_line_reach_query(q):
-        line_reach_hint = (
-            "本题是达线/预测线查询：必须查 tb_score_indicator（exam_name=批次名）；"
-            "区县或全市须 SUM(reached_count)/SUM(candidates) 重算率，禁止 AVG(reach_rate)；"
-            "禁止扫 tb_score_overview 学生明细。"
+        line_reach_hint = _line_reach_fact_hint(
+            q,
+            school=school,
+            class_name=class_name,
+            district=district,
+            citywide=is_line_reach_citywide_scope(q),
         )
     overview_hint = ""
     if not line_reach_hint and is_overview_total_query(q):

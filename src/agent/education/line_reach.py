@@ -57,7 +57,8 @@ _STUDENT_KEYS = ("anon_stu_id", "student_id", "sid")
 _CLASS_KEYS = ("bj", "class", "class_name")
 _SCHOOL_ID_KEYS = ("school_id", "xx", "xxid", "school")
 _DISTRICT_KEYS = ("district", "dq", "qx", "区县")
-_TOTAL_KEYS = ("zf6m", "zf4m", "zf3m", "zf", "total", "total_score", "总分")
+# 达线只用六门/全科总分；禁止把 zf4m/zf3m 当总分（会远低于分数线导致全员不达线）
+_TOTAL_KEYS = ("zf6m", "zf", "total", "total_score", "总分")
 _SUBJECT_KEYS = (
     ("yw", "语文"),
     ("sx", "数学"),

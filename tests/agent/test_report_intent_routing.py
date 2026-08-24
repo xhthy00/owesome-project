@@ -32,6 +32,7 @@ from src.agent.education.report_types import ReportType
 from src.agent.expand.planner import (
     build_class_overview_plan_items,
     build_comprehensive_class_plan_items,
+    build_fact_query_plan_items,
     build_group_feature_plan_items,
     build_school_class_comparison_plan_items,
     build_school_subject_report_plan_items,
@@ -465,6 +466,15 @@ def test_coerce_fact_query_rejects_report_plan():
     assert _route(q) == "fact"
 
 
+def test_citywide_district_compare_line_reach_is_report():
+    q = "各区特控线达线分析"
+    assert is_line_reach_report_query(q) is True
+    assert _route(q) == "line_reach"
+    route = classify_report_intent_sync(q)
+    assert route.needs_report is True
+    assert route.report_type == ReportType.LINE_REACH
+
+
 def test_citywide_line_reach_is_report_not_diagnostic():
     q = "全市2026届高三1月期末达线情况"
     assert is_line_reach_query(q) is True
@@ -511,6 +521,92 @@ def test_narrow_line_reach_count_is_fact():
     route = classify_report_intent_sync(q)
     assert route.needs_report is False
     assert route.report_type is None
+
+
+def test_district_after_month_not_swallowed_by_yue():
+    """「3月广陵区」不得抽成「月广陵区」。"""
+    from src.agent.education.query_parse import extract_district_target
+
+    q = "扬州市2026届高三3月广陵区本科线达线人数和达线率"
+    assert extract_district_target(q) == "广陵区"
+    assert extract_district_target("邗江区物理类本科线达线人数") == "邗江区"
+    assert extract_district_target("扬州市2026届高三3月广陵本科线达线") == "广陵区"
+
+
+def test_exam_hint_cohort_month_batch():
+    """「2026届高三3月」应抽为批次简称，供 LIKE 对齐。"""
+    q = "扬州市2026届高三3月广陵区本科线达线人数和达线率"
+    assert extract_exam_name_hint(q) == "2026届高三3月"
+    blob = build_fact_query_plan_items(q)[0]["sub_task"]
+    assert "区县【广陵区】" in blob
+    assert "考试【2026届高三3月】" in blob
+    assert "区县【月" not in blob
+    assert "LIKE '%广陵%'" in blob or "district LIKE" in blob
+    assert "禁止把「N月」" in blob or "拼进区县" in blob
+
+
+def test_class_school_line_reach_is_fact_not_citywide_report():
+    q = "我想了解扬州中学高三(18)班现有的考试达到特招线的情况"
+    assert is_line_reach_query(q) is True
+    assert is_line_reach_report_query(q) is False
+    assert _route(q) == "fact"
+    route = classify_report_intent_sync(q)
+    assert route.needs_report is False
+    assert route.report_type is None
+    plans = build_fact_query_plan_items(q)
+    blob = plans[0]["sub_task"]
+    assert "build_line_reach_report_data_tool" not in blob
+    assert "tb_score_overview" in blob
+    assert "tb_fraction_bar" in blob
+    assert "zf6m" in blob
+    assert "zf4m" in blob  # 提示里应明确禁止
+    assert "禁止" in blob and "zf4m" in blob
+    assert "xkkm" in blob or "物理类" in blob
+    assert "扬州中学" in blob
+    assert "高三(18)班" in blob
+    wrong = [
+        {
+            "sub_task": "调 build_line_reach_report_data_tool(render=true)",
+            "sub_task_agent": "ToolExpert",
+        },
+    ]
+    fixed = coerce_plan_items_if_needed(q, wrong)
+    fixed_blob = " ".join(p["sub_task"] for p in fixed)
+    assert "调 build_line_reach_report_data_tool" not in fixed_blob
+    assert "tb_score_overview" in fixed_blob
+
+
+def test_class_nanda_line_reach_plan_forces_zf6m_and_track_split():
+    q = "2026届高三3月扬州中学高三(1)班南大达线情况"
+    assert is_line_reach_query(q) is True
+    assert is_line_reach_report_query(q) is False
+    blob = build_fact_query_plan_items(q)[0]["sub_task"]
+    assert "zf6m" in blob
+    assert "禁止" in blob
+    assert "zf4m" in blob
+    assert "文理混报" in blob or "只报该方向" in blob
+    assert "tb_score_indicator" in blob and "禁止" in blob
+    assert "高三(1)班" in blob
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "扬州中学特招线情况",
+        "邗江区达线情况",
+    ],
+)
+def test_school_or_district_line_reach_is_fact(question: str):
+    assert is_line_reach_query(question) is True
+    assert is_line_reach_report_query(question) is False
+    assert _route(question) == "fact"
+    route = classify_report_intent_sync(question)
+    assert route.needs_report is False
+    assert route.report_type is None
+    blob = build_fact_query_plan_items(question)[0]["sub_task"]
+    assert "build_line_reach_report_data_tool" not in blob
+    assert "tb_score_indicator" in blob
+    assert "禁止套用全市达线" in blob
 
 
 def test_resolver_planner_dispatch_consistent():

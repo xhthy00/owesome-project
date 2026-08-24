@@ -18,6 +18,7 @@ export default function ChatPage() {
     summaryByRunId,
     reports,
     queryResults,
+    chartByRunId,
     loading,
     activity,
     runMetrics,
@@ -206,6 +207,7 @@ export default function ChatPage() {
                     summaryByRunId={summaryByRunId}
                     reports={reports}
                     queryResults={queryResults}
+                    chartByRunId={chartByRunId}
                     selectedStepId={selectedStepId}
                     onSelectStep={setSelectedStepId}
                     runMetrics={runMetrics}

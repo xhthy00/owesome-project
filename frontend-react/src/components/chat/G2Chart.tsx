@@ -8,6 +8,10 @@ type Props = {
   columns: string[];
   rows: unknown[][];
   showLabel?: boolean;
+  /** Charter / 调用方指定的 X 轴列；列存在时优先于启发式 */
+  xField?: string;
+  /** Charter / 调用方指定的 Y 轴列；列存在时优先于启发式 */
+  yField?: string;
   /** 单色柱/条，关闭按类目着色与图例 */
   accentColor?: string;
   /** 数值标签后缀，如 % */
@@ -15,14 +19,24 @@ type Props = {
   height?: number;
 };
 
-const toNumber = (value: unknown): number | null => {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : null;
-  }
-  return null;
-};
+/** 数值列打分：优先画率/占比，避免默认落到「参考人数」。 */
+export function scoreYColumn(name: string): number {
+  const n = name.toLowerCase();
+  if (/率|%|占比|比例|reach_rate/.test(n)) return 3;
+  if (/达线人数|reached/.test(n)) return 2;
+  if (/参考人数|candidates/.test(n)) return 0;
+  if (/人数|count/.test(n) && !/达线/.test(n)) return 0;
+  return 1;
+}
+
+export function pickYField(candidates: string[]): string | undefined {
+  if (!candidates.length) return undefined;
+  return [...candidates].sort((a, b) => {
+    const diff = scoreYColumn(b) - scoreYColumn(a);
+    if (diff !== 0) return diff;
+    return candidates.indexOf(a) - candidates.indexOf(b);
+  })[0];
+}
 
 const isNumericColumn = (col: string, data: Record<string, unknown>[]): boolean => {
   if (!data.length) return false;
@@ -35,11 +49,68 @@ const isNumericColumn = (col: string, data: Record<string, unknown>[]): boolean 
   return true;
 };
 
+export function inferChartFields(
+  columns: string[],
+  rows: unknown[][],
+  overrides?: { xField?: string; yField?: string }
+): { xField: string; yField: string } {
+  if (!columns.length) return { xField: "", yField: "" };
+  const data = rows.map((row) =>
+    Object.fromEntries(columns.map((col, idx) => [col, (row as unknown[])[idx]]))
+  ) as Record<string, unknown>[];
+  const numericCols = columns.filter((col) => isNumericColumn(col, data));
+  const categoricalCols = columns.filter((col) => !isNumericColumn(col, data));
+  const hasOnlyNumericCols = categoricalCols.length === 0 && numericCols.length > 0;
+  if (hasOnlyNumericCols && data.length === 1) {
+    return { xField: "指标", yField: "数值" };
+  }
+  const overrideX =
+    overrides?.xField && columns.includes(overrides.xField) ? overrides.xField : undefined;
+  const overrideY =
+    overrides?.yField && columns.includes(overrides.yField) ? overrides.yField : undefined;
+  const xField = overrideX ?? categoricalCols[0] ?? columns[0];
+  const yCandidates = (numericCols.length ? numericCols : columns).filter((col) => col !== xField);
+  const yField = overrideY ?? pickYField(yCandidates) ?? columns[1] ?? columns[0];
+  return { xField, yField };
+}
+
+/** 查询集下拉：用「达线率（按选科方向）」这类可读名，避免堆列名。 */
+export function formatQuerySetLabel(opts: {
+  xField?: string;
+  yField?: string;
+  chartTitle?: string;
+  isFinal: boolean;
+  index: number;
+  total: number;
+}): string {
+  const title = opts.chartTitle?.trim();
+  const chartName =
+    title ||
+    (opts.yField && opts.xField && opts.xField !== opts.yField
+      ? `${opts.yField}（按${opts.xField}）`
+      : opts.yField) ||
+    "数据图";
+  if (opts.total <= 1) return chartName;
+  const prefix = opts.isFinal ? "最终" : `查询 ${opts.index + 1}`;
+  return `${prefix} · ${chartName}`;
+}
+
+const toNumber = (value: unknown): number | null => {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+};
+
 export default function G2Chart({
   type,
   columns,
   rows,
   showLabel = false,
+  xField: xFieldOverride,
+  yField: yFieldOverride,
   accentColor,
   valueSuffix = "",
   height = 320
@@ -57,23 +128,21 @@ export default function G2Chart({
     if (!columns.length || !data.length) {
       return { xField: "", yField: "", chartData: [] as Record<string, unknown>[] };
     }
+    const { xField, yField } = inferChartFields(columns, rows, {
+      xField: xFieldOverride,
+      yField: yFieldOverride
+    });
     const numericCols = columns.filter((col) => isNumericColumn(col, data));
     const categoricalCols = columns.filter((col) => !isNumericColumn(col, data));
-    const hasOnlyNumericCols = categoricalCols.length === 0 && numericCols.length > 0;
-    if (hasOnlyNumericCols && data.length === 1) {
-      const metricCol = "指标";
-      const valueCol = "数值";
+    if (categoricalCols.length === 0 && numericCols.length > 0 && data.length === 1) {
       const chartData: Record<string, unknown>[] = numericCols.map((col) => ({
-        [metricCol]: col,
-        [valueCol]: data[0][col]
+        [xField]: col,
+        [yField]: data[0][col]
       }));
-      return { xField: metricCol, yField: valueCol, chartData };
+      return { xField, yField, chartData };
     }
-    const xField = categoricalCols[0] ?? columns[0];
-    const yCandidates = (numericCols.length ? numericCols : columns).filter((col) => col !== xField);
-    const yField = yCandidates[0] ?? columns[1] ?? columns[0];
     return { xField, yField, chartData: data };
-  }, [columns, data]);
+  }, [columns, data, rows, xFieldOverride, yFieldOverride]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -127,6 +196,7 @@ export default function G2Chart({
     } else {
       const mark = type === "line" ? chart.line() : chart.interval();
       mark.data(chartData).encode("x", xField).encode("y", yField);
+      mark.tooltip({ title: xField, items: [yField] });
       if (dashboard) {
         chart.legend(false);
         mark.legend(false);
@@ -147,6 +217,8 @@ export default function G2Chart({
         mark.style("radiusTopRight", 6);
       } else {
         mark.encode("color", xField);
+        mark.axis("y", { title: yField });
+        mark.legend("color", { title: false });
       }
       if (showLabel) {
         mark.label({

@@ -199,6 +199,13 @@ def extract_exam_name_hint(question: str) -> str | None:
     q = normalize_fullwidth_parentheses((question or "").strip())
     if not q:
         return None
+    # 「2026届高三3月」类批次简称（可无期末/模拟后缀）
+    m = re.search(
+        r"(\d{4}届(?:高[一二三]|初[一二三])\d{1,2}月(?:期末|期中|模拟|月考|摸底)?)",
+        q,
+    )
+    if m:
+        return m.group(1)
     # 完整/半正式考试名（清洗班级/科目误吞，避免「班数学期末考试」）
     m = re.search(
         r"([\u4e00-\u9fff]{2,30}?(?:质量检测|模拟考试|学情检测|单元测验|期末考试|期中考试|检测试卷|调研测试))",
@@ -345,7 +352,30 @@ def is_individual_student_analysis_query(question: str) -> bool:
     return "考试" in q
 
 
-_DISTRICT_RE = re.compile(r"([\u4e00-\u9fff]{2,8}(?:区|县))")
+# 可选吃掉「3月」，避免「3月广陵区」抽成「月广陵区」；区名本身不以「月」开头
+_DISTRICT_RE = re.compile(
+    r"(?:[0-9]{1,2}月)?((?!月)[\u4e00-\u9fff]{2,6}(?:区|县))"
+)
+_DISTRICT_BARE_RE = re.compile(
+    r"(?:[0-9]{1,2}月)?([\u4e00-\u9fff]{2,3})(?=本科线|特控线|上线)"
+)
+_DISTRICT_BARE_REJECT = frozenset(
+    {
+        "高一",
+        "高二",
+        "高三",
+        "初一",
+        "初二",
+        "初三",
+        "南大",
+        "清北",
+        "本科",
+        "特控",
+        "体育",
+        "美术",
+        "音乐",
+    }
+)
 
 
 def extract_district_target(question: str) -> str | None:
@@ -354,7 +384,16 @@ def extract_district_target(question: str) -> str | None:
     if not q:
         return None
     m = _DISTRICT_RE.search(q)
-    return m.group(1) if m else None
+    if m:
+        return m.group(1)
+    # 「3月广陵本科线」口语省略「区」；不用「达线」以免「班南大达线」误抽
+    m = _DISTRICT_BARE_RE.search(q)
+    if not m:
+        return None
+    bare = m.group(1)
+    if bare in _DISTRICT_BARE_REJECT or "班" in bare:
+        return None
+    return bare + "区"
 
 
 _CITYWIDE_MARKERS = ("全市", "全域", "市域", "全区县", "各区县")
@@ -391,17 +430,39 @@ def is_line_reach_query(question: str) -> bool:
     return any(h in q for h in _LINE_REACH_HINTS)
 
 
-_LINE_REACH_REPORT_HINTS = ("分析", "报告", "情况", "对比", "环比", "全市", "全域", "各区", "各县")
+_LINE_REACH_CITY_SCOPE = ("全市", "全域", "市域", "各区", "各县", "各区县", "全区县")
 _LINE_REACH_REPORT_STRONG = ("分析", "报告", "情况", "对比", "环比")
 _LINE_REACH_NARROW = ("人数", "达线率", "上线率", "上线人数")
+_CLASS_TARGET_RE = re.compile(
+    r"高[一二三]\(\d+\)班|"
+    r"(初三|初二|初一|高三|高二|高一|九年级|八年级|七年级|六年级|五年级|四年级|三年级)"
+    r"[\d班]*\d?班"
+)
+
+
+def extract_class_target(question: str) -> str | None:
+    """从问题中抽取班级名（如「高三(18)班」）。"""
+    text = normalize_fullwidth_parentheses(question or "")
+    if not text:
+        return None
+    m = _CLASS_TARGET_RE.search(text)
+    return m.group(0) if m else None
+
+
+def is_line_reach_citywide_scope(question: str) -> bool:
+    """问句是否明确要求全市/各区对比（LINE_REACH 模板粒度）。"""
+    q = (question or "").strip()
+    return any(h in q for h in _LINE_REACH_CITY_SCOPE)
 
 
 def is_line_reach_report_query(question: str) -> bool:
-    """全市/各区达线情况分析报告；窄问人数/率仍走事实查询。"""
+    """全市/各区达线情况分析报告；班/校/单区县或窄问人数/率仍走事实查询。"""
     q = (question or "").strip()
     if not is_line_reach_query(q):
         return False
-    if not any(h in q for h in _LINE_REACH_REPORT_HINTS):
+    if extract_class_target(q):
+        return False
+    if not is_line_reach_citywide_scope(q):
         return False
     if any(h in q for h in _LINE_REACH_NARROW) and not any(
         h in q for h in _LINE_REACH_REPORT_STRONG
@@ -909,6 +970,9 @@ def extract_school_target(question: str) -> str | None:
                 if name.startswith(prefix):
                     name = name[len(prefix):]
                     break
+            # 「3月扬州中学」勿把月份的「月」拼进校名
+            if name.startswith("月") and re.search(rf"\d月{re.escape(name[1:])}", q):
+                name = name[1:]
             if _is_regional_exam_label(name):
                 return None
             return name or None
@@ -1877,6 +1941,8 @@ __all__ = [
     "extract_student_target",
     "format_scope_constraints",
     "is_citywide_analysis_query",
+    "extract_class_target",
+    "is_line_reach_citywide_scope",
     "is_line_reach_query",
     "is_line_reach_report_query",
     "is_subject_avg_report_query",

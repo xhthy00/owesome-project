@@ -60,6 +60,9 @@ def test_select_known_columns_picks_aliases():
 def test_student_total_prefers_zf_then_subjects():
     assert student_total({"zf": 500, "yw": 1}) == 500.0
     assert student_total({"zf6m": 368, "yw": 1}) == 368.0
+    # 达线禁止用 zf4m/zf3m：有四门分无六门分时回落到科目求和或忽略
+    assert student_total({"zf4m": 474, "yw": 100, "sx": 90, "yy": 80, "wl": 70}) == 340.0
+    assert student_total({"zf6m": 520, "zf4m": 400}) == 520.0
     assert student_total({"yw": 100, "sx": 90, "yy": 80, "wl": 70}) == 340.0
     assert student_total({"总分": "410"}) == 410.0
     assert student_total({}) is None

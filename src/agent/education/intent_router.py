@@ -671,6 +671,8 @@ def _build_classify_prompt(question: str, candidates: list[ReportType]) -> list[
         "report_type=null\n"
         "- 达线/预测线人数或率（未要求分析报告）→ needs_report=false\n"
         "- 全市/各区达线情况、达线分析/报告、环比 → line_reach，禁止出结构化诊断报告\n"
+        "- 点了班级或具体学校且未要求全市/各区对比时，达线问句 needs_report=false，"
+        "不是 line_reach\n"
         "- 明确要报告/总览/诊断/横向对比/群体特征/预警/学情分析报告/个人画像 → needs_report=true，"
         "并从候选中选 report_type\n"
         "- 具名学生（学号/姓名）+ 个人画像/学情/个人报告 → student_profile，"

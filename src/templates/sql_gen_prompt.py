@@ -212,12 +212,59 @@ LIMIT 1000;
        SUM(reached_count) AS reached_count,
        ROUND(SUM(reached_count) * 100.0 / NULLIF(SUM(candidates), 0), 2) AS reach_rate
 FROM tb_score_indicator
-WHERE district = '邗江区'
+WHERE district LIKE '%邗江%'
   AND track = '物理类'
   AND line_name = '本科线'
 GROUP BY district, track, line_name
 LIMIT 1000;
 -- 达线查 tb_score_indicator；区县/全市必须 SUM 后重算率，禁止 AVG(reach_rate)</suggestion-answer>
+  </example>
+  <example>
+    <question>扬州市2026届高三3月广陵区本科线达线人数和达线率</question>
+    <suggestion-answer>SELECT district,
+       line_name,
+       SUM(candidates) AS candidates,
+       SUM(reached_count) AS reached_count,
+       ROUND(SUM(reached_count) * 100.0 / NULLIF(SUM(candidates), 0), 2) AS reach_rate
+FROM tb_score_indicator
+WHERE exam_name LIKE '%2026届高三3月%'
+  AND district LIKE '%广陵%'
+  AND line_name = '本科线'
+GROUP BY district, line_name
+LIMIT 1000;
+-- 禁止把「N月」拼进 district；考试用 LIKE 对齐 batch_name</suggestion-answer>
+  </example>
+  <example>
+    <question>2026届高三3月扬州中学高三(1)班南大达线情况</question>
+    <suggestion-answer>SELECT CASE
+         WHEN ov.xkkm LIKE '物%' THEN '物理类'
+         WHEN ov.xkkm LIKE '史%' OR ov.xkkm LIKE '历%' THEN '历史类'
+         ELSE '其他'
+       END AS 选科方向,
+       COUNT(*) AS 参考人数,
+       SUM(CASE
+             WHEN ov.xkkm LIKE '物%' AND ov.zf6m &gt;= fb.wl_score_nd THEN 1
+             WHEN (ov.xkkm LIKE '史%' OR ov.xkkm LIKE '历%') AND ov.zf6m &gt;= fb.ls_score_nd THEN 1
+             ELSE 0
+           END) AS 达线人数,
+       ROUND(100.0 * SUM(CASE
+             WHEN ov.xkkm LIKE '物%' AND ov.zf6m &gt;= fb.wl_score_nd THEN 1
+             WHEN (ov.xkkm LIKE '史%' OR ov.xkkm LIKE '历%') AND ov.zf6m &gt;= fb.ls_score_nd THEN 1
+             ELSE 0
+           END) / NULLIF(COUNT(*), 0), 2) AS "达线率%",
+       MAX(CASE
+             WHEN ov.xkkm LIKE '物%' THEN fb.wl_score_nd
+             WHEN ov.xkkm LIKE '史%' OR ov.xkkm LIKE '历%' THEN fb.ls_score_nd
+           END) AS 分数线
+FROM tb_score_overview ov
+JOIN tb_fraction_bar fb ON fb.exam_name = ov.exam_name
+WHERE ov.exam_name LIKE '%2026届高三3月%'
+  AND ov.bj LIKE '%高三(1)%'
+  AND (ov.xkkm LIKE '物%' OR ov.xkkm LIKE '史%' OR ov.xkkm LIKE '历%')
+GROUP BY 1
+LIMIT 1000;
+-- 班级达线：必须用 zf6m（禁止 zf4m/zf3m）；物理对照 wl_score_*、历史对照 ls_score_*；
+-- 按 xkkm 分轨 GROUP BY；班内只有物理类则结果只有一行，禁止文理混报；WHERE 必含 bj</suggestion-answer>
   </example>
   <example>
     <question>2026届高三1月期末各区特控线达线率对比</question>
@@ -292,8 +339,8 @@ def education_terminologies_block() -> str:
     <description>语数外/三门均分=tb_score_overview.zf3m 的校均（三科总分，约 300–450，禁止除以 3，禁止写满分 150，禁止对 tb_score 语文/数学/英语 AVG(score)）。四门=zf4m，六门/全科总分=zf6m。理科=物理类（xkkm LIKE '物%'），文科=历史类（xkkm LIKE '史%' 或 LIKE '历%'）。学校排名 GROUP BY xx ORDER BY AVG(zf3m) DESC，校名用 xx（如 A01），不要用 tb_school.name 脱敏 token。参考人数 COUNT(*)</description>
   </terminology>
   <terminology>
-    <words><word>达线</word><word>预测线</word><word>特控线</word><word>本科线</word></words>
-    <description>达线人数/率查 tb_score_indicator（预计算长表，exam_name=批次名，exam_batch_id 关联 tb_exam_batch.id）。字段：exam_name、exam_batch_id、track 选科（物理类/历史类）、district 区县、school_id 学校、line_name 线种、threshold 分数线、candidates 参考人数、reached_count 达线人数、reach_rate 学校达线率。问区县或全市必须 SUM(reached_count)/SUM(candidates) 重算率，禁止 AVG(reach_rate)。**特招线=特控线**。分数线阈值在 tb_fraction_bar（宽表 wl_score_*/ls_score_*；物理美术列为 wl_socre_ms）。学生总分明细在 tb_score_overview（zf6m 全科总分、zf3m 语数英三门总分、zf4m 语数英+首选；xx 学校、dq 区县、bj 班级；学生标识只用 anon_stu_id，禁止 xm/sfzh/ksh）。应届=xsxz 为在籍生（排除市报生）。再选等级查 hxdj/swdj/zzdj/dldj；转换分 hxzh/swzh/zzzh/dlzh。选科组合达线按 xkkm（如物化生）对 zf6m 与分数线比较，不要把组合塌成物理类/历史类</description>
+    <words><word>达线</word><word>预测线</word><word>特控线</word><word>本科线</word><word>南大</word><word>特招线</word></words>
+    <description>**班级达线**（问句含具体班级）：禁止 tb_score_indicator（无班级粒度）；必须 tb_score_overview.**zf6m** 对照 tb_fraction_bar；**禁止 zf4m/zf3m**；物理类用 wl_score_*、历史类用 ls_score_*，按 xkkm（物%→物理、史%/历%→历史）分轨，班内仅一轨则只报该轨，禁止文理混报；WHERE 必含学校 xx + 班级 bj。**区县/全市/学校达线**：查 tb_score_indicator；exam_name LIKE '%批次%'（如 2026届高三3月）；区县用 district LIKE '%广陵%'，禁止把「3月」拼成「月广陵区」；空结果先 DISTINCT district/exam_name 再下结论；区县或全市须 SUM(reached_count)/SUM(candidates) 重算率，禁止 AVG(reach_rate)。**特招线=特控线**。分数线在 tb_fraction_bar（wl_score_*/ls_score_*；物理美术 wl_socre_ms）。overview 字段：zf6m 全科（达线唯一总分）、zf4m 四门、zf3m 三门、xx/dq/bj、xkkm；学生标识只用 anon_stu_id</description>
   </terminology>
   <terminology>
     <words><word>特招线</word><word>应届</word><word>贡献分</word><word>位次</word><word>ABCDE</word></words>
