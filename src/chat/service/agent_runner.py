@@ -241,6 +241,8 @@ class _RunConstraints:
     edu_scope: dict[str, Any] | None = None
     #: 意图路由结果（report_type / confidence / source），供工具守卫读取。
     report_route: dict[str, Any] | None = None
+    #: 教育问数短提示（按意图裁剪的 SQL 规则摘要）。
+    edu_sql_hint: str | None = None
 
     def to_context(self) -> dict[str, Any]:
         ctx: dict[str, Any] = {
@@ -262,6 +264,8 @@ class _RunConstraints:
             ctx["edu_scope"] = dict(self.edu_scope)
         if self.report_route:
             ctx["report_route"] = dict(self.report_route)
+        if self.edu_sql_hint:
+            ctx["edu_sql_hint"] = self.edu_sql_hint
         return ctx
 
     @classmethod
@@ -269,6 +273,7 @@ class _RunConstraints:
         data = raw if isinstance(raw, dict) else {}
         tc = data.get("target_classes")
         rr = data.get("report_route")
+        hint = data.get("edu_sql_hint")
         return cls(
             locked_tables=list(data.get("locked_tables") or []),
             required_keywords=list(data.get("required_keywords") or []),
@@ -280,6 +285,7 @@ class _RunConstraints:
             target_classes=list(tc) if isinstance(tc, list) else None,
             edu_scope=dict(data["edu_scope"]) if isinstance(data.get("edu_scope"), dict) else None,
             report_route=dict(rr) if isinstance(rr, dict) else None,
+            edu_sql_hint=str(hint).strip() if hint else None,
         )
 
 
@@ -312,6 +318,7 @@ def _build_shared_constraints(question: str, user_id: int) -> _RunConstraints:
         target_student=merged.get("target_student"),
         target_classes=merged.get("target_classes"),
         edu_scope=merged.get("edu_scope"),
+        edu_sql_hint=merged.get("edu_sql_hint"),
     )
 
 

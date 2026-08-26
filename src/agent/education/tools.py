@@ -6243,9 +6243,52 @@ def build_elite_roster_report_data_tool(
     )
 
 
+@tool()
+def peek_edu_filter_values(
+    exam_hint: str = "",
+    table: str = "tb_score_indicator",
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """探查教育表过滤维值（考试名/区县/线种/选科），写 WHERE 前或空结果后调用。
+
+    返回本库真实 DISTINCT 候选；拼 SQL 时字面量须来自候选或用 LIKE，
+    禁止臆造「月广陵区」等把月份拼进区县的条件。
+    """
+    from src.agent.education.filter_peek import (
+        format_peek_payload,
+        peek_edu_filter_values as _peek,
+    )
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    ds_id = datasource_id if datasource_id is not None else ctx.get("datasource_id")
+    ws_oid = workspace_oid if workspace_oid is not None else ctx.get("workspace_oid")
+    uid = user_id if user_id is not None else ctx.get("user_id")
+    if not ds_id:
+        return ToolResult(
+            content="peek_edu_filter_values 失败：缺少 datasource_id。",
+            data={"error": "missing datasource_id"},
+        )
+
+    def _exec(sql: str) -> tuple[bool, str, dict[str, Any] | None]:
+        ok, msg, result, _ = _run_edu_sql(
+            sql,
+            datasource_id=int(ds_id),
+            workspace_oid=int(ws_oid) if ws_oid is not None else None,
+            user_id=int(uid) if uid is not None else None,
+        )
+        return ok, msg, result if isinstance(result, dict) else None
+
+    payload = _peek(_exec, exam_hint=exam_hint or "", table=table or "tb_score_indicator")
+    return ToolResult(content=format_peek_payload(payload), data=payload)
+
+
 # 暴露给 ``build_default_toolpack`` 的列表（与 business.py 工具并列）。
 EDUCATION_TOOLS = [
     resolve_score_schema,
+    peek_edu_filter_values,
     compute_score_stats_tool,
     compute_rankings_tool,
     identify_at_risk_students_tool,
@@ -6306,6 +6349,7 @@ __all__ = [
     "cross_analyze_tool",
     "fetch_subject_diagnosis_data_tool",
     "identify_at_risk_students_tool",
+    "peek_edu_filter_values",
     "resolve_score_schema",
     "select_report_template_tool",
 ]

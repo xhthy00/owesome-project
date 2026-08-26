@@ -365,6 +365,23 @@ def generate_sql(
     assert_datasource_accessible(session, current_user, chat_request.datasource_id, workspace_oid)
 
     generator = SQLGenerator()
+    gen_kwargs: dict = {}
+    from src.agent.education.prompt_context import (
+        build_education_prompt_extras,
+        is_education_question,
+    )
+    if is_education_question(chat_request.question):
+        term, training = build_education_prompt_extras(chat_request.question)
+        gen_kwargs["terminologies"] = term
+        gen_kwargs["data_training"] = training
+        peek_instr = _legacy_edu_peek_instructions(
+            question=chat_request.question,
+            datasource_id=int(chat_request.datasource_id),
+            workspace_oid=workspace_oid,
+            user_id=int(current_user.id),
+        )
+        if peek_instr:
+            gen_kwargs["instructions"] = peek_instr
 
     result = generator.generate_sql(
         question=chat_request.question,
@@ -372,6 +389,7 @@ def generate_sql(
         session=session,
         need_title=True,
         user_id=current_user.id,
+        **gen_kwargs,
     )
 
     if not result["is_valid"]:
@@ -599,6 +617,47 @@ def execute_sql(
 
 # ============== Persistence helper ==============
 
+def _legacy_edu_peek_instructions(
+    *,
+    question: str,
+    datasource_id: int,
+    workspace_oid: int | None,
+    user_id: int | None,
+) -> str:
+    """教育问句：注入本库考试/区县候选；失败则返回空串。"""
+    try:
+        from src.agent.education.filter_peek import format_peek_payload, peek_edu_filter_values
+        from src.agent.education.query_parse import extract_exam_name_hint
+        from src.agent.education.tools import _run_edu_sql
+        from src.agent.expand.planner import _plan_exam_name
+
+        hint = (_plan_exam_name(question) or extract_exam_name_hint(question) or "").strip()
+
+        def _exec(sql: str):
+            ok, msg, result, _ = _run_edu_sql(
+                sql,
+                datasource_id=int(datasource_id),
+                workspace_oid=int(workspace_oid) if workspace_oid is not None else None,
+                user_id=int(user_id) if user_id is not None else None,
+            )
+            return ok, msg, result if isinstance(result, dict) else None
+
+        payload = peek_edu_filter_values(
+            _exec, exam_hint=hint, table="tb_score_indicator"
+        )
+        if payload.get("error") and not (
+            payload.get("exam_names") or payload.get("districts")
+        ):
+            return ""
+        text = format_peek_payload(payload)
+        return (
+            "以下为本库过滤维值候选，生成 SQL 时 WHERE 字面量必须来自候选或使用 LIKE：\n"
+            + text
+        )
+    except Exception:
+        return ""
+
+
 def _persist_record(
     session: Session,
     current_user_id: int,
@@ -778,9 +837,17 @@ async def chat_stream(
                     is_education_question,
                 )
                 if is_education_question(chat_request.question):
-                    term, training = build_education_prompt_extras()
+                    term, training = build_education_prompt_extras(chat_request.question)
                     gen_kwargs["terminologies"] = term
                     gen_kwargs["data_training"] = training
+                    peek_instr = _legacy_edu_peek_instructions(
+                        question=chat_request.question,
+                        datasource_id=int(chat_request.datasource_id),
+                        workspace_oid=workspace_oid,
+                        user_id=uid,
+                    )
+                    if peek_instr:
+                        gen_kwargs["instructions"] = peek_instr
 
                 result = generator.generate_sql(
                     question=chat_request.question,

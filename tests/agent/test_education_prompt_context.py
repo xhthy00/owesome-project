@@ -31,10 +31,15 @@ def test_education_sql_training_contains_tb_score():
 
 
 def test_build_education_prompt_extras():
+    term, training = build_education_prompt_extras("南京市第一中学高一(1)班数学平均分")
+    assert "<terminologies>" in term
+    assert "tb_exam.exam_score" in term or "及格" in term or "学校" in term
+    assert "tb_score" in training
+    # 班级均分意图不应塞入达线广陵示例
+    assert "广陵区本科线" not in training
+
+
+def test_build_education_prompt_extras_empty_question_default():
     term, training = build_education_prompt_extras()
     assert "<terminologies>" in term
-    assert "tb_exam.exam_score" in term
-    assert "tb_exam_batch.batch_name" in term
-    assert "tb_score_overview" in term
-    assert "tb_fraction_bar" in term
-    assert "tb_score_detail" in training
+    assert "<sql-examples>" in training

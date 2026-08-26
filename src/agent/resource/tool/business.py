@@ -2056,6 +2056,20 @@ def execute_sql(
         f"或 compute_score_stats_tool.count / 报告 KPI 为准。\n"
         f"{authority_notes}\n\n{preview}"
     )
+    try:
+        from src.agent.education.filter_peek import (
+            empty_result_protocol_note,
+            touches_edu_table,
+        )
+        from src.agent.education.sql_lint import format_lint_warnings, lint_edu_sql
+
+        lint_note = format_lint_warnings(lint_edu_sql(sql_run or sql))
+        if lint_note:
+            content = lint_note + "\n" + content
+        if row_count == 0 and touches_edu_table(sql_run or sql):
+            content = content + empty_result_protocol_note(sql_run or sql)
+    except Exception:
+        pass
     return ToolResult(
         content=content,
         data={

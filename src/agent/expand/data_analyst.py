@@ -76,6 +76,13 @@ DATA_ANALYST_DESC = """[分析范围约束]
    data keys。无法判断时默认 `class_overview` + `audience=default`。
 2. **查数前先调** `resolve_score_schema(datasource_id, question)` 取得
    成绩表字段映射（宽表/分表、科目列名），据此写 SQL，不要凭记忆猜列名。
+2b. **写含 district / exam_name / line_name / dq 的 WHERE 之前**，必须先调
+   `peek_edu_filter_values(exam_hint=...)` 取得本库真实候选；字面量须来自候选或
+   `LIKE '%线索%'`。**禁止**把「N月」拼进区县（如 `district='月广陵区'`）。
+   `execute_sql` 返回 0 行且触及教育表时：**禁止**断言「未纳入/没数据」；
+   必须再 peek（或 DISTINCT）后改写 SQL 重试，同题最多 2 次。
+   区县/全市达线查 `tb_score_indicator`，率用 `SUM(reached_count)/SUM(candidates)`，
+   **禁止** `AVG(reach_rate)`。
 3. **统计 MUST 走工具**：均分/及格率/优秀率/分数段用
    `compute_score_stats_tool`；百分比/同比/差值用 `calculate`。**禁止心算**
    及格率/优秀率/分数段人数。查 KPI 时 SQL **须 SELECT 带出 `exam_score`**

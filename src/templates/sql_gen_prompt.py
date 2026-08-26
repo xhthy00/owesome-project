@@ -283,6 +283,107 @@ LIMIT 1000;</suggestion-answer>
 </sql-examples>"""
 
 
+# intent -> 示例 <question> 子串，按序挑选（最多 5 条）
+_INTENT_EXAMPLE_KEYS: dict[str, tuple[str, ...]] = {
+    "line_reach": (
+        "广陵区本科线达线人数和达线率",
+        "邗江区物理类本科线达线人数和达线率",
+        "各区特控线达线率对比",
+        "物理类本科线是多少",
+    ),
+    "class_line_reach": (
+        "高三(1)班南大达线情况",
+        "物理类本科线是多少",
+        "广陵区本科线达线人数和达线率",
+    ),
+    "overview_avg": (
+        "全科总分均分",
+        "语数外三门均分的学校排名",
+        "邗江区 2026届高三5月模拟数学均分",
+    ),
+    "class_score": (
+        "高一(1)班数学平均分和人数",
+        "STU20240001 本次数学成绩",
+        "数学分数段分布",
+    ),
+    "knowledge": (
+        "每一小题得分率及关联知识点",
+        "知识点薄弱诊断",
+        "高一(1)班数学平均分和人数",
+    ),
+    "default": (
+        "高一(1)班数学平均分和人数",
+        "邗江区 2026届高三5月模拟数学均分",
+        "对比三所学校数学均分排名",
+    ),
+}
+
+_INTENT_TERM_WORDS: dict[str, tuple[str, ...]] = {
+    "line_reach": ("达线", "考试", "姓名", "学校"),
+    "class_line_reach": ("达线", "班级", "考试", "姓名"),
+    "overview_avg": ("语数外", "考试", "学校", "姓名"),
+    "class_score": ("班级", "学校", "及格", "考试", "姓名"),
+    "knowledge": ("知识点", "小题", "考试", "学校", "姓名"),
+    "default": ("学校", "班级", "考试", "及格", "姓名"),
+}
+
+
+def _pick_xml_blocks(blob: str, tag: str, keys: tuple[str, ...], *, limit: int = 5) -> list[str]:
+    import re
+
+    pattern = re.compile(rf"<{tag}>.*?</{tag}>", re.DOTALL)
+    parts = pattern.findall(blob or "")
+    chosen: list[str] = []
+    for key in keys:
+        for p in parts:
+            if key in p and p not in chosen:
+                chosen.append(p)
+                break
+        if len(chosen) >= limit:
+            break
+    if not chosen:
+        chosen = parts[: min(limit, 3)]
+    return chosen
+
+
+def resolve_edu_sql_intent(question: str) -> str:
+    """教育问数意图标签，用于裁剪 few-shot/术语。"""
+    from src.agent.education.query_parse import (
+        extract_class_target,
+        is_line_reach_query,
+        is_overview_total_query,
+    )
+
+    q = (question or "").strip()
+    if not q:
+        return "default"
+    if is_line_reach_query(q):
+        if extract_class_target(q):
+            return "class_line_reach"
+        return "line_reach"
+    if is_overview_total_query(q):
+        return "overview_avg"
+    if any(h in q for h in ("知识点", "小题", "逐题", "得分率")):
+        return "knowledge"
+    if extract_class_target(q) or "班" in q:
+        return "class_score"
+    return "default"
+
+
+def education_sql_training_block_for_intent(intent: str) -> str:
+    """按意图返回精简 SQL few-shot。"""
+    keys = _INTENT_EXAMPLE_KEYS.get(intent) or _INTENT_EXAMPLE_KEYS["default"]
+    examples = _pick_xml_blocks(education_sql_training_block(), "example", keys, limit=5)
+    return "<sql-examples>\n" + "\n".join(examples) + "\n</sql-examples>"
+
+
+def education_terminologies_block_for_intent(intent: str) -> str:
+    """按意图返回精简术语块。"""
+    keys = _INTENT_TERM_WORDS.get(intent) or _INTENT_TERM_WORDS["default"]
+    terms = _pick_xml_blocks(education_terminologies_block(), "terminology", keys, limit=6)
+    return "<terminologies>\n" + "\n".join(terms) + "\n</terminologies>"
+
+
 def education_terminologies_block() -> str:
     """返回教育学情术语块；及格/优秀比例注入当前异常规则配置。"""
     pr, er = _pass_excellent_ratios()

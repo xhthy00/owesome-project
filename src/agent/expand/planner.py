@@ -372,16 +372,18 @@ def _line_reach_fact_hint(
         return (
             "本题是学校/区县达线查询（特招线=特控线）："
             "优先查 tb_score_indicator，按 school_id/district 过滤；"
+            "写最终 SQL 前须先 peek_edu_filter_values（或 DISTINCT 考试/区县）；"
             "校名须先经 tb_school 对齐（indicator.school_name 常是脱敏校码）；"
             f"{dist_hint}"
             "考试名对照 tb_exam_batch.batch_name，用 exam_name LIKE '%批次%'，"
             "禁止臆造未出现在批次表中的精确全称；未点名考试则取最近一场；"
-            "空结果时先 DISTINCT exam_name/district 对照，禁止直接断言该区无数据；"
+            "空结果时先 peek/DISTINCT 对照，禁止直接断言该区无数据；"
             "区县达线率须 SUM(reached_count)/SUM(candidates)，禁止 AVG(reach_rate)；"
             "禁止套用全市达线 HTML 报告。"
         )
     return (
         "本题是达线/预测线查询：必须查 tb_score_indicator（exam_name=批次名）；"
+        "写 SQL 前先 peek_edu_filter_values；"
         "区县或全市须 SUM(reached_count)/SUM(candidates) 重算率，禁止 AVG(reach_rate)；"
         "禁止扫 tb_score_overview 学生明细。"
     )

@@ -1028,6 +1028,18 @@ def build_edu_aware_constraints(
         ctx["edu_scope"] = edu
     if target_classes:
         ctx["target_classes"] = target_classes
+    try:
+        from src.agent.education.prompt_context import (
+            build_education_sql_hint_text,
+            is_education_question,
+        )
+
+        if is_education_question(question or ""):
+            hint = build_education_sql_hint_text(question or "")
+            if hint:
+                ctx["edu_sql_hint"] = hint
+    except Exception:
+        pass
     return ctx
 
 
@@ -1088,6 +1100,9 @@ def format_scope_constraints(constraints: dict[str, Any] | None) -> str:
     if keywords:
         kw = "、".join(str(k) for k in keywords[:12])
         parts.append(f"问题关键词={kw}")
+    edu_sql_hint = str(raw.get("edu_sql_hint") or "").strip()
+    if edu_sql_hint:
+        parts.append(edu_sql_hint)
     if not parts:
         return "（无额外范围约束，按当前子任务描述理解即可）"
     return (
