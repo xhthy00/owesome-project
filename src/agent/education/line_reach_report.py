@@ -296,7 +296,9 @@ def filter_exams_by_question(ordered_exams: list[str], question: str) -> list[st
             if hit:
                 out = hit
             break
-    for mon in re.findall(r"\d{1,2}月", q):
+    # 「3 月」与「3月」同等；1月不能打到 11月。
+    q_month = re.sub(r"(\d{1,2})\s*月", r"\1月", q)
+    for mon in re.findall(r"\d{1,2}月", q_month):
         pat = re.compile(rf"(?<!\d){re.escape(mon)}")
         hit = [n for n in out if pat.search(n)]
         if hit:

@@ -203,6 +203,29 @@ def test_report_follows_asked_lines_and_districts():
     assert "985" in chart and "211" in chart and "清北" in chart
 
 
+def test_pick_exam_month_allows_space_not_latest():
+    """「3 月」中间有空格时，不得落到列表最后一场（高二6月期末）。"""
+    names = [
+        "2026届高三11月期中",
+        "2026届高三1月期末",
+        "2026届高三3月",
+        "2026届高三5月模拟",
+        "2027届高二6月期末",
+    ]
+
+    def boom(_messages):
+        raise AssertionError("3月已能唯一命中，不应再调 LLM，也不应取最新一场")
+
+    q = "扬州中学 3 月学科教研分析报告"
+    assert pick_exam_for_question(names, question=q, chat_fn=boom) == "2026届高三3月"
+    assert pick_exam_for_question(
+        names, question="扬州中学3月学科教研分析报告", chat_fn=boom
+    ) == "2026届高三3月"
+    assert pick_exam_for_question(names, question="1 月达线", chat_fn=boom) == (
+        "2026届高三1月期末"
+    )
+
+
 def test_pick_exam_keeps_asked_cohort_not_latest():
     names = [
         "2026届高三11月期中",

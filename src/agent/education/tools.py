@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any
 
 from src.agent.education.charts import build_chart_option as _build_chart_option
@@ -109,12 +110,14 @@ def _run_edu_sql(
     datasource_id: int,
     workspace_oid: int | None,
     user_id: int | None,
+    apply_row_scope: bool = True,
 ) -> tuple[bool, str, dict[str, Any] | None, str]:
     """教育工具查数：走行列权限 + edu 模板谓词。返回 (success, msg, result, sql_run)。"""
     from src.datasource.service.execute_with_permission import execute_sql_with_permission_by_user_id
 
+    uid = user_id if apply_row_scope else None
     success, msg, result, sql_run = execute_sql_with_permission_by_user_id(
-        user_id, datasource_id, workspace_oid, sql
+        uid, datasource_id, workspace_oid, sql
     )
     return success, msg, result, sql_run or sql
 
@@ -6048,6 +6051,242 @@ def build_line_reach_report_data_tool(
     )
 
 
+def _research_edu_scope(ctx: dict[str, Any], uid: int | None) -> dict[str, Any]:
+    """教研工具专用：运行时 ctx 通常没有 edu_scope，按 user_id 补读。不改其他工具。"""
+    constraints = ctx.get("constraints") if isinstance(ctx.get("constraints"), dict) else {}
+    edu = constraints.get("edu_scope") if isinstance(constraints.get("edu_scope"), dict) else None
+    if not isinstance(edu, dict) or not edu:
+        edu = ctx.get("edu_scope") if isinstance(ctx.get("edu_scope"), dict) else {}
+    if isinstance(edu, dict) and edu.get("edu_role"):
+        return edu
+    if not uid:
+        return edu if isinstance(edu, dict) else {}
+    try:
+        from datasource.service.edu_permission import edu_scope_summary
+        from src.common.core.database import get_db_session
+        from src.system.crud.crud_user import get_user_by_id
+
+        with get_db_session() as session:
+            user = get_user_by_id(session, int(uid))
+            if user is None:
+                return edu if isinstance(edu, dict) else {}
+            loaded = edu_scope_summary(user)
+            if isinstance(loaded, dict) and loaded.get("edu_role"):
+                return loaded
+    except Exception:
+        logger.warning("学科教研：读取 edu_scope 失败 user_id=%s", uid, exc_info=True)
+    return edu if isinstance(edu, dict) else {}
+
+
+def _permission_school_hint(tool_runtime_ctx: dict[str, Any] | None) -> str:
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    constraints = ctx.get("constraints") if isinstance(ctx.get("constraints"), dict) else {}
+    edu = constraints.get("edu_scope") if isinstance(constraints.get("edu_scope"), dict) else None
+    if not isinstance(edu, dict):
+        edu = ctx.get("edu_scope") if isinstance(ctx.get("edu_scope"), dict) else {}
+    if not isinstance(edu, dict):
+        edu = {}
+    for cand in (
+        edu.get("school_name"),
+        edu.get("school_id"),
+        constraints.get("target_school"),
+        constraints.get("school_id"),
+        ctx.get("target_school"),
+        ctx.get("school_id"),
+    ):
+        s = str(cand or "").strip()
+        if s:
+            return s
+    return ""
+
+
+@tool()
+def build_subject_research_report_data_tool(
+    exam_name: str = "",
+    school_name: str = "",
+    subject_name: str = "",
+    render: bool = True,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """一校一场学科教研分析报告。未点名科目则九科全出。
+
+    均分/排序/层级只读 tb_score + tb_school.type；卷1/卷2 读小题明细。
+    名单出明文姓名。禁止改走科目诊断 / 局端尖子生独立报告。
+    """
+    from src.agent.education.bureau_analysis import fraction_bar_select_sql
+    from src.agent.education.line_reach import normalize_fraction_bars
+    from src.agent.education.line_reach_report import (
+        exam_batch_select_sql,
+        ordered_exam_names,
+        pick_exam_for_question,
+        pick_previous_exam,
+        sql_result_to_dicts,
+    )
+    from src.agent.education.query_parse import extract_school_target
+    from src.agent.education.subject_research import (
+        bound_research_school,
+        build_subject_research_report_data,
+        item_school_select_sql,
+        overview_plain_select_sql,
+        paper_school_avg_select_sql,
+        research_needs_citywide,
+        research_other_school_forbidden,
+        research_subjects,
+        school_select_sql,
+        score_school_avg_select_sql,
+    )
+    from src.agent.resource.tool.business import _render_template_html, _sanitize_report_html
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    blocked = _guard_report_when_fact_query(
+        ctx, tool_name="build_subject_research_report_data_tool"
+    )
+    if blocked is not None:
+        return blocked
+
+    ds_id = datasource_id if datasource_id is not None else ctx.get("datasource_id")
+    ws_oid = workspace_oid if workspace_oid is not None else ctx.get("workspace_oid")
+    uid = user_id if user_id is not None else ctx.get("user_id")
+    if not ds_id:
+        return ToolResult(
+            content="build_subject_research_report_data_tool 失败：缺少 datasource_id。",
+            data={"error": "missing datasource_id"},
+        )
+
+    exam_hint = (exam_name or "").strip()
+    user_q = str(
+        ctx.get("user_question")
+        or (ctx.get("constraints") or {}).get("question")
+        or ""
+    )
+    asked_school = (school_name or "").strip() or (extract_school_target(user_q) or "")
+    edu_scope = _research_edu_scope(ctx, int(uid) if uid is not None else None)
+    citywide = research_needs_citywide(edu_scope)
+    if citywide:
+        logger.info("学科教研：校管按全市口径查数（页面仍只出本校）")
+    subject = (subject_name or "").strip()
+    if not subject:
+        from src.agent.education.orchestrator import _extract_subject
+
+        subject = (_extract_subject(user_q) or "").strip()
+    chat_fn = ctx.get("exam_pick_chat")
+    if not callable(chat_fn):
+        chat_fn = None
+
+    ok_b, msg_b, batch_res, _ = _run_edu_sql(
+        exam_batch_select_sql(),
+        datasource_id=int(ds_id),
+        workspace_oid=ws_oid,
+        user_id=uid,
+    )
+    names = ordered_exam_names(sql_result_to_dicts(batch_res if ok_b else None))
+    exam = pick_exam_for_question(
+        names, question=user_q, hint=exam_hint, chat_fn=chat_fn
+    )
+    prev_exam = pick_previous_exam(names, exam) if exam else None
+    if not exam:
+        return ToolResult(
+            content=(
+                "build_subject_research_report_data_tool 失败：未解析到考试名称，"
+                "且 tb_exam_batch 为空。"
+                + (f"（批次查询：{msg_b}）" if not ok_b and msg_b else "")
+            ),
+            data={"error": "missing exam_name"},
+        )
+
+    def _q(sql: str, label: str = "") -> list[dict[str, Any]]:
+        t0 = time.perf_counter()
+        ok, msg, res, _ = _run_edu_sql(
+            sql,
+            datasource_id=int(ds_id),
+            workspace_oid=ws_oid,
+            user_id=uid,
+            apply_row_scope=not citywide,
+        )
+        rows = sql_result_to_dicts(res) if ok else []
+        logger.info(
+            "学科教研查询 %s %.1fs rows=%s ok=%s",
+            label or "sql",
+            time.perf_counter() - t0,
+            len(rows),
+            ok,
+        )
+        if not ok:
+            logger.warning("学科教研查询失败: %s", msg)
+            return []
+        return rows
+
+    schools = _q(school_select_sql(), "schools")
+    denied = research_other_school_forbidden(edu_scope, user_q, asked_school, schools)
+    if denied:
+        return ToolResult(
+            content=denied,
+            data={"error": "forbidden_other_school"},
+        )
+    school_query = bound_research_school(
+        edu_scope, asked_school or _permission_school_hint(ctx)
+    )
+    want_subjects = research_subjects(subject)
+    score_subject = "" if len(want_subjects) > 1 else (want_subjects[0] if want_subjects else "")
+    score_rows = _q(score_school_avg_select_sql(exam, score_subject), "score")
+    paper_rows = _q(paper_school_avg_select_sql(exam, score_subject), "paper")
+    item_agg_rows = _q(item_school_select_sql(exam, score_subject), "item")
+    overview = _q(overview_plain_select_sql(exam), "overview")
+    bars = normalize_fraction_bars(_q(fraction_bar_select_sql(exam), "bars"))
+    prev_scores = (
+        _q(score_school_avg_select_sql(prev_exam, score_subject), "prev_score")
+        if prev_exam
+        else []
+    )
+
+    data = build_subject_research_report_data(
+        schools=schools,
+        score_rows=score_rows,
+        prev_score_rows=prev_scores,
+        paper_rows=paper_rows,
+        item_agg_rows=item_agg_rows,
+        overview_rows=overview,
+        fraction_bars=bars,
+        exam_name=exam,
+        prev_exam_name=prev_exam or "",
+        school_query=school_query,
+        question=user_q,
+        subject_name=subject,
+    )
+    data["REPORT_TIME"] = _now_str()
+    if not school_query:
+        return ToolResult(
+            content="请指定学校。学科教研分析报告按一校一场生成，不默认全市、不循环多校。",
+            data={"error": "need_school", **data},
+        )
+    if not render:
+        return ToolResult(content="学科教研分析 data 已组装。", data=data)
+
+    template_name = "education/subject_research.html"
+    title = data.get("REPORT_TITLE") or "学科教研分析报告"
+    try:
+        raw_html = _render_template_html(template_name, data)
+        safe_html = _sanitize_report_html(raw_html.strip())
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(content=f"学科教研分析报告渲染失败：{e}", data={"error": str(e)})
+    payload = {
+        "output_type": "html",
+        "title": title,
+        "html": safe_html,
+        "mode": "template",
+        "_stats": data.get("_stats") or {},
+        "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
+    }
+    return _html_report_tool_result(
+        f"学科教研分析报告已渲染（HTML {len(safe_html)} 字符）。",
+        payload,
+        report_type=ReportType.SUBJECT_RESEARCH,
+    )
+
+
 def _bureau_report_tool(
     kind: str,
     exam_name: str,
@@ -6438,6 +6677,7 @@ EDUCATION_TOOLS = [
     build_citywide_exam_analysis_report_tool,
     build_diagnostic_report_data_tool,
     build_line_reach_report_data_tool,
+    build_subject_research_report_data_tool,
     build_subject_avg_report_data_tool,
     build_assign_grade_report_data_tool,
     build_rank_bucket_report_data_tool,
@@ -6460,6 +6700,7 @@ __all__ = [
     "build_trend_tracking_report_data_tool",
     "build_diagnostic_report_data_tool",
     "build_line_reach_report_data_tool",
+    "build_subject_research_report_data_tool",
     "build_subject_avg_report_data_tool",
     "build_assign_grade_report_data_tool",
     "build_rank_bucket_report_data_tool",

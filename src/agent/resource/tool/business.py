@@ -461,6 +461,10 @@ _EDU_TEMPLATE_DEDICATED_BUILDERS: dict[str, tuple[str, str]] = {
         "build_line_reach_report_data_tool(exam_name=..., render=true)",
         "use_build_line_reach_report_data_tool",
     ),
+    "subject_research": (
+        "build_subject_research_report_data_tool(exam_name=..., render=true)",
+        "use_build_subject_research_report_data_tool",
+    ),
 }
 
 

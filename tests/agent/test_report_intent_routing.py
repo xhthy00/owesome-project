@@ -63,6 +63,7 @@ def _route(question: str) -> str:
         ReportType.SUBJECT_DIAGNOSIS: "school-exam",
         ReportType.TREND_TRACKING: "trend-tracking",
         ReportType.LINE_REACH: "line_reach",
+        ReportType.SUBJECT_RESEARCH: "subject_research",
     }
     return mapping.get(route.report_type, "llm")
 
@@ -757,3 +758,63 @@ def test_school_vs_city_avg_is_fact_not_class_compare():
     assert route_llm.needs_report is False
     assert route_llm.report_type is None
     assert route_llm.source == "hard"
+
+
+def test_subject_research_routing_isolation():
+    from src.agent.education.intent_router import plan_items_for_route
+    from src.agent.education.query_parse import is_subject_research_report_query
+
+    hit = "扬州中学 3 月学科教研分析报告"
+    assert is_subject_research_report_query(hit) is True
+    route = classify_report_intent_sync(hit)
+    assert route.needs_report is True
+    assert route.report_type == ReportType.SUBJECT_RESEARCH
+    assert route.source == "hard"
+    assert _route(hit) == "subject_research"
+    spec = ReportIntentResolver().resolve(hit)
+    assert spec.report_type == ReportType.SUBJECT_RESEARCH
+    assert spec.filters.get("school_name") == "扬州中学"
+    assert "class_name" not in spec.filters
+    blob = " ".join(p["sub_task"] for p in plan_items_for_route(route, hit))
+    assert "调 build_subject_research_report_data_tool" in blob
+    assert "调 build_subject_diagnosis_sections_tool" not in blob
+
+    math_q = "扬州中学数学教研分析报告"
+    spec_m = ReportIntentResolver().resolve(math_q)
+    assert spec_m.report_type == ReportType.SUBJECT_RESEARCH
+    assert spec_m.filters.get("subject") == "数学"
+
+    ask = "给我出一份学科教研分析报告"
+    assert classify_report_intent_sync(ask).report_type == ReportType.SUBJECT_RESEARCH
+
+    assert classify_report_intent_sync("扬州中学 3 月数学科目诊断").report_type == (
+        ReportType.SUBJECT_DIAGNOSIS
+    )
+    assert classify_report_intent_sync("扬州中学 3 月数学学科诊断").report_type == (
+        ReportType.SUBJECT_DIAGNOSIS
+    )
+    assert classify_report_intent_sync("扬州中学 3 月数学分析报告").report_type == (
+        ReportType.SUBJECT_DIAGNOSIS
+    )
+    assert classify_report_intent_sync("高三(5)班临界生预警").report_type == (
+        ReportType.TIER_ALERT
+    )
+    assert classify_report_intent_sync("全市理前100分析").report_type == (
+        ReportType.ELITE_ROSTER
+    )
+    assert classify_report_intent_sync("贡献分分析").report_type == ReportType.CONTRIBUTION
+    assert is_subject_research_report_query("八校分析报告") is False
+    assert classify_report_intent_sync("八校分析报告").report_type != (
+        ReportType.SUBJECT_RESEARCH
+    )
+
+
+def test_subject_research_bypasses_llm():
+    q = "扬州中学教科院分析报告"
+    llm = _FakeLlm(
+        '{"needs_report":true,"report_type":"subject_diagnosis",'
+        '"confidence":0.99,"reason":"分析报告"}'
+    )
+    route = _run(classify_report_intent(q, llm))
+    assert route.report_type == ReportType.SUBJECT_RESEARCH
+    assert route.source == "hard"
