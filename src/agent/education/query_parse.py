@@ -642,43 +642,21 @@ def is_score_threshold_fact_query(question: str) -> bool:
     )
 
 
+# 「报」允许省略末字「告」，避免「学科教研分析报」落到自由 SQL。
+_SUBJECT_RESEARCH_HINTS = (
+    "学科教研分析",
+    "教研分析报",
+    "教科院分析报",
+    "教科院学科分析",
+)
+
+
 def is_subject_research_report_query(question: str) -> bool:
     """一校×一场学科教研分析报告。正词收窄，避免抢走科目诊断。"""
     q = (question or "").strip()
     if not q:
         return False
-    if "学科教研分析报告" in q:
-        return True
-    if "教研分析报告" in q:
-        return True
-    if "教科院分析报告" in q or "教科院学科分析" in q:
-        return True
-    return False
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    return any(h in q for h in _SUBJECT_RESEARCH_HINTS)
 
 
 def is_bureau_report_query(question: str) -> bool:

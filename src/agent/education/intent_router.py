@@ -70,7 +70,15 @@ _REPORT_TYPE_DEFS: dict[ReportType, str] = {
 _FALLBACK_KEYWORDS: list[tuple[ReportType, tuple[str, ...]]] = [
     (
         ReportType.SUBJECT_RESEARCH,
-        ("学科教研分析报告", "教研分析报告", "教科院分析报告", "教科院学科分析"),
+        (
+            "学科教研分析报告",
+            "学科教研分析报",
+            "教研分析报告",
+            "教研分析报",
+            "教科院分析报告",
+            "教科院分析报",
+            "教科院学科分析",
+        ),
     ),
     (
         ReportType.LINE_REACH,
@@ -215,7 +223,15 @@ _POSITIVE_HINTS: dict[ReportType, tuple[str, ...]] = {
     ReportType.COMBO_REACH: ("选科组合达线", "各选择组合达线"),
     ReportType.ELITE_ROSTER: ("理前100", "文前30", "冲刺清北", "冲刺南大"),
     ReportType.SCORE_BAND: ("十分段", "10分段", "五分段", "5分段", "分段统计"),
-    ReportType.SUBJECT_RESEARCH: ("学科教研分析报告", "教研分析报告", "教科院分析报告", "教科院学科分析"),
+    ReportType.SUBJECT_RESEARCH: (
+        "学科教研分析报告",
+        "学科教研分析报",
+        "教研分析报告",
+        "教研分析报",
+        "教科院分析报告",
+        "教科院分析报",
+        "教科院学科分析",
+    ),
 }
 
 _NEGATIVE_HINTS: dict[ReportType, tuple[str, ...]] = {

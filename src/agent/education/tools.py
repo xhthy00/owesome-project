@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from src.agent.education.charts import build_chart_option as _build_chart_option
@@ -6130,6 +6131,7 @@ def build_subject_research_report_data_tool(
         bound_research_school,
         build_subject_research_report_data,
         item_school_select_sql,
+        match_schools,
         overview_plain_select_sql,
         paper_school_avg_select_sql,
         research_needs_citywide,
@@ -6229,18 +6231,46 @@ def build_subject_research_report_data_tool(
     school_query = bound_research_school(
         edu_scope, asked_school or _permission_school_hint(ctx)
     )
+    if not school_query:
+        return ToolResult(
+            content="请指定学校。学科教研分析报告按一校一场生成，不默认全市、不循环多校。",
+            data={"error": "need_school"},
+        )
     want_subjects = research_subjects(subject)
     score_subject = "" if len(want_subjects) > 1 else (want_subjects[0] if want_subjects else "")
-    score_rows = _q(score_school_avg_select_sql(exam, score_subject), "score")
-    paper_rows = _q(paper_school_avg_select_sql(exam, score_subject), "paper")
-    item_agg_rows = _q(item_school_select_sql(exam, score_subject), "item")
-    overview = _q(overview_plain_select_sql(exam), "overview")
-    bars = normalize_fraction_bars(_q(fraction_bar_select_sql(exam), "bars"))
-    prev_scores = (
-        _q(score_school_avg_select_sql(prev_exam, score_subject), "prev_score")
-        if prev_exam
-        else []
-    )
+    target_xx = [
+        str(s.get("s_name") or "").strip()
+        for s in match_schools(schools, school_query, user_q)
+        if str(s.get("s_name") or "").strip()
+    ]
+    bars_raw = _q(fraction_bar_select_sql(exam), "bars")
+    bars = normalize_fraction_bars(bars_raw)
+    thresholds = [
+        float(b["threshold"])
+        for b in bars
+        if isinstance(b, dict) and b.get("threshold") is not None
+    ]
+    jobs: dict[str, str] = {
+        "score": score_school_avg_select_sql(exam, score_subject),
+        "paper": paper_school_avg_select_sql(exam, score_subject),
+        "item": item_school_select_sql(exam, score_subject),
+    }
+    if target_xx:
+        jobs["overview"] = overview_plain_select_sql(exam, target_xx, thresholds)
+    if prev_exam:
+        jobs["prev_score"] = score_school_avg_select_sql(prev_exam, score_subject)
+    fetched: dict[str, list[dict[str, Any]]] = {}
+    t_par = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=len(jobs)) as pool:
+        futs = {pool.submit(_q, sql, label): label for label, sql in jobs.items()}
+        for fut, label in futs.items():
+            fetched[label] = fut.result()
+    logger.info("学科教研并行查询 %.1fs labels=%s", time.perf_counter() - t_par, list(jobs))
+    score_rows = fetched.get("score") or []
+    paper_rows = fetched.get("paper") or []
+    item_agg_rows = fetched.get("item") or []
+    overview = fetched.get("overview") or []
+    prev_scores = fetched.get("prev_score") or []
 
     data = build_subject_research_report_data(
         schools=schools,
@@ -6257,11 +6287,6 @@ def build_subject_research_report_data_tool(
         subject_name=subject,
     )
     data["REPORT_TIME"] = _now_str()
-    if not school_query:
-        return ToolResult(
-            content="请指定学校。学科教研分析报告按一校一场生成，不默认全市、不循环多校。",
-            data={"error": "need_school", **data},
-        )
     if not render:
         return ToolResult(content="学科教研分析 data 已组装。", data=data)
 

@@ -525,15 +525,63 @@ def detail_select_sql(exam_name: str, subject: str = "") -> str:
     return paper_sum_select_sql(exam_name, subject)
 
 
-def overview_plain_select_sql(exam_name: str) -> str:
-    """第一期始终取 xm，不走 privacy_mode 分支。"""
+def overview_plain_select_sql(
+    exam_name: str,
+    school_xx: list[str] | None = None,
+    thresholds: list[float] | None = None,
+) -> str:
+    """第一期始终取 xm。有本校名时不拉全市花名册（尖子生/切线生在库内筛）。"""
     lit = _esc(exam_name)
-    return (
+    cols = (
         "SELECT exam_name, xm, xh, anon_stu_id, xx, dq, bj, xkkm, xsxz, "
         "zf6m, yw, sx, yy, wl, hx, sw, zz, ls, dl, "
         "hxzh, hxdj, swzh, swdj, zzzh, zzdj, dlzh, dldj "
-        f"FROM tb_score_overview WHERE exam_name = '{lit}' LIMIT 50000"
+        f"FROM tb_score_overview WHERE exam_name = '{lit}' "
+        "AND COALESCE(xsxz, '') <> '市报生'"
     )
+    names = [_esc(x) for x in (school_xx or []) if _str(x)]
+    if not names:
+        return cols + " LIMIT 50000"
+    xx_sql = ", ".join(f"'{n}'" for n in names)
+    phy = "(xkkm LIKE '物%')"
+    his = "(xkkm LIKE '史%' OR xkkm LIKE '历%')"
+    parts = [
+        f"xx IN ({xx_sql})",
+        (
+            "anon_stu_id IN (SELECT anon_stu_id FROM ("
+            "SELECT anon_stu_id, RANK() OVER (ORDER BY zf6m DESC NULLS LAST) AS rk "
+            f"FROM tb_score_overview WHERE exam_name = '{lit}' "
+            f"AND COALESCE(xsxz, '') <> '市报生' AND {phy}"
+            ") t WHERE rk <= 100)"
+        ),
+        (
+            "anon_stu_id IN (SELECT anon_stu_id FROM ("
+            "SELECT anon_stu_id, RANK() OVER (ORDER BY zf6m DESC NULLS LAST) AS rk "
+            f"FROM tb_score_overview WHERE exam_name = '{lit}' "
+            f"AND COALESCE(xsxz, '') <> '市报生' AND {his}"
+            ") t WHERE rk <= 30)"
+        ),
+    ]
+    nums: list[float] = []
+    for raw in thresholds or []:
+        n = _num(raw)
+        if n is not None:
+            nums.append(n)
+    if nums:
+        in_list = ", ".join(str(n) for n in nums)
+        parts.append(f"zf6m IN ({in_list})")
+        thr_union = " UNION ALL ".join(f"SELECT {n} AS thr" for n in nums)
+        for track_pred in (phy, his):
+            parts.append(
+                "anon_stu_id IN ("
+                f"SELECT s.anon_stu_id FROM ({thr_union}) b JOIN LATERAL ("
+                "SELECT ov.anon_stu_id FROM tb_score_overview ov "
+                f"WHERE ov.exam_name = '{lit}' AND COALESCE(ov.xsxz, '') <> '市报生' "
+                f"AND ov.zf6m >= b.thr AND {track_pred.replace('xkkm', 'ov.xkkm')} "
+                "ORDER BY ov.zf6m ASC NULLS LAST LIMIT 1"
+                ") s ON TRUE)"
+            )
+    return cols + " AND (" + " OR ".join(parts) + ") LIMIT 5000"
 
 
 def _track_of(xkkm: str) -> str:
