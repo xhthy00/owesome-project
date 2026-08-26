@@ -17,6 +17,7 @@ from src.agent.education.orchestrator import ReportIntentResolver
 from src.agent.education.query_parse import (
     extract_exam_name_hint,
     extract_school_target,
+    extract_school_type_target,
     extract_student_target,
     is_citywide_analysis_query,
     is_class_overview_query,
@@ -26,6 +27,7 @@ from src.agent.education.query_parse import (
     is_line_reach_report_query,
     is_school_class_comparison_query,
     is_school_exam_report_query,
+    is_school_vs_city_avg_query,
     is_tier_alert_query,
 )
 from src.agent.education.report_types import ReportType
@@ -609,6 +611,36 @@ def test_school_or_district_line_reach_is_fact(question: str):
     assert "禁止套用全市达线" in blob
 
 
+def test_leading_school_citywide_line_reach_is_fact_not_city_report():
+    q = "2026届高三1月期末全市引领校达线情况"
+    assert extract_school_type_target(q) == "引领"
+    assert extract_school_type_target("全市达线情况") is None
+    assert is_line_reach_query(q) is True
+    assert is_line_reach_report_query(q) is False
+    assert _route(q) == "fact"
+    route = classify_report_intent_sync(q)
+    assert route.needs_report is False
+    assert route.report_type is None
+    blob = build_fact_query_plan_items(q)[0]["sub_task"]
+    assert "build_line_reach_report_data_tool" not in blob
+    assert "tb_school" in blob
+    assert "type" in blob
+    assert "引领" in blob
+    assert "tb_score_indicator" in blob
+    assert "禁止套用全市达线" in blob
+    wrong = [
+        {
+            "sub_task": "调 build_line_reach_report_data_tool(render=true)",
+            "sub_task_agent": "ToolExpert",
+        },
+    ]
+    fixed = coerce_plan_items_if_needed(q, wrong)
+    fixed_blob = " ".join(p["sub_task"] for p in fixed)
+    assert "调 build_line_reach_report_data_tool" not in fixed_blob
+    assert "tb_score_indicator" in fixed_blob
+    assert "tb_school" in fixed_blob
+
+
 def test_resolver_planner_dispatch_consistent():
     from src.agent.education.intent_router import plan_items_for_route
 
@@ -627,3 +659,101 @@ def test_resolver_planner_dispatch_consistent():
         assert plans
         blob = " ".join(p["sub_task"] for p in plans)
         assert blob.strip()
+
+
+def test_score_band_report_vs_threshold_fact():
+    from src.agent.education.query_parse import is_score_band_report_query
+    from src.templates.sql_gen_prompt import resolve_edu_sql_intent
+
+    q_report = "各地区总分十分段情况分析"
+    assert is_score_band_report_query(q_report) is True
+    route = classify_report_intent_sync(q_report)
+    assert route.needs_report is True
+    assert route.report_type == ReportType.SCORE_BAND
+    assert _route("高三(1)班分数段情况") != "score_band"
+
+    q_fact = "邗江物理类600分以上多少人"
+    assert classify_report_intent_sync(q_fact).needs_report is False
+    blob = build_fact_query_plan_items(q_fact)[0]["sub_task"]
+    assert "tb_score_overview" in blob
+    assert "zf6m" in blob
+    assert "hxzh" in blob
+    assert resolve_edu_sql_intent(q_fact) == "score_band"
+
+    q_chem = "全市化学86到90分多少人"
+    assert classify_report_intent_sync(q_chem).needs_report is False
+    assert resolve_edu_sql_intent(q_chem) == "score_band"
+
+    q10 = "2026届高三1月各区县总分10分段统计"
+    assert is_score_band_report_query(q10) is True
+    route10 = classify_report_intent_sync(q10)
+    assert route10.needs_report is True
+    assert route10.report_type == ReportType.SCORE_BAND
+    from src.agent.education.intent_router import plan_items_for_route
+
+    blob10 = " ".join(p["sub_task"] for p in plan_items_for_route(route10, q10))
+    assert "build_score_band_report_data_tool" in blob10
+
+    q_sch = "2026届高三1月扬州中学总分10分段分布情况"
+    assert extract_school_target(q_sch) == "扬州中学"
+    assert is_score_band_report_query(q_sch) is False
+    route_sch = classify_report_intent_sync(q_sch)
+    assert route_sch.needs_report is False
+    blob_sch = build_fact_query_plan_items(q_sch)[0]["sub_task"]
+    assert "扬州中学" in blob_sch
+    assert "各区县 HTML" in blob_sch or "禁止出全市" in blob_sch
+    assert "build_score_band_report_data_tool" not in blob_sch
+
+
+def test_school_vs_city_avg_is_fact_not_class_compare():
+    """点名学校均分 vs 全市是事实问，不能落到班级横向对比。"""
+    from src.agent.education.orchestrator import _extract_subject
+    from src.templates.sql_gen_prompt import resolve_edu_sql_intent
+
+    q = "2026届高三1月扬州中学物理类均分与全市的比较分析"
+    assert extract_school_target(q) == "扬州中学"
+    assert _extract_subject(q) is None
+    assert is_school_vs_city_avg_query(q) is True
+    assert is_school_class_comparison_query(q) is False
+    assert is_school_exam_report_query(q) is False
+    route = classify_report_intent_sync(q)
+    assert route.needs_report is False
+    assert route.report_type is None
+    assert _route(q) == "fact"
+    item = build_fact_query_plan_items(q)[0]
+    blob = item["sub_task"]
+    assert item["sub_task_agent"] == "DataAnalyst"
+    assert "扬州中学" in blob
+    assert "zf6m" in blob
+    assert "xx LIKE" in blob
+    assert "GZ_" in blob
+    assert "班级横向" in blob
+    assert "build_subject_diagnosis" not in blob
+    assert "科目【物理】" not in blob
+    assert "选科【物理类】" in blob
+    assert resolve_edu_sql_intent(q) == "overview_avg"
+
+    q_end = "2026届高三1月期末扬州中学物理类均分与全市的对比"
+    assert is_school_vs_city_avg_query(q_end) is True
+    assert "xx LIKE" in build_fact_query_plan_items(q_end)[0]["sub_task"]
+
+    q_own = "2026届高三1月期末本校物理类均分与全市的对比"
+    assert is_school_vs_city_avg_query(q_own) is True
+    assert is_citywide_analysis_query(q_own) is False
+    route_own = classify_report_intent_sync(q_own)
+    assert route_own.needs_report is False
+    assert _route(q_own) == "fact"
+
+    assert _extract_subject("扬州中学物理成绩分析") == "物理"
+    cmp_q = "扬州中学高二数学班级横向对比学情分析"
+    assert is_school_vs_city_avg_query(cmp_q) is False
+    assert is_school_class_comparison_query(cmp_q) is True
+
+    llm = _FakeLlm(
+        '{"needs_report":true,"report_type":"grade_comparison",'
+        '"confidence":0.9,"reason":"比较分析"}'
+    )
+    route_llm = _run(classify_report_intent(q, llm))
+    assert route_llm.needs_report is False
+    assert route_llm.report_type is None
+    assert route_llm.source == "hard"

@@ -785,10 +785,19 @@ def build_line_reach_payload(
             "message": "学生账号不可查看达线看板",
         }
     merged = attach_school_dimension(overview_rows, score_scope_rows, school_rows)
-    students = filter_students_by_scope(normalize_overview_students(merged), scope)
+    role = (getattr(scope, "edu_role", None) or "").strip()
+    raw_students = normalize_overview_students(merged)
+    if role in ("school_admin", "teacher"):
+        students = raw_students
+    else:
+        students = filter_students_by_scope(raw_students, scope)
     bars = normalize_fraction_bars(bar_rows)
     payload = aggregate_district_line_reach(
         students, bars, exam_name=exam_name, track=track
     )
     payload["accessible"] = True
+    if role in ("school_admin", "teacher"):
+        for d in payload.get("districts") or []:
+            if isinstance(d, dict):
+                d["schools"] = []
     return payload

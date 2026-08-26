@@ -18,6 +18,7 @@ from src.agent.resource.tool import business as biz
 from src.chat.schemas import ChatRequest
 from src.chat.service.agent_runner import (
     _is_lockable_table,
+    _maybe_emit_legacy_sql_result,
     _maybe_emit_report,
     _on_tool_result,
     _RunConstraints,
@@ -387,6 +388,37 @@ def test_describe_exam_batch_does_not_lock_table():
         },
     )
     assert state.constraints.locked_tables == []
+
+
+def test_school_vs_city_avg_tool_emits_sql_result():
+    events: list[tuple[str, dict]] = []
+
+    async def emit(event: str, data: dict) -> None:
+        events.append((event, dict(data)))
+
+    state = _RunState(sub_task_index=0)
+    payload = {
+        "tool": "query_school_vs_city_avg_tool",
+        "success": True,
+        "round": 1,
+        "data": {
+            "sql": "SELECT * FROM tb_score_overview WHERE exam_name = '2026届高三1月期末'",
+            "columns": ["scope", "avg_zf6m", "n"],
+            "rows": [["扬州中学", 580.1, 200], ["全市", 540.2, 8000]],
+            "row_count": 2,
+        },
+    }
+    _on_tool_result(state, payload)
+    assert state.last_sql.endswith("2026届高三1月期末'")
+    assert state.last_exec_result == {
+        "columns": ["scope", "avg_zf6m", "n"],
+        "rows": [["扬州中学", 580.1, 200], ["全市", 540.2, 8000]],
+        "row_count": 2,
+    }
+    _run(_maybe_emit_legacy_sql_result(state, payload, emit))
+    names = [e for e, _ in events]
+    assert names == ["sql", "result"]
+    assert events[1][1]["row_count"] == 2
 
 
 def test_line_reach_report_bypasses_exam_batch_table_lock():

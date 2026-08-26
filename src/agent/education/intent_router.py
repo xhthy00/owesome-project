@@ -62,6 +62,7 @@ _REPORT_TYPE_DEFS: dict[ReportType, str] = {
     ReportType.CONTRIBUTION: "预测线贡献分（切线生各科均值）",
     ReportType.COMBO_REACH: "理科选科组合特控/本科达线",
     ReportType.ELITE_ROSTER: "理前100/文前30脱敏高分名单",
+    ReportType.SCORE_BAND: "各区县/各类校总分十分段与学科五分段（人数/比例/累计）",
 }
 
 #: 兜底关键词表（仅在 needs_report=true 时用于选型）
@@ -70,6 +71,7 @@ _FALLBACK_KEYWORDS: list[tuple[ReportType, tuple[str, ...]]] = [
         ReportType.LINE_REACH,
         ("达线情况", "达线分析", "达线报告", "达线环比", "预测线分析"),
     ),
+    (ReportType.SCORE_BAND, ("十分段", "10分段", "五分段", "5分段", "分段统计")),
     (
         ReportType.COMPREHENSIVE,
         (
@@ -207,13 +209,17 @@ _POSITIVE_HINTS: dict[ReportType, tuple[str, ...]] = {
     ReportType.CONTRIBUTION: ("贡献分",),
     ReportType.COMBO_REACH: ("选科组合达线", "各选择组合达线"),
     ReportType.ELITE_ROSTER: ("理前100", "文前30", "冲刺清北", "冲刺南大"),
+    ReportType.SCORE_BAND: ("十分段", "10分段", "五分段", "5分段", "分段统计"),
 }
 
 _NEGATIVE_HINTS: dict[ReportType, tuple[str, ...]] = {
     ReportType.GROUP_FEATURE: ("横向对比", "横向分析", "班级横向", "各班横向", "各个班级"),
     ReportType.CLASS_OVERVIEW: ("横向", "各班", "小题", "知识点", "预警", "群体特征"),
-    ReportType.GRADE_COMPARISON: ("群体特征", "按班级群体", "临界生", "总览"),
-    ReportType.DIAGNOSTIC_REPORT: ("达线", "预测线", "分数线", "均分情况", "ABCDE", "位次", "贡献分"),
+    ReportType.GRADE_COMPARISON: ("群体特征", "按班级群体", "临界生", "总览", "与全市", "全市均分"),
+    ReportType.DIAGNOSTIC_REPORT: (
+        "达线", "预测线", "分数线", "均分情况", "ABCDE", "位次", "贡献分",
+        "十分段", "10分段", "五分段", "5分段", "分段统计",
+    ),
     ReportType.SUBJECT_DIAGNOSIS: (
         "横向对比",
         "各个班级",
@@ -233,6 +239,7 @@ _TIE_BREAK: dict[ReportType, int] = {
     ReportType.CONTRIBUTION: 88,
     ReportType.COMBO_REACH: 87,
     ReportType.ELITE_ROSTER: 86,
+    ReportType.SCORE_BAND: 93,
     ReportType.DIAGNOSTIC_REPORT: 85,
     ReportType.STUDENT_PROFILE: 85,
     ReportType.COMPREHENSIVE: 80,
@@ -299,6 +306,7 @@ def _bureau_report_type(question: str) -> ReportType | None:
         is_contribution_report_query,
         is_elite_roster_report_query,
         is_rank_bucket_report_query,
+        is_score_band_report_query,
         is_subject_avg_report_query,
     )
 
@@ -309,6 +317,8 @@ def _bureau_report_type(question: str) -> ReportType | None:
         return ReportType.ELITE_ROSTER
     if is_contribution_report_query(q):
         return ReportType.CONTRIBUTION
+    if is_score_band_report_query(q):
+        return ReportType.SCORE_BAND
     if is_rank_bucket_report_query(q):
         return ReportType.RANK_BUCKET
     if is_assign_grade_report_query(q):
@@ -327,6 +337,8 @@ def _candidate_pool(question: str) -> list[ReportType]:
         is_line_reach_query,
         is_line_reach_report_query,
         is_multi_exam_class_analysis_query,
+        is_school_vs_city_avg_query,
+        is_score_threshold_fact_query,
         is_structured_diagnostic_query,
         is_tier_alert_query,
         is_trend_tracking_query,
@@ -341,6 +353,10 @@ def _candidate_pool(question: str) -> list[ReportType]:
     if is_line_reach_report_query(q):
         return [ReportType.LINE_REACH]
     if is_line_reach_query(q):
+        return []
+    if is_score_threshold_fact_query(q):
+        return []
+    if is_school_vs_city_avg_query(q):
         return []
     if is_citywide_analysis_query(q) or is_structured_diagnostic_query(q):
         return [ReportType.DIAGNOSTIC_REPORT]
@@ -357,6 +373,7 @@ def _candidate_pool(question: str) -> list[ReportType]:
         ReportType.CONTRIBUTION,
         ReportType.COMBO_REACH,
         ReportType.ELITE_ROSTER,
+        ReportType.SCORE_BAND,
     ):
         candidates.discard(rt)
 
@@ -367,6 +384,8 @@ def _candidate_pool(question: str) -> list[ReportType]:
         candidates.discard(ReportType.GROUP_FEATURE)
         if not has_class_compare:
             candidates.discard(ReportType.GRADE_COMPARISON)
+    elif "全市" in q and not has_class_compare:
+        candidates.discard(ReportType.GRADE_COMPARISON)
 
     if has_class_compare and not has_explicit_group:
         candidates.discard(ReportType.GROUP_FEATURE)
@@ -502,6 +521,8 @@ def fallback_classify_report_intent(question: str) -> ReportRoute:
         is_multi_exam_class_analysis_query,
         is_school_class_comparison_query,
         is_school_exam_report_query,
+        is_school_vs_city_avg_query,
+        is_score_threshold_fact_query,
         is_structured_diagnostic_query,
         is_tier_alert_query,
         is_trend_tracking_query,
@@ -540,6 +561,22 @@ def fallback_classify_report_intent(question: str) -> ReportRoute:
             report_type=None,
             confidence=0.95,
             reason="达线/预测线走指标表事实查询",
+            source="hard",
+        )
+    if is_score_threshold_fact_query(q):
+        return ReportRoute(
+            needs_report=False,
+            report_type=None,
+            confidence=0.95,
+            reason="分数阈值/分段人数走 overview 事实查询",
+            source="hard",
+        )
+    if is_school_vs_city_avg_query(q):
+        return ReportRoute(
+            needs_report=False,
+            report_type=None,
+            confidence=0.95,
+            reason="学校均分与全市比较走 overview 事实查询",
             source="hard",
         )
 
@@ -669,15 +706,18 @@ def _build_classify_prompt(question: str, candidates: list[ReportType]) -> list[
         "规则：\n"
         "- 事实查询（谁最高分、多少人、均分多少、排名第几、是谁、达线人数/率）→ needs_report=false，"
         "report_type=null\n"
+        "- 点名学校的均分与全市/市均比较 → needs_report=false，不是 grade_comparison，"
+        "不是班级横向对比；物理类/历史类是选科方向（xkkm），不是物理/历史学科\n"
         "- 达线/预测线人数或率（未要求分析报告）→ needs_report=false\n"
         "- 全市/各区达线情况、达线分析/报告、环比 → line_reach，禁止出结构化诊断报告\n"
-        "- 点了班级或具体学校且未要求全市/各区对比时，达线问句 needs_report=false，"
-        "不是 line_reach\n"
+        "- 点了班级、具体学校、或引领校/支撑校/发展校时，达线问句 needs_report=false，"
+        "不是 line_reach（全市达线报告是全体学校合计）\n"
         "- 明确要报告/总览/诊断/横向对比/群体特征/预警/学情分析报告/个人画像 → needs_report=true，"
         "并从候选中选 report_type\n"
         "- 具名学生（学号/姓名）+ 个人画像/学情/个人报告 → student_profile，"
         "不是 subject_diagnosis\n"
-        "- 「班级横向对比」→ grade_comparison，不是 group_feature\n"
+        "- 「班级横向对比 / 各班横向」→ grade_comparison，不是 group_feature；"
+        "仅「比较分析」且对比全市时不要选 grade_comparison\n"
         "- 仅当明确「群体特征/按班级群体」时选 group_feature\n"
         "- 拿不准时 needs_report=false（宁可只回答，不强行出报告）\n"
     )
@@ -757,6 +797,8 @@ async def classify_report_intent(
         is_knowledge_cohort_gap_query,
         is_line_reach_query,
         is_line_reach_report_query,
+        is_school_vs_city_avg_query,
+        is_score_threshold_fact_query,
         is_structured_diagnostic_query,
     )
 
@@ -784,6 +826,22 @@ async def classify_report_intent(
             report_type=None,
             confidence=0.95,
             reason="达线/预测线走指标表事实查询",
+            source="hard",
+        )
+    if is_score_threshold_fact_query(q):
+        return ReportRoute(
+            needs_report=False,
+            report_type=None,
+            confidence=0.95,
+            reason="分数阈值/分段人数走 overview 事实查询",
+            source="hard",
+        )
+    if is_school_vs_city_avg_query(q):
+        return ReportRoute(
+            needs_report=False,
+            report_type=None,
+            confidence=0.95,
+            reason="学校均分与全市比较走 overview 事实查询",
             source="hard",
         )
     if is_knowledge_cohort_gap_query(q):
@@ -866,6 +924,7 @@ EXPECTED_PLAN_TOOLS: dict[ReportType, frozenset[str]] = {
     ReportType.CONTRIBUTION: frozenset({"build_contribution_report_data_tool"}),
     ReportType.COMBO_REACH: frozenset({"build_combo_reach_report_data_tool"}),
     ReportType.ELITE_ROSTER: frozenset({"build_elite_roster_report_data_tool"}),
+    ReportType.SCORE_BAND: frozenset({"build_score_band_report_data_tool"}),
 }
 
 
@@ -951,6 +1010,7 @@ def plan_items_for_report_type(
         ReportType.CONTRIBUTION: "build_contribution_report_data_tool",
         ReportType.COMBO_REACH: "build_combo_reach_report_data_tool",
         ReportType.ELITE_ROSTER: "build_elite_roster_report_data_tool",
+        ReportType.SCORE_BAND: "build_score_band_report_data_tool",
     }
     tool = tool_by_rt.get(rt)
     if tool:
@@ -1007,6 +1067,7 @@ def plan_is_fact_query(plan_items: list[dict[str, str]] | None) -> bool:
             "build_contribution_report_data_tool",
             "build_combo_reach_report_data_tool",
             "build_elite_roster_report_data_tool",
+            "build_score_band_report_data_tool",
             "compare_knowledge_cohort_tool",
             "render_html_report",
         )

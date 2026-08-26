@@ -120,6 +120,7 @@ const REPORT_TYPE_MARKERS = new Set([
   "contribution",
   "combo_reach",
   "elite_roster",
+  "score_band",
   "班级总览报告",
   "班级横向对比报告",
   "科目诊断报告",
@@ -135,7 +136,8 @@ const REPORT_TYPE_MARKERS = new Set([
   "高分位次分析",
   "贡献分分析",
   "选科组合达线",
-  "高分名单分析"
+  "高分名单分析",
+  "分段统计"
 ]);
 
 /** 报告列表/预览标题：报告名称【报告类型】 */

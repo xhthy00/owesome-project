@@ -190,6 +190,21 @@ LIMIT 1000;
 -- 全科总分用 tb_score_overview.zf6m；学生标识 anon_stu_id；禁止 xm/sfzh/ksh</suggestion-answer>
   </example>
   <example>
+    <question>2026届高三1月扬州中学物理类均分与全市的比较分析</question>
+    <suggestion-answer>SELECT '扬州中学' AS scope, ROUND(AVG(zf6m), 2) AS avg_zf6m, COUNT(*) AS n
+FROM tb_score_overview
+WHERE exam_name LIKE '%2026届高三1月%'
+  AND xkkm LIKE '物%'
+  AND xx LIKE '%扬州中学%'
+UNION ALL
+SELECT '全市' AS scope, ROUND(AVG(zf6m), 2) AS avg_zf6m, COUNT(*) AS n
+FROM tb_score_overview
+WHERE exam_name LIKE '%2026届高三1月%'
+  AND xkkm LIKE '物%'
+LIMIT 1000;
+-- 两行对比：scope+avg_zf6m+n。overview.xx 是学校明文，用 xx LIKE '%扬州中学%'；全市那一支禁止 xx；禁止 GROUP BY xx 当全市；禁止 xx='GZ_…'（校码不是校名）；物理类=xkkm 不是物理单科；禁止 exam_type / 班级横向报告</suggestion-answer>
+  </example>
+  <example>
     <question>2026届高三5月模拟理科语数外三门均分的学校排名</question>
     <suggestion-answer>SELECT xx AS school,
        COUNT(*) AS candidates,
@@ -201,7 +216,38 @@ GROUP BY xx
 ORDER BY avg_zf3m DESC
 LIMIT 1000;
 -- 语数外/三门均分=AVG(zf3m) 三科总分校均（约 350），禁止除以 3，禁止 tb_score 三科 AVG(score)
--- 理科=物理类 xkkm LIKE '物%'；学校用 xx（如 A01），不要用 tb_school.name 脱敏码</suggestion-answer>
+-- 理科=物理类 xkkm LIKE '物%'；学校用 xx（学校明文），不要用 tb_school.name 脱敏码</suggestion-answer>
+  </example>
+  <example>
+    <question>2026届高三1月期末扬州中学达线情况</question>
+    <suggestion-answer>SELECT line_name,
+       track,
+       SUM(candidates) AS candidates,
+       SUM(reached_count) AS reached_count,
+       ROUND(SUM(reached_count) * 100.0 / NULLIF(SUM(candidates), 0), 2) AS reach_rate
+FROM tb_score_indicator
+WHERE exam_name LIKE '%2026届高三1月期末%'
+  AND school_name LIKE '%扬州中学%'
+GROUP BY line_name, track
+ORDER BY line_name, track
+LIMIT 1000;
+-- 学校达线用 school_name LIKE '%校名%'；禁止 school_id='GZ_…'；禁止用 district='市直' 冒充学校</suggestion-answer>
+  </example>
+  <example>
+    <question>2026届高三1月期末全市引领校达线情况</question>
+    <suggestion-answer>SELECT ind.line_name,
+       ind.track,
+       SUM(ind.candidates) AS candidates,
+       SUM(ind.reached_count) AS reached_count,
+       ROUND(SUM(ind.reached_count) * 100.0 / NULLIF(SUM(ind.candidates), 0), 2) AS reach_rate
+FROM tb_score_indicator ind
+JOIN tb_school sch ON ind.school_name = COALESCE(sch.s_name, sch.name)
+WHERE ind.exam_name LIKE '%2026届高三1月期末%'
+  AND sch."type" LIKE '%引领%'
+GROUP BY ind.line_name, ind.track
+ORDER BY ind.line_name, ind.track
+LIMIT 1000;
+-- 引领/支撑/发展校达线：indicator JOIN tb_school，校类用 sch.type（与 overview.xxlb 同源）；禁止套用全市达线 HTML</suggestion-answer>
   </example>
   <example>
     <question>邗江区物理类本科线达线人数和达线率</question>
@@ -280,16 +326,67 @@ GROUP BY district, line_name
 ORDER BY reach_rate DESC
 LIMIT 1000;</suggestion-answer>
   </example>
+  <example>
+    <question>邗江物理类600分以上多少人</question>
+    <suggestion-answer>SELECT COUNT(*) FILTER (WHERE zf6m &gt;= 600) AS n_ge,
+       COUNT(*) AS n,
+       ROUND(100.0 * COUNT(*) FILTER (WHERE zf6m &gt;= 600) / NULLIF(COUNT(*), 0), 2) AS pct
+FROM tb_score_overview
+WHERE exam_name = '2026届高三1月期末'
+  AND dq LIKE '%邗江%'
+  AND xkkm LIKE '物%'
+LIMIT 1000;
+-- 绝对分数段查 tb_score_overview.zf6m；禁止 tb_score / tb_score_indicator；物理类 xkkm LIKE '物%'</suggestion-answer>
+  </example>
+  <example>
+    <question>全市化学86到90分多少人</question>
+    <suggestion-answer>SELECT COUNT(*) AS n
+FROM tb_score_overview
+WHERE exam_name = '2026届高三1月期末'
+  AND hxzh &gt;= 86 AND hxzh &lt; 91
+LIMIT 1000;
+-- 化学分段用 hxzh（转换分），禁止 hx；未选该科（0/空）不要计入</suggestion-answer>
+  </example>
+  <example>
+    <question>引领校语文110分以上人数</question>
+    <suggestion-answer>SELECT COUNT(*) FILTER (WHERE yw &gt;= 110) AS n_ge,
+       COUNT(*) AS n
+FROM tb_score_overview
+WHERE exam_name = '2026届高三1月期末'
+  AND xxlb LIKE '%引领%'
+  AND xsxz = '在籍生'
+LIMIT 1000;
+-- 引领/支撑/发展走 xxlb 且排除市报生；市报生用 xsxz LIKE '%市报%'</suggestion-answer>
+  </example>
+  <example>
+    <question>2026届高三1月扬州中学总分10分段分布情况</question>
+    <suggestion-answer>SELECT ((CAST(zf6m AS int) - 1) / 10) * 10 + 1 AS band_lo,
+       COUNT(*) AS n
+FROM tb_score_overview
+WHERE exam_name LIKE '%2026届高三1月%'
+  AND xx LIKE '%扬州中学%'
+GROUP BY 1
+ORDER BY 1 DESC
+LIMIT 1000;
+-- 点名学校的十分段是事实查询：zf6m 六门总分，按该校过滤；禁止套用各区县分段 HTML 报告</suggestion-answer>
+  </example>
 </sql-examples>"""
 
 
 # intent -> 示例 <question> 子串，按序挑选（最多 5 条）
 _INTENT_EXAMPLE_KEYS: dict[str, tuple[str, ...]] = {
     "line_reach": (
+        "全市引领校达线情况",
+        "扬州中学达线情况",
         "广陵区本科线达线人数和达线率",
         "邗江区物理类本科线达线人数和达线率",
         "各区特控线达线率对比",
-        "物理类本科线是多少",
+    ),
+    "score_band": (
+        "邗江物理类600分以上多少人",
+        "全市化学86到90分多少人",
+        "引领校语文110分以上人数",
+        "扬州中学总分10分段分布情况",
     ),
     "class_line_reach": (
         "高三(1)班南大达线情况",
@@ -300,6 +397,7 @@ _INTENT_EXAMPLE_KEYS: dict[str, tuple[str, ...]] = {
         "全科总分均分",
         "语数外三门均分的学校排名",
         "邗江区 2026届高三5月模拟数学均分",
+        "扬州中学物理类均分与全市",
     ),
     "class_score": (
         "高一(1)班数学平均分和人数",
@@ -321,7 +419,8 @@ _INTENT_EXAMPLE_KEYS: dict[str, tuple[str, ...]] = {
 _INTENT_TERM_WORDS: dict[str, tuple[str, ...]] = {
     "line_reach": ("达线", "考试", "姓名", "学校"),
     "class_line_reach": ("达线", "班级", "考试", "姓名"),
-    "overview_avg": ("语数外", "考试", "学校", "姓名"),
+    "score_band": ("分以上", "十分段", "10分段", "考试"),
+    "overview_avg": ("语数外", "均分", "考试", "学校", "姓名"),
     "class_score": ("班级", "学校", "及格", "考试", "姓名"),
     "knowledge": ("知识点", "小题", "考试", "学校", "姓名"),
     "default": ("学校", "班级", "考试", "及格", "姓名"),
@@ -352,6 +451,8 @@ def resolve_edu_sql_intent(question: str) -> str:
         extract_class_target,
         is_line_reach_query,
         is_overview_total_query,
+        is_school_vs_city_avg_query,
+        is_score_threshold_fact_query,
     )
 
     q = (question or "").strip()
@@ -361,7 +462,9 @@ def resolve_edu_sql_intent(question: str) -> str:
         if extract_class_target(q):
             return "class_line_reach"
         return "line_reach"
-    if is_overview_total_query(q):
+    if is_score_threshold_fact_query(q):
+        return "score_band"
+    if is_school_vs_city_avg_query(q) or is_overview_total_query(q):
         return "overview_avg"
     if any(h in q for h in ("知识点", "小题", "逐题", "得分率")):
         return "knowledge"
@@ -389,19 +492,42 @@ def education_terminologies_block() -> str:
     pr, er = _pass_excellent_ratios()
     pp, ep = round(pr * 100, 2), round(er * 100, 2)
     try:
-        from src.agent.education.privacy_mode import privacy_sql_instruction
+        from src.agent.education.privacy_mode import (
+            is_anonymize_display_enabled,
+            privacy_sql_instruction,
+        )
 
         privacy_desc = privacy_sql_instruction()
+        if is_anonymize_display_enabled():
+            school_desc = (
+                "对应 tb_school.name（脱敏码）。过滤 tb_score 用 JOIN tb_school sch "
+                "ON sc.school_id = sch.id WHERE sch.name = '学校脱敏码'。"
+                "tb_score_overview.xx 是学校明文，点名学校用 xx LIKE '%校名%'；"
+                "禁止把 GZ_ 校码写进 overview.xx。"
+            )
+        else:
+            school_desc = (
+                "对应 tb_school.s_name（学校全称，当前允许展示）。"
+                "查 tb_score：JOIN tb_school sch ON sc.school_id=sch.id "
+                "WHERE sch.s_name LIKE '%校名%'。"
+                "查 tb_score_overview：xx 是学校明文（如「扬州中学」），用 xx LIKE '%校名%'。"
+                "禁止 xx='GZ_…' / xx=tb_school.id / xx=tb_school.name（那些是脱敏校码）。"
+                "禁止 WHERE sch.name = '扬州中学'（name 仍是脱敏码）。"
+            )
     except Exception:
         privacy_desc = (
             "学校字段：展示与过滤只用 sch.name 或 sch.id / sc.school_id（脱敏码）；"
             "**禁止** SELECT/引用 tb_school.s_name。"
             "学生标识只用 student_id / anon_stu_id；禁止 SELECT xm/xh/sfzh/ksh。"
         )
+        school_desc = (
+            "对应 tb_school.name，过滤用 JOIN tb_school sch ON sc.school_id = sch.id "
+            "WHERE sch.name = '学校名'"
+        )
     return f"""<terminologies>
   <terminology>
     <words><word>学校</word><word>机构</word><word>校区</word></words>
-    <description>对应 tb_school.name，过滤用 JOIN tb_school sch ON sc.school_id = sch.id WHERE sch.name = '学校名'</description>
+    <description>{school_desc}</description>
   </terminology>
   <terminology>
     <words><word>班级</word><word>班</word></words>
@@ -437,15 +563,19 @@ def education_terminologies_block() -> str:
   </terminology>
   <terminology>
     <words><word>语数外</word><word>语数英</word><word>三门</word><word>三门均分</word><word>三门总均分</word><word>四门</word><word>六门</word><word>理科</word><word>文科</word></words>
-    <description>语数外/三门均分=tb_score_overview.zf3m 的校均（三科总分，约 300–450，禁止除以 3，禁止写满分 150，禁止对 tb_score 语文/数学/英语 AVG(score)）。四门=zf4m，六门/全科总分=zf6m。理科=物理类（xkkm LIKE '物%'），文科=历史类（xkkm LIKE '史%' 或 LIKE '历%'）。学校排名 GROUP BY xx ORDER BY AVG(zf3m) DESC，校名用 xx（如 A01），不要用 tb_school.name 脱敏 token。参考人数 COUNT(*)</description>
+    <description>语数外/三门均分=tb_score_overview.zf3m 的校均（三科总分，约 300–450，禁止除以 3，禁止写满分 150，禁止对 tb_score 语文/数学/英语 AVG(score)）。四门=zf4m，六门/全科总分=zf6m。理科=物理类（xkkm LIKE '物%'），文科=历史类（xkkm LIKE '史%' 或 LIKE '历%'）。点名学校均分与全市比较：结果必须两行 scope+avg_zf6m+n（该校/全市 UNION ALL）；overview.xx 是学校明文，用 xx LIKE '%校名%'；禁止把 GZ_ 校码 / tb_school.id / tb_school.name 当作 xx。禁止套用班级横向对比报告。学校排名 GROUP BY xx ORDER BY AVG(zf3m) DESC。参考人数 COUNT(*)</description>
   </terminology>
   <terminology>
     <words><word>达线</word><word>预测线</word><word>特控线</word><word>本科线</word><word>南大</word><word>特招线</word></words>
-    <description>**班级达线**（问句含具体班级）：禁止 tb_score_indicator（无班级粒度）；必须 tb_score_overview.**zf6m** 对照 tb_fraction_bar；**禁止 zf4m/zf3m**；物理类用 wl_score_*、历史类用 ls_score_*，按 xkkm（物%→物理、史%/历%→历史）分轨，班内仅一轨则只报该轨，禁止文理混报；WHERE 必含学校 xx + 班级 bj。**区县/全市/学校达线**：查 tb_score_indicator；exam_name LIKE '%批次%'（如 2026届高三3月）；区县用 district LIKE '%广陵%'，禁止把「3月」拼成「月广陵区」；空结果先 DISTINCT district/exam_name 再下结论；区县或全市须 SUM(reached_count)/SUM(candidates) 重算率，禁止 AVG(reach_rate)。**特招线=特控线**。分数线在 tb_fraction_bar（wl_score_*/ls_score_*；物理美术 wl_socre_ms）。overview 字段：zf6m 全科（达线唯一总分）、zf4m 四门、zf3m 三门、xx/dq/bj、xkkm；学生标识只用 anon_stu_id</description>
+    <description>**班级达线**（问句含具体班级）：禁止 tb_score_indicator（无班级粒度）；必须 tb_score_overview.**zf6m** 对照 tb_fraction_bar；**禁止 zf4m/zf3m**；物理类用 wl_score_*、历史类用 ls_score_*，按 xkkm（物%→物理、史%/历%→历史）分轨，班内仅一轨则只报该轨，禁止文理混报；WHERE 必含学校 xx + 班级 bj。**引领/支撑/发展校达线**：查 tb_score_indicator JOIN tb_school sch ON school_name = COALESCE(s_name, name)，sch."type" LIKE '%引领%'（type 与 overview.xxlb 同源）；禁止套用全市达线 HTML。**区县/全市/学校达线**：查 tb_score_indicator；exam_name LIKE '%批次%'（如 2026届高三3月）；点名学校用 school_name LIKE '%校名%'，禁止 school_id='GZ_…'，禁止用 district='市直' 冒充学校；区县用 district LIKE '%广陵%'，禁止把「3月」拼成「月广陵区」；空结果先 DISTINCT district/exam_name 再下结论；区县或全市须 SUM(reached_count)/SUM(candidates) 重算率，禁止 AVG(reach_rate)。**特招线=特控线**。分数线在 tb_fraction_bar（wl_score_*/ls_score_*；物理美术 wl_socre_ms）。overview 字段：zf6m 全科（达线唯一总分）、zf4m 四门、zf3m 三门、xx/dq/bj、xkkm；学生标识只用 anon_stu_id</description>
   </terminology>
   <terminology>
     <words><word>特招线</word><word>应届</word><word>贡献分</word><word>位次</word><word>ABCDE</word></words>
     <description>特招线=特控线。应届=tb_score_overview.xsxz 在籍生（排除市报生）。ABCDE 聚合 hxdj/swdj/zzdj/dldj。位次前N含并列（zf6m≥第N名分数）。贡献分=达该线且 zf6m 等于切线分的学生各科均值</description>
+  </terminology>
+  <terminology>
+    <words><word>分以上</word><word>十分段</word><word>10分段</word><word>五分段</word><word>总分</word></words>
+    <description>绝对分数段/十分段查 tb_score_overview，禁止 tb_score/tb_score_indicator。问句「总分」未点名语数英/三门时=六门 zf6m（不是 zf3m、不是英语 yy）。N分以上 COUNT FILTER zf6m&gt;=N。十分段/10分段下限 ((CAST(zf6m AS int)-1)/10)*10+1；五分段宽为5。物理类 xkkm LIKE '物%'。化学用 hxzh 禁止 hx。点名学校按该校过滤，禁止套用各区县分段报告。引领校 xxlb LIKE '%引领%' 且 xsxz=在籍生；市报生 xsxz LIKE '%市报%'</description>
   </terminology>
   <terminology>
     <words><word>姓名</word><word>学号</word><word>校名</word><word>脱敏</word></words>

@@ -1,4 +1,4 @@
-"""局端基础分析：均分 / ABCDE / 位次桶 / 贡献分 / 组合达线 / 脱敏高分名单。
+"""局端基础分析：均分 / ABCDE / 位次桶 / 贡献分 / 组合达线 / 脱敏高分名单 / 分段统计。
 
 全部从 tb_score_overview 学生行重算。应届=xsxz 在籍生（排除市报生）。
 特招线与特控线同义。脱敏开启时禁止输出 xm/ksh/sfzh；关闭后可展示姓名与学号。
@@ -25,12 +25,19 @@ __all__ = [
     "aggregate_subject_avg",
     "build_bureau_report_data",
     "build_elite_roster",
+    "compare_school_city_avg",
     "elite_class_select_sql",
     "filter_students",
+    "format_school_city_avg_content",
     "fraction_bar_select_sql",
     "normalize_students",
+    "overview_exam_names_sql",
     "overview_select_sql",
     "parse_track",
+    "school_city_avg_from_union_rows",
+    "school_city_avg_sql",
+    "school_codes_from_lookup",
+    "school_lookup_sql",
     "wants_elite_class",
     "wants_enrolled_only",
 ]
@@ -42,6 +49,7 @@ BUREAU_KINDS: dict[str, ReportType] = {
     "contribution": ReportType.CONTRIBUTION,
     "combo_reach": ReportType.COMBO_REACH,
     "elite_roster": ReportType.ELITE_ROSTER,
+    "score_band": ReportType.SCORE_BAND,
 }
 
 PHYSICS_BUCKETS = (10, 20, 50, 100, 200, 500, 1000, 2000)
@@ -207,6 +215,207 @@ def filter_students(
                 continue
         out.append(row)
     return out
+
+
+def school_lookup_sql(school_name: str) -> str:
+    """按中文校名从 tb_school 取 id/name，供对齐 overview.xx。"""
+    lit = _str(school_name).replace("'", "''")
+    from src.agent.education.privacy_mode import is_anonymize_display_enabled
+
+    if is_anonymize_display_enabled():
+        return (
+            "SELECT id, name FROM tb_school "
+            f"WHERE name LIKE '%{lit}%' LIMIT 50"
+        )
+    return (
+        "SELECT id, name, s_name FROM tb_school "
+        f"WHERE s_name LIKE '%{lit}%' OR name LIKE '%{lit}%' LIMIT 50"
+    )
+
+
+def school_codes_from_lookup(rows: list[dict[str, Any]]) -> list[str]:
+    codes: list[str] = []
+    seen: set[str] = set()
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        for key in ("id", "name"):
+            val = _str(row.get(key))
+            if val and val not in seen:
+                seen.add(val)
+                codes.append(val)
+    return codes
+
+
+def compare_school_city_avg(
+    students: list[dict[str, Any]],
+    *,
+    school_name: str,
+    school_codes: list[str] | None = None,
+    track: str = "",
+    exam_name: str = "",
+) -> dict[str, Any]:
+    """点名学校 vs 全市：六门 zf6m 均分。不出 HTML。"""
+    raw = normalize_students(students)
+    rows = filter_students(raw, track=track) if track else raw
+    codes = {_str(c) for c in (school_codes or []) if _str(c)}
+    needle = _str(school_name)
+    school_rows = [
+        r
+        for r in rows
+        if _str(r.get("xx")) in codes or (needle and needle in _str(r.get("xx")))
+    ]
+    city_vals = [float(r["zf6m"]) for r in rows if r.get("zf6m") is not None]
+    sch_vals = [float(r["zf6m"]) for r in school_rows if r.get("zf6m") is not None]
+    city_avg = _mean(city_vals)
+    school_avg = _mean(sch_vals)
+    delta = None
+    if school_avg is not None and city_avg is not None:
+        delta = round(school_avg - city_avg, 2)
+    if not rows:
+        unmatched_reason = "track_empty" if raw else "no_students"
+    elif not sch_vals:
+        unmatched_reason = "school_not_aligned"
+    else:
+        unmatched_reason = ""
+    table = []
+    if sch_vals:
+        table.append(
+            {"scope": needle or "该校", "avg_zf6m": school_avg, "n": len(sch_vals)}
+        )
+    if city_vals:
+        table.append({"scope": "全市", "avg_zf6m": city_avg, "n": len(city_vals)})
+    return {
+        "exam_name": _str(exam_name),
+        "track": track or "全员",
+        "school_name": needle,
+        "school_matched": bool(sch_vals),
+        "unmatched_reason": unmatched_reason,
+        "school_avg": school_avg,
+        "city_avg": city_avg,
+        "delta": delta,
+        "school_n": len(sch_vals),
+        "city_n": len(city_vals),
+        "table": table,
+    }
+
+
+def school_city_avg_sql(exam_name: str, school_name: str, track: str = "") -> str:
+    """该校 vs 全市均分：聚合 UNION，不拉学生行。"""
+    exam_lit = _str(exam_name).replace("'", "''")
+    sch_lit = _str(school_name).replace("'", "''")
+    track_pred = ""
+    if track == "物理类":
+        track_pred = " AND xkkm LIKE '物%'"
+    elif track == "历史类":
+        track_pred = " AND (xkkm LIKE '史%' OR xkkm LIKE '历%')"
+    return (
+        f"SELECT '{sch_lit}' AS scope, ROUND(AVG(zf6m), 2) AS avg_zf6m, COUNT(*) AS n "
+        f"FROM tb_score_overview WHERE exam_name = '{exam_lit}'{track_pred} "
+        f"AND xx LIKE '%{sch_lit}%' "
+        "UNION ALL "
+        f"SELECT '全市' AS scope, ROUND(AVG(zf6m), 2) AS avg_zf6m, COUNT(*) AS n "
+        f"FROM tb_score_overview WHERE exam_name = '{exam_lit}'{track_pred}"
+    )
+
+
+def school_city_avg_from_union_rows(
+    rows: list[dict[str, Any]],
+    *,
+    school_name: str,
+    exam_name: str = "",
+    track: str = "",
+) -> dict[str, Any]:
+    needle = _str(school_name)
+    school_avg = None
+    city_avg = None
+    school_n = 0
+    city_n = 0
+    for r in rows or []:
+        if not isinstance(r, dict):
+            continue
+        scope = _str(r.get("scope"))
+        n = int(r.get("n") or 0)
+        avg = r.get("avg_zf6m")
+        avg_n = float(avg) if avg is not None and avg != "" else None
+        if scope == "全市":
+            city_avg, city_n = avg_n, n
+        else:
+            school_avg, school_n = avg_n, n
+    delta = None
+    if school_avg is not None and city_avg is not None:
+        delta = round(school_avg - city_avg, 2)
+    if city_n == 0 and school_n == 0:
+        unmatched_reason = "no_students"
+    elif school_n == 0:
+        unmatched_reason = "school_not_aligned"
+    else:
+        unmatched_reason = ""
+    table = []
+    if school_n:
+        table.append({"scope": needle or "该校", "avg_zf6m": school_avg, "n": school_n})
+    if city_n:
+        table.append({"scope": "全市", "avg_zf6m": city_avg, "n": city_n})
+    return {
+        "exam_name": _str(exam_name),
+        "track": track or "全员",
+        "school_name": needle,
+        "school_matched": school_n > 0,
+        "unmatched_reason": unmatched_reason,
+        "school_avg": school_avg,
+        "city_avg": city_avg,
+        "delta": delta,
+        "school_n": school_n,
+        "city_n": city_n,
+        "table": table,
+    }
+
+
+def format_school_city_avg_content(
+    cmp: dict[str, Any],
+    *,
+    overview_exam_names: list[str] | None = None,
+) -> str:
+    """给 Summarizer / 前端的结论。全市有数时禁止说考试名为空。"""
+    exam = _str(cmp.get("exam_name")) or "该场考试"
+    track = _str(cmp.get("track")) or "全员"
+    school = _str(cmp.get("school_name")) or "该校"
+    reason = _str(cmp.get("unmatched_reason"))
+    city_avg = cmp.get("city_avg")
+    city_n = int(cmp.get("city_n") or 0)
+    school_avg = cmp.get("school_avg")
+    school_n = int(cmp.get("school_n") or 0)
+    delta = cmp.get("delta")
+    if reason == "no_students":
+        names = "、".join(
+            _str(x) for x in (overview_exam_names or []) if _str(x)
+        ) or "（未读到非空 exam_name）"
+        return (
+            f"按批次选中「{exam}」后，tb_score_overview 没有该场学生行。"
+            f"库中已有考试名称：{names}。原因是批次未命中，不是校名问题。"
+        )
+    if reason == "track_empty":
+        return f"「{exam}」有学生行，但选科方向「{track}」人数为 0。"
+    if reason == "school_not_aligned" or not cmp.get("school_matched"):
+        return (
+            f"「{exam}」{track}全市六门均分 {city_avg}（{city_n}人）。"
+            f"未能把校名「{school}」对齐到 overview.xx"
+            f"（该列是校码，须经 tb_school.s_name 对齐）。"
+        )
+    sign = "高" if (delta or 0) >= 0 else "低"
+    abs_delta = abs(delta) if delta is not None else 0
+    return (
+        f"「{exam}」{track}：{school}六门均分 {school_avg}（{school_n}人），"
+        f"全市 {city_avg}（{city_n}人），该校{sign} {abs_delta} 分。"
+    )
+
+
+def overview_exam_names_sql() -> str:
+    return (
+        "SELECT DISTINCT exam_name FROM tb_score_overview "
+        "WHERE exam_name IS NOT NULL AND exam_name <> '' "
+        "ORDER BY exam_name LIMIT 40"
+    )
 
 
 def overview_select_sql(exam_name: str) -> str:
@@ -690,6 +899,8 @@ def build_bureau_report_data(
 
     primary = "<p class='edu-sub'>暂无数据。</p>"
     secondary = ""
+    primary_title = "区县" if kind != "elite_roster" else "名单"
+    secondary_title = "学校/班级"
     insight = f"<p>{exam} {scope}共 {len(rows)} 人。</p>"
     recs = ["口径由学生行重算，不以离线汇总表为准。"]
     kpi = [_kpi_card("参考人数", str(len(rows)))]
@@ -780,6 +991,18 @@ def build_bureau_report_data(
             if not is_anonymize_display_enabled()
             else "只展示匿名学号与校码，禁止姓名/考生号/身份证。"
         )
+    elif kind == "score_band":
+        from src.agent.education.score_band import build_score_band_tables
+
+        payload = build_score_band_tables(rows, question=q, exam_name=exam)
+        primary = payload["primary"]
+        secondary = payload["secondary"]
+        primary_title = payload["primary_title"]
+        secondary_title = payload["secondary_title"]
+        for label, value in payload.get("kpis") or []:
+            kpi.append(_kpi_card(label, value))
+        insight = payload.get("insight") or insight
+        recs = list(payload.get("recs") or recs)
 
     title = f"{exam} · {report_type_label(rt)}"
     return {
@@ -793,8 +1016,8 @@ def build_bureau_report_data(
         "KPI_GRID": f'<div class="edu-grid">{"".join(kpi)}</div>',
         "PRIMARY_TABLE": primary,
         "SECONDARY_TABLE": secondary,
-        "PRIMARY_TITLE": "区县" if kind != "elite_roster" else "名单",
-        "SECONDARY_TITLE": "学校/班级",
+        "PRIMARY_TITLE": primary_title,
+        "SECONDARY_TITLE": secondary_title,
         "GENERAL_INSIGHT": insight,
         "SUMMARY": insight,
         "RECOMMENDATIONS": "<ul>" + "".join(f"<li>{x}</li>" for x in recs) + "</ul>",

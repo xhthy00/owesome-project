@@ -307,6 +307,7 @@ _GENERATE_REPORT_ALLOWED_TYPES = frozenset(
         "contribution",
         "combo_reach",
         "elite_roster",
+        "score_band",
     }
 )
 
@@ -855,6 +856,7 @@ def _overview_agg_sql(
     *,
     exam_name: str,
     track: str,
+    include_school: bool = True,
 ) -> str | None:
     """区县/学校/选科达线聚合 SQL；缺总分列时返回 None。
 
@@ -875,7 +877,9 @@ def _overview_agg_sql(
         else "'未知区县'"
     )
     s_expr = (
-        f"COALESCE(CAST({_ident(school_col)} AS TEXT), '')" if school_col else "''"
+        f"COALESCE(CAST({_ident(school_col)} AS TEXT), '')"
+        if school_col and include_school
+        else "''"
     )
     t_ident = _ident(total_col)
     reached = [
@@ -889,12 +893,13 @@ def _overview_agg_sql(
     if track_pred:
         where.append(track_pred)
     where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+    group_by = "GROUP BY 1, 2, 3" if include_school else "GROUP BY 1, 3"
     return (
         f"SELECT {d_expr} AS district, {s_expr} AS school_name, "
         f"{_track_case_sql(track_col)} AS track, "
         f"COUNT(*) AS candidates, {', '.join(reached)} "
         f"FROM tb_score_overview{where_sql} "
-        f"GROUP BY 1, 2, 3 ORDER BY 1, 2, 3 LIMIT 5000"
+        f"{group_by} ORDER BY 1, 2, 3 LIMIT 5000"
     )
 
 
@@ -988,7 +993,10 @@ async def line_reach_dashboard(
     if not exam and exams:
         exam = exams[0]
     use_bars = _filter_bars(bars_all, exam, "")
-    agg_sql = _overview_agg_sql(ov_cols, use_bars, exam_name=exam, track="")
+    hide_schools = scope.edu_role in ("school_admin", "teacher")
+    agg_sql = _overview_agg_sql(
+        ov_cols, use_bars, exam_name=exam, track="", include_school=not hide_schools
+    )
     agg_rows: list[dict[str, Any]] = []
     if agg_sql:
         result = await execute(agg_sql)
@@ -1010,6 +1018,11 @@ async def line_reach_dashboard(
     city = _view(use_bars, "")
     physics = _view(phys_bars, "物理类")
     history = _view(hist_bars, "历史类")
+    if hide_schools:
+        for p in (city, physics, history):
+            for d in p.get("districts") or []:
+                if isinstance(d, dict):
+                    d["schools"] = []
 
     def _slice(p: dict[str, Any]) -> dict[str, Any]:
         return {"lines": p.get("lines") or [], "kpis": p.get("kpis") or {}, "districts": p.get("districts") or []}

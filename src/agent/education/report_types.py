@@ -36,6 +36,7 @@ class ReportType(str, Enum):
     CONTRIBUTION = "contribution"            # 切线贡献分
     COMBO_REACH = "combo_reach"              # 选科组合达线
     ELITE_ROSTER = "elite_roster"            # 脱敏高分名单
+    SCORE_BAND = "score_band"                # 总分十分段 / 学科五分段
 
 
 class Audience(str, Enum):
@@ -67,6 +68,7 @@ REPORT_TYPE_LABELS: dict[ReportType, str] = {
     ReportType.CONTRIBUTION: "贡献分分析",
     ReportType.COMBO_REACH: "选科组合达线",
     ReportType.ELITE_ROSTER: "高分名单分析",
+    ReportType.SCORE_BAND: "分段统计",
 }
 
 _KNOWN_TYPE_MARKERS: frozenset[str] = frozenset(

@@ -25,10 +25,15 @@ const TOOL_COPY: Record<string, ToolCopy> = {
     done: "已完成样例数据核验",
     error: "未能获取样例数据"
   },
-  execute_sql: {
+    execute_sql: {
     running: "助手正在查询成绩数据…",
     done: "已完成数据查询",
     error: "查询未成功，正在尝试调整"
+  },
+  query_school_vs_city_avg_tool: {
+    running: "助手正在计算该校与全市均分…",
+    done: "该校与全市均分已算出",
+    error: "该校与全市均分未能完成"
   },
   find_related_datasources: {
     running: "助手正在确认数据源…",
@@ -115,6 +120,11 @@ const TOOL_COPY: Record<string, ToolCopy> = {
     done: "高分名单已就绪",
     error: "高分名单未能完成"
   },
+  build_score_band_report_data_tool: {
+    running: "助手正在统计分数段分布…",
+    done: "分段统计已就绪",
+    error: "分段统计未能完成"
+  },
   build_tier_alert_report_data_tool: {
     running: "助手正在生成分层预警数据…",
     done: "分层预警数据已就绪",
@@ -200,6 +210,7 @@ function inferToolCopy(key: string): ToolCopy | null {
   if (/contribution/.test(key)) return TOOL_COPY.build_contribution_report_data_tool;
   if (/combo_reach/.test(key)) return TOOL_COPY.build_combo_reach_report_data_tool;
   if (/elite_roster/.test(key)) return TOOL_COPY.build_elite_roster_report_data_tool;
+  if (/score_band/.test(key)) return TOOL_COPY.build_score_band_report_data_tool;
   if (/diagnostic_report|citywide/.test(key)) return TOOL_COPY.build_diagnostic_report_data_tool;
   if (/tier_alert|knowledge_tier/.test(key)) return TOOL_COPY.build_tier_alert_report_data_tool;
   if (/group_feature/.test(key)) return TOOL_COPY.build_group_feature_report_data_tool;
@@ -216,6 +227,7 @@ function inferToolCopy(key: string): ToolCopy | null {
   if (/chart_option|build_chart/.test(key)) return TOOL_COPY.build_chart_option_tool;
   if (/report_template|select_report/.test(key)) return TOOL_COPY.select_report_template_tool;
   if (/schema|resolve_score/.test(key)) return TOOL_COPY.resolve_score_schema;
+  if (/school_vs_city|city_avg/.test(key)) return TOOL_COPY.query_school_vs_city_avg_tool;
   if (/report|render_html/.test(key)) return TOOL_COPY.render_html_report;
   return null;
 }

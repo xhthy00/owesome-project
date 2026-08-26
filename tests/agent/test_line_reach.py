@@ -228,6 +228,21 @@ def test_can_access_line_reach_hides_student():
     assert can_access_line_reach(EduScope(edu_role="")) is True
 
 
+def test_school_admin_line_reach_keeps_city_kpis_hides_schools():
+    payload = build_line_reach_payload(
+        _bars(),
+        _overview_rows(),
+        _score_scope(),
+        _schools(),
+        exam_name="5月模考",
+        track="物理类",
+        scope=EduScope(edu_role="school_admin", school_id="sch-a"),
+    )
+    assert payload["accessible"] is True
+    assert payload["kpis"]["candidates"] == 4
+    assert all(d.get("schools") == [] for d in payload["districts"])
+
+
 def test_filter_students_by_scope_school_and_class():
     students = [
         {"student_id": "s1", "school_id": "sch-a", "class_name": "1班"},
@@ -243,8 +258,6 @@ def test_filter_students_by_scope_school_and_class():
         EduScope(edu_role="teacher", school_id="sch-a", class_names=["1班"]),
     )
     assert [s["student_id"] for s in teacher] == ["s1"]
-
-
 def test_aggregate_district_line_reach_counts_and_rates():
     payload = build_line_reach_payload(
         _bars(),

@@ -115,3 +115,12 @@ def test_privacy_sql_instruction_switches():
     text = privacy_sql_instruction()
     assert "已关闭匿名脱敏" in text
     assert "sfzh" in text
+    assert "s_name LIKE" in text
+    assert "xx LIKE" in text
+
+    from src.templates.sql_gen_prompt import education_terminologies_block
+
+    blob = education_terminologies_block()
+    assert "s_name LIKE '%校名%'" in blob
+    assert "xx LIKE '%校名%'" in blob
+    assert "WHERE sch.name = '学校名'" not in blob

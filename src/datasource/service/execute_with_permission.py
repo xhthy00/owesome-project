@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from datasource.service.query_permission import (
     apply_permissions_for_execute,
+    expand_overview_xx_school_code_literals,
     filter_exec_result_by_column_permissions,
     validate_sql_column_permissions,
 )
@@ -32,12 +33,14 @@ def execute_sql_with_permission(
     from datasource.service.sql_auto_fix import format_auto_fix_note, run_sql_with_auto_fix
 
     def _prepare(raw: str) -> str:
-        return apply_permissions_for_execute(
-            session, user, datasource_id, db_type, raw, tables_hint
-        )
+        if user is not None:
+            return apply_permissions_for_execute(
+                session, user, datasource_id, db_type, raw, tables_hint
+            )
+        return expand_overview_xx_school_code_literals(raw, db_type)
 
+    sql_run = _prepare(sql)
     if user is not None:
-        sql_run = _prepare(sql)
         err = validate_sql_column_permissions(session, user, datasource_id, db_type, sql_run)
         if err:
             return False, err, {"error": err, "sql": sql_run}, sql_run
@@ -46,7 +49,7 @@ def execute_sql_with_permission(
         sql,
         db_type=db_type,
         config=config,
-        prepare_sql=_prepare if user is not None else None,
+        prepare_sql=_prepare,
     )
     sql_run = outcome.sql_run
     note = format_auto_fix_note(outcome.fixes_applied, success=outcome.success)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 
 from datasource.service.edu_permission import (
@@ -204,6 +205,12 @@ def test_qualify_school_id_on_score_indicator():
     preds = ['"school_id" = \'YZZX\'']
     qualified = qualify_edu_row_predicates(sql, preds, "pg")
     assert qualified == ['tb_score_indicator."school_id" = \'YZZX\'']
+    named = qualify_edu_row_predicates(
+        sql, preds, "pg", school_name="扬州中学"
+    )
+    assert 'school_name' in named[0]
+    assert "扬州中学" in named[0]
+    assert "YZZX" not in named[0]
 
 
 def test_qualify_drops_class_keeps_school_on_score_indicator():
@@ -239,6 +246,193 @@ def test_qualify_overview_maps_xx_bj_anon():
         'ov."bj" IN (\'高三(10)班\')',
         'ov."anon_stu_id" = \'GZ_ABC\'',
     ]
+
+
+def test_expand_overview_xx_school_code_not_plaintext():
+    from datasource.service.query_permission import expand_overview_xx_school_code_literals
+
+    raw = (
+        "SELECT MIN(jc), COUNT(*) FROM tb_score_overview "
+        "WHERE tb_score_overview.\"xx\" = 'GZ_19D9D68D'"
+    )
+    out = expand_overview_xx_school_code_literals(raw, "pg")
+    assert "s_name" in out
+    assert "GZ_19D9D68D" in out
+    assert "OR" in out
+    keep = "SELECT * FROM tb_score_overview WHERE xx LIKE '%扬州中学%'"
+    assert expand_overview_xx_school_code_literals(keep, "pg") == keep
+    other = "SELECT school_id FROM tb_score WHERE school_id = 'GZ_19D9D68D'"
+    assert expand_overview_xx_school_code_literals(other, "pg") == other
+
+
+def _perm_session():
+    class FakeQuery:
+        def filter(self, *_a, **_kw):
+            return self
+
+        def all(self):
+            return []
+
+        def first(self):
+            return SimpleNamespace(id=1, oid=1)
+
+    class FakeSession:
+        def query(self, *_a, **_kw):
+            return FakeQuery()
+
+    return FakeSession()
+
+
+def test_apply_permissions_overview_xx_expands_school_code():
+    u = _user(edu_role="school_admin", school_id="GZ_19D9D68D")
+    sql = "SELECT xm, zf6m FROM tb_score_overview"
+    merged = apply_permissions_for_execute(_perm_session(), u, 1, "pg", sql)
+    assert "s_name" in merged
+    assert "GZ_19D9D68D" in merged
+    assert "tb_school" in merged
+
+
+def test_overview_citywide_avg_skips_school_predicate():
+    """全市聚合不能再 AND xx=本校，否则全市均分被收成该校。"""
+    u = _user(edu_role="school_admin", school_id="GZ_19D9D68D")
+    sql = (
+        "SELECT ROUND(AVG(zf6m), 2) AS avg_zf6m, COUNT(*) AS n "
+        "FROM tb_score_overview "
+        "WHERE exam_name = '2026届高三1月期末' AND xkkm LIKE '物%'"
+    )
+    merged = apply_permissions_for_execute(_perm_session(), u, 1, "pg", sql)
+    assert "GZ_19D9D68D" not in merged
+    assert '"xx"' not in merged
+    assert "s_name" not in merged
+
+
+def test_school_vs_city_union_city_branch_not_school_filtered():
+    u = _user(edu_role="school_admin", school_id="GZ_19D9D68D")
+    sql = (
+        "SELECT '扬州中学' AS scope, ROUND(AVG(zf6m), 2) AS avg_zf6m, COUNT(*) AS n "
+        "FROM tb_score_overview "
+        "WHERE exam_name LIKE '%2026届高三1月%' AND xkkm LIKE '物%' "
+        "AND xx LIKE '%扬州中学%' "
+        "UNION ALL "
+        "SELECT '全市' AS scope, ROUND(AVG(zf6m), 2) AS avg_zf6m, COUNT(*) AS n "
+        "FROM tb_score_overview "
+        "WHERE exam_name LIKE '%2026届高三1月%' AND xkkm LIKE '物%'"
+    )
+    merged = apply_permissions_for_execute(_perm_session(), u, 1, "pg", sql)
+    assert "_perm_sub" not in merged
+    parts = re.split(r"UNION\s+ALL", merged, flags=re.I)
+    assert len(parts) == 2
+    city = parts[1]
+    assert "GZ_19D9D68D" not in city
+    assert "扬州中学" not in city
+
+
+def test_city_union_branch_strips_copied_xx_filter():
+    """全市支若误带 xx LIKE 该校，必须剥掉，否则全市=该校。"""
+    u = _user(edu_role="school_admin", school_id="GZ_19D9D68D")
+    sql = (
+        "SELECT '扬州中学' AS scope, AVG(zf6m) AS avg_zf6m, COUNT(*) AS n "
+        "FROM tb_score_overview WHERE xx LIKE '%扬州中学%' "
+        "UNION ALL "
+        "SELECT '全市' AS scope, AVG(zf6m) AS avg_zf6m, COUNT(*) AS n "
+        "FROM tb_score_overview WHERE xx LIKE '%扬州中学%'"
+    )
+    merged = apply_permissions_for_execute(_perm_session(), u, 1, "pg", sql)
+    city = re.split(r"UNION\s+ALL", merged, flags=re.I)[1]
+    assert "扬州中学" not in city
+    assert "GZ_19D9D68D" not in city
+
+
+def test_overview_group_by_district_skips_school_predicate():
+    u = _user(edu_role="school_admin", school_id="GZ_19D9D68D", school_name="扬州中学")
+    sql = (
+        "SELECT dq, ROUND(AVG(zf6m), 2) AS avg_zf6m, COUNT(*) AS n "
+        "FROM tb_score_overview WHERE exam_name = '2026届高三1月期末' GROUP BY dq"
+    )
+    merged = apply_permissions_for_execute(_perm_session(), u, 1, "pg", sql)
+    assert "GZ_19D9D68D" not in merged
+    assert '"xx"' not in merged
+
+
+def test_overview_group_by_school_keeps_school_predicate():
+    u = _user(edu_role="school_admin", school_id="GZ_19D9D68D")
+    sql = (
+        "SELECT xx, AVG(zf6m) AS avg_zf6m FROM tb_score_overview "
+        "WHERE exam_name = '2026届高三1月期末' GROUP BY xx"
+    )
+    merged = apply_permissions_for_execute(_perm_session(), u, 1, "pg", sql)
+    assert "GZ_19D9D68D" in merged
+
+
+def test_overview_named_other_school_keeps_school_predicate():
+    u = _user(edu_role="school_admin", school_id="GZ_19D9D68D")
+    sql = (
+        "SELECT AVG(zf6m) FROM tb_score_overview "
+        "WHERE exam_name = '2026届高三1月期末' AND xx LIKE '%新华中学%'"
+    )
+    merged = apply_permissions_for_execute(_perm_session(), u, 1, "pg", sql)
+    assert "GZ_19D9D68D" in merged
+
+
+def test_indicator_citywide_sum_skips_school_predicate():
+    u = _user(
+        edu_role="school_admin",
+        school_id="GZ_19D9D68D",
+        school_name="扬州中学",
+    )
+    sql = (
+        "SELECT SUM(reached_count) AS reached, SUM(candidates) AS n "
+        "FROM tb_score_indicator WHERE line_name = '本科线'"
+    )
+    merged = apply_permissions_for_execute(_perm_session(), u, 1, "pg", sql)
+    assert "GZ_19D9D68D" not in merged
+    assert "扬州中学" not in merged
+    assert "school_id" not in merged
+    assert "school_name" not in merged
+
+
+def test_teacher_citywide_avg_skips_class_predicate():
+    u = _user(
+        edu_role="teacher",
+        school_id="GZ_19D9D68D",
+        class_names=["高三(10)班"],
+    )
+    sql = (
+        "SELECT AVG(zf6m) AS avg_zf6m, COUNT(*) AS n FROM tb_score_overview "
+        "WHERE exam_name = '2026届高三1月期末'"
+    )
+    merged = apply_permissions_for_execute(_perm_session(), u, 1, "pg", sql)
+    assert "GZ_19D9D68D" not in merged
+    assert "高三(10)班" not in merged
+
+
+def test_teacher_student_rows_keep_class_predicate():
+    u = _user(
+        edu_role="teacher",
+        school_id="GZ_19D9D68D",
+        class_names=["高三(10)班"],
+    )
+    sql = "SELECT xm, zf6m FROM tb_score_overview"
+    merged = apply_permissions_for_execute(_perm_session(), u, 1, "pg", sql)
+    assert "GZ_19D9D68D" in merged
+    assert "高三(10)班" in merged
+
+
+def test_apply_permissions_indicator_uses_plaintext_school_name():
+    u = _user(
+        edu_role="school_admin",
+        school_id="GZ_19D9D68D",
+        school_name="扬州中学",
+    )
+    sql = (
+        "SELECT line_name, track, SUM(candidates), SUM(reached_count) "
+        "FROM tb_score_indicator WHERE exam_name LIKE '%2026届高三1月期末%' "
+        "GROUP BY line_name, track"
+    )
+    merged = apply_permissions_for_execute(_perm_session(), u, 1, "pg", sql)
+    assert "扬州中学" in merged
+    assert "GZ_19D9D68D" not in merged
+    assert "school_name" in merged
 
 
 def test_qualify_drops_scope_on_fraction_bar_only():

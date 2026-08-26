@@ -20,6 +20,26 @@ logger = logging.getLogger(__name__)
 
 _FIELD_SAFE = re.compile(r"^[A-Za-z_\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff]*$")
 _OPS = {"=", "!=", ">", "<", ">=", "<=", "like", "in"}
+_SCHOOL_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_OVERVIEW_SQL_RE = re.compile(r"\btb_score_overview\b|\bscore_overview\b", re.I)
+_INDICATOR_SQL_RE = re.compile(r"\btb_score_indicator\b|\bscore_indicator\b", re.I)
+_IND_SID_EQ_RE = re.compile(
+    r"(?P<col>(?:[A-Za-z_][\w]*\.)?(?:\"school_id\"|`school_id`|\bschool_id\b))\s*=\s*'(?P<val>[^']*)'",
+    re.I,
+)
+_IND_SID_IN_RE = re.compile(
+    r"(?P<col>(?:[A-Za-z_][\w]*\.)?(?:\"school_id\"|`school_id`|\bschool_id\b))\s+IN\s*\((?P<body>[^)]*)\)",
+    re.I,
+)
+_XX_EQ_RE = re.compile(
+    r"(?P<col>(?:[A-Za-z_][\w]*\.)?(?:\"xx\"|`xx`|\bxx\b))\s*=\s*'(?P<val>[^']*)'",
+    re.I,
+)
+_XX_IN_RE = re.compile(
+    r"(?P<col>(?:[A-Za-z_][\w]*\.)?(?:\"xx\"|`xx`|\bxx\b))\s+IN\s*\((?P<body>[^)]*)\)",
+    re.I,
+)
+_SQL_LIT_RE = re.compile(r"'([^']*)'")
 
 
 def _norm_user_id(raw: Any) -> Optional[int]:
@@ -526,6 +546,375 @@ def _find_table_aliases(sql: str, table_names: frozenset[str], db_type: str) -> 
     return aliases
 
 
+def _is_school_code_literal(value: str) -> bool:
+    n = (value or "").strip()
+    if not n or any("\u4e00" <= ch <= "\u9fff" for ch in n):
+        return False
+    return bool(_SCHOOL_CODE_RE.fullmatch(n))
+
+
+def expand_overview_xx_school_code_literals(sql: str, db_type: str = "pg") -> str:
+    """overview.xx 是学校明文：把 xx='GZ_…' 扩成同时匹配 tb_school.s_name。"""
+    text = strip_city_scope_xx_filters(sql or "", db_type)
+    if not _OVERVIEW_SQL_RE.search(text):
+        return text
+    q = "`" if db_type == "mysql" else '"'
+
+    def _sname_subq(body: str) -> str:
+        return (
+            f"SELECT COALESCE({q}s_name{q}, {q}name{q}) FROM tb_school "
+            f"WHERE {q}id{q} IN ({body}) OR {q}name{q} IN ({body})"
+        )
+
+    def _repl_in(m: re.Match[str]) -> str:
+        body = m.group("body")
+        if re.search(r"\bSELECT\b", body, re.I):
+            return m.group(0)
+        lits = _SQL_LIT_RE.findall(body)
+        if not lits or not all(_is_school_code_literal(v) for v in lits):
+            return m.group(0)
+        col = m.group("col")
+        return f"({col} IN ({body}) OR {col} IN ({_sname_subq(body)}))"
+
+    def _repl_eq(m: re.Match[str]) -> str:
+        val = m.group("val")
+        if not _is_school_code_literal(val):
+            return m.group(0)
+        col = m.group("col")
+        lit = "'" + val.replace("'", "''") + "'"
+        return f"({col} = {lit} OR {col} IN ({_sname_subq(lit)}))"
+
+    text = _XX_IN_RE.sub(_repl_in, text)
+    return _XX_EQ_RE.sub(_repl_eq, text)
+
+
+def expand_indicator_school_code_literals(sql: str, db_type: str = "pg") -> str:
+    """indicator 的 school_id/school_name 存学校明文：把 school_id='GZ_…' 扩成匹配 tb_school.s_name。"""
+    text = sql or ""
+    if not _INDICATOR_SQL_RE.search(text):
+        return text
+    if _find_table_aliases(text, _SCORE_TABLE_NAMES, db_type):
+        return text
+    if _find_table_aliases(text, _OVERVIEW_TABLE_NAMES, db_type):
+        return text
+    q = "`" if db_type == "mysql" else '"'
+
+    def _sname_subq(body: str) -> str:
+        return (
+            f"SELECT COALESCE({q}s_name{q}, {q}name{q}) FROM tb_school "
+            f"WHERE {q}id{q} IN ({body}) OR {q}name{q} IN ({body})"
+        )
+
+    def _name_col(col: str) -> str:
+        return re.sub(r"school_id", "school_name", col, count=1, flags=re.I)
+
+    def _repl_in(m: re.Match[str]) -> str:
+        body = m.group("body")
+        if re.search(r"\bSELECT\b", body, re.I):
+            return m.group(0)
+        lits = _SQL_LIT_RE.findall(body)
+        if not lits or not all(_is_school_code_literal(v) for v in lits):
+            return m.group(0)
+        col = m.group("col")
+        subq = _sname_subq(body)
+        return f"({col} IN ({subq}) OR {_name_col(col)} IN ({subq}))"
+
+    def _repl_eq(m: re.Match[str]) -> str:
+        val = m.group("val")
+        if not _is_school_code_literal(val):
+            return m.group(0)
+        col = m.group("col")
+        lit = "'" + val.replace("'", "''") + "'"
+        subq = _sname_subq(lit)
+        return f"({col} IN ({subq}) OR {_name_col(col)} IN ({subq}))"
+
+    text = _IND_SID_IN_RE.sub(_repl_in, text)
+    return _IND_SID_EQ_RE.sub(_repl_eq, text)
+
+
+_CITY_SCOPE_LABELS = frozenset({"全市", "市均", "city"})
+_IDENTITY_COLS = frozenset({"xm", "xh", "ksh", "sfzh", "anon_stu_id", "student_id"})
+_SCHOOL_GRAIN_COLS = frozenset({"xx", "school_id", "school_name"})
+_CLASS_GRAIN_COLS = frozenset({"bj", "class"})
+_METRIC_DIM_COLS = frozenset({
+    "dq", "district", "exam_name", "xkkm", "xsxz", "xxlb", "line_name",
+})
+_METRIC_TABLE_NAMES = (
+    _OVERVIEW_TABLE_NAMES | _SCORE_TABLE_NAMES | _INDICATOR_TABLE_NAMES
+)
+
+
+def _sql_dialect(db_type: str) -> str:
+    return "mysql" if db_type == "mysql" else "postgres"
+
+
+def _unwrap_alias(node: Any) -> Any:
+    from sqlglot import exp
+
+    return node.this if isinstance(node, exp.Alias) else node
+
+
+def _projection_is_const_or_agg(node: Any) -> bool:
+    """投影是字面量或聚合（含 ROUND/CAST 包裹），不含学生明文列。"""
+    from sqlglot import exp
+
+    node = _unwrap_alias(node)
+    if node is None:
+        return False
+    if isinstance(node, exp.Literal):
+        return True
+    if isinstance(node, exp.AggFunc):
+        return True
+    if isinstance(node, (exp.Paren, exp.Cast, exp.Round)):
+        return _projection_is_const_or_agg(node.this)
+    if isinstance(node, (exp.Anonymous, exp.Func, exp.Coalesce)):
+        args = [
+            c
+            for c in node.iter_expressions()
+            if not isinstance(c, exp.DataType)
+        ]
+        return bool(args) and all(_projection_is_const_or_agg(c) for c in args)
+    return False
+
+
+def _select_uses_metric_table(select: Any) -> bool:
+    from sqlglot import exp
+
+    for table in select.find_all(exp.Table):
+        name = (table.name or "").strip().lower()
+        if name in _METRIC_TABLE_NAMES:
+            return True
+    return False
+
+
+def _group_by_column_names(select: Any) -> set[str]:
+    from sqlglot import exp
+
+    group = select.args.get("group")
+    if group is None:
+        return set()
+    names: set[str] = set()
+    exprs = group.expressions if hasattr(group, "expressions") else []
+    for item in exprs or []:
+        node = _unwrap_alias(item)
+        if isinstance(node, exp.Column):
+            n = (node.name or "").strip().lower()
+            if n:
+                names.add(n)
+    return names
+
+
+def _bare_projection_columns(select: Any) -> set[str]:
+    """非聚合投影里的列名；无法识别的投影记为 __other__。"""
+    from sqlglot import exp
+
+    names: set[str] = set()
+    for e in select.expressions or []:
+        if _projection_is_const_or_agg(e):
+            continue
+        inner = _unwrap_alias(e)
+        if isinstance(inner, exp.Column):
+            n = (inner.name or "").strip().lower()
+            names.add(n or "__other__")
+        else:
+            names.add("__other__")
+    return names
+
+
+def _select_has_aggregate(select: Any) -> bool:
+    from sqlglot import exp
+
+    return any(e.find(exp.AggFunc) for e in (select.expressions or []))
+
+
+def _is_citywide_metric_select(select: Any) -> bool:
+    """全市/区县合计：无学生列、无按校/按班粒度。点名学校或 GROUP BY xx 不算。"""
+    from sqlglot import exp
+
+    if not _select_uses_metric_table(select):
+        return False
+    exprs = list(select.expressions or [])
+    if not exprs or not _select_has_aggregate(select):
+        return False
+    if any(isinstance(_unwrap_alias(e), exp.Star) for e in exprs):
+        return False
+    top_cols = _bare_projection_columns(select)
+    if "__other__" in top_cols:
+        return False
+    blocked = _IDENTITY_COLS | _SCHOOL_GRAIN_COLS | _CLASS_GRAIN_COLS
+    if top_cols & blocked:
+        return False
+    if top_cols - _METRIC_DIM_COLS:
+        return False
+    gcols = _group_by_column_names(select)
+    if gcols & blocked:
+        return False
+    if gcols - _METRIC_DIM_COLS:
+        return False
+    where_cols = _where_column_names(select)
+    if where_cols & _SCHOOL_GRAIN_COLS:
+        return False
+    return True
+
+
+def _where_column_names(select: Any) -> set[str]:
+    from sqlglot import exp
+
+    where = select.args.get("where")
+    if where is None:
+        return set()
+    names: set[str] = set()
+    for col in where.find_all(exp.Column):
+        n = (col.name or "").strip().lower()
+        if n:
+            names.add(n)
+    return names
+
+
+def _scope_literal(select: Any) -> str:
+    from sqlglot import exp
+
+    exprs = list(select.expressions or [])
+    if not exprs:
+        return ""
+    first = _unwrap_alias(exprs[0])
+    if isinstance(first, exp.Literal):
+        return str(first.this or "")
+    return ""
+
+
+def _is_xx_predicate(node: Any) -> bool:
+    from sqlglot import exp
+
+    if isinstance(node, exp.Paren):
+        return _is_xx_predicate(node.this)
+    if isinstance(node, (exp.EQ, exp.NEQ, exp.Like, exp.ILike, exp.In)):
+        left = node.this
+        return isinstance(left, exp.Column) and (left.name or "").lower() == "xx"
+    return False
+
+
+def _drop_xx_clauses(node: Any) -> Any:
+    from sqlglot import exp
+
+    if node is None:
+        return None
+    if isinstance(node, exp.Paren):
+        inner = _drop_xx_clauses(node.this)
+        return None if inner is None else exp.Paren(this=inner)
+    if isinstance(node, (exp.And, exp.Or)):
+        left = _drop_xx_clauses(node.this)
+        right = _drop_xx_clauses(node.expression)
+        if left is None:
+            return right
+        if right is None:
+            return left
+        return node.__class__(this=left, expression=right)
+    if _is_xx_predicate(node):
+        return None
+    return node
+
+
+def _strip_xx_from_select(select: Any) -> Any:
+    where = select.args.get("where")
+    if where is None:
+        return select
+    new_cond = _drop_xx_clauses(where.this)
+    if new_cond is None:
+        select.set("where", None)
+    else:
+        where.set("this", new_cond)
+    return select
+
+
+def _walk_selects(tree: Any, fn: Any) -> Any:
+    from sqlglot import exp
+
+    if isinstance(tree, (exp.Limit, exp.Order, exp.Offset)):
+        tree.set("this", _walk_selects(tree.this, fn))
+        return tree
+    if isinstance(tree, exp.Union):
+        tree.set("this", _walk_selects(tree.this, fn))
+        tree.set("expression", _walk_selects(tree.expression, fn))
+        return tree
+    if isinstance(tree, exp.Subquery):
+        tree.set("this", _walk_selects(tree.this, fn))
+        return tree
+    if isinstance(tree, exp.Select):
+        return fn(tree)
+    return tree
+
+
+def strip_city_scope_xx_filters(sql: str, db_type: str = "pg") -> str:
+    """UNION 中 scope='全市' 的分支去掉 xx 条件，避免全市均分被收成该校。"""
+    text = sql or ""
+    if not _OVERVIEW_SQL_RE.search(text):
+        return text
+    if not re.search(r"\bUNION\b", text, re.I):
+        return text
+    try:
+        from sqlglot import parse_one
+    except ImportError:
+        return text
+    dialect = _sql_dialect(db_type)
+    try:
+        tree = parse_one(text, dialect=dialect)
+    except Exception:
+        return text
+
+    def _on_select(select: Any) -> Any:
+        if _scope_literal(select) in _CITY_SCOPE_LABELS:
+            return _strip_xx_from_select(select)
+        return select
+
+    new_tree = _walk_selects(tree, _on_select)
+    try:
+        return new_tree.sql(dialect=dialect)
+    except Exception:
+        return text
+
+
+def _pred_targets_overview_school(pred: str) -> bool:
+    return bool(re.search(r'\bxx\b|"xx"|`xx`|school_id|school_name', pred, re.I))
+
+
+def _pred_targets_overview_class(pred: str) -> bool:
+    return bool(re.search(r'\bbj\b|"bj"|`bj`|"class"|`class`', pred, re.I))
+
+
+def _pred_targets_overview_student(pred: str) -> bool:
+    return bool(re.search(r"anon_stu_id|student_id", pred, re.I))
+
+
+def _preds_for_overview_select(select: Any, predicates: list[str]) -> list[str]:
+    """全市/区县指标不注入本校/本班；明细与点名他校仍注入。"""
+    if not _is_citywide_metric_select(select):
+        return predicates
+    out: list[str] = []
+    for p in predicates:
+        if _pred_targets_overview_school(p):
+            continue
+        if _pred_targets_overview_class(p):
+            continue
+        if _pred_targets_overview_student(p):
+            continue
+        out.append(p)
+    return out
+
+
+def _combine_predicate_tree(predicates: list[str], dialect: str) -> Any:
+    from sqlglot import exp, parse_one
+
+    combined: Optional[Any] = None
+    for p in predicates:
+        try:
+            frag = parse_one(p, dialect=dialect)
+        except Exception:
+            continue
+        combined = frag if combined is None else exp.And(this=combined, expression=frag)
+    return combined
+
+
 def _edu_scope_column(
     field: str,
     *,
@@ -538,7 +927,7 @@ def _edu_scope_column(
 ) -> Optional[str]:
     """教育权限列映射：school_id/class 优先 tb_score；总览表为 xx/bj/anon_stu_id。
 
-    tb_score_indicator 仅有 school_id；class/student_id 不能挂在该表。
+    tb_score_indicator 挂 school_id（无明文校名时）或 school_name；class/student_id 不能挂在该表。
     """
     q = "`" if db_type == "mysql" else '"'
     if field == "school_id":
@@ -580,12 +969,18 @@ def _exists_score_guard(sd_alias: str, qualified_inner: str, db_type: str) -> st
     )
 
 
-def qualify_edu_row_predicates(sql: str, predicates: list[str], db_type: str) -> list[str]:
+def qualify_edu_row_predicates(
+    sql: str,
+    predicates: list[str],
+    db_type: str,
+    school_name: str = "",
+) -> list[str]:
     """为教育权限谓词补全正确表别名，避免 sd.school_id / st.student_id 等错误引用。
 
     若 SQL 未涉及成绩事实表（如只查 tb_exam / tb_fraction_bar），无法安全挂
     school_id/class：丢弃该谓词，避免把裸列注入维表导致 ``column "class" does not exist``。
-    tb_score_overview 用 xx/bj/anon_stu_id；tb_score_indicator 仅挂 school_id。
+    tb_score_overview 用 xx/bj/anon_stu_id；tb_score_indicator 有明文校名时挂
+    school_name LIKE，否则挂 school_id。
     """
     if not predicates:
         return predicates
@@ -617,6 +1012,12 @@ def qualify_edu_row_predicates(sql: str, predicates: list[str], db_type: str) ->
             if indicator_only and field == "class":
                 drop = True
                 continue
+            name = (school_name or "").strip()
+            if indicator_only and field == "school_id" and name:
+                alias = indicator_aliases[0]
+                lit = name.replace("'", "''")
+                new_pred = f"{alias}.{q}school_name{q} LIKE '%{lit}%'"
+                break
             col = _edu_scope_column(
                 field,
                 score_aliases=score_aliases,
@@ -643,44 +1044,35 @@ def qualify_edu_row_predicates(sql: str, predicates: list[str], db_type: str) ->
 
 
 def merge_row_predicates_into_sql(sql: str, db_type: str, predicates: list[str]) -> str:
-    """将多个谓词以 AND 方式并入最外层 SELECT（支持简单 UNION 时整体包一层子查询）。"""
+    """将谓词并入各 SELECT 叶子。UNION 按支合并，避免全市支被本校 xx 收成该校。"""
     if not predicates or not sql.strip():
         return sql
     try:
-        from sqlglot import exp, parse_one
+        from sqlglot import parse_one
     except ImportError:
         logger.warning("sqlglot missing, skip row permission merge")
         return sql
 
-    dialect = "mysql" if db_type == "mysql" else "postgres"
+    dialect = _sql_dialect(db_type)
     try:
         tree = parse_one(sql, dialect=dialect)
     except Exception as e:
         logger.warning("row merge parse failed: %s", e)
         return sql
 
-    combined: Optional[exp.Expression] = None
-    for p in predicates:
-        try:
-            frag = parse_one(p, dialect=dialect)
-        except Exception:
-            continue
-        combined = frag if combined is None else exp.And(this=combined, expression=frag)
-    if combined is None:
-        return sql
+    def _on_select(select: Any) -> Any:
+        leaf_preds = _preds_for_overview_select(select, predicates)
+        combined = _combine_predicate_tree(leaf_preds, dialect)
+        if combined is None:
+            return select
+        return select.where(combined, append=True)
 
     try:
-        if isinstance(tree, exp.Union):
-            sub = tree.subquery(alias="_perm_sub", copy=False)
-            new_sel = exp.Select().select("*").from_(sub).where(combined)
-            return new_sel.sql(dialect=dialect)
-        if isinstance(tree, exp.Select):
-            return tree.where(combined, append=True).sql(dialect=dialect)
+        new_tree = _walk_selects(tree, _on_select)
+        return new_tree.sql(dialect=dialect)
     except Exception as e:
         logger.warning("row merge apply failed: %s", e)
         return sql
-    logger.debug("row merge skipped for root type %s", type(tree).__name__)
-    return sql
 
 
 def tables_referenced_in_sql(sql: str, db_type: str) -> list[str]:
@@ -718,17 +1110,25 @@ def apply_permissions_for_execute(
     tables_hint: Optional[list[str]] = None,
 ) -> str:
     """执行前合并行权限。显式引用被隐藏列的 SQL 由 ``validate_sql_column_permissions`` 拦截；``SELECT *`` 等由 ``filter_exec_result_by_column_permissions`` 兜底裁剪结果列。"""
+    sql = strip_city_scope_xx_filters(sql, db_type)
     if user is None or bypasses_data_row_column_scope(user):
-        return sql
+        sql = expand_overview_xx_school_code_literals(sql, db_type)
+        return expand_indicator_school_code_literals(sql, db_type)
     names = list(tables_hint or []) or tables_referenced_in_sql(sql, db_type)
     preds = collect_row_predicate_sqls(session, user.id, ds_id, names, db_type)
-    from datasource.service.edu_permission import build_edu_row_predicates
+    from datasource.service.edu_permission import build_edu_row_predicates, parse_edu_scope
 
-    edu_preds = qualify_edu_row_predicates(sql, build_edu_row_predicates(user, db_type), db_type)
+    scope_name = parse_edu_scope(user).school_name
+    edu_preds = qualify_edu_row_predicates(
+        sql,
+        build_edu_row_predicates(user, db_type),
+        db_type,
+        school_name=scope_name,
+    )
     preds.extend(edu_preds)
-    if not preds:
-        return sql
-    return merge_row_predicates_into_sql(sql, db_type, preds)
+    merged = merge_row_predicates_into_sql(sql, db_type, preds) if preds else sql
+    merged = expand_overview_xx_school_code_literals(merged, db_type)
+    return expand_indicator_school_code_literals(merged, db_type)
 
 
 def schema_tables_for_user(

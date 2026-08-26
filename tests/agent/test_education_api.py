@@ -697,6 +697,21 @@ def test_overview_agg_sql_citywide_scopes_each_bar():
     assert all("LIKE" not in s for s in sums)
 
 
+def test_overview_agg_sql_without_school_grain():
+    from src.agent.education.api import _overview_agg_sql
+
+    sql = _overview_agg_sql(
+        ["zf6m", "dq", "xx", "exam_name", "xkkm"],
+        [{"line_name": "本科线", "threshold": 461, "track": "物理类"}],
+        exam_name="5月模考",
+        track="",
+        include_school=False,
+    )
+    assert sql is not None
+    assert "GROUP BY 1, 3" in sql
+    assert "xx" not in sql
+
+
 def test_line_reach_api_student_forbidden(monkeypatch):
     client = _auth_client(monkeypatch)
     _mock_line_reach_session(monkeypatch, edu_role="student")

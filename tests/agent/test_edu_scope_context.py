@@ -80,3 +80,53 @@ def test_build_edu_aware_constraints_falls_back_to_school_id():
     )
     assert ctx["target_school"] == "YZZX"
     assert ctx["target_classes"] == ["高三(10)班"]
+
+
+def test_citywide_question_does_not_overwrite_named_school():
+    edu = {
+        "edu_role": "school_admin",
+        "school_name": "南京市第一中学",
+        "school_id": "SCH001",
+    }
+    ctx = build_edu_aware_constraints(
+        "2026届高三1月期末扬州中学物理类均分与全市的对比",
+        edu,
+    )
+    assert ctx["target_school"] != "南京市第一中学"
+    assert "扬州中学" in (ctx["target_school"] or "")
+
+
+def test_own_school_vs_city_uses_bound_school():
+    edu = {
+        "edu_role": "school_admin",
+        "school_name": "扬州中学",
+        "school_id": "GZ_19D9D68D",
+    }
+    ctx = build_edu_aware_constraints(
+        "2026届高三1月期末本校物理类均分与全市的对比",
+        edu,
+    )
+    assert ctx["target_school"] == "扬州中学"
+    edu = {
+        "edu_role": "school_admin",
+        "school_name": "南京市第一中学",
+        "school_id": "SCH001",
+    }
+    ctx = build_edu_aware_constraints("2026届高三1月期末全市物理类均分", edu)
+    assert not ctx.get("target_school")
+
+
+def test_format_scope_constraints_allows_citywide_metrics():
+    text = format_scope_constraints(
+        {
+            "edu_scope": {
+                "edu_role": "school_admin",
+                "edu_role_label": "学校（校长）",
+                "school_name": "扬州中学",
+            },
+            "target_school": "扬州中学",
+        }
+    )
+    assert "全市" in text
+    assert "GROUP BY xx" in text
+    assert "明细" in text

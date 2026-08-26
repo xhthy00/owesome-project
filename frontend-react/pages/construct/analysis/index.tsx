@@ -60,7 +60,8 @@ const OPEN_REPORT_TYPES = new Set([
   "rank_bucket",
   "contribution",
   "combo_reach",
-  "elite_roster"
+  "elite_roster",
+  "score_band"
 ]);
 
 const AUDIENCE_OPTIONS = [
@@ -146,6 +147,7 @@ function fieldsForType(reportType: string): {
     case "contribution":
     case "combo_reach":
     case "elite_roster":
+    case "score_band":
       return { exam_name: true };
     default:
       return { class_name: true, exam_name: true };

@@ -2151,3 +2151,87 @@ def test_aggregate_dimension_tool_dict_rows():
         )
     )
     assert len(result.data["groups"]) == 2
+
+
+def test_query_school_vs_city_avg_tool_computes_two_rows(monkeypatch):
+    from src.agent.education import tools as edu_tools
+
+    def fake_run(sql, **kwargs):
+        text = sql or ""
+        if "tb_exam_batch" in text:
+            return True, "", {
+                "columns": ["id", "batch_name", "exam_time"],
+                "rows": [[1, "2026届高三1月期末", "2026-01-15"]],
+            }, text
+        if "tb_school" in text:
+            return True, "", {
+                "columns": ["id", "name", "s_name"],
+                "rows": [["A01", "A01", "扬州中学"]],
+            }, text
+        if "tb_score_overview" in text:
+            return True, "", {
+                "columns": ["scope", "avg_zf6m", "n"],
+                "rows": [["扬州中学", 600, 1], ["全市", 550, 2]],
+            }, text
+        return True, "", {"columns": ["exam_name"], "rows": []}, text
+
+    monkeypatch.setattr(edu_tools, "_run_edu_sql", fake_run)
+    result = _run(
+        edu_tools.query_school_vs_city_avg_tool.execute(
+            datasource_id=1,
+            tool_runtime_ctx={
+                "user_question": "2026届高三1月期末扬州中学物理类均分与全市的对比",
+                "datasource_id": 1,
+            },
+        )
+    )
+    assert result.is_final is True
+    assert result.data["school_matched"] is True
+    assert result.data["school_avg"] == 600
+    assert result.data["city_avg"] == 550
+    assert result.data["columns"] == ["scope", "avg_zf6m", "n"]
+    assert result.data["row_count"] == 2
+    assert "考试名称字段为空" not in result.content
+    assert "600" in result.content and "550" in result.content
+
+
+def test_query_school_vs_city_avg_tool_unmatched_school_not_empty_exam(monkeypatch):
+    from src.agent.education import tools as edu_tools
+
+    def fake_run(sql, **kwargs):
+        text = sql or ""
+        if "tb_exam_batch" in text:
+            return True, "", {
+                "columns": ["id", "batch_name", "exam_time"],
+                "rows": [[1, "2026届高三1月期末", "2026-01-15"]],
+            }, text
+        if "tb_school" in text:
+            return True, "", {"columns": ["id", "name", "s_name"], "rows": []}, text
+        if "DISTINCT exam_name" in text:
+            return True, "", {
+                "columns": ["exam_name"],
+                "rows": [["2026届高三1月期末"]],
+            }, text
+        if "tb_score_overview" in text:
+            return True, "", {
+                "columns": ["scope", "avg_zf6m", "n"],
+                "rows": [["扬州中学", None, 0], ["全市", 500, 1]],
+            }, text
+        return True, "", {"columns": [], "rows": []}, text
+
+    monkeypatch.setattr(edu_tools, "_run_edu_sql", fake_run)
+    result = _run(
+        edu_tools.query_school_vs_city_avg_tool.execute(
+            datasource_id=1,
+            tool_runtime_ctx={
+                "user_question": "2026届高三1月期末扬州中学物理类均分与全市的对比",
+                "datasource_id": 1,
+            },
+        )
+    )
+    assert result.data["school_matched"] is False
+    assert result.data["city_n"] == 1
+    assert "对齐" in result.content
+    assert "全市" in result.content
+    assert "考试名称字段为空" not in result.content
+    assert "未包含该考试批次" not in result.content

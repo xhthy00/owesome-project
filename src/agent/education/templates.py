@@ -34,6 +34,7 @@ _TEMPLATE_PATH: dict[ReportType, str] = {
     ReportType.CONTRIBUTION: "education/bureau_analysis.html",
     ReportType.COMBO_REACH: "education/bureau_analysis.html",
     ReportType.ELITE_ROSTER: "education/bureau_analysis.html",
+    ReportType.SCORE_BAND: "education/bureau_analysis.html",
 }
 
 #: 额外模板文件名 → ReportType（非主路径，但仍属上述标准类型）
@@ -177,6 +178,7 @@ for _rt in (
     ReportType.CONTRIBUTION,
     ReportType.COMBO_REACH,
     ReportType.ELITE_ROSTER,
+    ReportType.SCORE_BAND,
 ):
     _REQUIRED_KEYS[_rt] = list(_REQUIRED_KEYS[ReportType.SUBJECT_AVG])
 

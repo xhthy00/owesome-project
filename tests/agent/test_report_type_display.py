@@ -13,8 +13,8 @@ from src.agent.education.templates import (
 
 
 def test_standard_report_types_defined():
-    assert len(ReportType) == 16
-    assert len(REPORT_TYPE_LABELS) == 16
+    assert len(ReportType) == 17
+    assert len(REPORT_TYPE_LABELS) == 17
     assert set(REPORT_TYPE_LABELS) == set(ReportType)
 
 

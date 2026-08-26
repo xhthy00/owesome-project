@@ -455,12 +455,32 @@ def is_line_reach_citywide_scope(question: str) -> bool:
     return any(h in q for h in _LINE_REACH_CITY_SCOPE)
 
 
+_SCHOOL_TYPE_HINTS = (
+    ("引领校", "引领"),
+    ("支撑校", "支撑"),
+    ("发展校", "发展"),
+)
+
+
+def extract_school_type_target(question: str) -> str | None:
+    """校类切片：引领/支撑/发展。不是具体校名，也不是全市全体学校。"""
+    q = (question or "").strip()
+    if not q:
+        return None
+    for hint, code in _SCHOOL_TYPE_HINTS:
+        if hint in q:
+            return code
+    return None
+
+
 def is_line_reach_report_query(question: str) -> bool:
-    """全市/各区达线情况分析报告；班/校/单区县或窄问人数/率仍走事实查询。"""
+    """全市/各区达线情况分析报告；班/校/校类/单区县或窄问人数/率仍走事实查询。"""
     q = (question or "").strip()
     if not is_line_reach_query(q):
         return False
     if extract_class_target(q):
+        return False
+    if extract_school_type_target(q):
         return False
     if not is_line_reach_citywide_scope(q):
         return False
@@ -469,6 +489,10 @@ def is_line_reach_report_query(question: str) -> bool:
     ):
         return False
     return True
+
+
+_TRACK_ONLY_RE = re.compile(r"物理类|物理方向|历史类|历史方向")
+_NAMED_SUBJECT_RE = re.compile(r"数学|语文|英语|化学|生物|政治|地理|科学")
 
 
 def is_overview_total_query(question: str) -> bool:
@@ -484,11 +508,50 @@ def is_overview_total_query(question: str) -> bool:
         return True
     if any(h in q for h in ("六门总均分", "六门均分", "六门总分", "全科总分", "zf6m", "zf3m")):
         return True
+    # 「物理类均分」= 该选科方向六门 zf6m，不是物理单科
+    if _TRACK_ONLY_RE.search(q) and "均分" in q:
+        rest = _TRACK_ONLY_RE.sub("", q)
+        if not _NAMED_SUBJECT_RE.search(rest) and not re.search(r"物理|历史", rest):
+            return True
     return False
+
+
+def is_school_vs_city_avg_query(question: str) -> bool:
+    """点名学校或本校的均分与全市比较：事实查询，禁止班级横向/全市区县均分报告。"""
+    q = (question or "").strip()
+    if not q:
+        return False
+    if not extract_school_target(q) and "本校" not in q and "我校" not in q:
+        return False
+    if not any(h in q for h in ("均分", "平均分")):
+        return False
+    if not any(h in q for h in ("全市", "市均", "全市均分")):
+        return False
+    if any(
+        h in q
+        for h in ("各班", "各个班级", "班级横向", "横向对比", "横向分析", "横向多维")
+    ):
+        return False
+    if is_bureau_report_query(q):
+        return False
+    return True
 
 
 def _has_reportish(question: str) -> bool:
     return any(h in (question or "") for h in ("分析", "报告", "情况", "对比"))
+
+
+#: 「10分段」口语 = 十分段；勿与班级「分数段」或位次桶混淆
+SCORE_BAND_SHIFEN_HINTS = ("十分段", "10分段", "10分档", "十分档")
+SCORE_BAND_WUFEN_HINTS = ("五分段", "5分段", "5分档", "五分档")
+_SCORE_BAND_GEO = ("各区县", "各区", "各地区", "区县", "各类校", "校类", "全市")
+
+
+def has_score_band_bin_hint(question: str) -> bool:
+    q = question or ""
+    if "分段统计" in q:
+        return True
+    return any(h in q for h in (*SCORE_BAND_SHIFEN_HINTS, *SCORE_BAND_WUFEN_HINTS))
 
 
 def is_subject_avg_report_query(question: str) -> bool:
@@ -540,6 +603,45 @@ def is_elite_roster_report_query(question: str) -> bool:
     return any(h in q for h in ("理前100", "文前30", "冲刺清北", "冲刺南大", "高分名单"))
 
 
+def is_score_band_report_query(question: str) -> bool:
+    """各区县/各类校总分十分段总览。点名学校或班级的十分段走事实查询。"""
+    q = (question or "").strip()
+    if not q:
+        return False
+    if "位次" in q:
+        return False
+    if not has_score_band_bin_hint(q):
+        return False
+    if extract_school_target(q) or extract_class_target(q):
+        return False
+    if any(h in q for h in _SCORE_BAND_GEO):
+        return True
+    return _has_reportish(q) or "生成" in q or "统计表" in q
+
+
+_SCORE_THRESHOLD_RE = re.compile(r"\d+\s*分\s*(以上|以下|及以上|及以下)")
+_SCORE_RANGE_RE = re.compile(r"\d+\s*到\s*\d+\s*分")
+_SCORE_RANGE_DASH_RE = re.compile(r"\d+\s*[-–~]\s*\d+\s*分")
+
+
+def is_score_threshold_fact_query(question: str) -> bool:
+    """N分以上/某段人数，或点名学校/班级的十分段分布：事实查询。"""
+    q = (question or "").strip()
+    if not q or is_score_band_report_query(q):
+        return False
+    if is_line_reach_query(q):
+        return False
+    if has_score_band_bin_hint(q) and (
+        extract_school_target(q) or extract_class_target(q)
+    ):
+        return True
+    return bool(
+        _SCORE_THRESHOLD_RE.search(q)
+        or _SCORE_RANGE_RE.search(q)
+        or _SCORE_RANGE_DASH_RE.search(q)
+    )
+
+
 def is_bureau_report_query(question: str) -> bool:
     q = (question or "").strip()
     return any(
@@ -551,6 +653,7 @@ def is_bureau_report_query(question: str) -> bool:
             is_contribution_report_query,
             is_combo_reach_report_query,
             is_elite_roster_report_query,
+            is_score_band_report_query,
         )
     )
 
@@ -562,7 +665,7 @@ def is_citywide_analysis_query(question: str) -> bool:
         return False
     if not any(m in q for m in _CITYWIDE_MARKERS):
         return False
-    if extract_school_target(q):
+    if extract_school_target(q) or "本校" in q or "我校" in q:
         return False
     if is_line_reach_query(q):
         return False
@@ -709,6 +812,8 @@ def is_school_class_comparison_query(question: str) -> bool:
     """学校范围 + 各班/横向对比（应走全校班级对比，禁止缩成单班科目诊断）。"""
     q = (question or "").strip()
     if not q or is_citywide_analysis_query(q) or is_individual_student_analysis_query(q):
+        return False
+    if is_school_vs_city_avg_query(q):
         return False
     if is_multi_exam_class_analysis_query(q):
         return False
@@ -929,6 +1034,8 @@ def is_school_exam_report_query(question: str) -> bool:
     q = (question or "").strip()
     if not q or is_citywide_analysis_query(q) or is_individual_student_analysis_query(q):
         return False
+    if is_school_vs_city_avg_query(q):
+        return False
     if is_multi_exam_class_analysis_query(q):
         return False
     if is_structured_diagnostic_query(q):
@@ -1006,11 +1113,17 @@ def build_edu_aware_constraints(
     target_classes: list[str] | None = None
 
     if role in ("teacher", "school_admin"):
-        bound = (str(edu.get("school_name") or "").strip()) or (
-            str(edu.get("school_id") or "").strip() or None
+        qtext = question or ""
+        city_metric = any(
+            m in qtext for m in (*_CITYWIDE_MARKERS, "市均", "全市均分")
         )
-        if bound:
-            target_school = bound
+        own_school = "本校" in qtext or "我校" in qtext
+        if own_school or not city_metric:
+            bound = (str(edu.get("school_name") or "").strip()) or (
+                str(edu.get("school_id") or "").strip() or None
+            )
+            if bound:
+                target_school = bound
     if role == "teacher":
         raw = edu.get("class_names")
         if isinstance(raw, list):
@@ -1075,8 +1188,9 @@ def format_scope_constraints(constraints: dict[str, Any] | None) -> str:
         school_id = str(edu.get("school_id") or "").strip()
         if school_name:
             parts.append(
-                f"权限绑定学校名={school_name}（工具参数 school_name 用此中文全称，对应 sch.name；"
-                "禁止把问题里的「江苏省/南京市」等省市区统考冠名当作学校名）"
+                f"权限绑定学校名={school_name}（工具参数 school_name 用此中文全称；"
+                "overview 用 xx LIKE '%校名%'；达线表 tb_score_indicator 用 school_name LIKE '%校名%'；"
+                "禁止 school_id='GZ_…' 当校名；禁止把问题里的「江苏省/南京市」等省市区统考冠名当作学校名）"
             )
         elif school_id:
             parts.append(
@@ -1105,14 +1219,30 @@ def format_scope_constraints(constraints: dict[str, Any] | None) -> str:
         parts.append(edu_sql_hint)
     if not parts:
         return "（无额外范围约束，按当前子任务描述理解即可）"
+    role = ""
+    if isinstance(edu, dict):
+        role = str(edu.get("edu_role") or "").strip()
+    if role in ("school_admin", "teacher"):
+        prefix = (
+            "成绩明细（名单/逐人分数）必须限本校"
+            + ("（老师再限班）" if role == "teacher" else "")
+            + "；全市/区县指标禁止 xx/school_id，禁止 GROUP BY xx。"
+            "探查维表（tb_exam / tb_exam_batch / tb_fraction_bar / tb_knowledge / tb_school 等）无需手写 school_id/class——"
+            "系统仅在成绩表上自动注入行级权限。"
+        )
+    else:
+        prefix = (
+            "报告/SQL 范围必须与用户数据权限及子任务描述一致；"
+            "查成绩明细（tb_score / tb_score_detail）时 WHERE 须含学校/班级/学生等过滤，"
+            "禁止默认查全量学生、全校或多校合并数据。"
+            "探查维表（tb_exam / tb_exam_batch / tb_fraction_bar / tb_knowledge / tb_school 等）无需手写 school_id/class——"
+            "系统仅在成绩表上自动注入行级权限。"
+        )
     return (
-        "报告/SQL 范围必须与用户数据权限及子任务描述一致；"
-        "查成绩明细（tb_score / tb_score_detail）时 WHERE 须含学校/班级/学生等过滤，"
-        "禁止默认查全量学生、全校或多校合并数据。"
-        "探查维表（tb_exam / tb_exam_batch / tb_fraction_bar / tb_knowledge / tb_school 等）无需手写 school_id/class——"
-        "系统仅在成绩表上自动注入行级权限。"
-        f"{privacy_sql_instruction()}"
-        "范围：" + "；".join(parts)
+        prefix
+        + f"{privacy_sql_instruction()}"
+        + "范围："
+        + "；".join(parts)
     )
 
 
@@ -1947,6 +2077,7 @@ __all__ = [
     "extract_district_target",
     "extract_exam_name_hint",
     "extract_school_target",
+    "extract_school_type_target",
     "extract_student_id_target",
     "extract_student_target",
     "is_individual_student_analysis_query",
@@ -1966,8 +2097,14 @@ __all__ = [
     "is_contribution_report_query",
     "is_combo_reach_report_query",
     "is_elite_roster_report_query",
+    "is_score_band_report_query",
+    "is_score_threshold_fact_query",
+    "has_score_band_bin_hint",
+    "SCORE_BAND_SHIFEN_HINTS",
+    "SCORE_BAND_WUFEN_HINTS",
     "is_bureau_report_query",
     "is_overview_total_query",
+    "is_school_vs_city_avg_query",
     "is_multi_exam_class_analysis_query",
     "is_trend_tracking_query",
     "is_school_class_comparison_query",

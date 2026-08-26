@@ -87,6 +87,7 @@ _BUREAU_TYPES = frozenset(
         ReportType.CONTRIBUTION,
         ReportType.COMBO_REACH,
         ReportType.ELITE_ROSTER,
+        ReportType.SCORE_BAND,
     }
 )
 
@@ -181,6 +182,7 @@ _CLASS_RE = _re.compile(
     r"(初三|初二|初一|高三|高二|高一|九年级|八年级|七年级|六年级|五年级|四年级|三年级)[\d班]*\d?班"
 )
 _SUBJECT_RE = _re.compile(r"(数学|语文|英语|物理|化学|生物|政治|历史|地理|科学)")
+_TRACK_STRIP_RE = _re.compile(r"物理类|物理方向|历史类|历史方向")
 _EXAM_RE = _re.compile(r"(期中|期末|月考|摸底|模拟|单元测验)")
 _EXAM_FULL_RE = _re.compile(
     r"([\u4e00-\u9fff]{2,30}?(?:质量检测|模拟考试|学情检测|单元测验|期末考试|期中考试|检测试卷))"
@@ -196,7 +198,9 @@ def _extract_class_name(q: str) -> str | None:
 
 
 def _extract_subject(q: str) -> str | None:
-    m = _SUBJECT_RE.search(q)
+    """抽取学科。物理类/历史类是选科方向，不能当成物理/历史单科。"""
+    text = _TRACK_STRIP_RE.sub("", q or "")
+    m = _SUBJECT_RE.search(text)
     return m.group(1) if m else None
 
 

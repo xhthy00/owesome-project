@@ -6244,6 +6244,134 @@ def build_elite_roster_report_data_tool(
 
 
 @tool()
+def build_score_band_report_data_tool(
+    exam_name: str = "",
+    render: bool = True,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """各区县/各类校总分十分段与学科五分段：人数、比例、累计人数、累计比例。"""
+    return _bureau_report_tool(
+        "score_band", exam_name, render, datasource_id, workspace_oid, user_id, tool_runtime_ctx
+    )
+
+
+@tool()
+def query_school_vs_city_avg_tool(
+    exam_name: str = "",
+    school_name: str = "",
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """点名学校 vs 全市六门均分（zf6m）。物理类/历史类按选科过滤，不是物理单科。
+
+    用 tb_exam_batch 选场、tb_school.s_name 对齐 overview.xx。禁止 HTML 报告。
+    """
+    from src.agent.education.bureau_analysis import (
+        format_school_city_avg_content,
+        overview_exam_names_sql,
+        parse_track,
+        school_city_avg_from_union_rows,
+        school_city_avg_sql,
+    )
+    from src.agent.education.line_reach_report import (
+        exam_batch_select_sql,
+        ordered_exam_names,
+        pick_exam_for_question,
+        sql_result_to_dicts,
+    )
+    from src.agent.education.query_parse import extract_school_target
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    ds_id = datasource_id if datasource_id is not None else ctx.get("datasource_id")
+    ws_oid = workspace_oid if workspace_oid is not None else ctx.get("workspace_oid")
+    uid = user_id if user_id is not None else ctx.get("user_id")
+    if not ds_id:
+        return ToolResult(
+            content="query_school_vs_city_avg_tool 失败：缺少 datasource_id。",
+            data={"error": "missing datasource_id"},
+        )
+    user_q = str(ctx.get("user_question") or (ctx.get("constraints") or {}).get("question") or "")
+    school = extract_school_target(user_q) or str(school_name or "").strip()
+    if not school:
+        return ToolResult(
+            content="query_school_vs_city_avg_tool 失败：问题中没有校名。",
+            data={"error": "missing_school"},
+        )
+    chat_fn = ctx.get("exam_pick_chat")
+    if not callable(chat_fn):
+        chat_fn = None
+    ok_b, msg_b, batch_res, _ = _run_edu_sql(
+        exam_batch_select_sql(), datasource_id=int(ds_id), workspace_oid=ws_oid, user_id=uid
+    )
+    names = ordered_exam_names(sql_result_to_dicts(batch_res if ok_b else None))
+    exam = pick_exam_for_question(names, question=user_q, hint=(exam_name or "").strip(), chat_fn=chat_fn)
+    if not exam:
+        return ToolResult(
+            content="query_school_vs_city_avg_tool 失败：未解析到考试名称。"
+            + (f"（{msg_b}）" if not ok_b and msg_b else ""),
+            data={"error": "missing exam_name"},
+        )
+    codes: list[str] = []
+    track = parse_track(user_q)
+    stu_sql = school_city_avg_sql(exam, school, track)
+    ok_s, msg_s, stu_res, sql_run = _run_edu_sql(
+        stu_sql, datasource_id=int(ds_id), workspace_oid=ws_oid, user_id=uid
+    )
+    if not ok_s:
+        return ToolResult(
+            content=f"读取 tb_score_overview 失败：{msg_s}",
+            data={"error": msg_s, "sql": sql_run or stu_sql},
+        )
+    cmp = school_city_avg_from_union_rows(
+        sql_result_to_dicts(stu_res),
+        school_name=school,
+        exam_name=exam,
+        track=track,
+    )
+    overview_names: list[str] = []
+    if cmp.get("unmatched_reason") == "no_students":
+        ok_n, _, name_res, _ = _run_edu_sql(
+            overview_exam_names_sql(), datasource_id=int(ds_id), workspace_oid=ws_oid, user_id=uid
+        )
+        if ok_n:
+            overview_names = [
+                str(r.get("exam_name") or "").strip()
+                for r in sql_result_to_dicts(name_res)
+                if str(r.get("exam_name") or "").strip()
+            ]
+    content = format_school_city_avg_content(cmp, overview_exam_names=overview_names)
+    table = cmp.get("table") or []
+    rows = [[r.get("scope"), r.get("avg_zf6m"), r.get("n")] for r in table]
+    payload = {
+        "sql": sql_run or stu_sql,
+        "columns": ["scope", "avg_zf6m", "n"],
+        "rows": rows,
+        "row_count": len(rows),
+        "exam_name": exam,
+        "school_name": school,
+        "track": cmp.get("track"),
+        "school_matched": cmp.get("school_matched"),
+        "unmatched_reason": cmp.get("unmatched_reason"),
+        "school_avg": cmp.get("school_avg"),
+        "city_avg": cmp.get("city_avg"),
+        "delta": cmp.get("delta"),
+        "school_n": cmp.get("school_n"),
+        "city_n": cmp.get("city_n"),
+        "school_codes": codes,
+    }
+    return ToolResult(
+        content=content + "\n任务已完成，无需再调用其他工具。",
+        data=payload,
+        is_final=True,
+    )
+
+
+@tool()
 def peek_edu_filter_values(
     exam_hint: str = "",
     table: str = "tb_score_indicator",
@@ -6289,6 +6417,7 @@ def peek_edu_filter_values(
 EDUCATION_TOOLS = [
     resolve_score_schema,
     peek_edu_filter_values,
+    query_school_vs_city_avg_tool,
     compute_score_stats_tool,
     compute_rankings_tool,
     identify_at_risk_students_tool,
@@ -6315,6 +6444,7 @@ EDUCATION_TOOLS = [
     build_contribution_report_data_tool,
     build_combo_reach_report_data_tool,
     build_elite_roster_report_data_tool,
+    build_score_band_report_data_tool,
     build_knowledge_tier_sections_tool,
     compare_knowledge_cohort_tool,
 ]
@@ -6336,6 +6466,7 @@ __all__ = [
     "build_contribution_report_data_tool",
     "build_combo_reach_report_data_tool",
     "build_elite_roster_report_data_tool",
+    "build_score_band_report_data_tool",
     "build_group_feature_report_data_tool",
     "build_knowledge_tier_sections_tool",
     "build_student_exam_report_data_tool",
@@ -6350,6 +6481,7 @@ __all__ = [
     "fetch_subject_diagnosis_data_tool",
     "identify_at_risk_students_tool",
     "peek_edu_filter_values",
+    "query_school_vs_city_avg_tool",
     "resolve_score_schema",
     "select_report_template_tool",
 ]

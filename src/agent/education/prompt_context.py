@@ -43,6 +43,10 @@ _EDUCATION_KEYWORDS = (
     "预测线",
     "特控",
     "本科线",
+    "十分段",
+    "10分段",
+    "五分段",
+    "5分段",
 )
 
 
@@ -75,10 +79,16 @@ def build_education_sql_hint_text(question: str) -> str:
     if "AVG(reach_rate)" in term or "达线" in term:
         rules.append(
             "达线：区县/全市查 tb_score_indicator，SUM(reached_count)/SUM(candidates)；"
-            "禁止 AVG(reach_rate)；禁止 district='月…区'；先 peek_edu_filter_values。"
+            "点名学校用 school_name LIKE '%校名%'，禁止 school_id='GZ_…'；"
+            "引领/支撑/发展校 JOIN tb_school，sch.type LIKE '%引领%'（与 overview.xxlb 同源）；"
+            "禁止套用全市达线报告；禁止 AVG(reach_rate)；先 peek_edu_filter_values。"
         )
     if "zf3m" in term or "zf6m" in term:
         rules.append("三门/六门均分用 tb_score_overview.zf3m/zf6m，禁止对 tb_score 三科 AVG 当三门均分。")
+    if "hxzh" in term or "十分段" in term or "分以上" in term:
+        rules.append(
+            "绝对分数段查 tb_score_overview；化学用 hxzh；十分段 ((zf6m-1)/10)*10+1。"
+        )
     if "peek" not in " ".join(rules).lower():
         rules.append("写 district/exam_name 过滤前先 peek_edu_filter_values；空结果禁止断言缺数。")
     import re

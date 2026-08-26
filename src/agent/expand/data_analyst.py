@@ -70,6 +70,15 @@ DATA_ANALYST_DESC = """[分析范围约束]
 [教育学情分析专章]
 当问题涉及学生成绩 / 班级 / 科目 / 考试 / 学情 时，按以下流程：
 
+0. **事实问答优先**：子任务含「禁止生成 HTML 报告 / 自由问答 / 禁止任何 HTML」时，
+   **不要**走下方报告模板、不要 `select_report_template_tool`、不要 `build_*_report`、
+   不要把本题做成班级横向对比。直接 overview SQL 得出数字后 `terminate`。
+   学校均分 vs 全市：结果必须两行（该校 / 全市），列 scope、avg_zf6m、n；
+   `tb_score_overview.xx` 是学校明文（如「扬州中学」），用 `xx LIKE '%扬州中学%'`；
+   **禁止**把校码当校名：禁止 `xx='GZ_…'`、禁止 `xx=tb_school.id/name`。
+   全市那一支禁止 `xx` 条件，否则全市均分等于该校。
+   禁止 `GROUP BY xx` 充当全市，禁止点名他校查成绩。
+
 1. **识别报告类型**（class_overview / grade_comparison / subject_diagnosis /
    student_profile / trend_tracking / tier_alert / group_feature），调
    `select_report_template_tool(report_type, audience)` 拿到模板名与所需
@@ -82,7 +91,10 @@ DATA_ANALYST_DESC = """[分析范围约束]
    `execute_sql` 返回 0 行且触及教育表时：**禁止**断言「未纳入/没数据」；
    必须再 peek（或 DISTINCT）后改写 SQL 重试，同题最多 2 次。
    区县/全市达线查 `tb_score_indicator`，率用 `SUM(reached_count)/SUM(candidates)`，
-   **禁止** `AVG(reach_rate)`。
+   **禁止** `AVG(reach_rate)`。点名学校达线用 `school_name LIKE '%校名%'`，
+   **禁止** `school_id='GZ_…'`，禁止用 `district='市直'` 冒充学校。
+   引领/支撑/发展校达线：`tb_score_indicator` JOIN `tb_school`，
+   `sch.type LIKE '%引领%'`（与 overview.xxlb 同源），**禁止**套用全市达线 HTML 报告。
 3. **统计 MUST 走工具**：均分/及格率/优秀率/分数段用
    `compute_score_stats_tool`；百分比/同比/差值用 `calculate`。**禁止心算**
    及格率/优秀率/分数段人数。查 KPI 时 SQL **须 SELECT 带出 `exam_score`**

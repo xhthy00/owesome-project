@@ -135,7 +135,9 @@ export default function G2Chart({
     const numericCols = columns.filter((col) => isNumericColumn(col, data));
     const categoricalCols = columns.filter((col) => !isNumericColumn(col, data));
     if (categoricalCols.length === 0 && numericCols.length > 0 && data.length === 1) {
-      const chartData: Record<string, unknown>[] = numericCols.map((col) => ({
+      const metricCols = numericCols.filter((col) => scoreYColumn(col) > 0);
+      const useCols = metricCols.length >= 2 ? metricCols : numericCols;
+      const chartData: Record<string, unknown>[] = useCols.map((col) => ({
         [xField]: col,
         [yField]: data[0][col]
       }));

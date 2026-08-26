@@ -1903,6 +1903,9 @@ _SUB_TASK_SCOPED_EVENTS: tuple[str, ...] = (
     "tool_call", "tool_result", "agent_thought", "final_answer", "report",
 )
 
+#: 会把 columns/rows 写入 last_exec_result，并向前端补发 sql/result 事件。
+_TABULAR_RESULT_TOOLS = frozenset({"execute_sql", "query_school_vs_city_avg_tool"})
+
 
 def _make_forwarder(state: _RunState, emit: EmitCallback) -> EmitCallback:
     """生成一个 stream_callback：先做状态累积 / 老事件回灌，再转发给 emit。"""
@@ -2017,7 +2020,7 @@ def _on_tool_result(state: _RunState, payload: dict[str, Any]) -> None:
             )
 
     if (
-        payload.get("tool") == "execute_sql"
+        payload.get("tool") in _TABULAR_RESULT_TOOLS
         and success
         and isinstance(data, dict)
     ):
@@ -2048,7 +2051,7 @@ async def _maybe_emit_legacy_sql_result(
     payload: dict[str, Any],
     emit: EmitCallback,
 ) -> None:
-    if payload.get("tool") != "execute_sql" or not payload.get("success"):
+    if payload.get("tool") not in _TABULAR_RESULT_TOOLS or not payload.get("success"):
         return
     if state.last_exec_result is None or not state.last_sql:
         return

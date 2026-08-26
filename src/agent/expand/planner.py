@@ -158,7 +158,7 @@ PLANNER_DESC = """[你的职责]
   分布/进退步 TOP/偏科/单科之最/总分轨迹/学生档案）——仅当问题点名综合分析时使用：
   ["查询该班历次考试每位学生分数（SQL 须含 exam_name、student_id、score；禁止只查班级 KPI 聚合）",
    {"task": "调 build_comprehensive_report_data_tool(class_name=【班级】) 一步生成综合分析 HTML（进步/退步 TOP5 与每位学生档案由工具自动计算）；**禁止** render_html_report / 手填模板；完成后 terminate", "sub_task_agent": "ToolExpert"}]
-- **全市达线情况分析**（如「全市2026届高三1月期末达线情况」）——
+- **全市达线情况分析**（如「全市2026届高三1月期末达线情况」；问句含引领校/支撑校/发展校则不是本报告，按校类事实查询）——
   **只 1 个子任务**，走 `build_line_reach_report_data_tool`，查 tb_score_indicator，含较上场人数/率环比：
   [{"task": "调 build_line_reach_report_data_tool(render=true) 生成全市达线分析 HTML；**禁止** describe_table / execute_sql / build_diagnostic_report_data_tool / 扫 tb_score_overview；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 - 结构化诊断报告（diagnostic_report，一般性/特殊性/动态性三节）：
@@ -349,6 +349,10 @@ def _line_reach_fact_hint(
 ) -> str:
     """按班/校/区/全市粒度给出达线事实查询的选表提示。"""
     spec_district = district if district and district not in _GENERIC_DISTRICT_LABELS else ""
+    school_type = ""
+    from src.agent.education.query_parse import extract_school_type_target
+
+    school_type = extract_school_type_target(question) or ""
     if class_name:
         return (
             "本题是班级达线/预测线查询（特招线=特控线）："
@@ -361,6 +365,18 @@ def _line_reach_fact_hint(
             "未点名考试则对照 tb_exam_batch 取最近一场；"
             "禁止扫 tb_score_indicator（无班级粒度）、禁止套用全市达线 HTML 报告。"
         )
+    if school_type:
+        label = f"{school_type}校"
+        return (
+            f"本题是全市{label}达线查询（特招线=特控线），范围是该校类不是全体学校："
+            "优先查 tb_score_indicator；"
+            "JOIN tb_school sch ON ind.school_name = COALESCE(sch.s_name, sch.name)；"
+            f"校类用 sch.\"type\" LIKE '%{school_type}%'（overview.xxlb 同源 tb_school.type，"
+            "indicator 无 xxlb，必须关联学校表）；"
+            "达线率 SUM(reached_count)/SUM(candidates)，禁止 AVG(reach_rate)；"
+            "写 SQL 前先 peek_edu_filter_values；"
+            "禁止套用全市达线 HTML 报告。"
+        )
     if school or (spec_district and not citywide):
         dist_hint = (
             f"区县过滤用 district LIKE '%{spec_district.rstrip('区县')}%' "
@@ -371,9 +387,9 @@ def _line_reach_fact_hint(
         )
         return (
             "本题是学校/区县达线查询（特招线=特控线）："
-            "优先查 tb_score_indicator，按 school_id/district 过滤；"
+            "优先查 tb_score_indicator；点名学校用 school_name LIKE '%校名%'，区县用 district；"
             "写最终 SQL 前须先 peek_edu_filter_values（或 DISTINCT 考试/区县）；"
-            "校名须先经 tb_school 对齐（indicator.school_name 常是脱敏校码）；"
+            "禁止 school_id='GZ_…'（校码不是校名）；禁止用 district='市直' 冒充学校；"
             f"{dist_hint}"
             "考试名对照 tb_exam_batch.batch_name，用 exam_name LIKE '%批次%'，"
             "禁止臆造未出现在批次表中的精确全称；未点名考试则取最近一场；"
@@ -389,19 +405,60 @@ def _line_reach_fact_hint(
     )
 
 
+def _score_band_fact_hint() -> str:
+    """绝对分数阈值/分段人数：钉死 overview 与分箱列。"""
+    return (
+        "本题是绝对分数阈值/分段人数（不是达线、不是位次桶）："
+        "必须查 tb_score_overview；禁止 tb_score、禁止 tb_score_indicator。"
+        "问句「总分」未写语数英/三门时必须用 zf6m 六门全科，禁止 zf3m、禁止英语 yy；"
+        "物理类 xkkm LIKE '物%'；历史类 LIKE '史%' OR LIKE '历%'；"
+        "区县 dq LIKE '%邗江%'；"
+        "引领校 xxlb LIKE '%引领%' AND xsxz='在籍生'（xxlb 同源 tb_school.type）；市报生 xsxz LIKE '%市报%'。"
+        "N分以上：COUNT(*) FILTER (WHERE zf6m >= N) 与同分母 COUNT(*)。"
+        "十分段 GROUP BY ((CAST(zf6m AS int)-1)/10)*10+1。"
+        "点名学校时必须 xx LIKE '%校名%'（xx 是学校明文），禁止 xx='GZ_…' 校码；"
+        "禁止出全市/各区县 HTML 报告；"
+        "点名班级时 WHERE 必含 bj。"
+        "化学用 hxzh 禁止 hx；生物 swzh、政治 zzzh、地理 dlzh；语数英物史用 yw/sx/yy/wl/ls。"
+        "比例分母=该切片有效人数，禁止对区县比例再平均。"
+    )
+
+
+def _school_vs_city_avg_hint() -> str:
+    """点名学校均分 vs 全市：自由 SQL；xx 是校名明文，禁止拿校码去查。"""
+    return (
+        "本题是点名学校均分与全市比较（自由 SQL）："
+        "必须查 tb_score_overview；禁止 tb_score / tb_exam / exam_type；禁止任何 HTML 报告。"
+        "未点名语数英/单科时均分=AVG(zf6m) 六门全科，禁止用物理单科 wl。"
+        "物理类/历史类是选科方向不是学科：物理类 xkkm LIKE '物%'，历史类 LIKE '史%' OR LIKE '历%'。"
+        "tb_score_overview.xx 是学校明文（如「扬州中学」），不是校码。"
+        "禁止 xx='GZ_…'、禁止 xx=tb_school.id、禁止 xx=tb_school.name（那些是脱敏校码）。"
+        "点名学校用 xx LIKE '%扬州中学%'。"
+        "「本校/我校」=权限绑定学校，xx LIKE '%绑定校名%'。"
+        "全市那一支禁止任何 xx 条件，禁止 GROUP BY xx 当全市，禁止点名他校。"
+        "最终结果必须恰好两行：scope（该校/全市）、avg_zf6m、n；用 UNION ALL。"
+        "terminate 必须写出该校均分、全市均分、人数、分差。"
+        "禁止套用班级横向对比 / 科目诊断 / 各区县均分 HTML 报告。"
+    )
+
+
 def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     """事实查询：仅 DataAnalyst，禁止生成任何 HTML 报告。"""
     from src.agent.education.orchestrator import _extract_class_name, _extract_subject
     from src.agent.education.query_parse import (
         extract_district_target,
         extract_school_target,
+        extract_school_type_target,
         is_line_reach_citywide_scope,
         is_line_reach_query,
         is_overview_total_query,
+        is_school_vs_city_avg_query,
+        is_score_threshold_fact_query,
     )
 
     q = (question or "").strip()
     school = extract_school_target(q) or ""
+    school_type = extract_school_type_target(q) or ""
     class_name = _extract_class_name(q) or ""
     subject = _plan_subject_name(q) or (_extract_subject(q) or "")
     exam = _plan_exam_name(q)
@@ -410,12 +467,18 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     scope_bits = []
     if school:
         scope_bits.append(f"学校【{school}】")
+    if school_type:
+        scope_bits.append(f"校类【{school_type}校】")
     if class_name:
         scope_bits.append(f"班级【{class_name}】")
     if spec_district:
         scope_bits.append(f"区县【{spec_district}】")
     if subject:
         scope_bits.append(f"科目【{subject}】")
+    if any(h in q for h in ("物理类", "物理方向", "理科")):
+        scope_bits.append("选科【物理类】")
+    elif any(h in q for h in ("历史类", "历史方向", "文科")):
+        scope_bits.append("选科【历史类】")
     if exam:
         scope_bits.append(f"考试【{exam}】")
     scope = "、".join(scope_bits) if scope_bits else "问题中的范围"
@@ -428,8 +491,19 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
             district=district,
             citywide=is_line_reach_citywide_scope(q),
         )
+    score_band_hint = ""
+    if not line_reach_hint and is_score_threshold_fact_query(q):
+        score_band_hint = _score_band_fact_hint()
+    school_city_hint = ""
+    if not line_reach_hint and not score_band_hint and is_school_vs_city_avg_query(q):
+        school_city_hint = _school_vs_city_avg_hint()
     overview_hint = ""
-    if not line_reach_hint and is_overview_total_query(q):
+    if (
+        not line_reach_hint
+        and not score_band_hint
+        and not school_city_hint
+        and is_overview_total_query(q)
+    ):
         overview_hint = (
             "本题是语数外三门/四门/六门总分均分："
             "必须查 tb_score_overview；"
@@ -437,7 +511,7 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
             "禁止对 tb_score 语文/数学/英语 AVG(score) 当三门均分，禁止写满分150）；"
             "四门=zf4m，六门/全科=zf6m；"
             "理科=物理类（xkkm LIKE '物%'），文科=历史类（xkkm LIKE '史%' OR xkkm LIKE '历%'）；"
-            "学校用 xx 分组展示（官方表校码如 A01），不要 JOIN tb_school.name（脱敏 token）；"
+            "学校用 xx 分组（xx 是学校明文，禁止拿 GZ_ 校码当 xx）；"
             "参考人数=COUNT(*)。"
         )
     from src.agent.education.privacy_mode import is_anonymize_display_enabled
@@ -460,13 +534,15 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
             "sub_task": (
                 f"用 SQL 直接回答用户问题（范围：{scope}）。"
                 f"{line_reach_hint}"
+                f"{score_band_hint}"
+                f"{school_city_hint}"
                 f"{overview_hint}"
                 "WHERE 必须按问题中的班级/学校/科目/考试过滤（有则过滤）；"
                 f"{student_hint}"
                 "只回答用户所问（如最高分是谁/多少分）；"
                 + (
                     ""
-                    if overview_hint
+                    if overview_hint or school_city_hint
                     else (
                         "**禁止**写「参考人数/共N人参考/班级人数」——"
                         "Top-N、LIMIT、返回行数都不是全班人数；"

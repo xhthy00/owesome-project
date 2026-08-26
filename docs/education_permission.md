@@ -59,13 +59,14 @@ bureau_user,bureau_admin,,,,
 
 ## 运行时行为
 
-1. Chat / Agent `execute_sql` 与列裁剪链路不变
-2. `apply_permissions_for_execute` 在 `ds_rules` 谓词之后追加 edu 模板谓词
-3. 教育报告工具（`build_subject_diagnosis_report_tool` 等）通过 `user_id` binding 走同一权限链路
+1. Chat / Agent `execute_sql` 与列裁剪链路不变。
+2. `apply_permissions_for_execute` 在 `ds_rules` 谓词之后追加 edu 模板谓词。
+3. **校长/老师**：成绩**明细**（名单、逐人分数）仍注入本校（老师再限班）。**全市/区县合计**（`AVG`/`COUNT`/`SUM`、`GROUP BY dq`）不注入学校谓词。点名他校、`GROUP BY xx` 各校排名仍注入本校（他校为 0 行或只剩本校）。学生角色不开放全市。
+4. 教育报告工具通过 `user_id` binding 走同一权限链路。
 
 配置文件：[`config/education_permission.json`](../config/education_permission.json)
 
-核心模块：[`src/datasource/service/edu_permission.py`](../src/datasource/service/edu_permission.py)
+核心模块：[`src/datasource/service/edu_permission.py`](../src/datasource/service/edu_permission.py)、[`src/datasource/service/query_permission.py`](../src/datasource/service/query_permission.py)
 
 ## 手工验收
 
@@ -73,7 +74,9 @@ bureau_user,bureau_admin,,,,
 2. 配置 `teacher` + 两个班级，谓词应含 `class IN (...)`
 3. 配置 `student` + 学号，谓词应含 `student_id = '...'`
 4. `bureau_admin` 预览谓词为空
-5. 用校长账号问数，SQL 结果不应含其他学校数据
+5. 校长问本校学生名单：结果只有本校
+6. 校长问全市均分：人数应明显大于本校，SQL 全市支无 `xx`/`school_id`
+7. 校长问他校均分或 `GROUP BY xx`：不应出现其他学校
 
 ## 限制
 

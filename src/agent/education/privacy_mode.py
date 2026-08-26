@@ -70,11 +70,17 @@ def privacy_sql_instruction() -> str:
         return (
             "学校字段：展示与过滤只用 sch.name 或 sch.id / sc.school_id（脱敏码）；"
             "**禁止** SELECT/引用 tb_school.s_name（可能含中文明文）。"
+            "但 tb_score_overview.xx 仍是学校明文，点名学校用 xx LIKE '%校名%'；"
+            "禁止把 GZ_ 校码写进 overview.xx。"
             "学生标识只用 student_id / anon_stu_id；"
             "**禁止** SELECT xm（姓名）、xh（真实学号）、sfzh/ksh。"
         )
     return (
         "当前已关闭匿名脱敏：可 SELECT xm（姓名）、xh（学号）、tb_school.s_name（学校全称）；"
+        "点名学校时 tb_score 用 sch.s_name LIKE '%校名%'；"
+        "tb_score_overview.xx 是学校明文（如「扬州中学」），用 xx LIKE '%校名%'；"
+        "禁止 xx='GZ_…' / xx=tb_school.id / xx=tb_school.name（那些是脱敏校码，不是校名）；"
+        "禁止 WHERE sch.name = '扬州中学'（name 仍是脱敏码）；"
         "仍禁止 SELECT sfzh/ksh（身份证/考生号）。"
     )
 

@@ -10,9 +10,12 @@ from src.agent.education.bureau_analysis import (
     aggregate_subject_avg,
     build_bureau_report_data,
     build_elite_roster,
+    compare_school_city_avg,
     filter_students,
+    format_school_city_avg_content,
     normalize_students,
     parse_track,
+    school_codes_from_lookup,
     wants_enrolled_only,
 )
 from src.agent.education.intent_router import classify_report_intent_sync
@@ -22,6 +25,7 @@ from src.agent.education.query_parse import (
     is_combo_reach_report_query,
     is_elite_roster_report_query,
     is_rank_bucket_report_query,
+    is_score_band_report_query,
     is_subject_avg_report_query,
 )
 from src.agent.education.report_types import ReportType
@@ -225,8 +229,44 @@ def test_routing_bureau_reports():
     assert is_rank_bucket_report_query("高三物理方向位次情况")
     assert is_combo_reach_report_query("理科各选择组合达线情况")
     assert is_elite_roster_report_query("理前100名单情况")
+    assert is_score_band_report_query("各地区总分十分段情况分析")
+    assert is_score_band_report_query("请生成各区县与各类校总分十分段、学科五分段统计")
+    assert is_score_band_report_query("2026届高三1月各区县总分10分段统计")
+    assert not is_score_band_report_query("高三(1)班分数段情况")
     assert classify_report_intent_sync("各地区均分情况分析").report_type == ReportType.SUBJECT_AVG
+    assert classify_report_intent_sync("各地区总分十分段情况分析").report_type == ReportType.SCORE_BAND
+    assert classify_report_intent_sync("2026届高三1月各区县总分10分段统计").report_type == ReportType.SCORE_BAND
+    assert classify_report_intent_sync("2026届高三1月扬州中学总分10分段分布情况").needs_report is False
+    assert classify_report_intent_sync(
+        "2026届高三1月扬州中学物理类均分与全市的比较分析"
+    ).needs_report is False
     assert classify_report_intent_sync("邗江物理类本科线达线人数").needs_report is False
+    assert classify_report_intent_sync("邗江物理类600分以上多少人").needs_report is False
+
+
+def test_score_band_report_html():
+    data = build_bureau_report_data(
+        "score_band",
+        [
+            _stu(anon_stu_id="a", xkkm="物化生", zf6m=685, dq="市直", xxlb="引领"),
+            _stu(
+                anon_stu_id="b",
+                xx="A02",
+                dq="邗江区",
+                xkkm="史政地",
+                zf6m=400,
+                ls=70,
+            ),
+        ],
+        exam_name="1月期末",
+        question="各地区总分十分段情况分析",
+    )
+    html = data["PRIMARY_TABLE"]
+    assert "物理方向" in html
+    assert "681 - 690" in html
+    assert data["REPORT_TYPE"] == "分段统计"
+    assert data["SECONDARY_TABLE"] == ""
+    assert "各区县分段" in data["PRIMARY_TITLE"]
 
 
 def test_tezhao_alias_and_parse_track():
@@ -237,3 +277,52 @@ def test_tezhao_alias_and_parse_track():
     out = aggregate_contribution(rows, bars)
     assert out[0]["line_name"] == "特控线"
     assert out[0]["reached"] == 1
+
+
+def test_compare_school_city_avg_physics_track():
+    students = [
+        _stu(anon_stu_id="a", xx="A01", xkkm="物化生", zf6m=600),
+        _stu(anon_stu_id="b", xx="A01", xkkm="史政地", zf6m=400, ls=70),
+        _stu(anon_stu_id="c", xx="A02", xkkm="物化生", zf6m=500),
+    ]
+    out = compare_school_city_avg(
+        students,
+        school_name="扬州中学",
+        school_codes=["A01"],
+        track="物理类",
+        exam_name="2026届高三1月期末",
+    )
+    assert out["school_matched"] is True
+    assert out["school_n"] == 1
+    assert out["city_n"] == 2
+    assert out["school_avg"] == 600
+    assert out["city_avg"] == 550
+    assert out["delta"] == 50
+    assert [r["scope"] for r in out["table"]] == ["扬州中学", "全市"]
+    text = format_school_city_avg_content(out)
+    assert "600" in text and "550" in text
+    assert "考试名称字段为空" not in text
+
+
+def test_compare_school_city_avg_unmatched_school_not_empty_exam():
+    students = [
+        _stu(anon_stu_id="a", xx="A02", xkkm="物化生", zf6m=500),
+        _stu(anon_stu_id="b", xx="A03", xkkm="物化生", zf6m=400),
+    ]
+    out = compare_school_city_avg(
+        students,
+        school_name="扬州中学",
+        school_codes=["A01"],
+        track="物理类",
+        exam_name="2026届高三1月期末",
+    )
+    assert out["school_matched"] is False
+    assert out["unmatched_reason"] == "school_not_aligned"
+    assert out["city_n"] == 2
+    assert out["city_avg"] == 450
+    text = format_school_city_avg_content(out)
+    assert "对齐" in text
+    assert "全市" in text
+    assert "考试名称字段为空" not in text
+    assert "未包含该考试批次" not in text
+    assert school_codes_from_lookup([{"id": "A01", "name": "A01", "s_name": "扬州中学"}]) == ["A01"]
