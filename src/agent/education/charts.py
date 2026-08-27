@@ -47,6 +47,7 @@ SUPPORTED_CHART_TYPES = (
     "ability_radar",
     "question_type_bar",
     "scatter",
+    "difficulty_curve",
 )
 
 
@@ -545,6 +546,36 @@ def _scatter(data: dict[str, Any], title: str) -> dict[str, Any]:
     }
 
 
+def _difficulty_curve(data: dict[str, Any], title: str) -> dict[str, Any]:
+    x_labels = list(data.get("x_labels") or [])
+    series = []
+    for s in data.get("series") or []:
+        series.append(
+            {
+                "type": "line",
+                "name": s.get("name", ""),
+                "data": list(s.get("values") or []),
+                "smooth": False,
+                "symbol": "circle",
+                "label": {"show": True, "position": "top"},
+            }
+        )
+    return {
+        "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
+        "tooltip": {"trigger": "axis"},
+        "legend": {"top": 24},
+        "grid": {"left": "8%", "right": "8%", "bottom": "12%", "containLabel": True},
+        "xAxis": {"type": "category", "data": x_labels, "name": "分数段"},
+        "yAxis": {
+            "type": "value",
+            "name": "得分率(%)",
+            "min": 0,
+            "max": 100,
+        },
+        "series": series,
+    }
+
+
 _register_builder("score_distribution", _score_distribution)
 _register_builder("subject_radar", _subject_radar)
 _register_builder("class_compare_bar", _class_compare_bar)
@@ -561,6 +592,7 @@ _register_builder("heatmap", _heatmap)
 _register_builder("ability_radar", _ability_radar)
 _register_builder("question_type_bar", _question_type_bar)
 _register_builder("scatter", _scatter)
+_register_builder("difficulty_curve", _difficulty_curve)
 
 
 __all__ = ["SUPPORTED_CHART_TYPES", "build_chart_option", "resolve_chart_type"]

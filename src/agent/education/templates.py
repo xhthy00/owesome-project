@@ -35,6 +35,7 @@ _TEMPLATE_PATH: dict[ReportType, str] = {
     ReportType.COMBO_REACH: "education/bureau_analysis.html",
     ReportType.ELITE_ROSTER: "education/bureau_analysis.html",
     ReportType.SCORE_BAND: "education/bureau_analysis.html",
+    ReportType.DIFFICULTY_CURVE: "education/difficulty_curve.html",
 }
 
 #: 额外模板文件名 → ReportType（非主路径，但仍属上述标准类型）
@@ -170,6 +171,12 @@ _REQUIRED_KEYS: dict[ReportType, list[str]] = {
         "KPI_GRID", "PRIMARY_TABLE", "SECONDARY_TABLE",
         "PRIMARY_TITLE", "SECONDARY_TITLE", "GENERAL_INSIGHT",
         "SUMMARY", "RECOMMENDATIONS",
+    ],
+    ReportType.DIFFICULTY_CURVE: [
+        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME", "REPORT_TYPE",
+        "SCOPE", "EXAM_NAME", "SUBJECT_NAME",
+        "CURVE_CHART", "PRIMARY_TABLE", "SECONDARY_TABLE", "ITEM_CHARTS_HTML",
+        "GENERAL_INSIGHT", "SUMMARY", "RECOMMENDATIONS",
     ],
 }
 for _rt in (

@@ -28,6 +28,7 @@ from src.agent.education.query_parse import (
     is_school_class_comparison_query,
     is_school_exam_report_query,
     is_school_vs_city_avg_query,
+    is_school_vs_school_type_avg_query,
     is_tier_alert_query,
 )
 from src.agent.education.report_types import ReportType
@@ -757,3 +758,45 @@ def test_school_vs_city_avg_is_fact_not_class_compare():
     assert route_llm.needs_report is False
     assert route_llm.report_type is None
     assert route_llm.source == "hard"
+
+
+def test_school_vs_leading_subject_avg_is_fact_uses_xxlb():
+    """学校对比引领校单科均分：学生加权 AVG(yw)+xxlb，禁止 JOIN tb_school。"""
+    q = "2026届高三3月扬州中学对比引领校语文单科"
+    assert extract_school_target(q) == "扬州中学"
+    assert extract_school_type_target(q) == "引领"
+    assert is_school_vs_school_type_avg_query(q) is True
+    assert is_school_vs_city_avg_query(q) is False
+    assert is_line_reach_query(q) is False
+    route = classify_report_intent_sync(q)
+    assert route.needs_report is False
+    assert _route(q) == "fact"
+    blob = build_fact_query_plan_items(q)[0]["sub_task"]
+    assert "yw" in blob
+    assert "xxlb" in blob
+    assert "在籍生" in blob
+    assert "JOIN tb_school" in blob and "禁止" in blob
+    assert "GROUP BY xx" in blob
+    assert "yw > 0" in blob
+    assert "缺考" in blob
+    assert "build_line_reach_report_data_tool" not in blob
+    from src.agent.education.prompt_context import build_education_sql_hint_text
+    from src.templates.sql_gen_prompt import education_sql_training_block_for_intent
+
+    hint = build_education_sql_hint_text(q)
+    assert "xxlb" in hint
+    assert "JOIN tb_school" in hint
+    assert "达线" not in hint
+    assert "yw > 0" in hint
+    shot = education_sql_training_block_for_intent("overview_avg")
+    assert "yw > 0" in shot
+    wrong = [
+        {
+            "sub_task": "调 build_subject_avg_report_data_tool(render=true)",
+            "sub_task_agent": "ToolExpert",
+        },
+    ]
+    fixed = coerce_plan_items_if_needed(q, wrong)
+    fixed_blob = " ".join(p["sub_task"] for p in fixed)
+    assert "调 build_subject_avg_report_data_tool" not in fixed_blob
+    assert "xxlb" in fixed_blob

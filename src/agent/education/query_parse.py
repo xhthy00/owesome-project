@@ -537,6 +537,27 @@ def is_school_vs_city_avg_query(question: str) -> bool:
     return True
 
 
+def is_school_vs_school_type_avg_query(question: str) -> bool:
+    """点名学校对比引领/支撑/发展校的均分或单科：事实查询，学生加权 AVG。"""
+    q = (question or "").strip()
+    if not q:
+        return False
+    if not extract_school_target(q) and "本校" not in q and "我校" not in q:
+        return False
+    if not extract_school_type_target(q):
+        return False
+    if is_line_reach_query(q) or is_score_threshold_fact_query(q):
+        return False
+    if any(
+        h in q
+        for h in ("各班", "各个班级", "班级横向", "横向对比", "横向分析", "横向多维")
+    ):
+        return False
+    if is_bureau_report_query(q):
+        return False
+    return any(h in q for h in ("对比", "比较", "均分", "平均", "单科"))
+
+
 def _has_reportish(question: str) -> bool:
     return any(h in (question or "") for h in ("分析", "报告", "情况", "对比"))
 
@@ -603,10 +624,34 @@ def is_elite_roster_report_query(question: str) -> bool:
     return any(h in q for h in ("理前100", "文前30", "冲刺清北", "冲刺南大", "高分名单"))
 
 
+def is_item_difficulty_curve_query(question: str) -> bool:
+    """点名第 N 题/单选 N 的难度曲线：事实问，仍走难度曲线工具。"""
+    from src.agent.education.difficulty_curve import (
+        extract_question_target,
+        is_difficulty_curve_query,
+    )
+
+    q = (question or "").strip()
+    return bool(is_difficulty_curve_query(q) and extract_question_target(q))
+
+
+def is_difficulty_curve_report_query(question: str) -> bool:
+    """整卷难度曲线报告（未抽到题号）。"""
+    from src.agent.education.difficulty_curve import (
+        extract_question_target,
+        is_difficulty_curve_query,
+    )
+
+    q = (question or "").strip()
+    return bool(is_difficulty_curve_query(q) and not extract_question_target(q))
+
+
 def is_score_band_report_query(question: str) -> bool:
     """各区县/各类校总分十分段总览。点名学校或班级的十分段走事实查询。"""
     q = (question or "").strip()
     if not q:
+        return False
+    if is_item_difficulty_curve_query(q) or is_difficulty_curve_report_query(q):
         return False
     if "位次" in q:
         return False
@@ -813,7 +858,11 @@ def is_school_class_comparison_query(question: str) -> bool:
     q = (question or "").strip()
     if not q or is_citywide_analysis_query(q) or is_individual_student_analysis_query(q):
         return False
+    if is_item_difficulty_curve_query(q) or is_difficulty_curve_report_query(q):
+        return False
     if is_school_vs_city_avg_query(q):
+        return False
+    if is_school_vs_school_type_avg_query(q):
         return False
     if is_multi_exam_class_analysis_query(q):
         return False
@@ -1034,7 +1083,11 @@ def is_school_exam_report_query(question: str) -> bool:
     q = (question or "").strip()
     if not q or is_citywide_analysis_query(q) or is_individual_student_analysis_query(q):
         return False
+    if is_item_difficulty_curve_query(q) or is_difficulty_curve_report_query(q):
+        return False
     if is_school_vs_city_avg_query(q):
+        return False
+    if is_school_vs_school_type_avg_query(q):
         return False
     if is_multi_exam_class_analysis_query(q):
         return False
@@ -2097,6 +2150,8 @@ __all__ = [
     "is_contribution_report_query",
     "is_combo_reach_report_query",
     "is_elite_roster_report_query",
+    "is_item_difficulty_curve_query",
+    "is_difficulty_curve_report_query",
     "is_score_band_report_query",
     "is_score_threshold_fact_query",
     "has_score_band_bin_hint",
@@ -2105,6 +2160,7 @@ __all__ = [
     "is_bureau_report_query",
     "is_overview_total_query",
     "is_school_vs_city_avg_query",
+    "is_school_vs_school_type_avg_query",
     "is_multi_exam_class_analysis_query",
     "is_trend_tracking_query",
     "is_school_class_comparison_query",

@@ -74,9 +74,20 @@ def build_education_sql_hint_text(question: str) -> str:
     """给 Team/DataAnalyst 的短提示（非整包 XML）。"""
     intent = resolve_edu_sql_intent(question or "")
     term, training = build_education_prompt_extras(question)
+    q = question or ""
     # 压缩：只保留关键规则行 + 示例题干
     rules: list[str] = []
-    if "AVG(reach_rate)" in term or "达线" in term:
+    from src.agent.education.query_parse import is_school_vs_school_type_avg_query
+
+    if is_school_vs_school_type_avg_query(q):
+        rules.append(
+            "学校 vs 引领/支撑/发展校均分或单科：查 tb_score_overview；"
+            "校类用 xxlb LIKE '%引领%' 且 xsxz=在籍生；语文=yw 且 yw > 0（缺考 0 分不计入）；"
+            "禁止 JOIN tb_school 算学生均分；禁止 GROUP BY xx 再平均。"
+        )
+    if not is_school_vs_school_type_avg_query(q) and (
+        "AVG(reach_rate)" in term or "达线" in term
+    ):
         rules.append(
             "达线：区县/全市查 tb_score_indicator，SUM(reached_count)/SUM(candidates)；"
             "点名学校用 school_name LIKE '%校名%'，禁止 school_id='GZ_…'；"

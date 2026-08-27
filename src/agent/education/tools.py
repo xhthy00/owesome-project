@@ -6259,6 +6259,170 @@ def build_score_band_report_data_tool(
 
 
 @tool()
+def build_difficulty_curve_report_data_tool(
+    exam_name: str = "",
+    subject_name: str = "",
+    question_no: str = "",
+    render: bool = True,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """难度曲线：该科卷面十分段 × 全卷/小题得分率。question_no 非空则只画匹配题。
+
+    禁止手写 SQL 分段。单题找不到题号时返回 error，不用全卷曲线冒充。
+    本工具在事实问（单题）时仍可调用，不走 needs_report 拦截。
+    """
+    from src.agent.education.bureau_analysis import overview_select_sql
+    from src.agent.education.difficulty_curve import (
+        build_curve_report_data,
+        exam_full_score_sql,
+        extract_question_target,
+        item_band_sql,
+        item_catalog_sql,
+        match_question_nos,
+        subject_column,
+        subject_full_score,
+    )
+    from src.agent.education.line_reach_report import (
+        exam_batch_select_sql,
+        ordered_exam_names,
+        pick_exam_for_question,
+        sql_result_to_dicts,
+    )
+    from src.agent.education.orchestrator import _extract_subject
+    from src.agent.education.query_parse import extract_class_target, extract_school_target
+    from src.agent.resource.tool.business import _render_template_html, _sanitize_report_html
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    ds_id = datasource_id if datasource_id is not None else ctx.get("datasource_id")
+    ws_oid = workspace_oid if workspace_oid is not None else ctx.get("workspace_oid")
+    uid = user_id if user_id is not None else ctx.get("user_id")
+    if not ds_id:
+        return ToolResult(
+            content="build_difficulty_curve_report_data_tool 失败：缺少 datasource_id。",
+            data={"error": "missing datasource_id"},
+        )
+    user_q = str(ctx.get("user_question") or (ctx.get("constraints") or {}).get("question") or "")
+    subject = (subject_name or "").strip() or (_extract_subject(user_q) or "")
+    if not subject or not subject_column(subject):
+        return ToolResult(
+            content="请点名科目，例如「3月数学难度曲线」。未点名科目不默认语文。",
+            data={"error": "missing_subject"},
+        )
+    school = extract_school_target(user_q) or ""
+    class_name = extract_class_target(user_q) or ""
+    clue = (question_no or "").strip() or (extract_question_target(user_q) or "")
+    chat_fn = ctx.get("exam_pick_chat")
+    if not callable(chat_fn):
+        chat_fn = None
+    ok_b, msg_b, batch_res, _ = _run_edu_sql(
+        exam_batch_select_sql(), datasource_id=int(ds_id), workspace_oid=ws_oid, user_id=uid
+    )
+    names = ordered_exam_names(sql_result_to_dicts(batch_res if ok_b else None))
+    exam = pick_exam_for_question(
+        names, question=user_q, hint=(exam_name or "").strip(), chat_fn=chat_fn
+    )
+    if not exam:
+        return ToolResult(
+            content="build_difficulty_curve_report_data_tool 失败：未解析到考试名称。"
+            + (f"（{msg_b}）" if not ok_b and msg_b else ""),
+            data={"error": "missing exam_name"},
+        )
+    col = subject_column(subject) or "sx"
+    ok_s, msg_s, stu_res, _ = _run_edu_sql(
+        overview_select_sql(exam), datasource_id=int(ds_id), workspace_oid=ws_oid, user_id=uid
+    )
+    if not ok_s:
+        return ToolResult(content=f"读取 tb_score_overview 失败：{msg_s}", data={"error": msg_s})
+    students = sql_result_to_dicts(stu_res)
+    catalog: list[str] = []
+    ok_c, _, cat_res, _ = _run_edu_sql(
+        item_catalog_sql(exam, subject), datasource_id=int(ds_id), workspace_oid=ws_oid, user_id=uid
+    )
+    if ok_c:
+        catalog = [
+            str(r.get("question_no") or "").strip()
+            for r in sql_result_to_dicts(cat_res)
+            if str(r.get("question_no") or "").strip()
+        ]
+    matched = match_question_nos(clue, catalog) if clue else []
+    item_rows: list[dict[str, Any]] = []
+    if (clue and matched) or (not clue and catalog):
+        ok_i, msg_i, item_res, _ = _run_edu_sql(
+            item_band_sql(
+                exam,
+                subject,
+                col,
+                matched or None,
+                school=school,
+                class_name=class_name,
+            ),
+            datasource_id=int(ds_id),
+            workspace_oid=ws_oid,
+            user_id=uid,
+        )
+        if ok_i:
+            item_rows = sql_result_to_dicts(item_res)
+        elif clue:
+            return ToolResult(
+                content=f"读取小题分段失败：{msg_i}",
+                data={"error": msg_i},
+            )
+    full: float | None = None
+    ok_f, _, fs_res, _ = _run_edu_sql(
+        exam_full_score_sql(exam, subject),
+        datasource_id=int(ds_id),
+        workspace_oid=ws_oid,
+        user_id=uid,
+    )
+    if ok_f:
+        fs_rows = sql_result_to_dicts(fs_res)
+        if fs_rows:
+            try:
+                full = float(fs_rows[0].get("exam_score") or 0) or None
+            except (TypeError, ValueError):
+                full = None
+    data = build_curve_report_data(
+        exam_name=exam,
+        subject_name=subject,
+        students=students,
+        item_rows=item_rows,
+        catalog=catalog,
+        question_clue=clue,
+        school=school,
+        class_name=class_name,
+        full_score=full if full else subject_full_score(subject),
+        report_time=_now_str(),
+    )
+    if data.get("error"):
+        return ToolResult(content=str(data.get("message") or data["error"]), data=data)
+    if not render:
+        return ToolResult(content="难度曲线 data 已组装。", data=data)
+    try:
+        raw_html = _render_template_html("education/difficulty_curve.html", data)
+        safe_html = _sanitize_report_html(raw_html.strip())
+    except Exception as e:  # noqa: BLE001
+        return ToolResult(content=f"难度曲线渲染失败：{e}", data={"error": str(e)})
+    title = data.get("REPORT_TITLE") or "难度曲线"
+    payload = {
+        "output_type": "html",
+        "title": title,
+        "html": safe_html,
+        "mode": "template",
+        "_stats": data.get("_stats") or {},
+        "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
+    }
+    rt = ReportType.DIFFICULTY_CURVE if not clue else None
+    return _html_report_tool_result(
+        f"难度曲线已渲染（HTML {len(safe_html)} 字符）。",
+        payload,
+        report_type=rt,
+    )
+
+
+@tool()
 def query_school_vs_city_avg_tool(
     exam_name: str = "",
     school_name: str = "",
@@ -6445,6 +6609,7 @@ EDUCATION_TOOLS = [
     build_combo_reach_report_data_tool,
     build_elite_roster_report_data_tool,
     build_score_band_report_data_tool,
+    build_difficulty_curve_report_data_tool,
     build_knowledge_tier_sections_tool,
     compare_knowledge_cohort_tool,
 ]
@@ -6467,6 +6632,7 @@ __all__ = [
     "build_combo_reach_report_data_tool",
     "build_elite_roster_report_data_tool",
     "build_score_band_report_data_tool",
+    "build_difficulty_curve_report_data_tool",
     "build_group_feature_report_data_tool",
     "build_knowledge_tier_sections_tool",
     "build_student_exam_report_data_tool",

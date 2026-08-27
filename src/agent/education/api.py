@@ -308,6 +308,7 @@ _GENERATE_REPORT_ALLOWED_TYPES = frozenset(
         "combo_reach",
         "elite_roster",
         "score_band",
+        "difficulty_curve",
     }
 )
 

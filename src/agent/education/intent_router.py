@@ -63,6 +63,7 @@ _REPORT_TYPE_DEFS: dict[ReportType, str] = {
     ReportType.COMBO_REACH: "理科选科组合特控/本科达线",
     ReportType.ELITE_ROSTER: "理前100/文前30脱敏高分名单",
     ReportType.SCORE_BAND: "各区县/各类校总分十分段与学科五分段（人数/比例/累计）",
+    ReportType.DIFFICULTY_CURVE: "单科难度曲线（十分段×得分率），非十分段、非科目诊断",
 }
 
 #: 兜底关键词表（仅在 needs_report=true 时用于选型）
@@ -72,6 +73,7 @@ _FALLBACK_KEYWORDS: list[tuple[ReportType, tuple[str, ...]]] = [
         ("达线情况", "达线分析", "达线报告", "达线环比", "预测线分析"),
     ),
     (ReportType.SCORE_BAND, ("十分段", "10分段", "五分段", "5分段", "分段统计")),
+    (ReportType.DIFFICULTY_CURVE, ("难度曲线", "难度分析", "试题质量", "试卷得分率", "试题得分率")),
     (
         ReportType.COMPREHENSIVE,
         (
@@ -210,6 +212,7 @@ _POSITIVE_HINTS: dict[ReportType, tuple[str, ...]] = {
     ReportType.COMBO_REACH: ("选科组合达线", "各选择组合达线"),
     ReportType.ELITE_ROSTER: ("理前100", "文前30", "冲刺清北", "冲刺南大"),
     ReportType.SCORE_BAND: ("十分段", "10分段", "五分段", "5分段", "分段统计"),
+    ReportType.DIFFICULTY_CURVE: ("难度曲线", "难度分析", "试题质量", "试卷得分率", "试题得分率"),
 }
 
 _NEGATIVE_HINTS: dict[ReportType, tuple[str, ...]] = {
@@ -228,6 +231,10 @@ _NEGATIVE_HINTS: dict[ReportType, tuple[str, ...]] = {
         "个人画像",
         "学生画像",
         "个体画像",
+        "难度曲线",
+        "难度分析",
+        "试卷得分率",
+        "试题得分率",
     ),
 }
 
@@ -240,6 +247,7 @@ _TIE_BREAK: dict[ReportType, int] = {
     ReportType.COMBO_REACH: 87,
     ReportType.ELITE_ROSTER: 86,
     ReportType.SCORE_BAND: 93,
+    ReportType.DIFFICULTY_CURVE: 94,
     ReportType.DIAGNOSTIC_REPORT: 85,
     ReportType.STUDENT_PROFILE: 85,
     ReportType.COMPREHENSIVE: 80,
@@ -333,11 +341,14 @@ def _candidate_pool(question: str) -> list[ReportType]:
     from src.agent.education.query_parse import (
         extract_school_target,
         is_citywide_analysis_query,
+        is_difficulty_curve_report_query,
         is_individual_student_analysis_query,
+        is_item_difficulty_curve_query,
         is_line_reach_query,
         is_line_reach_report_query,
         is_multi_exam_class_analysis_query,
         is_school_vs_city_avg_query,
+        is_school_vs_school_type_avg_query,
         is_score_threshold_fact_query,
         is_structured_diagnostic_query,
         is_tier_alert_query,
@@ -347,6 +358,10 @@ def _candidate_pool(question: str) -> list[ReportType]:
     q = (question or "").strip()
     all_types = list(ReportType)
 
+    if is_item_difficulty_curve_query(q):
+        return []
+    if is_difficulty_curve_report_query(q):
+        return [ReportType.DIFFICULTY_CURVE]
     bureau = _bureau_report_type(q)
     if bureau is not None:
         return [bureau]
@@ -357,6 +372,8 @@ def _candidate_pool(question: str) -> list[ReportType]:
     if is_score_threshold_fact_query(q):
         return []
     if is_school_vs_city_avg_query(q):
+        return []
+    if is_school_vs_school_type_avg_query(q):
         return []
     if is_citywide_analysis_query(q) or is_structured_diagnostic_query(q):
         return [ReportType.DIAGNOSTIC_REPORT]
@@ -374,6 +391,7 @@ def _candidate_pool(question: str) -> list[ReportType]:
         ReportType.COMBO_REACH,
         ReportType.ELITE_ROSTER,
         ReportType.SCORE_BAND,
+        ReportType.DIFFICULTY_CURVE,
     ):
         candidates.discard(rt)
 
@@ -513,8 +531,10 @@ def fallback_classify_report_intent(question: str) -> ReportRoute:
     from src.agent.education.query_parse import (
         is_citywide_analysis_query,
         is_class_overview_query,
+        is_difficulty_curve_report_query,
         is_group_feature_query,
         is_individual_student_analysis_query,
+        is_item_difficulty_curve_query,
         is_knowledge_cohort_gap_query,
         is_line_reach_query,
         is_line_reach_report_query,
@@ -522,6 +542,7 @@ def fallback_classify_report_intent(question: str) -> ReportRoute:
         is_school_class_comparison_query,
         is_school_exam_report_query,
         is_school_vs_city_avg_query,
+        is_school_vs_school_type_avg_query,
         is_score_threshold_fact_query,
         is_structured_diagnostic_query,
         is_tier_alert_query,
@@ -536,6 +557,23 @@ def fallback_classify_report_intent(question: str) -> ReportRoute:
             confidence=0.2,
             reason="空问句不出报告",
             source="fallback",
+        )
+
+    if is_item_difficulty_curve_query(q):
+        return ReportRoute(
+            needs_report=False,
+            report_type=None,
+            confidence=0.95,
+            reason="单题难度曲线走事实问工具",
+            source="hard",
+        )
+    if is_difficulty_curve_report_query(q):
+        return ReportRoute(
+            needs_report=True,
+            report_type=ReportType.DIFFICULTY_CURVE,
+            confidence=0.95,
+            reason="硬约束整卷难度曲线",
+            source="hard",
         )
 
     bureau = _bureau_report_type(q)
@@ -577,6 +615,14 @@ def fallback_classify_report_intent(question: str) -> ReportRoute:
             report_type=None,
             confidence=0.95,
             reason="学校均分与全市比较走 overview 事实查询",
+            source="hard",
+        )
+    if is_school_vs_school_type_avg_query(q):
+        return ReportRoute(
+            needs_report=False,
+            report_type=None,
+            confidence=0.95,
+            reason="学校均分与引领/支撑/发展校比较走 overview 事实查询",
             source="hard",
         )
 
@@ -706,8 +752,8 @@ def _build_classify_prompt(question: str, candidates: list[ReportType]) -> list[
         "规则：\n"
         "- 事实查询（谁最高分、多少人、均分多少、排名第几、是谁、达线人数/率）→ needs_report=false，"
         "report_type=null\n"
-        "- 点名学校的均分与全市/市均比较 → needs_report=false，不是 grade_comparison，"
-        "不是班级横向对比；物理类/历史类是选科方向（xkkm），不是物理/历史学科\n"
+        "- 点名学校对比引领校/支撑校/发展校的均分或单科 → needs_report=false，"
+        "用 overview.xxlb，禁止 JOIN tb_school 算均分\n"
         "- 达线/预测线人数或率（未要求分析报告）→ needs_report=false\n"
         "- 全市/各区达线情况、达线分析/报告、环比 → line_reach，禁止出结构化诊断报告\n"
         "- 点了班级、具体学校、或引领校/支撑校/发展校时，达线问句 needs_report=false，"
@@ -719,6 +765,10 @@ def _build_classify_prompt(question: str, candidates: list[ReportType]) -> list[
         "- 「班级横向对比 / 各班横向」→ grade_comparison，不是 group_feature；"
         "仅「比较分析」且对比全市时不要选 grade_comparison\n"
         "- 仅当明确「群体特征/按班级群体」时选 group_feature\n"
+        "- 点名第N题/单选N/小题N 的难度曲线 → needs_report=false，"
+        "不是科目诊断、不是十分段，仍调难度曲线工具\n"
+        "- 整卷难度曲线/难度分析/试卷得分率分析（未点名具体题号）→ difficulty_curve 报告，"
+        "不是十分段人数、不是科目诊断\n"
         "- 拿不准时 needs_report=false（宁可只回答，不强行出报告）\n"
     )
     user = f"候选报告类型（仅 needs_report=true 时选用）：\n{catalog}\n\n用户问题：{question}"
@@ -793,16 +843,35 @@ async def classify_report_intent(
     """异步分类：优先 LLM，失败则规则兜底。"""
     from src.agent.education.query_parse import (
         is_citywide_analysis_query,
+        is_difficulty_curve_report_query,
         is_individual_student_analysis_query,
+        is_item_difficulty_curve_query,
         is_knowledge_cohort_gap_query,
         is_line_reach_query,
         is_line_reach_report_query,
         is_school_vs_city_avg_query,
+        is_school_vs_school_type_avg_query,
         is_score_threshold_fact_query,
         is_structured_diagnostic_query,
     )
 
     q = (question or "").strip()
+    if is_item_difficulty_curve_query(q):
+        return ReportRoute(
+            needs_report=False,
+            report_type=None,
+            confidence=0.95,
+            reason="单题难度曲线走事实问工具",
+            source="hard",
+        )
+    if is_difficulty_curve_report_query(q):
+        return ReportRoute(
+            needs_report=True,
+            report_type=ReportType.DIFFICULTY_CURVE,
+            confidence=0.95,
+            reason="硬约束整卷难度曲线",
+            source="hard",
+        )
     bureau = _bureau_report_type(q)
     if bureau is not None:
         return ReportRoute(
@@ -842,6 +911,14 @@ async def classify_report_intent(
             report_type=None,
             confidence=0.95,
             reason="学校均分与全市比较走 overview 事实查询",
+            source="hard",
+        )
+    if is_school_vs_school_type_avg_query(q):
+        return ReportRoute(
+            needs_report=False,
+            report_type=None,
+            confidence=0.95,
+            reason="学校均分与引领/支撑/发展校比较走 overview 事实查询",
             source="hard",
         )
     if is_knowledge_cohort_gap_query(q):
@@ -925,6 +1002,7 @@ EXPECTED_PLAN_TOOLS: dict[ReportType, frozenset[str]] = {
     ReportType.COMBO_REACH: frozenset({"build_combo_reach_report_data_tool"}),
     ReportType.ELITE_ROSTER: frozenset({"build_elite_roster_report_data_tool"}),
     ReportType.SCORE_BAND: frozenset({"build_score_band_report_data_tool"}),
+    ReportType.DIFFICULTY_CURVE: frozenset({"build_difficulty_curve_report_data_tool"}),
 }
 
 
@@ -1003,6 +1081,10 @@ def plan_items_for_report_type(
         return build_school_subject_report_plan_items(q)
     if rt == ReportType.LINE_REACH:
         return build_line_reach_plan_items(q)
+    if rt == ReportType.DIFFICULTY_CURVE:
+        from src.agent.expand.planner import build_difficulty_curve_plan_items
+
+        return build_difficulty_curve_plan_items(q)
     tool_by_rt = {
         ReportType.SUBJECT_AVG: "build_subject_avg_report_data_tool",
         ReportType.ASSIGN_GRADE: "build_assign_grade_report_data_tool",
@@ -1093,6 +1175,14 @@ def coerce_plan_to_route(
         return plan_items_for_route(route, question)
 
     if not route.needs_report:
+        from src.agent.education.query_parse import is_item_difficulty_curve_query
+
+        if is_item_difficulty_curve_query(q):
+            blob = " ".join(str(it.get("sub_task") or "") for it in (plan_items or []))
+            if "build_difficulty_curve_report_data_tool" in blob:
+                return plan_items
+            logger.info("intent coerce: item difficulty curve → fact tool plan")
+            return plan_items_for_route(route, question)
         if plan_is_fact_query(plan_items):
             return plan_items
         logger.info("intent coerce: needs_report=false → fact query plan")

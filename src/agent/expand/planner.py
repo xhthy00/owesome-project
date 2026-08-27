@@ -173,7 +173,10 @@ PLANNER_DESC = """[你的职责]
 简单问题（如"三班数学平均分"）不生成报告，返回 plans=[原问题] 即可。
 **例外**：问题含学号/「学生xxx」且询问「得分情况/成绩/知识点」——**不算简单问题**，
 须走上方「单个学生 + 单次考试」2 步计划（含 build_student_subject_diagnosis_tool），
-禁止只查总分后 terminate。"""
+禁止只查总分后 terminate。
+- **难度曲线**：整卷（如「3月数学难度曲线」「5月数学难度分析」「试卷得分率分析」）→ 调
+  `build_difficulty_curve_report_data_tool(render=true)`，禁止科目诊断/十分段。
+  点名第N题/单选N → **不算报告**，仍调同一工具并传 `question_no`，禁止 `execute_sql` 手写分段。"""
 
 
 def _plan_exam_name(question: str) -> str:
@@ -442,21 +445,82 @@ def _school_vs_city_avg_hint() -> str:
     )
 
 
+_SUBJECT_AVG_COL = {
+    "语文": "yw",
+    "数学": "sx",
+    "英语": "yy",
+    "物理": "wl",
+    "历史": "ls",
+    "化学": "hxzh",
+    "生物": "swzh",
+    "政治": "zzzh",
+    "地理": "dlzh",
+}
+
+
+def _school_vs_school_type_avg_hint(school: str, school_type: str, subject: str) -> str:
+    """点名学校 vs 引领/支撑/发展校：学生加权均分，校类用 overview.xxlb。"""
+    label = f"{school_type}校" if school_type else "该校类"
+    col = _SUBJECT_AVG_COL.get(subject or "", "")
+    metric = (
+        f"单科均分=AVG({col})（{subject}），必须 AND {col} > 0（缺考 0 分不计入分母）"
+        if col
+        else "未点名单科时均分=AVG(zf6m) 六门全科"
+    )
+    sch = school or "该校"
+    return (
+        f"本题是点名学校与全市{label}的均分/单科对比（自由 SQL）："
+        "必须查 tb_score_overview；禁止 tb_score / tb_score_indicator；禁止任何 HTML 报告。"
+        f"{metric}；禁止作文列 ywzw 当语文。"
+        f"该校支：xx LIKE '%{sch}%'。"
+        f"{label}支：xxlb LIKE '%{school_type}%' AND xsxz='在籍生'（市报生不计入校类）；"
+        "校类过滤用 overview.xxlb，**禁止 JOIN tb_school** 算学生均分"
+        "（校名对不齐会少人，均分会偏；达线才用 sch.type）。"
+        f"{label}支不要排除点名学校。"
+        "必须学生加权 AVG，禁止 GROUP BY xx 再对校均分取平均。"
+        f"最终两行 UNION ALL：scope（{sch}/{label}）、均分、n。"
+        "禁止套用班级横向 / 全市达线 / 各区县均分 HTML 报告。"
+    )
+
+
 def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     """事实查询：仅 DataAnalyst，禁止生成任何 HTML 报告。"""
+    from src.agent.education.difficulty_curve import extract_question_target
     from src.agent.education.orchestrator import _extract_class_name, _extract_subject
     from src.agent.education.query_parse import (
         extract_district_target,
         extract_school_target,
         extract_school_type_target,
+        is_item_difficulty_curve_query,
         is_line_reach_citywide_scope,
         is_line_reach_query,
         is_overview_total_query,
         is_school_vs_city_avg_query,
+        is_school_vs_school_type_avg_query,
         is_score_threshold_fact_query,
     )
 
     q = (question or "").strip()
+    if is_item_difficulty_curve_query(q):
+        qno = extract_question_target(q) or ""
+        subject = _plan_subject_name(q) or (_extract_subject(q) or "")
+        exam = _plan_exam_name(q)
+        return [
+            {
+                "sub_task": (
+                    "调 build_difficulty_curve_report_data_tool("
+                    f"exam_name='{exam}', subject_name='{subject}', "
+                    f"question_no='{qno}', render=true) "
+                    "生成该题难度曲线单图 HTML；"
+                    "**禁止** execute_sql 手写分数段得分率；"
+                    "**禁止**科目诊断 / 十分段报告工具；"
+                    "完成后 terminate，结论写出各段得分率与是否上升。"
+                    f"原问：{q}"
+                ),
+                "sub_task_agent": _TOOL_EXPERT_AGENT,
+            }
+        ]
+
     school = extract_school_target(q) or ""
     school_type = extract_school_type_target(q) or ""
     class_name = _extract_class_name(q) or ""
@@ -495,13 +559,22 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     if not line_reach_hint and is_score_threshold_fact_query(q):
         score_band_hint = _score_band_fact_hint()
     school_city_hint = ""
-    if not line_reach_hint and not score_band_hint and is_school_vs_city_avg_query(q):
+    school_type_avg_hint = ""
+    if not line_reach_hint and not score_band_hint and is_school_vs_school_type_avg_query(q):
+        school_type_avg_hint = _school_vs_school_type_avg_hint(school, school_type, subject)
+    if (
+        not line_reach_hint
+        and not score_band_hint
+        and not school_type_avg_hint
+        and is_school_vs_city_avg_query(q)
+    ):
         school_city_hint = _school_vs_city_avg_hint()
     overview_hint = ""
     if (
         not line_reach_hint
         and not score_band_hint
         and not school_city_hint
+        and not school_type_avg_hint
         and is_overview_total_query(q)
     ):
         overview_hint = (
@@ -535,6 +608,7 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
                 f"用 SQL 直接回答用户问题（范围：{scope}）。"
                 f"{line_reach_hint}"
                 f"{score_band_hint}"
+                f"{school_type_avg_hint}"
                 f"{school_city_hint}"
                 f"{overview_hint}"
                 "WHERE 必须按问题中的班级/学校/科目/考试过滤（有则过滤）；"
@@ -542,7 +616,7 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
                 "只回答用户所问（如最高分是谁/多少分）；"
                 + (
                     ""
-                    if overview_hint or school_city_hint
+                    if overview_hint or school_city_hint or school_type_avg_hint
                     else (
                         "**禁止**写「参考人数/共N人参考/班级人数」——"
                         "Top-N、LIMIT、返回行数都不是全班人数；"
@@ -584,6 +658,22 @@ def build_bureau_plan_items(tool_name: str, question: str) -> list[dict[str, str
                 "完成后 terminate。"
                 "**禁止** build_diagnostic_report_data_tool / "
                 "build_class_overview_report_data_tool。"
+                f"原问：{question or ''}"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        }
+    ]
+
+
+def build_difficulty_curve_plan_items(question: str) -> list[dict[str, str]]:
+    """整卷难度曲线：工具内聚合，禁止手写 SQL 分段。"""
+    return [
+        {
+            "sub_task": (
+                "调 build_difficulty_curve_report_data_tool(render=true) 生成整卷难度曲线；"
+                "考试+科目取自原问，未点名科目须追问，禁止默认语文；"
+                "**禁止** execute_sql 手算分数段得分率；"
+                "**禁止**科目诊断 / 十分段报告工具；完成后 terminate。"
                 f"原问：{question or ''}"
             ),
             "sub_task_agent": _TOOL_EXPERT_AGENT,

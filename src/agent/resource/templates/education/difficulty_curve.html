@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{REPORT_TITLE}}</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    :root {
+      --edu-primary: #1677ff;
+      --edu-primary-soft: #e8f3ff;
+      --edu-primary-bg: #e6f4ff;
+      --edu-text-lv1: rgba(0,0,0,0.88);
+      --edu-text-lv2: rgba(0,0,0,0.65);
+      --edu-text-lv3: rgba(0,0,0,0.45);
+      --edu-border: #e8edf3;
+      --edu-surface: #f7f9fc;
+      --edu-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 4px 12px rgba(16, 24, 40, 0.04);
+    }
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: linear-gradient(180deg, #eef3f9 0%, #f0f2f5 40%, #f5f6f8 100%);
+      color: var(--edu-text-lv1);
+    }
+    .edu-container { max-width: 1040px; margin: 24px auto; padding: 0 16px 32px; }
+    .edu-card {
+      background: #fff;
+      border: 1px solid var(--edu-border);
+      border-radius: 14px;
+      padding: 22px 24px;
+      margin-bottom: 16px;
+      box-shadow: var(--edu-shadow);
+    }
+    .edu-card > h2 {
+      margin: 0 0 16px;
+      font-size: 17px;
+      font-weight: 650;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--edu-border);
+    }
+    h1 { margin: 0 0 8px; font-size: 24px; font-weight: 700; }
+    h3 { margin: 16px 0 10px; font-size: 14px; color: var(--edu-text-lv2); }
+    p { margin: 6px 0; line-height: 1.75; }
+    .edu-sub { color: var(--edu-text-lv3); font-size: 13px; }
+    .edu-meta { display: flex; gap: 12px; flex-wrap: wrap; color: var(--edu-text-lv2); font-size: 13px; }
+    .edu-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: var(--edu-primary-soft);
+      color: var(--edu-primary);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    table, .edu-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    table th, table td, .edu-table th, .edu-table td {
+      border-bottom: 1px solid var(--edu-border);
+      padding: 11px 14px;
+      text-align: left;
+    }
+    table thead th, .edu-table thead th {
+      background: linear-gradient(180deg, #f3f8ff 0%, var(--edu-primary-bg) 100%);
+      color: #3b6fb8;
+      font-weight: 650;
+    }
+    .edu-table th.num, .edu-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .edu-chart { width: 100%; height: 360px; }
+    .item-curve-host { height: 300px; }
+    .item-curve-block {
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px dashed var(--edu-border);
+    }
+    .item-curve-block:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+    .edu-chart-empty {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      height: 180px;
+      color: var(--edu-text-lv3);
+      background: var(--edu-surface);
+      border: 1px dashed var(--edu-border);
+      border-radius: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="edu-container">
+    <section class="edu-card">
+      <div class="edu-badge">{{REPORT_TYPE}}</div>
+      <h1>{{REPORT_TITLE}}</h1>
+      <p class="edu-sub">{{REPORT_SUBTITLE}}</p>
+      <div class="edu-meta">
+        <span>考试：{{EXAM_NAME}}</span>
+        <span>科目：{{SUBJECT_NAME}}</span>
+        <span>范围：{{SCOPE}}</span>
+        <span>{{REPORT_TIME}}</span>
+      </div>
+    </section>
+
+    <section class="edu-card">
+      <h2>难度曲线</h2>
+      <p class="edu-sub">X 轴为该科卷面总分十分段上限（与教研图 10、20、60 一致），Y 轴为得分率（%）。空单元格按 0 分；缺考（科目分≤0）不入段。</p>
+      <div id="curveChart" class="edu-chart"></div>
+      <div id="curveEmpty" class="edu-chart-empty">暂无难度曲线数据</div>
+      <script type="application/json" id="curveChartData">{{CURVE_CHART}}</script>
+      <script>
+        (function () {
+          var el = document.getElementById('curveChart');
+          var empty = document.getElementById('curveEmpty');
+          var raw = (document.getElementById('curveChartData').textContent || '').trim();
+          if (!raw || raw === '{}' || raw === 'null') {
+            el.style.display = 'none';
+            empty.style.display = 'flex';
+            return;
+          }
+          try {
+            echarts.init(el).setOption(JSON.parse(raw));
+          } catch (e) {
+            el.style.display = 'none';
+            empty.style.display = 'flex';
+          }
+        })();
+      </script>
+      <p>{{GENERAL_INSIGHT}}</p>
+    </section>
+
+    <section class="edu-card">
+      <h2>分段得分率</h2>
+      <div>{{PRIMARY_TABLE}}</div>
+    </section>
+
+    <section class="edu-card" id="secondarySection">
+      <h2>各小题一览</h2>
+      <div>{{SECONDARY_TABLE}}</div>
+    </section>
+
+    {% if ITEM_CHARTS_HTML %}
+    <section class="edu-card" id="itemChartsSection">
+      <h2>各小题难度曲线</h2>
+      <p class="edu-sub">每题一张折线：X 为该科卷面十分段，Y 为该题得分率（%）。</p>
+      {{ITEM_CHARTS_HTML}}
+    </section>
+    {% endif %}
+
+    <section class="edu-card">
+      <h2>结论</h2>
+      <p>{{SUMMARY}}</p>
+      <p>{{RECOMMENDATIONS}}</p>
+    </section>
+  </div>
+  <script>
+    (function () {
+      document.querySelectorAll('.item-curve-data').forEach(function (node) {
+        var target = node.getAttribute('data-target');
+        var el = target ? document.getElementById(target) : null;
+        var raw = (node.textContent || '').trim();
+        if (!el || !raw || raw === '{}' || raw === 'null') {
+          if (el) el.style.display = 'none';
+          return;
+        }
+        try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) {}
+      });
+    })();
+  </script>
+</body>
+</html>

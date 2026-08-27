@@ -205,6 +205,24 @@ LIMIT 1000;
 -- 两行对比：scope+avg_zf6m+n。overview.xx 是学校明文，用 xx LIKE '%扬州中学%'；全市那一支禁止 xx；禁止 GROUP BY xx 当全市；禁止 xx='GZ_…'（校码不是校名）；物理类=xkkm 不是物理单科；禁止 exam_type / 班级横向报告</suggestion-answer>
   </example>
   <example>
+    <question>2026届高三3月扬州中学对比引领校语文单科</question>
+    <suggestion-answer>SELECT '扬州中学' AS scope, ROUND(AVG(yw), 2) AS avg_score, COUNT(*) AS n
+FROM tb_score_overview
+WHERE exam_name LIKE '%2026届高三3月%'
+  AND xx LIKE '%扬州中学%'
+  AND xsxz = '在籍生'
+  AND yw > 0
+UNION ALL
+SELECT '引领校' AS scope, ROUND(AVG(yw), 2) AS avg_score, COUNT(*) AS n
+FROM tb_score_overview
+WHERE exam_name LIKE '%2026届高三3月%'
+  AND xxlb LIKE '%引领%'
+  AND xsxz = '在籍生'
+  AND yw > 0
+LIMIT 1000;
+-- 语文=yw。缺考 yw=0 不计入均分分母（否则 113.05 会被拉成 112.99）。引领校用 overview.xxlb 且在籍生；禁止 JOIN tb_school 算均分；禁止 GROUP BY xx 再平均；引领校支不要排除扬州中学</suggestion-answer>
+  </example>
+  <example>
     <question>2026届高三5月模拟理科语数外三门均分的学校排名</question>
     <suggestion-answer>SELECT xx AS school,
        COUNT(*) AS candidates,
@@ -394,10 +412,11 @@ _INTENT_EXAMPLE_KEYS: dict[str, tuple[str, ...]] = {
         "广陵区本科线达线人数和达线率",
     ),
     "overview_avg": (
+        "扬州中学对比引领校语文单科",
+        "扬州中学物理类均分与全市",
         "全科总分均分",
         "语数外三门均分的学校排名",
         "邗江区 2026届高三5月模拟数学均分",
-        "扬州中学物理类均分与全市",
     ),
     "class_score": (
         "高一(1)班数学平均分和人数",
@@ -452,6 +471,7 @@ def resolve_edu_sql_intent(question: str) -> str:
         is_line_reach_query,
         is_overview_total_query,
         is_school_vs_city_avg_query,
+        is_school_vs_school_type_avg_query,
         is_score_threshold_fact_query,
     )
 
@@ -464,7 +484,7 @@ def resolve_edu_sql_intent(question: str) -> str:
         return "line_reach"
     if is_score_threshold_fact_query(q):
         return "score_band"
-    if is_school_vs_city_avg_query(q) or is_overview_total_query(q):
+    if is_school_vs_city_avg_query(q) or is_school_vs_school_type_avg_query(q) or is_overview_total_query(q):
         return "overview_avg"
     if any(h in q for h in ("知识点", "小题", "逐题", "得分率")):
         return "knowledge"
@@ -563,7 +583,7 @@ def education_terminologies_block() -> str:
   </terminology>
   <terminology>
     <words><word>语数外</word><word>语数英</word><word>三门</word><word>三门均分</word><word>三门总均分</word><word>四门</word><word>六门</word><word>理科</word><word>文科</word></words>
-    <description>语数外/三门均分=tb_score_overview.zf3m 的校均（三科总分，约 300–450，禁止除以 3，禁止写满分 150，禁止对 tb_score 语文/数学/英语 AVG(score)）。四门=zf4m，六门/全科总分=zf6m。理科=物理类（xkkm LIKE '物%'），文科=历史类（xkkm LIKE '史%' 或 LIKE '历%'）。点名学校均分与全市比较：结果必须两行 scope+avg_zf6m+n（该校/全市 UNION ALL）；overview.xx 是学校明文，用 xx LIKE '%校名%'；禁止把 GZ_ 校码 / tb_school.id / tb_school.name 当作 xx。禁止套用班级横向对比报告。学校排名 GROUP BY xx ORDER BY AVG(zf3m) DESC。参考人数 COUNT(*)</description>
+    <description>语数外/三门均分=tb_score_overview.zf3m 的校均（三科总分，约 300–450，禁止除以 3，禁止写满分 150，禁止对 tb_score 语文/数学/英语 AVG(score)）。四门=zf4m，六门/全科总分=zf6m。理科=物理类（xkkm LIKE '物%'），文科=历史类（xkkm LIKE '史%' 或 LIKE '历%'）。点名学校均分与全市比较：结果必须两行 scope+avg_zf6m+n（该校/全市 UNION ALL）；overview.xx 是学校明文，用 xx LIKE '%校名%'；禁止把 GZ_ 校码 / tb_school.id / tb_school.name 当作 xx。学校 vs 引领/支撑/发展校单科：语文=yw 且 yw&gt;0（缺考 0 分不计入均分），校类用 xxlb LIKE '%引领%' 且 xsxz=在籍生，禁止 JOIN tb_school 算均分，禁止 GROUP BY xx 再平均。禁止套用班级横向对比报告。学校排名 GROUP BY xx ORDER BY AVG(zf3m) DESC。参考人数 COUNT(*)</description>
   </terminology>
   <terminology>
     <words><word>达线</word><word>预测线</word><word>特控线</word><word>本科线</word><word>南大</word><word>特招线</word></words>

@@ -73,11 +73,17 @@ DATA_ANALYST_DESC = """[分析范围约束]
 0. **事实问答优先**：子任务含「禁止生成 HTML 报告 / 自由问答 / 禁止任何 HTML」时，
    **不要**走下方报告模板、不要 `select_report_template_tool`、不要 `build_*_report`、
    不要把本题做成班级横向对比。直接 overview SQL 得出数字后 `terminate`。
+   **例外**：单题难度曲线必须调 `build_difficulty_curve_report_data_tool(question_no=..., render=true)`
+   出单图 HTML，**禁止** `execute_sql` 手写分数段×得分率。
+   整卷难度曲线同样禁止手写 SQL，一律调 `build_difficulty_curve_report_data_tool`。
    学校均分 vs 全市：结果必须两行（该校 / 全市），列 scope、avg_zf6m、n；
    `tb_score_overview.xx` 是学校明文（如「扬州中学」），用 `xx LIKE '%扬州中学%'`；
    **禁止**把校码当校名：禁止 `xx='GZ_…'`、禁止 `xx=tb_school.id/name`。
    全市那一支禁止 `xx` 条件，否则全市均分等于该校。
    禁止 `GROUP BY xx` 充当全市，禁止点名他校查成绩。
+   学校 vs 引领/支撑/发展校单科或均分：两行 UNION ALL；语文=`yw` 且 `yw > 0`（缺考 0 分不计入分母）；
+   校类用 `xxlb LIKE '%引领%' AND xsxz='在籍生'`；**禁止 JOIN tb_school 算均分**
+   （达线才用 `sch.type`）；必须学生加权 AVG，禁止先按校再平均。
 
 1. **识别报告类型**（class_overview / grade_comparison / subject_diagnosis /
    student_profile / trend_tracking / tier_alert / group_feature），调
