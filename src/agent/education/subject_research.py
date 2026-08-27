@@ -236,6 +236,7 @@ _MIN_SCHOOL_LABEL = 3
 _FORBIDDEN_OTHER_SCHOOL = (
     "没有权限查看其他学校的学科教研分析报告。当前账号只能查看本校的该报告。"
 )
+_YIZHONG_IN_Q = re.compile(r"([\u4e00-\u9fff]{2,12}一中)")
 
 
 def _edu_dict(edu_scope: dict[str, Any] | None) -> dict[str, Any]:
@@ -271,6 +272,37 @@ def _school_labels(sch: dict[str, Any]) -> list[str]:
     return out
 
 
+def _school_name_aliases(name: str) -> list[str]:
+    """「扬州市一中」↔「扬州市第一中学」。光「一中」不展开，避免误中高邮/邗江一中。"""
+    n = _str(name)
+    if not n:
+        return []
+    out = [n]
+    if n.endswith("一中") and len(n) > 2:
+        out.append(n[:-2] + "第一中学")
+    elif n.endswith("第一中学") and len(n) > 4:
+        out.append(n[:-4] + "一中")
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for item in out:
+        if item and item not in seen:
+            seen.add(item)
+            uniq.append(item)
+    return uniq
+
+
+def _research_asked_token(question: str) -> str:
+    """问句里的校名。extract_school_target 不含「一中」后缀，这里补抽。"""
+    from src.agent.education.query_parse import extract_school_target
+
+    token = _str(extract_school_target(question))
+    if token:
+        return token
+    blob = _str(question).replace(" ", "").replace("\u3000", "")
+    m = _YIZHONG_IN_Q.search(blob)
+    return _str(m.group(1) if m else "")
+
+
 def schools_mentioned(schools: list[dict[str, Any]], text: str) -> list[dict[str, Any]]:
     """问句里出现的库内学校（按去码校名命中，不改全局 extract_school_target）。"""
     blob = _str(text)
@@ -282,8 +314,9 @@ def schools_mentioned(schools: list[dict[str, Any]], text: str) -> list[dict[str
             continue
         best = 0
         for lab in _school_labels(sch):
-            if lab in blob:
-                best = max(best, len(lab))
+            for token in _school_name_aliases(lab):
+                if token in blob:
+                    best = max(best, len(token))
         if best:
             scored.append((best, _str(sch.get("id")), sch))
     scored.sort(key=lambda x: -x[0])
@@ -312,17 +345,23 @@ def research_other_school_forbidden(
         return None
     bound = match_schools(schools, bound_key, question)
     bound_ids = {_str(s.get("id")) for s in bound if _str(s.get("id"))}
+    bound_labs = {bound_key}
+    for s in bound:
+        for lab in _school_labels(s):
+            bound_labs.update(_school_name_aliases(lab))
     asked_ids: set[str] = set()
-    asked = _str(school_arg)
-    if asked:
+    candidates = []
+    for cand in (_str(school_arg), _research_asked_token(question)):
+        if cand and cand not in candidates:
+            candidates.append(cand)
+    for asked in candidates:
         matched = match_schools(schools, asked, question)
-        asked_ids = {_str(s.get("id")) for s in matched if _str(s.get("id"))}
-        if not asked_ids and asked != bound_key:
-            bound_labs = {bound_key}
-            for s in bound:
-                bound_labs.update(_school_labels(s))
-            if asked not in bound_labs:
-                asked_ids.add("__other__")
+        ids = {_str(s.get("id")) for s in matched if _str(s.get("id"))}
+        asked_ids.update(ids)
+        if ids:
+            continue
+        if asked != bound_key and asked not in bound_labs:
+            asked_ids.add("__other__")
     for sch in schools_mentioned(schools, question):
         sid = _str(sch.get("id"))
         if sid:
@@ -361,16 +400,21 @@ def match_schools(
 
     campus = campus_of(question) or campus_of(target)
     target_base = base_school_name(target) or target
+    targets = set(_school_name_aliases(target_base))
+    targets.add(target)
     exact: list[dict[str, Any]] = []
     suffix: list[dict[str, Any]] = []
     for sch in rows:
         s_name = _str(sch.get("s_name"))
         disp = strip_school_code(s_name)
         base = base_school_name(s_name)
-        if disp == target or base == target_base or disp == target_base:
+        names = {disp, base, *(_school_name_aliases(disp)), *(_school_name_aliases(base))}
+        if names & targets:
             exact.append(sch)
-        elif target_base and (
-            disp.endswith(target_base) or base.endswith(target_base)
+        elif any(
+            disp.endswith(t) or base.endswith(t)
+            for t in targets
+            if t
         ):
             suffix.append(sch)
     matched = exact if exact else (suffix if len(suffix) == 1 else [])

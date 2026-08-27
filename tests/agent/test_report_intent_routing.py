@@ -765,6 +765,12 @@ def test_subject_research_routing_isolation():
     from src.agent.education.intent_router import plan_items_for_route
     from src.agent.education.query_parse import is_subject_research_report_query
 
+    truncated = "扬州中学 3月学科教研分析报"
+    assert is_subject_research_report_query(truncated) is True
+    assert classify_report_intent_sync(truncated).report_type == (
+        ReportType.SUBJECT_RESEARCH
+    )
+
     hit = "扬州中学 3 月学科教研分析报告"
     assert is_subject_research_report_query(hit) is True
     route = classify_report_intent_sync(hit)
