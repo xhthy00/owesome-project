@@ -687,6 +687,23 @@ def is_score_threshold_fact_query(question: str) -> bool:
     )
 
 
+# 「报」允许省略末字「告」，避免「学科教研分析报」落到自由 SQL。
+_SUBJECT_RESEARCH_HINTS = (
+    "学科教研分析",
+    "教研分析报",
+    "教科院分析报",
+    "教科院学科分析",
+)
+
+
+def is_subject_research_report_query(question: str) -> bool:
+    """一校×一场学科教研分析报告。正词收窄，避免抢走科目诊断。"""
+    q = (question or "").strip()
+    if not q:
+        return False
+    return any(h in q for h in _SUBJECT_RESEARCH_HINTS)
+
+
 def is_bureau_report_query(question: str) -> bool:
     q = (question or "").strip()
     return any(
@@ -1312,6 +1329,16 @@ def report_matches_school(title: str, html: str, target: str) -> bool:
     tn = _normalize_school_key(target)
     if tn and tn in blob_n:
         return True
+    # 权限常只绑 school_id（GZ_…），报告标题用中文校名
+    m = re.search(
+        r'data-edu-school-id=["\']([^"\']+)["\']',
+        html[:8000],
+        flags=re.I,
+    )
+    if m and tn:
+        ids = {x.strip() for x in m.group(1).split() if x.strip()}
+        if tn in ids:
+            return True
     # 允许匹配校名核心后缀（如「第一中学」）
     core = re.sub(r"^[\u4e00-\u9fff]{2,6}(?:市|省|区|县)", "", tn)
     if len(core) >= 4 and core in blob_n:
@@ -2157,6 +2184,7 @@ __all__ = [
     "has_score_band_bin_hint",
     "SCORE_BAND_SHIFEN_HINTS",
     "SCORE_BAND_WUFEN_HINTS",
+    "is_subject_research_report_query",
     "is_bureau_report_query",
     "is_overview_total_query",
     "is_school_vs_city_avg_query",

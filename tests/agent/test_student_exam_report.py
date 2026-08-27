@@ -217,6 +217,22 @@ def test_report_matches_school_filters_wrong_scope():
     assert not report_matches_school("高一数学学科诊断报告", wrong, "南京市第一中学")
 
 
+def test_report_matches_school_id_in_data_attr():
+    html = (
+        '<body data-edu-school-id="GZ_19D9D68D">'
+        "<h1>扬州中学 2026届高三3月学科教研分析报告</h1></body>"
+    )
+    title = "扬州中学 2026届高三3月学科教研分析报告"
+    assert report_matches_school(title, html, "GZ_19D9D68D")
+    yizhong = (
+        '<body data-edu-school-id="GZ_5708CB3E">'
+        "<h1>扬州市一中 2026届高三3月学科教研分析报告</h1></body>"
+    )
+    assert not report_matches_school(
+        "扬州市一中 2026届高三3月学科教研分析报告", yizhong, "GZ_19D9D68D"
+    )
+
+
 def test_extract_upstream_participant_count_from_final_answer():
     count = extract_upstream_participant_count({
         "sub_tasks": [

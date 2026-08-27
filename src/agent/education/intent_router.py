@@ -64,10 +64,23 @@ _REPORT_TYPE_DEFS: dict[ReportType, str] = {
     ReportType.ELITE_ROSTER: "理前100/文前30脱敏高分名单",
     ReportType.SCORE_BAND: "各区县/各类校总分十分段与学科五分段（人数/比例/累计）",
     ReportType.DIFFICULTY_CURVE: "单科难度曲线（十分段×得分率），非十分段、非科目诊断",
+    ReportType.SUBJECT_RESEARCH: "一校一场学科教研分析（全市校际+层级均分+拖后腿小题），不是科目诊断",
 }
 
 #: 兜底关键词表（仅在 needs_report=true 时用于选型）
 _FALLBACK_KEYWORDS: list[tuple[ReportType, tuple[str, ...]]] = [
+    (
+        ReportType.SUBJECT_RESEARCH,
+        (
+            "学科教研分析报告",
+            "学科教研分析报",
+            "教研分析报告",
+            "教研分析报",
+            "教科院分析报告",
+            "教科院分析报",
+            "教科院学科分析",
+        ),
+    ),
     (
         ReportType.LINE_REACH,
         ("达线情况", "达线分析", "达线报告", "达线环比", "预测线分析"),
@@ -212,6 +225,15 @@ _POSITIVE_HINTS: dict[ReportType, tuple[str, ...]] = {
     ReportType.COMBO_REACH: ("选科组合达线", "各选择组合达线"),
     ReportType.ELITE_ROSTER: ("理前100", "文前30", "冲刺清北", "冲刺南大"),
     ReportType.SCORE_BAND: ("十分段", "10分段", "五分段", "5分段", "分段统计"),
+    ReportType.SUBJECT_RESEARCH: (
+        "学科教研分析报告",
+        "学科教研分析报",
+        "教研分析报告",
+        "教研分析报",
+        "教科院分析报告",
+        "教科院分析报",
+        "教科院学科分析",
+    ),
     ReportType.DIFFICULTY_CURVE: ("难度曲线", "难度分析", "试题质量", "试卷得分率", "试题得分率"),
 }
 
@@ -235,10 +257,13 @@ _NEGATIVE_HINTS: dict[ReportType, tuple[str, ...]] = {
         "难度分析",
         "试卷得分率",
         "试题得分率",
+        "教研分析",
+        "教科院分析",
     ),
 }
 
 _TIE_BREAK: dict[ReportType, int] = {
+    ReportType.SUBJECT_RESEARCH: 93,
     ReportType.LINE_REACH: 92,
     ReportType.SUBJECT_AVG: 91,
     ReportType.ASSIGN_GRADE: 90,
@@ -351,6 +376,7 @@ def _candidate_pool(question: str) -> list[ReportType]:
         is_school_vs_school_type_avg_query,
         is_score_threshold_fact_query,
         is_structured_diagnostic_query,
+        is_subject_research_report_query,
         is_tier_alert_query,
         is_trend_tracking_query,
     )
@@ -367,6 +393,8 @@ def _candidate_pool(question: str) -> list[ReportType]:
         return [bureau]
     if is_line_reach_report_query(q):
         return [ReportType.LINE_REACH]
+    if is_subject_research_report_query(q):
+        return [ReportType.SUBJECT_RESEARCH]
     if is_line_reach_query(q):
         return []
     if is_score_threshold_fact_query(q):
@@ -383,6 +411,7 @@ def _candidate_pool(question: str) -> list[ReportType]:
     candidates = set(all_types)
     candidates.discard(ReportType.DIAGNOSTIC_REPORT)
     candidates.discard(ReportType.LINE_REACH)
+    candidates.discard(ReportType.SUBJECT_RESEARCH)
     for rt in (
         ReportType.SUBJECT_AVG,
         ReportType.ASSIGN_GRADE,
@@ -545,6 +574,7 @@ def fallback_classify_report_intent(question: str) -> ReportRoute:
         is_school_vs_school_type_avg_query,
         is_score_threshold_fact_query,
         is_structured_diagnostic_query,
+        is_subject_research_report_query,
         is_tier_alert_query,
         is_trend_tracking_query,
     )
@@ -591,6 +621,14 @@ def fallback_classify_report_intent(question: str) -> ReportRoute:
             report_type=ReportType.LINE_REACH,
             confidence=0.95,
             reason="硬约束全市达线情况分析",
+            source="hard",
+        )
+    if is_subject_research_report_query(q):
+        return ReportRoute(
+            needs_report=True,
+            report_type=ReportType.SUBJECT_RESEARCH,
+            confidence=0.95,
+            reason="硬约束学科教研分析报告",
             source="hard",
         )
     if is_line_reach_query(q):
@@ -704,6 +742,7 @@ def should_use_deterministic_report_plan(question: str, route: ReportRoute) -> b
         is_school_class_comparison_query,
         is_school_exam_report_query,
         is_structured_diagnostic_query,
+        is_subject_research_report_query,
         is_tier_alert_query,
         is_trend_tracking_query,
     )
@@ -728,6 +767,7 @@ def should_use_deterministic_report_plan(question: str, route: ReportRoute) -> b
             is_trend_tracking_query(q),
             is_structured_diagnostic_query(q),
             is_line_reach_report_query(q),
+            is_subject_research_report_query(q),
             _is_parent_child_xueqing(q),
         )
     ):
@@ -853,6 +893,7 @@ async def classify_report_intent(
         is_school_vs_school_type_avg_query,
         is_score_threshold_fact_query,
         is_structured_diagnostic_query,
+        is_subject_research_report_query,
     )
 
     q = (question or "").strip()
@@ -887,6 +928,14 @@ async def classify_report_intent(
             report_type=ReportType.LINE_REACH,
             confidence=0.95,
             reason="硬约束全市达线情况分析",
+            source="hard",
+        )
+    if is_subject_research_report_query(q):
+        return ReportRoute(
+            needs_report=True,
+            report_type=ReportType.SUBJECT_RESEARCH,
+            confidence=0.95,
+            reason="硬约束学科教研分析报告",
             source="hard",
         )
     if is_line_reach_query(q):
@@ -936,13 +985,19 @@ async def classify_report_intent(
     if len(pool) == 1 and (
         _has_explicit_report_intent(q)
         or pool[0]
-        in {ReportType.DIAGNOSTIC_REPORT, ReportType.STUDENT_PROFILE, ReportType.LINE_REACH}
+        in {
+            ReportType.DIAGNOSTIC_REPORT,
+            ReportType.STUDENT_PROFILE,
+            ReportType.LINE_REACH,
+            ReportType.SUBJECT_RESEARCH,
+        }
     ):
         if (
             is_citywide_analysis_query(q)
             or is_structured_diagnostic_query(q)
             or is_individual_student_analysis_query(q)
             or is_line_reach_report_query(q)
+            or is_subject_research_report_query(q)
         ):
             return ReportRoute(
                 needs_report=True,
@@ -995,6 +1050,7 @@ EXPECTED_PLAN_TOOLS: dict[ReportType, frozenset[str]] = {
     ReportType.COMPREHENSIVE: frozenset({"build_comprehensive_report_data_tool"}),
     ReportType.DIAGNOSTIC_REPORT: frozenset({"build_diagnostic_report_data_tool"}),
     ReportType.LINE_REACH: frozenset({"build_line_reach_report_data_tool"}),
+    ReportType.SUBJECT_RESEARCH: frozenset({"build_subject_research_report_data_tool"}),
     ReportType.SUBJECT_AVG: frozenset({"build_subject_avg_report_data_tool"}),
     ReportType.ASSIGN_GRADE: frozenset({"build_assign_grade_report_data_tool"}),
     ReportType.RANK_BUCKET: frozenset({"build_rank_bucket_report_data_tool"}),
@@ -1002,7 +1058,6 @@ EXPECTED_PLAN_TOOLS: dict[ReportType, frozenset[str]] = {
     ReportType.COMBO_REACH: frozenset({"build_combo_reach_report_data_tool"}),
     ReportType.ELITE_ROSTER: frozenset({"build_elite_roster_report_data_tool"}),
     ReportType.SCORE_BAND: frozenset({"build_score_band_report_data_tool"}),
-    ReportType.DIFFICULTY_CURVE: frozenset({"build_difficulty_curve_report_data_tool"}),
 }
 
 
@@ -1041,6 +1096,7 @@ def plan_items_for_report_type(
         build_line_reach_plan_items,
         build_school_class_comparison_plan_items,
         build_school_subject_report_plan_items,
+        build_subject_research_plan_items,
         build_tier_alert_plan_items,
         build_trend_tracking_plan_items,
     )
@@ -1085,6 +1141,8 @@ def plan_items_for_report_type(
         from src.agent.expand.planner import build_difficulty_curve_plan_items
 
         return build_difficulty_curve_plan_items(q)
+    if rt == ReportType.SUBJECT_RESEARCH:
+        return build_subject_research_plan_items(q)
     tool_by_rt = {
         ReportType.SUBJECT_AVG: "build_subject_avg_report_data_tool",
         ReportType.ASSIGN_GRADE: "build_assign_grade_report_data_tool",
@@ -1143,6 +1201,7 @@ def plan_is_fact_query(plan_items: list[dict[str, str]] | None) -> bool:
             "build_diagnostic_report_data_tool",
             "build_trend_tracking_report_data_tool",
             "build_line_reach_report_data_tool",
+            "build_subject_research_report_data_tool",
             "build_subject_avg_report_data_tool",
             "build_assign_grade_report_data_tool",
             "build_rank_bucket_report_data_tool",

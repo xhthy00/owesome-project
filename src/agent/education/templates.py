@@ -28,6 +28,7 @@ _TEMPLATE_PATH: dict[ReportType, str] = {
     ReportType.COMPREHENSIVE: "education/comprehensive.html",
     ReportType.DIAGNOSTIC_REPORT: "education/diagnostic_report.html",
     ReportType.LINE_REACH: "education/line_reach.html",
+    ReportType.SUBJECT_RESEARCH: "education/subject_research.html",
     ReportType.SUBJECT_AVG: "education/bureau_analysis.html",
     ReportType.ASSIGN_GRADE: "education/bureau_analysis.html",
     ReportType.RANK_BUCKET: "education/bureau_analysis.html",
@@ -163,6 +164,12 @@ _REQUIRED_KEYS: dict[ReportType, list[str]] = {
         "SCOPE", "EXAM_NAME", "PREV_EXAM_NAME", "SUBJECT_NAME",
         "KPI_GRID", "DELTA_TABLE", "COMPARE_CHART",
         "DISTRICT_TABLE", "DISTRICT_CHART", "SCHOOL_TABLE", "GENERAL_INSIGHT",
+        "SUMMARY", "RECOMMENDATIONS",
+    ],
+    ReportType.SUBJECT_RESEARCH: [
+        "REPORT_TITLE", "REPORT_SUBTITLE", "REPORT_TIME", "REPORT_TYPE",
+        "SCOPE", "EXAM_NAME", "PREV_EXAM_NAME", "SUBJECT_NAME",
+        "SCHOOL_NAME", "SCHOOL_TIER", "SCHOOL_IDS", "KPI_GRID", "SUBJECT_HTML",
         "SUMMARY", "RECOMMENDATIONS",
     ],
     ReportType.SUBJECT_AVG: [

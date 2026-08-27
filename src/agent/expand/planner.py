@@ -161,6 +161,9 @@ PLANNER_DESC = """[你的职责]
 - **全市达线情况分析**（如「全市2026届高三1月期末达线情况」；问句含引领校/支撑校/发展校则不是本报告，按校类事实查询）——
   **只 1 个子任务**，走 `build_line_reach_report_data_tool`，查 tb_score_indicator，含较上场人数/率环比：
   [{"task": "调 build_line_reach_report_data_tool(render=true) 生成全市达线分析 HTML；**禁止** describe_table / execute_sql / build_diagnostic_report_data_tool / 扫 tb_score_overview；完成后 terminate", "sub_task_agent": "ToolExpert"}]
+- **学科教研分析报告**（如「扬州中学 3 月学科教研分析报告」）——
+  **只 1 个子任务**，走 `build_subject_research_report_data_tool`，一校一场九科（或点名一科）：
+  [{"task": "调 build_subject_research_report_data_tool(render=true) 生成学科教研分析 HTML；**禁止** build_subject_diagnosis_sections_tool / build_class_overview_report_data_tool / build_elite_roster_report_data_tool / describe_table；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 - 结构化诊断报告（diagnostic_report，一般性/特殊性/动态性三节）：
   ["查询【范围】成绩明细（含 class/district/subject）用于聚合",
    {"task": "调 build_diagnostic_report_data_tool(scope_label=【范围】, exam_name=【考试】, subject_name=【科目】, render=true) 生成结构化诊断 HTML（勿手传 score_rows/fetch_data）", "sub_task_agent": "ToolExpert"}]
@@ -643,6 +646,24 @@ def build_line_reach_plan_items(question: str) -> list[dict[str, str]]:
                 "完成后 terminate。"
                 "**禁止** describe_table / execute_sql / "
                 "build_diagnostic_report_data_tool / 扫 tb_score_overview 学生明细"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        }
+    ]
+
+
+def build_subject_research_plan_items(question: str) -> list[dict[str, str]]:
+    """学科教研分析：一校一场，禁止改走科目诊断或局端名单工具。"""
+    return [
+        {
+            "sub_task": (
+                "调 build_subject_research_report_data_tool(render=true) "
+                "生成学科教研分析报告（一校一场，未点名科目则九科）；"
+                "完成后 terminate。"
+                "**禁止** build_subject_diagnosis_sections_tool / "
+                "build_class_overview_report_data_tool / "
+                "build_elite_roster_report_data_tool / describe_table。"
+                f"原问：{question or ''}"
             ),
             "sub_task_agent": _TOOL_EXPERT_AGENT,
         }
@@ -1159,9 +1180,12 @@ def should_replace_with_school_exam_plan(
     from src.agent.education.query_parse import (
         is_school_class_comparison_query,
         is_school_exam_report_query,
+        is_subject_research_report_query,
     )
 
     if is_school_class_comparison_query(question):
+        return False
+    if is_subject_research_report_query(question):
         return False
     if not is_school_exam_report_query(question):
         return False
@@ -1281,9 +1305,21 @@ def _fallback_single_plan(question: str, reason: str) -> ActionOutput:
         is_individual_student_analysis_query,
         is_school_class_comparison_query,
         is_school_exam_report_query,
+        is_subject_research_report_query,
     )
 
     q = (question or "").strip() or "（原始问题）"
+    if is_subject_research_report_query(q):
+        items = build_subject_research_plan_items(q)
+        plans = [it["sub_task"] for it in items]
+        plan_agents = [it["sub_task_agent"] for it in items]
+        return ActionOutput(
+            is_exe_success=True,
+            content=f"计划回落为学科教研分析 1 步子任务（{reason}）",
+            action="plan",
+            extra={"plans": plans, "plan_agents": plan_agents},
+            terminate=True,
+        )
     if is_individual_student_analysis_query(q):
         items = build_individual_student_exam_plan_items(q)
         plans = [it["sub_task"] for it in items]

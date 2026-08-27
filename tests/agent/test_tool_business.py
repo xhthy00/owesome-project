@@ -27,7 +27,7 @@ def fake_datasource(monkeypatch):
     """注入一个假的 datasource，返回其"加载器"调用计数。"""
     calls = {"loaded": 0}
 
-    def fake_load(datasource_id: int):
+    def fake_load(datasource_id: int, workspace_oid: int | None = None):
         calls["loaded"] += 1
         if datasource_id == 999:
             raise ValueError(f"datasource not found: id={datasource_id}")

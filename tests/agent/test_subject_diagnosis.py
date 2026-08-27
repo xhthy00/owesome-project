@@ -645,6 +645,22 @@ def test_subject_diagnosis_template_hides_empty_student_archive():
     assert "studentArchiveBody" in text
     assert "sec.style.display = 'none'" in text
 
+
+def test_subject_diagnosis_template_rate_placeholders_have_no_trailing_percent():
+    """PASS_RATE/EXCELLENT_RATE 由数据侧已带 %，模板不得再拼一个 %。"""
+    from pathlib import Path
+
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src/agent/resource/templates/education/subject_diagnosis.html"
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "{{PASS_RATE}}%" not in text
+    assert "{{EXCELLENT_RATE}}%" not in text
+    assert "{{PASS_RATE}}" in text
+    assert "{{EXCELLENT_RATE}}" in text
+
+
 def test_normalize_link_weights_equal_and_unequal():
     from src.agent.education.subject_diagnosis import (
         normalize_link_weights,

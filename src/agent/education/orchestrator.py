@@ -134,7 +134,10 @@ class ReportIntentResolver:
         # 简单的过滤条件抽取：班级名（初三/初二/高一...N班）、科目、考试名。
         filters: dict[str, str] = {}
         class_name = _extract_class_name(q)
-        if class_name and report_type != ReportType.GRADE_COMPARISON:
+        if class_name and report_type not in {
+            ReportType.GRADE_COMPARISON,
+            ReportType.SUBJECT_RESEARCH,
+        }:
             filters["class_name"] = class_name
         subject = _extract_subject(q)
         if subject:
@@ -160,6 +163,8 @@ class ReportIntentResolver:
             filters["scope"] = "全市"
         if report_type == ReportType.LINE_REACH and not filters.get("school_name"):
             filters.setdefault("scope", "全市")
+        if report_type == ReportType.SUBJECT_RESEARCH:
+            filters["question"] = q
         return ReportSpec(
             report_type=report_type,
             audience=audience,
@@ -350,6 +355,8 @@ class ReportOrchestrator:
             return await self._gather_line_reach(spec)
         if spec.report_type == ReportType.DIFFICULTY_CURVE:
             return await self._gather_difficulty_curve(spec)
+        if spec.report_type == ReportType.SUBJECT_RESEARCH:
+            return await self._gather_subject_research(spec)
         if spec.report_type in _BUREAU_TYPES:
             return await self._gather_bureau_analysis(spec)
 
@@ -987,6 +994,111 @@ class ReportOrchestrator:
         data["REPORT_TIME"] = _now_str()
         return data
 
+    async def _gather_subject_research(self, spec: ReportSpec) -> dict[str, Any]:
+        """一校一场学科教研分析：tb_score 均分 + type 层级 + 明细卷别。"""
+        from src.agent.education.bureau_analysis import fraction_bar_select_sql
+        from src.agent.education.line_reach import normalize_fraction_bars
+        from src.agent.education.line_reach_report import (
+            exam_batch_select_sql,
+            ordered_exam_names,
+            pick_exam_for_question,
+            pick_previous_exam,
+            sql_result_to_dicts,
+        )
+        from src.agent.education.subject_research import (
+            build_subject_research_report_data,
+            item_school_select_sql,
+            overview_plain_select_sql,
+            paper_sum_select_sql,
+            research_subjects,
+            school_select_sql,
+            score_select_sql,
+        )
+
+        exam_hint = str(spec.filters.get("exam_name") or "").strip()
+        question = str(spec.filters.get("question") or "").strip()
+        school_query = str(spec.filters.get("school_name") or "").strip()
+        subject_name = str(spec.filters.get("subject") or "").strip()
+        batches: list[dict[str, Any]] = []
+        try:
+            batches = sql_result_to_dicts(await self._execute_sql(exam_batch_select_sql()))
+        except Exception:
+            logger.exception("学科教研：读取考试批次失败")
+        names = ordered_exam_names(batches)
+        exam_name = pick_exam_for_question(names, question=question, hint=exam_hint)
+        prev_exam = pick_previous_exam(names, exam_name) if exam_name else None
+
+        schools: list[dict[str, Any]] = []
+        try:
+            schools = sql_result_to_dicts(await self._execute_sql(school_select_sql()))
+        except Exception:
+            logger.exception("学科教研：读取 tb_school 失败")
+
+        score_rows: list[dict[str, Any]] = []
+        prev_scores: list[dict[str, Any]] = []
+        paper_rows: list[dict[str, Any]] = []
+        item_agg_rows: list[dict[str, Any]] = []
+        overview: list[dict[str, Any]] = []
+        bars: list[dict[str, Any]] = []
+        if exam_name:
+            try:
+                score_rows = sql_result_to_dicts(
+                    await self._execute_sql(score_select_sql(exam_name, subject_name))
+                )
+            except Exception:
+                logger.exception("学科教研：读取 tb_score 失败")
+            for subj in research_subjects(subject_name):
+                try:
+                    paper_rows.extend(sql_result_to_dicts(
+                        await self._execute_sql(paper_sum_select_sql(exam_name, subj))
+                    ))
+                except Exception:
+                    logger.exception("学科教研：读取卷面汇总失败 subject=%s", subj)
+                try:
+                    item_agg_rows.extend(sql_result_to_dicts(
+                        await self._execute_sql(item_school_select_sql(exam_name, subj))
+                    ))
+                except Exception:
+                    logger.exception("学科教研：读取小题校际聚合失败 subject=%s", subj)
+            try:
+                overview = sql_result_to_dicts(
+                    await self._execute_sql(overview_plain_select_sql(exam_name))
+                )
+            except Exception:
+                logger.exception("学科教研：读取 tb_score_overview 失败")
+            try:
+                bars = normalize_fraction_bars(
+                    sql_result_to_dicts(
+                        await self._execute_sql(fraction_bar_select_sql(exam_name))
+                    )
+                )
+            except Exception:
+                logger.exception("学科教研：读取 tb_fraction_bar 失败")
+        if prev_exam:
+            try:
+                prev_scores = sql_result_to_dicts(
+                    await self._execute_sql(score_select_sql(prev_exam, subject_name))
+                )
+            except Exception:
+                logger.exception("学科教研：读取上场 tb_score 失败")
+
+        data = build_subject_research_report_data(
+            schools=schools,
+            score_rows=score_rows,
+            prev_score_rows=prev_scores,
+            paper_rows=paper_rows,
+            item_agg_rows=item_agg_rows,
+            overview_rows=overview,
+            fraction_bars=bars,
+            exam_name=exam_name or exam_hint,
+            prev_exam_name=prev_exam or "",
+            school_query=school_query,
+            question=question,
+            subject_name=subject_name,
+        )
+        data["REPORT_TIME"] = _now_str()
+        return data
+
     async def _gather_bureau_analysis(self, spec: ReportSpec) -> dict[str, Any]:
         """局端基础分析：读 tb_score_overview 学生行重算，禁止用预聚合 Excel。"""
         from src.agent.education.bureau_analysis import (
@@ -1053,123 +1165,6 @@ class ReportOrchestrator:
             question=question,
             elite_keys=elite_keys,
         )
-        data["REPORT_TIME"] = _now_str()
-        return data
-
-    async def _gather_difficulty_curve(self, spec: ReportSpec) -> dict[str, Any]:
-        """难度曲线：overview 全卷曲线 + SQL 聚合小题分段。"""
-        from src.agent.education.bureau_analysis import overview_select_sql
-        from src.agent.education.difficulty_curve import (
-            assemble_curve_template_data,
-            build_curve_report_data,
-            exam_full_score_sql,
-            extract_question_target,
-            item_band_sql,
-            item_catalog_sql,
-            match_question_nos,
-            subject_column,
-            subject_full_score,
-        )
-        from src.agent.education.line_reach_report import (
-            exam_batch_select_sql,
-            ordered_exam_names,
-            pick_exam_for_question,
-            sql_result_to_dicts,
-        )
-        from src.agent.education.query_parse import extract_class_target, extract_school_target
-
-        question = str(spec.filters.get("question") or "").strip()
-        exam_hint = str(spec.filters.get("exam_name") or "").strip()
-        subject = str(spec.filters.get("subject") or "").strip()
-        school = str(spec.filters.get("school_name") or "").strip() or (
-            extract_school_target(question) or ""
-        )
-        class_name = str(spec.filters.get("class_name") or "").strip() or (
-            extract_class_target(question) or ""
-        )
-        empty = assemble_curve_template_data(
-            exam_name=exam_hint,
-            subject_name=subject or "",
-            paper_curve=[],
-            item_curves={},
-            report_time=_now_str(),
-        )
-        names: list[str] = []
-        try:
-            names = ordered_exam_names(
-                sql_result_to_dicts(await self._execute_sql(exam_batch_select_sql()))
-            )
-        except Exception:
-            logger.exception("难度曲线：读取考试批次失败")
-        exam_name = pick_exam_for_question(names, question=question, hint=exam_hint)
-        if not exam_name or not subject or not subject_column(subject):
-            empty["SUMMARY"] = empty.get("SUMMARY") or "请同时点名考试与科目。"
-            empty["REPORT_TIME"] = _now_str()
-            return empty
-        students: list[dict[str, Any]] = []
-        try:
-            students = sql_result_to_dicts(
-                await self._execute_sql(overview_select_sql(exam_name))
-            )
-        except Exception:
-            logger.exception("难度曲线：读取 tb_score_overview 失败")
-        catalog: list[str] = []
-        try:
-            catalog = [
-                str(r.get("question_no") or "").strip()
-                for r in sql_result_to_dicts(
-                    await self._execute_sql(item_catalog_sql(exam_name, subject))
-                )
-                if str(r.get("question_no") or "").strip()
-            ]
-        except Exception:
-            logger.exception("难度曲线：读取题号目录失败")
-        clue = extract_question_target(question) or ""
-        matched = match_question_nos(clue, catalog) if clue else []
-        item_rows: list[dict[str, Any]] = []
-        col = subject_column(subject) or "sx"
-        if (clue and matched) or (not clue and catalog):
-            try:
-                item_rows = sql_result_to_dicts(
-                    await self._execute_sql(
-                        item_band_sql(
-                            exam_name,
-                            subject,
-                            col,
-                            matched or None,
-                            school=school,
-                            class_name=class_name,
-                        )
-                    )
-                )
-            except Exception:
-                logger.exception("难度曲线：读取小题分段失败")
-        full: float | None = None
-        try:
-            fs_rows = sql_result_to_dicts(
-                await self._execute_sql(exam_full_score_sql(exam_name, subject))
-            )
-            if fs_rows:
-                full = float(fs_rows[0].get("exam_score") or 0) or None
-        except Exception:
-            logger.exception("难度曲线：读取卷面满分失败")
-        data = build_curve_report_data(
-            exam_name=exam_name,
-            subject_name=subject,
-            students=students,
-            item_rows=item_rows,
-            catalog=catalog,
-            question_clue=clue,
-            school=school,
-            class_name=class_name,
-            full_score=full if full else subject_full_score(subject),
-            report_time=_now_str(),
-        )
-        if data.get("error"):
-            empty["SUMMARY"] = str(data.get("message") or data["error"])
-            empty["GENERAL_INSIGHT"] = empty["SUMMARY"]
-            empty["REPORT_TIME"] = _now_str()
-            return empty
         data["REPORT_TIME"] = _now_str()
         return data
 
