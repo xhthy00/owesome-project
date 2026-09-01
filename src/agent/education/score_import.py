@@ -102,6 +102,7 @@ class ImportResult:
     error_rows: list[ImportErrorRow] = field(default_factory=list)
     summary: dict[str, int] = field(default_factory=dict)
     preview_sample: list[dict[str, Any]] = field(default_factory=list)
+    preview_columns: list[dict[str, str]] = field(default_factory=list)
     #: 导入成功后供异常扫描使用（含校验失败时为空）
     resolved_rows: list[ResolvedRow] = field(default_factory=list)
 
@@ -1101,4 +1102,5 @@ def import_result_to_dict(result: ImportResult) -> dict[str, Any]:
         ],
         "summary": result.summary,
         "preview_sample": result.preview_sample,
+        "preview_columns": result.preview_columns,
     }

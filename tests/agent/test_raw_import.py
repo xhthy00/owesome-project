@@ -4,18 +4,22 @@ from __future__ import annotations
 
 import inspect
 import io
+import zipfile
 from contextlib import contextmanager
 from types import SimpleNamespace
+from urllib.parse import unquote
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 from common.router import register_routers
 from datasource.service.edu_permission import EduScope
 from src.agent.education.raw_import import (
+    RawDetailRow,
     RawOverviewRow,
+    _build_detail_write_rows,
     _encode_school_token,
     _generate_anon_stu_id,
     _ksh_to_class_name,
@@ -26,6 +30,8 @@ from src.agent.education.raw_import import (
     _validate_detail_rows,
     _validate_overview_rows,
     assert_raw_import_role_allowed,
+    build_raw_detail_template,
+    build_raw_overview_template,
     execute_raw_detail_import,
     execute_raw_overview_import,
     preview_raw_detail_import,
@@ -201,7 +207,7 @@ def test_parse_overview_basic_two_rows():
         _overview_row(),
         _overview_row(KSH="501081360408", SFZH="261081010845", XM="李四"),
     ])
-    rows, errors = _parse_overview_excel(data)
+    rows, errors, _headers = _parse_overview_excel(data)
     assert errors == []
     assert len(rows) == 2
     assert rows[0].row_num == 2
@@ -221,7 +227,7 @@ def test_parse_overview_keeps_passthrough_others():
     data = _build_overview_workbook([
         _overview_row(XKKM="物理化学生物", XSXZ="应届"),
     ])
-    rows, errors = _parse_overview_excel(data)
+    rows, errors, _headers = _parse_overview_excel(data)
     assert errors == []
     assert rows[0].others["XKKM"] == "物理化学生物"
     assert rows[0].others["XSXZ"] == "应届"
@@ -232,7 +238,7 @@ def test_parse_overview_keeps_passthrough_others():
 
 def test_parse_overview_missing_required_columns():
     data = _build_overview_workbook([_overview_row()], omit={"ZF6M"})
-    rows, errors = _parse_overview_excel(data)
+    rows, errors, _headers = _parse_overview_excel(data)
     assert rows == []
     assert len(errors) == 1
     assert errors[0].row == 0
@@ -245,7 +251,7 @@ def test_parse_overview_sfzh_duplicate():
         _overview_row(),
         _overview_row(KSH="501081360408", SFZH="261081010844", XM="李四"),
     ])
-    rows, errors = _parse_overview_excel(data)
+    rows, errors, _headers = _parse_overview_excel(data)
     assert len(rows) == 1
     assert rows[0].ksh == "501101360479"
     assert len(errors) == 1
@@ -258,7 +264,7 @@ def test_parse_overview_ksh_duplicate():
         _overview_row(),
         _overview_row(KSH="501101360479", SFZH="261081010845", XM="李四"),
     ])
-    rows, errors = _parse_overview_excel(data)
+    rows, errors, _headers = _parse_overview_excel(data)
     assert len(rows) == 1
     assert rows[0].sfzh == "261081010844"
     assert len(errors) == 1
@@ -267,7 +273,7 @@ def test_parse_overview_ksh_duplicate():
 
 
 def test_parse_overview_corrupt_file_is_whole_file_error():
-    rows, errors = _parse_overview_excel(b"not-an-excel-file")
+    rows, errors, _headers = _parse_overview_excel(b"not-an-excel-file")
     assert rows == []
     assert len(errors) == 1
     assert errors[0].row == 0
@@ -426,8 +432,8 @@ _SCORE_SCHEMA_COLS = {
     "exam_score",
     "exam_time",
 }
-_PREVIEW_SAMPLE_KEYS = {"anon_stu_id", "xx", "班级", "zf6m"}
 _PII_KEYS = {"xm", "sfzh", "ksh"}
+_PREVIEW_HIDDEN_KEYS = {"ry", "rykg", "ryzw"}
 
 
 def _two_subject_overview_row(**overrides):
@@ -553,7 +559,7 @@ def test_execute_overview_skips_write_when_school_missing(monkeypatch):
     assert result.summary == {} or result.summary.get("overview_upserted", 0) == 0
 
 
-def test_preview_sample_has_no_pii_keys(monkeypatch):
+def test_preview_sample_includes_identity_cols(monkeypatch):
     _patch_overview_io(monkeypatch)
     data = _build_overview_workbook([_two_subject_overview_row()])
     result = preview_raw_overview_import(
@@ -567,18 +573,98 @@ def test_preview_sample_has_no_pii_keys(monkeypatch):
     assert result.valid_rows == 1
     assert len(result.preview_sample) == 1
     sample = result.preview_sample[0]
-    assert set(sample) == _PREVIEW_SAMPLE_KEYS
-    for key in _PII_KEYS:
+    for key in _PREVIEW_HIDDEN_KEYS:
         assert key not in sample
+        assert key not in {str(k).lower() for k in sample}
     assert sample["anon_stu_id"] == "GZ_F57E7326_54558B0F"
+    assert sample["ksh"] == "501101360479"
+    assert sample["sfzh"] == "261081010844"
+    assert sample["xm"] == "张三"
     assert sample["xx"] == "A05仪征中学"
-    assert sample["班级"] == "高三(10)班"
+    assert sample["bj"] == "高三(10)班"
     assert sample["zf6m"] == 530.0
+    assert sample["yw"] == 110.0
+    titles = {c["key"]: c["title"] for c in result.preview_columns}
+    assert titles["anon_stu_id"] == "学号匿名编码"
+    assert titles["ksh"] == "考生号"
+    assert titles["sfzh"] == "学号"
+    assert titles["xm"] == "姓名"
+    assert titles["bj"] == "班级"
+    assert titles["xx"] == "学校"
+    assert titles["zf6m"] == "全科总分"
+    assert titles["yw"] == "语文"
+    assert [c["key"] for c in result.preview_columns] == list(sample)
     assert result.resolved_rows
     for rec in result.resolved_rows:
         assert rec["school_id"] == "GZ_F57E7326"
         for key in _PII_KEYS:
             assert key not in rec
+
+
+def test_preview_sample_returns_all_valid_rows(monkeypatch):
+    _patch_overview_io(monkeypatch)
+    rows = [
+        _two_subject_overview_row(
+            KSH=f"5011013604{i:02d}",
+            SFZH=f"2610810108{i:02d}",
+            XM=f"学生{i}",
+        )
+        for i in range(12)
+    ]
+    result = preview_raw_overview_import(
+        _build_overview_workbook(rows),
+        1,
+        EduScope(edu_role="bureau_admin"),
+        "pg",
+        {},
+    )
+    assert result.error_rows == []
+    assert result.valid_rows == 12
+    assert len(result.preview_sample) == 12
+
+
+def test_preview_sample_follows_excel_and_hides_ry_cols(monkeypatch):
+    _patch_overview_io(monkeypatch)
+    data = _build_overview_workbook(
+        [
+            _two_subject_overview_row(
+                DQ="仪征",
+                XKKM="物化生",
+                RY=90,
+                RYKG=40,
+                RYZW=20,
+            )
+        ]
+    )
+    result = preview_raw_overview_import(
+        data,
+        1,
+        EduScope(edu_role="bureau_admin"),
+        "pg",
+        {},
+    )
+    assert result.error_rows == []
+    sample = result.preview_sample[0]
+    keys = [c["key"] for c in result.preview_columns]
+    assert keys[0] == "anon_stu_id"
+    assert "ksh" in keys
+    assert "sfzh" in keys
+    assert "xm" in keys
+    assert "bj" in keys
+    assert keys.index("bj") == keys.index("xx") + 1
+    assert "dq" in keys
+    assert "xkkm" in keys
+    assert sample["dq"] == "仪征"
+    assert sample["xkkm"] == "物化生"
+    assert sample["ksh"] == "501101360479"
+    assert sample["sfzh"] == "261081010844"
+    assert sample["xm"] == "张三"
+    for hidden in ("ry", "rykg", "ryzw"):
+        assert hidden not in keys
+        assert hidden not in sample
+    titles = {c["key"]: c["title"] for c in result.preview_columns}
+    assert titles["dq"] == "地区"
+    assert titles["xkkm"] == "选考科目组合"
 
 
 def test_school_admin_foreign_file_execute_does_not_write(monkeypatch):
@@ -638,6 +724,10 @@ def test_parse_detail_basic():
     assert subject == "数学"
     assert len(rows) == 1
     assert rows[0].scores == {"单选1": 5.0, "12": 5.0, "15_1": 6.0}
+    assert rows[0].sfzh == "261081010844"
+    assert rows[0].ksh == "501101360479"
+    assert rows[0].xm == "张三"
+    assert rows[0].school_name == "A01扬州中学"
     assert {q["question_no"] for q in questions} == {"单选1", "12", "15_1"}
 
 
@@ -686,13 +776,66 @@ def _detail_dims(**overrides):
             }
         },
         "questions_by_no": {
-            "单选1": {"question_score": 5},
-            "12": {"question_score": 5},
-            "15_1": {"question_score": 6},
+            "单选1": {"id": 101, "question_score": 5},
+            "12": {"id": 102, "question_score": 5},
+            "15_1": {"id": 103, "question_score": 6},
         },
     }
     dims.update(overrides)
     return dims
+
+
+def test_build_detail_write_rows_uses_exam_question_id():
+    resolved = [
+        {
+            "row": RawDetailRow(
+                row_num=4,
+                sfzh="261081010844",
+                ksh="",
+                school_name="",
+                scores={"24-2": 4.0},
+            ),
+            "anon_stu_id": "GZ_E74EBD64_9DCD1578",
+            "school_token": "GZ_E74EBD64",
+            "class_name": "高三(1)班",
+        }
+    ]
+    rows = _build_detail_write_rows(
+        resolved,
+        {
+            "exam": {"id": 33},
+            "questions_by_no": {"24-2": {"id": 88, "question_score": 4.0}},
+        },
+    )
+    assert len(rows) == 1
+    assert rows[0]["exam_id"] == 33
+    assert rows[0]["question_no"] == "24-2"
+    assert rows[0]["question_id"] == 88
+    assert rows[0]["question_id"] != ""
+    assert rows[0]["score"] == 4.0
+    assert rows[0]["question_score"] == 4.0
+
+
+def test_build_detail_write_rows_blank_question_id_is_none():
+    resolved = [
+        {
+            "row": RawDetailRow(
+                row_num=4,
+                sfzh="261081010844",
+                ksh="",
+                school_name="",
+                scores={"24-2": 4.0},
+            ),
+            "anon_stu_id": "GZ_E74EBD64_9DCD1578",
+            "school_token": "GZ_E74EBD64",
+            "class_name": "高三(1)班",
+        }
+    ]
+    rows = _build_detail_write_rows(
+        resolved,
+        {"exam": {"id": 33}, "questions_by_no": {"24-2": {"question_score": 4.0}}},
+    )
+    assert rows[0]["question_id"] is None
 
 
 def test_execute_detail_upserts_when_overview_hits(monkeypatch):
@@ -719,6 +862,9 @@ def test_execute_detail_upserts_when_overview_hits(monkeypatch):
     assert result.summary["detail_upserted"] == 2
     assert result.summary["students_matched"] == 1
     assert len(calls) == 1
+    written = calls[0][-1]
+    assert {row["question_id"] for row in written} == {101, 102}
+    assert all(row["question_id"] not in ("",) for row in written)
 
 
 def test_execute_detail_skips_write_when_student_missing_from_overview(monkeypatch):
@@ -753,21 +899,82 @@ def test_validate_detail_unknown_question_no_rejects_file():
     assert any(e.row == 0 and "题号" in e.message and "不存在" in e.message for e in errors)
 
 
-def test_preview_detail_sample_has_no_pii(monkeypatch):
+def test_preview_detail_sample_includes_excel_and_detail_cols(monkeypatch):
     monkeypatch.setattr(
         "src.agent.education.raw_import._load_detail_dimensions",
         lambda *_a, **_k: _detail_dims(),
     )
-    data = _build_detail_workbook(["学号", "单选1（5.0分）"], [["261081010844", 5]])
+    data = _build_detail_workbook(
+        ["学号", "考号", "姓名", "学校", "单选1（5.0分）", "12（5.0分）", "15_1（6.0分）"],
+        [["261081010844", "501101360479", "张三", "A01扬州中学", 5, 5, 6]],
+    )
     result = preview_raw_detail_import(
         data, 1, 10, EduScope(edu_role="bureau_admin"), "pg", {}
     )
     assert not result.error_rows
-    assert result.preview_sample
-    for sample in result.preview_sample:
-        for key in _PII_KEYS:
-            assert key not in sample
-            assert key not in {str(v).lower() for v in sample.values()}
+    assert len(result.preview_sample) == 1
+    sample = result.preview_sample[0]
+    assert sample["exam_id"] == "10"
+    assert sample["student_id"] == "GZ_F57E7326_54558B0F"
+    assert sample["anon_stu_id"] == sample["student_id"]
+    assert sample["class"] == "高三(10)班"
+    assert sample["ksh"] == "501101360479"
+    assert sample["sfzh"] == "261081010844"
+    assert sample["xm"] == "张三"
+    assert sample["xx"] == "A01扬州中学"
+    assert sample["单选1"] == 5.0
+    assert sample["12"] == 5.0
+    assert sample["15_1"] == 6.0
+    assert "questions" not in sample
+    titles = {c["key"]: c["title"] for c in result.preview_columns}
+    assert titles["exam_id"] == "试卷ID"
+    assert titles["student_id"] == "学号匿名编码"
+    assert titles["class"] == "班级"
+    assert titles["ksh"] == "考生号"
+    assert titles["sfzh"] == "学号"
+    assert titles["xm"] == "姓名"
+    assert titles["xx"] == "学校"
+    assert titles["单选1"] == "单选1（5.0分）"
+    assert [c["key"] for c in result.preview_columns] == [
+        "exam_id",
+        "student_id",
+        "class",
+        "ksh",
+        "sfzh",
+        "xm",
+        "xx",
+        "单选1",
+        "12",
+        "15_1",
+    ]
+
+
+def test_preview_detail_sample_returns_all_valid_rows(monkeypatch):
+    overview = {
+        f"26108101{i:04d}": {
+            "sfzh": f"26108101{i:04d}",
+            "anon_stu_id": f"GZ_F57E7326_{i:08X}",
+            "xx": "A05仪征中学",
+            "bj": "高三(10)班",
+        }
+        for i in range(12)
+    }
+    monkeypatch.setattr(
+        "src.agent.education.raw_import._load_detail_dimensions",
+        lambda *_a, **_k: _detail_dims(overview_by_sfzh=overview),
+    )
+    data = _build_detail_workbook(
+        ["学号", "单选1（5.0分）"],
+        [[f"26108101{i:04d}", 5] for i in range(12)],
+    )
+    result = preview_raw_detail_import(
+        data, 1, 10, EduScope(edu_role="bureau_admin"), "pg", {}
+    )
+    assert not result.error_rows
+    assert result.valid_rows == 12
+    assert len(result.preview_sample) == 12
+    assert result.preview_sample[0]["单选1"] == 5.0
+    assert result.preview_sample[-1]["sfzh"] == "261081010011"
 
 
 def test_execute_detail_school_admin_rejects_foreign(monkeypatch):
@@ -901,6 +1108,7 @@ def test_raw_import_endpoints_have_no_datasource_id_param():
         edu_api.execute_raw_overview,
         edu_api.preview_raw_detail,
         edu_api.execute_raw_detail,
+        edu_api.download_raw_import_template,
     ):
         assert "datasource_id" not in inspect.signature(fn).parameters
     assert "datasource_id" in inspect.signature(edu_api.preview_score_import).parameters
@@ -1064,8 +1272,25 @@ def test_list_raw_import_batches(monkeypatch):
 def test_list_raw_import_papers_missing_and_duplicate(monkeypatch):
     captured_sql: list[str] = []
 
-    def _fake_execute(_ds, sql, *_a, **_k):
-        captured_sql.append(sql)
+    def _fake_execute(*args, **_k):
+        sql = ""
+        for arg in args:
+            if isinstance(arg, str) and "SELECT" in arg.upper():
+                sql = arg
+                captured_sql.append(arg)
+        upper = sql.upper()
+        if "TB_EXAM_BATCH" in upper:
+            return True, "ok", {"columns": ["id", "batch_name"], "rows": [(1, "2026届高三1月期末")]}
+        if "TB_SCORE_OVERVIEW" in upper:
+            return True, "ok", {
+                "columns": ["row_count", "school_count", "last_write_time"],
+                "rows": [(0, 0, None)],
+            }
+        if "TB_SCORE_DETAIL" in upper:
+            return True, "ok", {
+                "columns": ["exam_id", "row_count", "student_count"],
+                "rows": [],
+            }
         return (
             True,
             "ok",
@@ -1080,18 +1305,163 @@ def test_list_raw_import_papers_missing_and_duplicate(monkeypatch):
         )
 
     monkeypatch.setattr("datasource.db.db.execute_sql", _fake_execute)
+    monkeypatch.setattr("src.agent.education.raw_import.execute_sql", _fake_execute)
     client = _raw_auth_client(monkeypatch)
     r = client.get("/api/v1/education/raw-score-import/papers", params={"exam_batch_id": 1})
     assert r.status_code == 200
-    assert captured_sql
-    assert "subject_name" not in captured_sql[0]
-    assert "FROM tb_exam" in captured_sql[0]
+    exam_sql = next((s for s in captured_sql if isinstance(s, str) and "FROM tb_exam" in s), "")
+    assert exam_sql
+    assert "subject_name" not in exam_sql
     data = r.json()["data"]
     assert len(data["papers"]) == 3
     assert "数学" in data["duplicate_subjects"]
     assert "物理" in data["missing_subjects"]
     assert "语文" not in data["missing_subjects"]
     assert "数学" not in data["missing_subjects"]
+    assert data["overview"]["imported"] is False
+    assert data["overview"]["row_count"] == 0
+
+
+def test_list_raw_import_papers_overview_already_imported(monkeypatch):
+    def _fake_execute(*args, **_k):
+        sql = next((a for a in args if isinstance(a, str) and "SELECT" in a.upper()), "")
+        upper = sql.upper()
+        if "TB_EXAM_BATCH" in upper:
+            return True, "ok", {"columns": ["id", "batch_name"], "rows": [(2, "2026届高三1月期末")]}
+        if "TB_SCORE_OVERVIEW" in upper:
+            return True, "ok", {
+                "columns": ["row_count", "school_count", "last_write_time"],
+                "rows": [(17700, 12, "2026-09-01 10:00:00")],
+            }
+        if "TB_SCORE_DETAIL" in upper:
+            return True, "ok", {
+                "columns": ["exam_id", "row_count", "student_count"],
+                "rows": [],
+            }
+        return True, "ok", {
+            "columns": ["id", "subject", "exam_score"],
+            "rows": [(i, s, 150) for i, s in enumerate(_SUBJECTS, start=1)],
+        }
+
+    monkeypatch.setattr("datasource.db.db.execute_sql", _fake_execute)
+    monkeypatch.setattr("src.agent.education.raw_import.execute_sql", _fake_execute)
+    client = _raw_auth_client(monkeypatch)
+    r = client.get("/api/v1/education/raw-score-import/papers", params={"exam_batch_id": 2})
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["overview"]["imported"] is True
+    assert data["overview"]["row_count"] == 17700
+    assert data["overview"]["school_count"] == 12
+    assert data["missing_subjects"] == []
+
+
+def test_list_raw_import_papers_school_admin_filters_overview(monkeypatch):
+    captured: list[str] = []
+
+    def _fake_execute(*args, **_k):
+        sql = next((a for a in args if isinstance(a, str) and "SELECT" in a.upper()), "")
+        captured.append(sql)
+        upper = sql.upper()
+        if "TB_EXAM_BATCH" in upper:
+            return True, "ok", {"columns": ["id", "batch_name"], "rows": [(1, "2026届高三1月期末")]}
+        if "TB_SCHOOL" in upper:
+            return True, "ok", {"columns": ["s_name"], "rows": [("A05仪征中学",)]}
+        if "TB_SCORE_OVERVIEW" in upper:
+            return True, "ok", {
+                "columns": ["row_count", "school_count", "last_write_time"],
+                "rows": [(800, 1, None)],
+            }
+        if "TB_SCORE_DETAIL" in upper:
+            return True, "ok", {
+                "columns": ["exam_id", "row_count", "student_count"],
+                "rows": [],
+            }
+        return True, "ok", {
+            "columns": ["id", "subject", "exam_score"],
+            "rows": [(i, s, 150) for i, s in enumerate(_SUBJECTS, start=1)],
+        }
+
+    monkeypatch.setattr("datasource.db.db.execute_sql", _fake_execute)
+    monkeypatch.setattr("src.agent.education.raw_import.execute_sql", _fake_execute)
+    client = _raw_auth_client(monkeypatch, edu_role="school_admin")
+    r = client.get("/api/v1/education/raw-score-import/papers", params={"exam_batch_id": 1})
+    assert r.status_code == 200
+    overview_sql = next((s for s in captured if "tb_score_overview" in s.lower()), "")
+    assert "A05仪征中学" in overview_sql
+    assert r.json()["data"]["overview"]["row_count"] == 800
+
+
+def test_list_raw_import_papers_detail_already_imported(monkeypatch):
+    def _fake_execute(*args, **_k):
+        sql = next((a for a in args if isinstance(a, str) and "SELECT" in a.upper()), "")
+        upper = sql.upper()
+        if "TB_EXAM_BATCH" in upper:
+            return True, "ok", {"columns": ["id", "batch_name"], "rows": [(2, "2026届高三1月期末")]}
+        if "TB_SCORE_OVERVIEW" in upper:
+            return True, "ok", {
+                "columns": ["row_count", "school_count", "last_write_time"],
+                "rows": [(100, 1, None)],
+            }
+        if "TB_SCORE_DETAIL" in upper:
+            return True, "ok", {
+                "columns": ["exam_id", "row_count", "student_count"],
+                "rows": [(9, 314432, 9248), (2, 0, 0)],
+            }
+        return True, "ok", {
+            "columns": ["id", "subject", "exam_score"],
+            "rows": [(i, s, 150) for i, s in enumerate(_SUBJECTS, start=1)],
+        }
+
+    monkeypatch.setattr("datasource.db.db.execute_sql", _fake_execute)
+    monkeypatch.setattr("src.agent.education.raw_import.execute_sql", _fake_execute)
+    client = _raw_auth_client(monkeypatch)
+    r = client.get("/api/v1/education/raw-score-import/papers", params={"exam_batch_id": 2})
+    assert r.status_code == 200
+    papers = {p["subject"]: p for p in r.json()["data"]["papers"]}
+    assert papers["地理"]["exam_id"] == 9
+    assert papers["地理"]["detail"]["imported"] is True
+    assert papers["地理"]["detail"]["row_count"] == 314432
+    assert papers["地理"]["detail"]["student_count"] == 9248
+    assert papers["数学"]["detail"]["imported"] is False
+    assert papers["数学"]["detail"]["row_count"] == 0
+
+
+def test_list_raw_import_papers_school_admin_filters_detail(monkeypatch):
+    captured: list[str] = []
+
+    def _fake_execute(*args, **_k):
+        sql = next((a for a in args if isinstance(a, str) and "SELECT" in a.upper()), "")
+        captured.append(sql)
+        upper = sql.upper()
+        if "TB_EXAM_BATCH" in upper:
+            return True, "ok", {"columns": ["id", "batch_name"], "rows": [(1, "2026届高三1月期末")]}
+        if "TB_SCHOOL" in upper:
+            return True, "ok", {"columns": ["s_name"], "rows": [("A05仪征中学",)]}
+        if "TB_SCORE_OVERVIEW" in upper:
+            return True, "ok", {
+                "columns": ["row_count", "school_count", "last_write_time"],
+                "rows": [(800, 1, None)],
+            }
+        if "TB_SCORE_DETAIL" in upper:
+            return True, "ok", {
+                "columns": ["exam_id", "row_count", "student_count"],
+                "rows": [(9, 800, 80)],
+            }
+        return True, "ok", {
+            "columns": ["id", "subject", "exam_score"],
+            "rows": [(i, s, 150) for i, s in enumerate(_SUBJECTS, start=1)],
+        }
+
+    monkeypatch.setattr("datasource.db.db.execute_sql", _fake_execute)
+    monkeypatch.setattr("src.agent.education.raw_import.execute_sql", _fake_execute)
+    client = _raw_auth_client(monkeypatch, edu_role="school_admin")
+    r = client.get("/api/v1/education/raw-score-import/papers", params={"exam_batch_id": 1})
+    assert r.status_code == 200
+    detail_sql = next((s for s in captured if "tb_score_detail" in s.lower()), "")
+    assert "F57E7326" in detail_sql
+    assert "ESCAPE" in detail_sql.upper()
+    assert "student_id" in detail_sql.lower()
+    assert r.json()["data"]["papers"][8]["detail"]["imported"] is True
 
 
 def test_overview_execute_scans_alerts_and_does_not_recompute(monkeypatch):
@@ -1123,7 +1493,7 @@ def test_overview_execute_scans_alerts_and_does_not_recompute(monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["code"] == 200
-    assert body["data"]["summary"]["alert_scan"] == {"inserted": 2, "exams": 2}
+    assert body["data"]["summary"]["alert_scan"] == {"pending": True}
     assert len(scan_kwargs) == 1
     assert scan_kwargs[0]["datasource_id"] == 12
     assert scan_kwargs[0]["exam_batch_id"] == 1
@@ -1151,8 +1521,7 @@ def test_overview_execute_scan_failure_becomes_warning(monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body["code"] == 200
-    warnings = body["data"]["warnings"]
-    assert any("异常扫描失败" in str(w.get("message", w)) for w in warnings)
+    assert body["data"]["summary"]["alert_scan"] == {"pending": True}
 
 
 def test_detail_execute_does_not_scan_alerts(monkeypatch):
@@ -1222,3 +1591,186 @@ def test_detail_execute_write_failure_is_not_validation_error(monkeypatch):
     assert "校验未通过" not in body["message"]
     assert "写入失败" in body["message"]
     assert "整文件重导" in body["message"]
+
+
+# 与 temp/教科院/考试/2026届-高三/2026届高三1月期末/成绩宽表.xlsx 第 1 行一致。
+_REF_OVERVIEW_HEADERS = [
+    "KSH",
+    "XX",
+    "XM",
+    "ZF3M",
+    "ZF4M",
+    "ZF6M",
+    "YW",
+    "YWZW",
+    "SX",
+    "YY",
+    "YYZW",
+    "WL",
+    "HX",
+    "SW",
+    "ZZ",
+    "LS",
+    "DL",
+    "XH",
+    "SXKG",
+    "SFZH",
+    "ZKCJ",
+    "XKQK",
+    "HXZH",
+    "HXDJ",
+    "SWZH",
+    "SWDJ",
+    "ZZZH",
+    "ZZDJ",
+    "DLZH",
+    "DLDJ",
+    "XKKM",
+    "XSXZ",
+    "XXLB",
+    "DQ",
+    "QH",
+    "RY",
+    "RYKG",
+    "RYZW",
+]
+
+
+def _cell_has_border(cell) -> bool:
+    b = cell.border
+    return bool(b.left.style or b.right.style or b.top.style or b.bottom.style)
+
+
+def test_build_raw_overview_template_parses():
+    data = build_raw_overview_template()
+    rows, errors, headers = _parse_overview_excel(data)
+    assert not errors
+    assert rows == []
+    assert headers == _REF_OVERVIEW_HEADERS
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb.active
+    assert [c.value for c in ws[1]] == _REF_OVERVIEW_HEADERS
+    assert _cell_has_border(ws.cell(1, 1))
+    assert _cell_has_border(ws.cell(1, len(_REF_OVERVIEW_HEADERS)))
+
+
+def test_build_raw_detail_template_header_merges():
+    data = build_raw_detail_template(
+        subject="数学",
+        questions=[
+            {"question_no": "单选1", "question_score": 5.0},
+            {"question_no": "12", "question_score": 5.0},
+            {"question_no": "15_1", "question_score": 6.0},
+        ],
+    )
+    rows, questions, errors, subject = _parse_detail_excel(data)
+    assert not errors
+    assert subject == "数学"
+    assert {q["question_no"] for q in questions} >= {"单选1", "12", "15_1"}
+    assert rows == []
+    wb = load_workbook(io.BytesIO(data))
+    ws = wb.active
+    row2 = [c.value for c in ws[2]]
+    row3 = [c.value for c in ws[3]]
+    assert str(ws.cell(1, 1).value or "").startswith("小题分(数学)")
+    assert row2[:6] == ["学号", "考号", "姓名", "学校", "区域", "数学"]
+    assert row3[5:8] == ["全卷", "1卷", "2卷"]
+    assert "单选1（5.0分）" in row3
+    assert "单选1_答案" in row3
+    merged = {str(r) for r in ws.merged_cells.ranges}
+    assert "A1:L1" in merged
+    assert "A2:A3" in merged
+    assert "B2:B3" in merged
+    assert "C2:C3" in merged
+    assert "D2:D3" in merged
+    assert "E2:E3" in merged
+    assert "F2:H2" in merged
+    assert "I2:J2" in merged
+    assert "K2:L2" in merged
+    a3 = ws.cell(3, 1)
+    assert a3.border.left.style == "thin"
+    assert a3.border.right.style == "thin"
+    assert a3.border.bottom.style == "thin"
+    xml = zipfile.ZipFile(io.BytesIO(data)).read("xl/worksheets/sheet1.xml").decode("utf-8")
+    assert 'r="A3"' in xml
+    assert 'r="B1"' in xml
+    f3 = ws.cell(3, 6)
+    assert f3.border.bottom.style == "thin"
+    assert f3.border.left.style == "thin"
+    assert _cell_has_border(ws.cell(1, 1))
+    assert _cell_has_border(ws.cell(3, 9))
+
+
+def test_build_raw_detail_template_uses_exam_questions():
+    data = build_raw_detail_template(
+        subject="地理",
+        questions=[
+            {"question_no": "24-2", "question_score": 4},
+            {"question_no": "1", "question_score": 5.0},
+        ],
+    )
+    rows, questions, errors, subject = _parse_detail_excel(data)
+    assert not errors
+    assert subject == "地理"
+    assert {q["question_no"] for q in questions} == {"24-2", "1"}
+    assert rows == []
+    wb = load_workbook(io.BytesIO(data))
+    merged = {str(r) for r in wb.active.merged_cells.ranges}
+    assert "A1:J1" in merged
+    assert "F2:H2" in merged
+    assert "I2:J2" in merged
+
+
+def test_download_raw_overview_template(monkeypatch):
+    client = _raw_auth_client(monkeypatch)
+    r = client.get("/api/v1/education/raw-score-import/templates/overview")
+    assert r.status_code == 200
+    assert "spreadsheetml" in (r.headers.get("content-type") or "")
+    rows, errors, headers = _parse_overview_excel(r.content)
+    assert not errors
+    assert "KSH" in headers
+    assert rows == []
+
+
+def test_download_raw_detail_template_requires_exam(monkeypatch):
+    client = _raw_auth_client(monkeypatch)
+    r = client.get("/api/v1/education/raw-score-import/templates/detail")
+    assert "spreadsheetml" not in (r.headers.get("content-type") or "")
+    body = r.json()
+    assert r.status_code in (200, 400)
+    message = body.get("message") or ""
+    if r.status_code == 200:
+        assert body["code"] == 400
+    assert "科目" in message
+
+
+def test_download_raw_detail_template_with_exam(monkeypatch):
+    def _fake_execute(*args, **_k):
+        sql = next((a for a in args if isinstance(a, str) and "SELECT" in a.upper()), "")
+        upper = sql.upper()
+        if "TB_EXAM_QUESTION" in upper:
+            return True, "ok", {
+                "columns": ["question_no", "question_score"],
+                "rows": [("24-2", 4), ("1", 5)],
+            }
+        if "TB_EXAM" in upper:
+            return True, "ok", {
+                "columns": ["id", "subject", "exam_score"],
+                "rows": [(9, "地理", 100)],
+            }
+        return True, "ok", {"columns": [], "rows": []}
+
+    monkeypatch.setattr("datasource.db.db.execute_sql", _fake_execute)
+    monkeypatch.setattr("src.agent.education.raw_import.execute_sql", _fake_execute)
+    client = _raw_auth_client(monkeypatch)
+    r = client.get(
+        "/api/v1/education/raw-score-import/templates/detail",
+        params={"exam_id": 9},
+    )
+    assert r.status_code == 200
+    disp = r.headers.get("content-disposition") or ""
+    assert "小题分导入模板(地理).xlsx" in unquote(disp)
+    _rows, questions, errors, subject = _parse_detail_excel(r.content)
+    assert not errors
+    assert subject == "地理"
+    assert {q["question_no"] for q in questions} == {"24-2", "1"}

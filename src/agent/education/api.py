@@ -15,8 +15,8 @@ import asyncio
 import json
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, Request, UploadFile
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from audit.service.decorators import audit_access
@@ -1486,6 +1486,36 @@ def _raw_result_payload(result) -> dict:
     return payload
 
 
+def _run_raw_overview_alert_scan(
+    *,
+    db_type: str,
+    config: dict,
+    workspace_oid: int,
+    datasource_id: int,
+    resolved_rows: list,
+    exam_batch_id: int,
+) -> None:
+    """宽表写入成功后的异常扫描：放后台跑，失败只记日志，不阻断导入响应。"""
+    import logging
+
+    from common.core.database import get_db_session
+    from src.agent.education.alert_service import scan_alerts_after_import
+
+    try:
+        with get_db_session() as session:
+            scan_alerts_after_import(
+                session,
+                db_type=db_type,
+                config=config,
+                workspace_oid=int(workspace_oid),
+                datasource_id=int(datasource_id),
+                resolved_rows=list(resolved_rows or []),
+                exam_batch_id=int(exam_batch_id),
+            )
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("raw overview alert scan failed")
+
+
 def _raw_execute_error(result, payload: dict) -> dict:
     write_failed = any(getattr(e, "field", "") == "写入" for e in (result.error_rows or []))
     if write_failed:
@@ -1605,9 +1635,15 @@ async def list_raw_import_papers(
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     from datasource.db.db import execute_sql
-    from src.agent.education.raw_import import _REQUIRED_SUBJECTS
+    from src.agent.education.raw_import import (
+        _REQUIRED_SUBJECTS,
+        _coerce_int_id,
+        _detail_import_status_by_exam,
+        _empty_detail_status,
+        _overview_import_status,
+    )
 
-    _ds_id, _scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
     ok, msg, data = execute_sql(
         db_type,
         config,
@@ -1638,12 +1674,71 @@ async def list_raw_import_papers(
                 duplicate_subjects.append(subject)
     present = {p["subject"] for p in papers if p["subject"]}
     missing_subjects = [s for s in _REQUIRED_SUBJECTS if s not in present]
+    overview = _overview_import_status(db_type, config, int(exam_batch_id), scope)
+    detail_by_exam = _detail_import_status_by_exam(
+        db_type, config, [p.get("exam_id") for p in papers], scope
+    )
+    for paper in papers:
+        eid = _coerce_int_id(paper.get("exam_id"))
+        paper["detail"] = dict(
+            detail_by_exam.get(eid, _empty_detail_status())
+            if eid is not None
+            else _empty_detail_status()
+        )
     return success_response(
         data={
             "papers": papers,
             "missing_subjects": missing_subjects,
             "duplicate_subjects": duplicate_subjects,
+            "overview": overview,
         }
+    )
+
+
+@router.get("/raw-score-import/templates/{kind}")
+@audit_access(query_arg="exam_id")
+async def download_raw_import_template(
+    request: Request,
+    kind: str,
+    exam_id: int | None = Query(None),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> Response:
+    from urllib.parse import quote
+
+    from src.agent.education.raw_import import (
+        build_raw_detail_template,
+        build_raw_overview_template,
+        load_raw_detail_template_meta,
+    )
+
+    _ds_id, _scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    name = (kind or "").strip().lower()
+    if name == "overview":
+        payload = build_raw_overview_template()
+        filename = "成绩宽表导入模板.xlsx"
+    elif name == "detail":
+        if exam_id is None:
+            raise BadRequestException("请选择科目后再下载小题分模板")
+        try:
+            subject, questions = load_raw_detail_template_meta(db_type, config, int(exam_id))
+        except ValueError as e:
+            raise BadRequestException(str(e)) from e
+        if not questions:
+            raise BadRequestException("该试卷没有题目，无法生成小题分模板")
+        payload = build_raw_detail_template(subject=subject, questions=questions)
+        filename = f"小题分导入模板({subject}).xlsx"
+    else:
+        raise BadRequestException("模板类型须为 overview 或 detail")
+    ascii_name = "overview-template.xlsx" if name == "overview" else "detail-template.xlsx"
+    return Response(
+        content=payload,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(filename)}'
+            )
+        },
     )
 
 
@@ -1668,40 +1763,32 @@ async def preview_raw_overview(
 @audit_access(query_arg="exam_batch_id")
 async def execute_raw_overview(
     request: Request,
+    background_tasks: BackgroundTasks,
     exam_batch_id: int = Form(...),
     file: UploadFile = File(...),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    from common.core.database import get_db_session
-    from src.agent.education.alert_service import scan_alerts_after_import
     from src.agent.education.raw_import import execute_raw_overview_import
 
     file_bytes = _read_raw_upload_file(file)
     ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
-    result = execute_raw_overview_import(file_bytes, exam_batch_id, scope, db_type, config)
+    result = await asyncio.to_thread(
+        execute_raw_overview_import, file_bytes, exam_batch_id, scope, db_type, config
+    )
     payload = _raw_result_payload(result)
     if result.error_rows:
         return _raw_execute_error(result, payload)
-    warnings = list(payload.get("warnings") or [])
-    try:
-        with get_db_session() as session:
-            scan_summary = scan_alerts_after_import(
-                session,
-                db_type=db_type,
-                config=config,
-                workspace_oid=int(workspace_oid),
-                datasource_id=int(ds_id),
-                resolved_rows=list(result.resolved_rows or []),
-                exam_batch_id=int(exam_batch_id),
-            )
-        payload.setdefault("summary", {})["alert_scan"] = scan_summary
-    except Exception:  # noqa: BLE001
-        import logging
-
-        logging.getLogger(__name__).exception("raw overview alert scan failed")
-        warnings.append({"row": 0, "message": "异常扫描失败，导入已成功，请稍后在异常提醒中重试"})
-    payload["warnings"] = warnings
+    payload.setdefault("summary", {})["alert_scan"] = {"pending": True}
+    background_tasks.add_task(
+        _run_raw_overview_alert_scan,
+        db_type=db_type,
+        config=config,
+        workspace_oid=int(workspace_oid),
+        datasource_id=int(ds_id),
+        resolved_rows=list(result.resolved_rows or []),
+        exam_batch_id=int(exam_batch_id),
+    )
     return success_response(data=payload)
 
 

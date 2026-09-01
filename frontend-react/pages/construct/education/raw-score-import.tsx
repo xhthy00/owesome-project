@@ -1,5 +1,6 @@
 import {
   CheckCircleOutlined,
+  DownloadOutlined,
   ReloadOutlined,
   UploadOutlined
 } from "@ant-design/icons";
@@ -17,7 +18,8 @@ import {
   Table,
   Typography,
   Upload,
-  message
+  message,
+  Tag
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import type { Dayjs } from "dayjs";
@@ -28,6 +30,7 @@ import {
   type ExamBatchOption,
   type RawImportResult,
   type RawImportWarning,
+  type RawOverviewStatus,
   type RawPaperOption,
   type ScoreImportErrorRow
 } from "@/api/education";
@@ -83,17 +86,45 @@ function asWarnings(result: RawImportResult | null): RawImportWarning[] {
 
 function paperLabel(paper: RawPaperOption): string {
   const score = paper.exam_score != null ? ` · ${paper.exam_score}分` : "";
-  return `${paper.subject || "未命名"}${score}`;
+  const imported = paper.detail?.imported ? " · 已导入" : "";
+  return `${paper.subject || "未命名"}${score}${imported}`;
+}
+
+function detailImportedHint(paper: RawPaperOption): string {
+  const d = paper.detail;
+  if (!d?.imported) return "";
+  return `${paper.subject}小题分已导入 ${d.student_count} 人 / ${d.row_count} 条。再次导入会覆盖原数据。`;
+}
+
+function overviewImportedHint(status: RawOverviewStatus): string {
+  let text = `该批次宽表已导入 ${status.row_count} 条`;
+  if (status.school_count > 0) {
+    text += `（${status.school_count} 所学校）`;
+  }
+  if (status.last_write_time) {
+    text += `，最近写入 ${status.last_write_time}`;
+  }
+  return `${text}。可直接去导入小题分，也可重新上传覆盖。`;
 }
 
 const DETAIL_STATUS_LABEL: Record<DetailStatus, string> = {
   pending: "待预览",
   validating: "校验中",
-  passed: "已校验通过",
+  passed: "校验通过（尚未导入）",
   errors: "有错误",
   importing: "导入中",
-  imported: "已导入",
+  imported: "导入成功",
   failed: "失败"
+};
+
+const DETAIL_STATUS_COLOR: Record<DetailStatus, string> = {
+  pending: "default",
+  validating: "processing",
+  passed: "blue",
+  errors: "error",
+  importing: "processing",
+  imported: "success",
+  failed: "error"
 };
 
 function resolveExamId(
@@ -123,6 +154,8 @@ export default function RawScoreImportPage() {
   const [overviewPreview, setOverviewPreview] = useState<RawImportResult | null>(null);
   const [overviewDone, setOverviewDone] = useState(false);
   const [overviewMessage, setOverviewMessage] = useState("");
+  const [dbOverview, setDbOverview] = useState<RawOverviewStatus | null>(null);
+  const [detailTemplateExamId, setDetailTemplateExamId] = useState<number | null>(null);
 
   const [detailItems, setDetailItems] = useState<DetailItem[]>([]);
   const [papersStatus, setPapersStatus] = useState<"idle" | "loading" | "ok" | "failed">("idle");
@@ -130,6 +163,7 @@ export default function RawScoreImportPage() {
 
   const papersReady =
     Boolean(batchId) && missingSubjects.length === 0 && duplicateSubjects.length === 0 && papers.length > 0;
+  const overviewReady = overviewDone || Boolean(dbOverview?.imported);
 
   const errorColumns: ColumnsType<ScoreImportErrorRow> = useMemo(
     () => [
@@ -162,12 +196,19 @@ export default function RawScoreImportPage() {
       setPapers(res.papers);
       setMissingSubjects(res.missing_subjects);
       setDuplicateSubjects(res.duplicate_subjects);
+      setDbOverview(res.overview ?? { imported: false, row_count: 0, school_count: 0, last_write_time: null });
       setPapersStatus("ok");
+      setDetailTemplateExamId((prev) => {
+        const ids = res.papers.map((p) => p.exam_id);
+        if (prev != null && ids.includes(prev)) return prev;
+        return ids[0] ?? null;
+      });
     } catch (err) {
       if (reqId !== papersReqId.current) return;
       setPapers([]);
       setMissingSubjects([]);
       setDuplicateSubjects([]);
+      setDbOverview(null);
       setPapersStatus("failed");
       message.error(err instanceof Error ? err.message : "加载试卷失败");
     } finally {
@@ -186,6 +227,8 @@ export default function RawScoreImportPage() {
     setOverviewPreview(null);
     setOverviewDone(false);
     setOverviewMessage("");
+    setDbOverview(null);
+    setDetailTemplateExamId(null);
     setDetailItems([]);
   };
 
@@ -234,10 +277,20 @@ export default function RawScoreImportPage() {
     }
   };
 
+  const downloadTemplate = async (kind: "overview" | "detail", examId?: number | null) => {
+    try {
+      const subject =
+        kind === "detail" ? papers.find((p) => p.exam_id === examId)?.subject : undefined;
+      await educationApi.downloadRawImportTemplate(kind, examId ?? undefined, subject);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "下载模板失败");
+    }
+  };
+
   const canVisitStep = (target: number) => {
     if (target <= step) return true;
     if (target === 1) return papersReady;
-    if (target === 2) return overviewDone;
+    if (target === 2) return papersReady && overviewReady;
     return false;
   };
 
@@ -266,12 +319,19 @@ export default function RawScoreImportPage() {
       if (endpoint === "overview-execute") {
         setOverviewDone(true);
         const summary = res.data?.summary || {};
+        const upserted = Number(summary.overview_upserted || 0);
+        setDbOverview((prev) => ({
+          imported: true,
+          row_count: upserted || prev?.row_count || 0,
+          school_count: prev?.school_count ?? 0,
+          last_write_time: prev?.last_write_time ?? null
+        }));
         setOverviewMessage(
-          `宽表导入成功：overview ${Number(summary.overview_upserted || 0)}，学生 ${Number(
+          `宽表导入成功：overview ${upserted}，学生 ${Number(
             summary.students_upserted || 0
           )}，成绩 ${Number(summary.score_upserted || 0)}`
         );
-        message.success("宽表导入成功");
+        message.success("宽表导入成功，异常扫描已在后台进行");
       } else {
         message.success("预览校验通过");
       }
@@ -325,17 +385,34 @@ export default function RawScoreImportPage() {
         return false;
       }
       if (endpoint === "detail-execute") {
+        const upserted = Number(res.data?.summary?.detail_upserted || 0);
+        const students = Number(res.data?.valid_rows || res.data?.summary?.students_matched || 0);
         patchDetail(item.uid, {
           status: "imported",
           preview: res.data,
-          message: `已导入 ${Number(res.data?.summary?.detail_upserted || 0)} 条小题分`
+          message: `导入成功：已写入 ${upserted} 条小题分`
         });
+        setPapers((prev) =>
+          prev.map((p) =>
+            p.exam_id === item.examId
+              ? {
+                  ...p,
+                  detail: {
+                    imported: true,
+                    row_count: upserted || p.detail?.row_count || 0,
+                    student_count: students || p.detail?.student_count || 0
+                  }
+                }
+              : p
+          )
+        );
+        message.success(`${detected || "该科"}小题分导入成功，已写入 ${upserted} 条`);
         return true;
       }
       patchDetail(item.uid, {
         status: "passed",
         preview: res.data,
-        message: `已校验通过 ${res.data?.valid_rows ?? 0} 行`
+        message: `校验通过 ${res.data?.valid_rows ?? 0} 行，尚未写入数据库`
       });
       return true;
     } catch (err) {
@@ -348,7 +425,7 @@ export default function RawScoreImportPage() {
   };
 
   const previewAllDetails = async () => {
-    if (!overviewDone) {
+    if (!overviewReady) {
       message.warning("请先完成宽表导入");
       return;
     }
@@ -364,7 +441,7 @@ export default function RawScoreImportPage() {
   };
 
   const executePassedDetails = async () => {
-    if (!overviewDone) {
+    if (!overviewReady) {
       message.warning("请先完成宽表导入");
       return;
     }
@@ -373,14 +450,33 @@ export default function RawScoreImportPage() {
       message.warning("没有校验通过的文件可导入");
       return;
     }
-    setLoading(true);
-    try {
-      for (const item of passed) {
-        await runDetail(item, "detail-execute");
+    const already = passed.filter((item) =>
+      papers.some((p) => p.exam_id === item.examId && p.detail?.imported)
+    );
+    const run = async () => {
+      setLoading(true);
+      try {
+        for (const item of passed) {
+          await runDetail(item, "detail-execute");
+        }
+      } finally {
+        setLoading(false);
       }
-    } finally {
-      setLoading(false);
+    };
+    if (already.length) {
+      const names = already
+        .map((item) => papers.find((p) => p.exam_id === item.examId)?.subject || item.file.name)
+        .join("、");
+      Modal.confirm({
+        title: "部分科目已导入过小题分",
+        content: `${names} 再次导入会覆盖原数据。确定继续？`,
+        okText: "覆盖导入",
+        cancelText: "取消",
+        onOk: () => run()
+      });
+      return;
     }
+    await run();
   };
 
   const selectedBatch = batches.find((b) => b.id === batchId) || null;
@@ -410,7 +506,10 @@ export default function RawScoreImportPage() {
     );
   };
 
-  const renderPreviewTables = (result: RawImportResult | null) => {
+  const renderPreviewTables = (
+    result: RawImportResult | null,
+    opts?: { imported?: boolean; importedHint?: string }
+  ) => {
     if (!result) return null;
     const warns = asWarnings(result);
     const keys = result.preview_sample?.[0] ? Object.keys(result.preview_sample[0]) : [];
@@ -426,7 +525,17 @@ export default function RawScoreImportPage() {
             pagination={{ pageSize: 8 }}
           />
         ) : (
-          <Alert className="mb-3" type="success" showIcon message="全部行校验通过，可执行导入" />
+          <Alert
+            className="mb-3"
+            type="success"
+            showIcon
+            icon={<CheckCircleOutlined />}
+            message={
+              opts?.imported
+                ? opts.importedHint || "导入成功，数据已写入"
+                : "校验通过（尚未写入），请点击确认导入"
+            }
+          />
         )}
         {warns.length > 0 ? (
           <Collapse
@@ -452,11 +561,24 @@ export default function RawScoreImportPage() {
         {result.preview_sample.length > 0 ? (
           <Table
             size="small"
-            rowKey={(_, i) => String(i)}
-            columns={keys.map((k) => ({ title: k, dataIndex: k, key: k }))}
+            rowKey={(row, i) => String(row.anon_stu_id || i)}
+            columns={(result.preview_columns?.length
+              ? result.preview_columns.map((c) => ({
+                  title: c.title,
+                  dataIndex: c.key,
+                  key: c.key,
+                  ellipsis: true
+                }))
+              : keys.map((k) => ({ title: k, dataIndex: k, key: k }))
+            )}
             dataSource={result.preview_sample}
-            pagination={false}
-            scroll={{ x: true }}
+            pagination={{
+              pageSize: 10,
+              showSizeChanger: true,
+              pageSizeOptions: [10, 20, 50, 100],
+              showTotal: (total) => `共 ${total} 条`
+            }}
+            scroll={{ x: "max-content" }}
           />
         ) : null}
       </>
@@ -511,8 +633,8 @@ export default function RawScoreImportPage() {
             description:
               idx === 0 && papersReady
                 ? "9 科齐全"
-                : idx === 1 && overviewDone
-                  ? "已完成"
+                : idx === 1 && overviewReady
+                  ? "已导入"
                   : s.description
           }))}
         />
@@ -567,38 +689,65 @@ export default function RawScoreImportPage() {
                   }
                 />
               ) : papersReady ? (
-                <Alert type="success" showIcon message="9 科试卷齐全，可以导入宽表" />
+                <Alert
+                  type="success"
+                  showIcon
+                  message={
+                    overviewReady
+                      ? "9 科试卷齐全，宽表已导入，可直接去导入小题分"
+                      : "9 科试卷齐全，可以导入宽表"
+                  }
+                  description={
+                    overviewReady && dbOverview ? overviewImportedHint(dbOverview) : undefined
+                  }
+                />
               ) : (
                 <Alert type="warning" showIcon message="该批次暂无可用试卷" />
               )}
             </Space>
             <div className="mt-4 flex justify-end">
-              <Button type="primary" disabled={!papersReady} onClick={() => setStep(1)}>
-                下一步
-              </Button>
+              <Space>
+                {overviewReady ? (
+                  <Button type="primary" disabled={!papersReady} onClick={() => setStep(2)}>
+                    去导入小题分
+                  </Button>
+                ) : null}
+                <Button type={overviewReady ? "default" : "primary"} disabled={!papersReady} onClick={() => setStep(1)}>
+                  {overviewReady ? "重新导入宽表" : "下一步"}
+                </Button>
+              </Space>
             </div>
           </div>
         ) : null}
 
         {step === 1 ? (
           <div className={PANEL_CARD}>
+            {dbOverview?.imported && !overviewMessage ? (
+              <Alert
+                className="mb-4"
+                type="info"
+                showIcon
+                message={overviewImportedHint(dbOverview)}
+                action={
+                  <Button type="primary" onClick={() => setStep(2)}>
+                    去导入小题分
+                  </Button>
+                }
+              />
+            ) : null}
             <Upload.Dragger
               accept=".xlsx"
               maxCount={1}
               beforeUpload={(file) => {
                 setOverviewFile(file);
                 setOverviewPreview(null);
-                setOverviewDone(false);
                 setOverviewMessage("");
-                setDetailItems([]);
                 return false;
               }}
               onRemove={() => {
                 setOverviewFile(null);
                 setOverviewPreview(null);
-                setOverviewDone(false);
                 setOverviewMessage("");
-                setDetailItems([]);
               }}
               fileList={
                 overviewFile
@@ -609,6 +758,9 @@ export default function RawScoreImportPage() {
               <p className="ant-upload-text">点击或拖拽上传成绩宽表（.xlsx）</p>
             </Upload.Dragger>
             <Space className="mt-4">
+              <Button icon={<DownloadOutlined />} onClick={() => void downloadTemplate("overview")}>
+                下载宽表模板
+              </Button>
               <Button
                 disabled={!overviewFile}
                 loading={loading}
@@ -644,20 +796,59 @@ export default function RawScoreImportPage() {
             ) : null}
             <div className="mt-4">
               {renderKpis(overviewPreview)}
-              {renderPreviewTables(overviewPreview)}
+              {renderPreviewTables(
+                overviewPreview,
+                overviewDone
+                  ? { imported: true, importedHint: overviewMessage || "宽表导入成功，数据已写入" }
+                  : undefined
+              )}
             </div>
           </div>
         ) : null}
 
         {step === 2 ? (
           <div className={PANEL_CARD}>
-            {!overviewDone ? (
+            {!overviewReady ? (
               <Alert className="mb-4" type="warning" showIcon message="请先完成宽表导入后再预览/导入小题分" />
             ) : null}
+            {papers.some((p) => p.detail?.imported) ? (
+              <Alert
+                className="mb-4"
+                type="warning"
+                showIcon
+                message={`以下科目已导入过小题分：${papers
+                  .filter((p) => p.detail?.imported)
+                  .map((p) => p.subject)
+                  .join("、")}`}
+                description="再次导入会覆盖原数据，请确认后再操作。"
+              />
+            ) : null}
+            <Alert
+              className="mb-4"
+              type="info"
+              showIcon
+              message="请先选择科目再下载小题分模板。表头会按该卷真实题目生成，与教科院小题分原表一致。"
+            />
+            <Space className="mb-4" wrap>
+              <Select
+                className="min-w-[220px]"
+                placeholder="选择科目生成模板"
+                value={detailTemplateExamId ?? undefined}
+                onChange={(v) => setDetailTemplateExamId(v)}
+                options={papers.map((p) => ({ value: p.exam_id, label: paperLabel(p) }))}
+              />
+              <Button
+                icon={<DownloadOutlined />}
+                disabled={!detailTemplateExamId}
+                onClick={() => void downloadTemplate("detail", detailTemplateExamId)}
+              >
+                下载该科小题分模板
+              </Button>
+            </Space>
             <Upload.Dragger
               accept=".xls,.xlsx"
               multiple
-              disabled={!overviewDone}
+              disabled={!overviewReady}
               beforeUpload={(file) => {
                 const guess = guessSubjectFromFilename(file.name);
                 const matched = papers.find((p) => p.subject === guess);
@@ -681,7 +872,7 @@ export default function RawScoreImportPage() {
             </Upload.Dragger>
             <Space className="mt-4" wrap>
               <Button
-                disabled={!overviewDone || !detailItems.length}
+                disabled={!overviewReady || !detailItems.length}
                 loading={loading}
                 onClick={() => void previewAllDetails()}
               >
@@ -689,7 +880,7 @@ export default function RawScoreImportPage() {
               </Button>
               <Button
                 type="primary"
-                disabled={!overviewDone || !detailItems.some((i) => i.status === "passed")}
+                disabled={!overviewReady || !detailItems.some((i) => i.status === "passed")}
                 loading={loading}
                 onClick={() => void executePassedDetails()}
               >
@@ -699,11 +890,16 @@ export default function RawScoreImportPage() {
             <div className="mt-4 space-y-3">
               {detailItems.map((item) => {
                 const detected = String(item.preview?.summary?.detected_subject || item.subjectGuess || "");
+                const paper = papers.find((p) => p.exam_id === item.examId);
+                const alreadyInDb = Boolean(paper?.detail?.imported) && item.status !== "imported";
+                const cardClass =
+                  item.status === "imported"
+                    ? "rounded-xl border border-[#86efac] bg-[#f0fdf4] p-4 dark:border-[#166534] dark:bg-[#14532d]/30"
+                    : item.status === "passed"
+                      ? "rounded-xl border border-[#93c5fd] bg-[#eff6ff] p-4 dark:border-[#1e3a5f] dark:bg-[#1e3a5f]/40"
+                      : "rounded-xl border border-[#e2e8f0] p-4 dark:border-[#334155]";
                 return (
-                  <div
-                    key={item.uid}
-                    className="rounded-xl border border-[#e2e8f0] p-4 dark:border-[#334155]"
-                  >
+                  <div key={item.uid} className={cardClass}>
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
                         <div className="font-medium">{item.file.name}</div>
@@ -715,15 +911,15 @@ export default function RawScoreImportPage() {
                           ) : (
                             <span>未识别科目（可用文件名回退）</span>
                           )}
-                          <span>
-                            状态：{DETAIL_STATUS_LABEL[item.status]}
-                            {item.message ? ` · ${item.message}` : ""}
-                          </span>
+                          <Tag color={DETAIL_STATUS_COLOR[item.status]}>
+                            {DETAIL_STATUS_LABEL[item.status]}
+                          </Tag>
+                          {item.message ? <span>{item.message}</span> : null}
                         </div>
                       </div>
                       <Space wrap>
                         <Select
-                          className="min-w-[180px]"
+                          className="min-w-[200px]"
                           placeholder="选择试卷"
                           value={item.examId ?? undefined}
                           onChange={(examId) =>
@@ -737,7 +933,7 @@ export default function RawScoreImportPage() {
                           options={papers.map((p) => ({ value: p.exam_id, label: paperLabel(p) }))}
                         />
                         <Button
-                          disabled={!overviewDone || item.examId == null}
+                          disabled={!overviewReady || item.examId == null}
                           loading={loading}
                           onClick={() => {
                             setLoading(true);
@@ -748,9 +944,24 @@ export default function RawScoreImportPage() {
                         </Button>
                         <Button
                           type="primary"
-                          disabled={!overviewDone || item.status !== "passed"}
+                          disabled={!overviewReady || item.status !== "passed"}
                           loading={loading}
                           onClick={() => {
+                            if (alreadyInDb && paper) {
+                              Modal.confirm({
+                                title: `${paper.subject}小题分已导入过`,
+                                content: `${detailImportedHint(paper)}确定覆盖导入？`,
+                                okText: "覆盖导入",
+                                cancelText: "取消",
+                                onOk: () => {
+                                  setLoading(true);
+                                  return runDetail(item, "detail-execute").finally(() =>
+                                    setLoading(false)
+                                  );
+                                }
+                              });
+                              return;
+                            }
                             setLoading(true);
                             void runDetail(item, "detail-execute").finally(() => setLoading(false));
                           }}
@@ -766,7 +977,22 @@ export default function RawScoreImportPage() {
                         </Button>
                       </Space>
                     </div>
-                    {item.preview ? <div className="mt-3">{renderPreviewTables(item.preview)}</div> : null}
+                    {alreadyInDb && paper ? (
+                      <Alert
+                        className="mt-3"
+                        type="warning"
+                        showIcon
+                        message={detailImportedHint(paper)}
+                      />
+                    ) : null}
+                    {item.preview ? (
+                      <div className="mt-3">
+                        {renderPreviewTables(item.preview, {
+                          imported: item.status === "imported",
+                          importedHint: item.message
+                        })}
+                      </div>
+                    ) : null}
                   </div>
                 );
               })}

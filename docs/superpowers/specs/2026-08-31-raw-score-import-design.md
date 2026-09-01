@@ -29,7 +29,7 @@
   → 导入成绩宽表（有错误行则整文件不写）
   → 写 tb_score_overview / tb_student / tb_score
   → 扫异常（失败不阻断；不重算达线）
-  → 导入各科小题分（必须先宽表成功；有错误行则该科整文件不写）
+  → 导入各科小题分（须宽表已在库中或本次刚导入成功；有错误行则该科整文件不写）
   → 写 tb_score_detail
 ```
 
@@ -188,7 +188,7 @@
 
 ---
 
-## 5. API 设计（7 个端点，全部 `@audit_access`）
+## 5. API 设计（9 个端点，全部 `@audit_access`）
 
 在 `education_router`（`src/agent/education/api.py`）下**新增**（不挂在旧 `/score-import` 下）：
 
@@ -196,6 +196,8 @@
 GET  /api/v1/education/raw-score-import/batches              列批次（下拉数据源）
 POST /api/v1/education/raw-score-import/batches              新建批次
 GET  /api/v1/education/raw-score-import/papers               批次下试卷列表（含 9 科齐备预检信息）
+GET  /api/v1/education/raw-score-import/templates/overview   下载成绩宽表 Excel 模板
+GET  /api/v1/education/raw-score-import/templates/detail     下载小题分模板（可选 exam_id 生成该卷题号）
 POST /api/v1/education/raw-score-import/overview-preview     宽表预览
 POST /api/v1/education/raw-score-import/overview-execute     宽表执行
 POST /api/v1/education/raw-score-import/detail-preview       小题分预览
@@ -208,7 +210,9 @@ POST /api/v1/education/raw-score-import/detail-execute       小题分执行
 
 **POST /raw-score-import/batches** — body `{batch_name, exam_time}`；批次名非空、不与现有重名（重名 → 400 带已有批次 id，前端自动选中）；插入 `tb_exam_batch` 返回新行。新建后 9 科预检仍会拦住上传，须先去试卷管理补卷。
 
-**GET /raw-score-import/papers?exam_batch_id=X** — 该批次下试卷列表 `[{exam_id, subject, exam_score}]`，并附 `missing_subjects: string[]`（9 科中缺失的科目名）。前端用 `missing_subjects` 决定能否进入宽表上传。同科多卷时该科目也视为不合法，列入缺失/冲突说明。
+**GET /raw-score-import/papers?exam_batch_id=X** — 该批次下试卷列表 `[{exam_id, subject, exam_score}]`，并附 `missing_subjects`、`duplicate_subjects`，以及 `overview: {imported, row_count, school_count, last_write_time}`（校管理员只统计本校）。前端用 `overview.imported` 决定能否跳过宽表、直接去小题分。同科多卷时该科目列入冲突说明。
+
+**GET /raw-score-import/templates/{overview|detail}** — 下载可被解析器直接读取的 Excel 模板。数据必须在 sheet 0；「填写说明」放第二张。宽表模板 38 列及列序与教科院 `成绩宽表.xlsx` 一致。小题分**必须带 `exam_id`**，按该卷题目生成；表头合并对齐原表（标题整行、身份列竖向、科目盖住合计列、1卷/2卷盖住对应题列）。不提供无科目的通用模板。
 
 **POST /raw-score-import/overview-preview / overview-execute** — `multipart/form-data`：
 
@@ -264,11 +268,14 @@ POST /api/v1/education/raw-score-import/detail-execute       小题分执行
 
 - 考试批次 Select（`showSearch`，显示 `批次名 + 考试时间`）+「新建批次」→ Modal（批次名 + DatePicker）；重名创建返回已有 id 时自动选中并提示「已存在，已为您选中」
 - 选中批次后展示 9 科齐备状态（来自 `GET .../papers` 的 `missing_subjects`）。不齐则红色 Alert 列出缺科，**「下一步」禁用**
+- 若 `overview.imported`：提示已导入人数/校数，主按钮改为「去导入小题分」，「重新导入宽表」为次要入口
 - 蓝色着色面板作「流程说明」：两步导什么、什么顺序、导完自动生成异常提醒、不刷新达线
 
 **第 1 步 · 导入成绩宽表**：
 
+- 「下载宽表模板」按教科院 `成绩宽表.xlsx` 生成 **38 列**英文表头（列序：KSH/XX/XM/ZF3M/ZF4M/ZF6M/YW/YWZW/…/RY/RYKG/RYZW），带边框
 - 上传区：`Upload.Dragger`（.xlsx）
+- 若库中已有宽表：顶部 info Alert 显示人数/校数，可跳过直接去小题分；重新上传仍 UPSERT 覆盖
 - 预览结果区：KPI 迷你卡 4 张——总行数/校验通过/错误行/警告行；错误行表 + 警告 Collapse + 预览样本表（匿名码列为主键）
 - 「确认导入」仅当预览 `error_rows.length === 0` 可点；成功 → 绿色 Alert：summary +「去异常提醒查看」链接（**不**提示达线已更新）
 
@@ -281,10 +288,11 @@ POST /api/v1/education/raw-score-import/detail-execute       小题分执行
 └────────────────────────────────────────────────────────────┘
 ```
 
+- 模板下载：须先选科目。表头合并对齐教科院小题分（标题整行、身份列竖向、科目盖住合计列、1卷/2卷盖住对应题列），题号列按该卷真实题目生成。无通用空白模板
 - 科目识别以**文件内标题行**为准，文件名 `小题分(数学)` 仅作回退
 - 试卷下拉：`GET .../papers` 按批次过滤，默认预填自动识别科目对应的卷
 - 批量操作：「全部预览」（**串行**）+「导入全部通过项」（仅 `error_rows` 为空的文件）
-- 宽表未导入成功时：文件列表顶部黄色 Alert，预览/导入按钮禁用
+- 宽表未在库中且本次也未导入成功时：文件列表顶部黄色 Alert，预览/导入按钮禁用
 - 状态机：`待预览 → 校验中 → 有错误/通过 → 导入中 → 已导入/失败`
 
 **交互细节**：

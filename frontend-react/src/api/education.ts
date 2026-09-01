@@ -44,16 +44,36 @@ export interface RawImportWarning {
   message: string;
 }
 
+export interface RawDetailStatus {
+  imported: boolean;
+  row_count: number;
+  student_count: number;
+}
+
 export interface RawPaperOption {
   exam_id: number;
   subject: string;
   exam_score?: number | null;
+  detail?: RawDetailStatus;
+}
+
+export interface RawOverviewStatus {
+  imported: boolean;
+  row_count: number;
+  school_count: number;
+  last_write_time?: string | null;
 }
 
 export interface RawPapersResponse {
   papers: RawPaperOption[];
   missing_subjects: string[];
   duplicate_subjects: string[];
+  overview?: RawOverviewStatus;
+}
+
+export interface RawPreviewColumn {
+  key: string;
+  title: string;
 }
 
 export interface RawImportResult {
@@ -63,6 +83,7 @@ export interface RawImportResult {
   warnings?: RawImportWarning[];
   summary: Record<string, unknown>;
   preview_sample: Array<Record<string, unknown>>;
+  preview_columns?: RawPreviewColumn[];
 }
 
 export interface RawImportResponse {
@@ -686,8 +707,67 @@ export const educationApi = {
     return {
       papers: body.data.papers ?? [],
       missing_subjects: body.data.missing_subjects ?? [],
-      duplicate_subjects: body.data.duplicate_subjects ?? []
+      duplicate_subjects: body.data.duplicate_subjects ?? [],
+      overview: body.data.overview ?? {
+        imported: false,
+        row_count: 0,
+        school_count: 0,
+        last_write_time: null
+      }
     };
+  },
+
+  async downloadRawImportTemplate(
+    kind: "overview" | "detail",
+    examId?: number,
+    subject?: string
+  ): Promise<void> {
+    const params = new URLSearchParams();
+    if (examId != null) params.set("exam_id", String(examId));
+    const qs = params.toString();
+    const resp = await fetch(
+      `${getApiBaseUrl()}/education/raw-score-import/templates/${kind}${qs ? `?${qs}` : ""}`,
+      {
+        headers: await authHeaders()
+      }
+    );
+    if (resp.status === 401) throw new Error("Unauthorized");
+    if (!resp.ok) {
+      let msg = "下载模板失败";
+      try {
+        const body = (await resp.json()) as { message?: string };
+        if (body.message) msg = body.message;
+      } catch {
+        /* ignore */
+      }
+      throw new Error(msg);
+    }
+    const blob = await resp.blob();
+    const header = resp.headers.get("Content-Disposition") || "";
+    const star = /filename\*=UTF-8''([^;]+)/i.exec(header);
+    let fromHeader = "";
+    if (star?.[1]) {
+      try {
+        fromHeader = decodeURIComponent(star[1]);
+      } catch {
+        fromHeader = star[1];
+      }
+    }
+    const looksOfficial =
+      fromHeader.includes("小题分导入模板") || fromHeader.includes("成绩宽表导入模板");
+    const filename = looksOfficial
+      ? fromHeader
+      : kind === "overview"
+        ? "成绩宽表导入模板.xlsx"
+        : subject
+          ? `小题分导入模板(${subject}).xlsx`
+          : fromHeader || "小题分导入模板.xlsx";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
   },
 
   async postRawOverviewImport(

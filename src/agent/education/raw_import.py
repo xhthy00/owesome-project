@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import io
+import logging
 import math
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -12,6 +13,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pandas as pd
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+from openpyxl.utils import get_column_letter
 
 from datasource.db.db import WriteDbSession, execute_sql
 from datasource.service.edu_permission import EduScope
@@ -74,6 +78,53 @@ _SCORE_WRITE_COLS = (
     "exam_time",
 )
 _STUDENT_WRITE_COLS = ("id", "school_id", "class", "jc")
+_PREVIEW_HIDE_COLS = frozenset({"ry", "rykg", "ryzw"})
+# 与 edu.tb_score_overview 列注释对齐（库中无 tb_score_view）。
+_OVERVIEW_COL_COMMENTS = {
+    "anon_stu_id": "学号匿名编码",
+    "exam_name": "考试批次名称",
+    "exam_batch_id": "考试批次ID",
+    "jc": "届次",
+    "ksh": "考生号",
+    "sfzh": "学号",
+    "xm": "姓名",
+    "bj": "班级",
+    "xx": "学校",
+    "xh": "学校编号",
+    "xsxz": "学生性质",
+    "xxlb": "学校类别",
+    "dq": "地区",
+    "qh": "地区编号",
+    "xkkm": "选考科目组合",
+    "xkqk": "选科编码",
+    "zf3m": "语数英总分",
+    "zf4m": "语数英加首选科总分",
+    "zf6m": "全科总分",
+    "yw": "语文",
+    "ywzw": "语文作文",
+    "sx": "数学",
+    "sxkg": "数学客观题",
+    "yy": "英语",
+    "yyzw": "英语作文",
+    "ry": "日语",
+    "rykg": "日语口语",
+    "ryzw": "日语作文",
+    "wl": "物理",
+    "ls": "历史",
+    "hx": "化学",
+    "sw": "生物",
+    "zz": "政治",
+    "dl": "地理",
+    "hxzh": "化学赋分",
+    "hxdj": "化学等级",
+    "swzh": "生物赋分",
+    "swdj": "生物等级",
+    "zzzh": "政治赋分",
+    "zzdj": "政治等级",
+    "dlzh": "地理赋分",
+    "dldj": "地理等级",
+    "zkcj": "中考成绩",
+}
 _DETAIL_WRITE_COLS = (
     "exam_id",
     "student_id",
@@ -83,8 +134,70 @@ _DETAIL_WRITE_COLS = (
     "question_score",
     "class",
 )
+_DETAIL_PREVIEW_COMMENTS = {
+    "exam_id": "试卷ID",
+    "student_id": "学号匿名编码",
+    "class": "班级",
+    "ksh": "考生号",
+    "sfzh": "学号",
+    "xm": "姓名",
+    "xx": "学校",
+}
 _SKIP_QUESTION_TOKENS = ("答案", "全卷", "1卷", "2卷", "合计")
 _SUBJECT_TITLE_RE = re.compile(r"小题分[（(]([^)）]+)[)）]")
+# 与教科院成绩宽表.xlsx 第 1 行列序一致（38 列）。
+_OVERVIEW_TEMPLATE_COLS = (
+    "KSH",
+    "XX",
+    "XM",
+    "ZF3M",
+    "ZF4M",
+    "ZF6M",
+    "YW",
+    "YWZW",
+    "SX",
+    "YY",
+    "YYZW",
+    "WL",
+    "HX",
+    "SW",
+    "ZZ",
+    "LS",
+    "DL",
+    "XH",
+    "SXKG",
+    "SFZH",
+    "ZKCJ",
+    "XKQK",
+    "HXZH",
+    "HXDJ",
+    "SWZH",
+    "SWDJ",
+    "ZZZH",
+    "ZZDJ",
+    "DLZH",
+    "DLDJ",
+    "XKKM",
+    "XSXZ",
+    "XXLB",
+    "DQ",
+    "QH",
+    "RY",
+    "RYKG",
+    "RYZW",
+)
+_DETAIL_IDENTITY_HEADERS = ("学号", "考号", "姓名", "学校", "区域")
+_TEMPLATE_PLACEHOLDER_ROWS = 12
+_THIN_BORDER = Border(
+    left=Side(style="thin", color="000000"),
+    right=Side(style="thin", color="000000"),
+    top=Side(style="thin", color="000000"),
+    bottom=Side(style="thin", color="000000"),
+)
+_HEADER_FILL = PatternFill("solid", fgColor="D9E2F3")
+_HEADER_FONT = Font(bold=True)
+_HEADER_ALIGN = Alignment(horizontal="center", vertical="center", wrap_text=True)
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -106,6 +219,7 @@ class RawDetailRow:
     ksh: str
     school_name: str
     scores: dict[str, float]
+    xm: str = ""
 
 
 def _encode_school_token(s_name: str) -> str:
@@ -210,16 +324,19 @@ def _to_float_or_invalid(value: Any) -> float | None | object:
         return _INVALID
 
 
-def _parse_overview_excel(file_bytes: bytes) -> tuple[list[RawOverviewRow], list[ImportErrorRow]]:
+def _parse_overview_excel(
+    file_bytes: bytes,
+) -> tuple[list[RawOverviewRow], list[ImportErrorRow], list[str]]:
     try:
         df = pd.read_excel(io.BytesIO(file_bytes), sheet_name=0, dtype=str)
     except Exception as e:  # noqa: BLE001
-        return [], [ImportErrorRow(row=0, field="header", message=f"无法解析 Excel: {e}")]
+        return [], [ImportErrorRow(row=0, field="header", message=f"无法解析 Excel: {e}")], []
     df.columns = [str(c).strip().upper() for c in df.columns]
+    headers = [str(c).strip().upper() for c in df.columns]
     missing = _OVERVIEW_REQUIRED_COLS - set(df.columns)
     if missing:
         cols = ", ".join(sorted(missing))
-        return [], [ImportErrorRow(row=0, field="header", message=f"缺少必需列: {cols}")]
+        return [], [ImportErrorRow(row=0, field="header", message=f"缺少必需列: {cols}")], headers
 
     valid: list[RawOverviewRow] = []
     errors: list[ImportErrorRow] = []
@@ -291,7 +408,7 @@ def _parse_overview_excel(file_bytes: bytes) -> tuple[list[RawOverviewRow], list
                 others=others,
             )
         )
-    return valid, errors
+    return valid, errors, headers
 
 
 def _load_overview_dimensions(
@@ -360,6 +477,156 @@ def _load_overview_dimensions(
         "exams_by_subject": exams_by_subject,
         "duplicate_subjects": duplicate_subjects,
     }
+
+
+def _empty_overview_status() -> dict[str, Any]:
+    return {
+        "imported": False,
+        "row_count": 0,
+        "school_count": 0,
+        "last_write_time": None,
+    }
+
+
+def _overview_import_status(
+    db_type: str,
+    config: dict[str, Any],
+    exam_batch_id: int,
+    scope: EduScope | None = None,
+) -> dict[str, Any]:
+    """查询该批次宽表是否已导入；校管理员只统计本校。"""
+    tables = _table_names()
+    batch_table = tables.get("exam_batch", "tb_exam_batch")
+    school_table = tables.get("school", "tb_school")
+    overview_table = tables.get("score_overview") or "tb_score_overview"
+    batch_id = int(exam_batch_id)
+    try:
+        ok, _msg, result = execute_sql(
+            db_type,
+            config,
+            f"SELECT id, batch_name FROM {batch_table} WHERE id = {batch_id}",
+        )
+        if not ok:
+            return _empty_overview_status()
+        batch_rows = _rows_to_dicts(result or {})
+        if not batch_rows:
+            return _empty_overview_status()
+        batch_name = str(batch_rows[0].get("batch_name") or "").strip()
+        if not batch_name:
+            return _empty_overview_status()
+
+        xx_filter = ""
+        if scope is not None and scope.edu_role == "school_admin":
+            school_token = str(scope.school_id or "").strip()
+            if not school_token:
+                return _empty_overview_status()
+            token_sql = school_token.replace("'", "''")
+            ok, _msg, school_result = execute_sql(
+                db_type,
+                config,
+                (
+                    f"SELECT s_name FROM {school_table} "
+                    f"WHERE CAST(id AS TEXT) = '{token_sql}' LIMIT 1"
+                ),
+            )
+            school_rows = _rows_to_dicts(school_result or {}) if ok else []
+            s_name = str((school_rows[0].get("s_name") if school_rows else "") or "").strip()
+            if not s_name:
+                return _empty_overview_status()
+            escaped_name = s_name.replace("'", "''")
+            xx_filter = f" AND xx = '{escaped_name}'"
+
+        name_sql = batch_name.replace("'", "''")
+        ok, _msg, count_result = execute_sql(
+            db_type,
+            config,
+            (
+                "SELECT COUNT(*) AS row_count, COUNT(DISTINCT xx) AS school_count, "
+                "MAX(update_time) AS last_write_time "
+                f"FROM {overview_table} "
+                f"WHERE (exam_batch_id = {batch_id} OR exam_name = '{name_sql}')"
+                f"{xx_filter}"
+            ),
+        )
+        if not ok:
+            return _empty_overview_status()
+        rows = _rows_to_dicts(count_result or {})
+        rec = rows[0] if rows else {}
+        row_count = int(rec.get("row_count") or 0)
+        school_count = int(rec.get("school_count") or 0)
+        last_write = rec.get("last_write_time")
+        return {
+            "imported": row_count > 0,
+            "row_count": row_count,
+            "school_count": school_count,
+            "last_write_time": str(last_write) if last_write is not None else None,
+        }
+    except (TypeError, ValueError, KeyError):
+        return _empty_overview_status()
+
+
+def _empty_detail_status() -> dict[str, Any]:
+    return {"imported": False, "row_count": 0, "student_count": 0}
+
+
+def _sql_like_prefix(value: str) -> str:
+    return (
+        str(value)
+        .replace("\\", "\\\\")
+        .replace("'", "''")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+
+
+def _detail_import_status_by_exam(
+    db_type: str,
+    config: dict[str, Any],
+    exam_ids: list[Any],
+    scope: EduScope | None = None,
+) -> dict[int, dict[str, Any]]:
+    """按试卷统计小题分是否已导入；校管理员只统计本校学生。"""
+    ids = [eid for eid in (_coerce_int_id(raw) for raw in exam_ids) if eid is not None]
+    if not ids:
+        return {}
+    tables = _table_names()
+    detail_table = tables.get("score_detail") or "tb_score_detail"
+    stu_filter = ""
+    if scope is not None and scope.edu_role == "school_admin":
+        token = str(scope.school_id or "").strip()
+        if not token:
+            return {}
+        stu_filter = f" AND student_id LIKE '{_sql_like_prefix(token)}\\_%' ESCAPE '\\'"
+    try:
+        ok, _msg, result = execute_sql(
+            db_type,
+            config,
+            (
+                "SELECT exam_id, COUNT(*) AS row_count, "
+                "COUNT(DISTINCT student_id) AS student_count "
+                f"FROM {detail_table} "
+                f"WHERE exam_id IN ({','.join(str(i) for i in ids)})"
+                f"{stu_filter} "
+                "GROUP BY exam_id"
+            ),
+        )
+        if not ok:
+            return {}
+        out: dict[int, dict[str, Any]] = {}
+        for rec in _rows_to_dicts(result or {}):
+            eid = _coerce_int_id(rec.get("exam_id"))
+            if eid is None:
+                continue
+            row_count = int(rec.get("row_count") or 0)
+            student_count = int(rec.get("student_count") or 0)
+            out[eid] = {
+                "imported": row_count > 0,
+                "row_count": row_count,
+                "student_count": student_count,
+            }
+        return out
+    except (TypeError, ValueError, KeyError):
+        return {}
 
 
 def _validate_overview_rows(
@@ -462,6 +729,7 @@ def _upsert_dict_rows(
                 )
                 if not ok:
                     session.rollback()
+                    logger.error("UPSERT %s failed: %s", table, msg)
                     raise RuntimeError(msg)
                 session.commit()
                 return int((result or {}).get("row_count") or len(chunk))
@@ -640,24 +908,70 @@ def _write_overview_to_db(
     }
 
 
+def _preview_column_keys(excel_headers: list[str]) -> list[str]:
+    keys: list[str] = ["anon_stu_id"]
+    seen = {"anon_stu_id"}
+    headers = [str(h).strip().upper() for h in excel_headers]
+    has_bj = "BJ" in headers
+
+    def _add(key: str) -> None:
+        if key and key not in seen:
+            keys.append(key)
+            seen.add(key)
+
+    for header in headers:
+        key = header.lower()
+        if key in _PREVIEW_HIDE_COLS:
+            continue
+        _add(key)
+        if key == "xx" and not has_bj:
+            _add("bj")
+    if "bj" not in seen:
+        keys.insert(1, "bj")
+    return keys
+
+
+def _overview_preview_cell(r: RawOverviewRow, key: str, anon: str, bj: str) -> Any:
+    if key == "anon_stu_id":
+        return anon
+    if key == "bj":
+        return bj
+    if key == "xx":
+        return r.xx
+    if key == "xm":
+        return r.xm
+    if key == "sfzh":
+        return r.sfzh
+    if key == "ksh":
+        return r.ksh
+    upper = key.upper()
+    if upper in _SUBJECT_CODE_TO_NAME:
+        return r.scores.get(_SUBJECT_CODE_TO_NAME[upper])
+    if upper in _TOTAL_COLS:
+        return r.totals.get(upper)
+    return r.others.get(upper)
+
+
+def _preview_columns(keys: list[str], excel_headers: list[str]) -> list[dict[str, str]]:
+    original = {str(h).strip().upper().lower(): str(h).strip() for h in excel_headers}
+    return [
+        {"key": key, "title": _OVERVIEW_COL_COMMENTS.get(key) or original.get(key) or key}
+        for key in keys
+    ]
+
+
 def _preview_sample_and_resolved(
-    valid: list[RawOverviewRow], dims: dict
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    valid: list[RawOverviewRow], dims: dict, excel_headers: list[str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, str]]]:
+    keys = _preview_column_keys(excel_headers)
+    columns = _preview_columns(keys, excel_headers)
     sample: list[dict[str, Any]] = []
     resolved: list[dict[str, Any]] = []
-    for i, r in enumerate(valid):
+    for r in valid:
         token, anon, bj = _token_and_anon(r, dims)
-        if i < 10:
-            sample.append(
-                {
-                    "anon_stu_id": anon,
-                    "xx": r.xx,
-                    "班级": bj,
-                    "zf6m": r.totals.get("ZF6M"),
-                }
-            )
+        sample.append({key: _overview_preview_cell(r, key, anon, bj) for key in keys})
         resolved.append({"school_id": token})
-    return sample, resolved
+    return sample, resolved, columns
 
 
 def preview_raw_overview_import(
@@ -667,7 +981,7 @@ def preview_raw_overview_import(
     db_type: str,
     config: dict[str, Any],
 ) -> ImportResult:
-    rows, parse_errors = _parse_overview_excel(file_bytes)
+    rows, parse_errors, excel_headers = _parse_overview_excel(file_bytes)
     per_row_parse = sum(1 for e in parse_errors if e.row > 0)
     result = ImportResult(
         total_rows=len(rows) + per_row_parse,
@@ -683,8 +997,9 @@ def preview_raw_overview_import(
     valid, val_errors = _validate_overview_rows(rows, dims, scope=scope)
     result.error_rows.extend(val_errors)
     result.valid_rows = len(valid)
-    sample, resolved = _preview_sample_and_resolved(valid, dims)
+    sample, resolved, columns = _preview_sample_and_resolved(valid, dims, excel_headers)
     result.preview_sample = sample
+    result.preview_columns = columns
     result.resolved_rows = resolved  # type: ignore[assignment]
     return result
 
@@ -701,7 +1016,7 @@ def execute_raw_overview_import(
         return preview
     if not preview.valid_rows:
         return preview
-    rows, parse_errors = _parse_overview_excel(file_bytes)
+    rows, parse_errors, _excel_headers = _parse_overview_excel(file_bytes)
     if parse_errors:
         preview.error_rows = list(parse_errors)
         return preview
@@ -718,6 +1033,7 @@ def execute_raw_overview_import(
     try:
         counts = _write_overview_to_db(db_type, config, valid, dims)
     except RuntimeError as e:
+        logger.error("raw overview import write failed: %s", e)
         preview.error_rows.append(ImportErrorRow(row=0, field="写入", message=str(e)))
         return preview
     preview.summary = {
@@ -770,6 +1086,8 @@ def _parse_detail_excel(
         raw = _header_cell(row3[col] if isinstance(col, int) and col < len(row3) else "")
         if _is_skipped_score_column(str(q.get("question_no") or ""), raw):
             continue
+        q = dict(q)
+        q["raw_header"] = raw
         kept.append(q)
 
     sfzh_idx = _find_header_idx(row3, ["学号"])
@@ -778,6 +1096,9 @@ def _parse_detail_excel(
     ksh_idx = _find_header_idx(row3, ["考号"])
     if ksh_idx is None:
         ksh_idx = _find_header_idx(row2, ["考号"])
+    xm_idx = _find_header_idx(row3, ["姓名"])
+    if xm_idx is None:
+        xm_idx = _find_header_idx(row2, ["姓名"])
     school_idx = _find_header_idx(row3, ["学校"])
     if school_idx is None:
         school_idx = _find_header_idx(row2, ["学校"])
@@ -795,11 +1116,14 @@ def _parse_detail_excel(
                 return None
             return rec[idx]
 
+        if not any(_cell_text(v) for v in rec):
+            continue
         sfzh = _normalize_id_str(_at(sfzh_idx))
         if not sfzh:
             errors.append(ImportErrorRow(row=row_num, field="学号", message="学号为空"))
             continue
         ksh = _normalize_id_str(_at(ksh_idx)) if ksh_idx is not None else ""
+        xm = _cell_text(_at(xm_idx)) if xm_idx is not None else ""
         school_name = _cell_text(_at(school_idx)) if school_idx is not None else ""
         scores: dict[str, float] = {}
         row_bad = False
@@ -821,6 +1145,7 @@ def _parse_detail_excel(
                 ksh=ksh,
                 school_name=school_name,
                 scores=scores,
+                xm=xm,
             )
         )
     return rows, kept, errors, detected_subject
@@ -881,7 +1206,7 @@ def _load_detail_dimensions(
             db_type,
             config,
             (
-                f"SELECT sfzh, anon_stu_id, xx, bj FROM {overview_table} "
+                f"SELECT sfzh, anon_stu_id, xx, bj, xm, ksh FROM {overview_table} "
                 f"WHERE exam_name = '{batch_name}' AND sfzh IN ({sfzh_sql})"
             ),
         )
@@ -893,7 +1218,7 @@ def _load_detail_dimensions(
     q_rows = _sql_ok(
         db_type,
         config,
-        f"SELECT question_no, question_score FROM {question_table} WHERE exam_id = {eid}",
+        f"SELECT id, question_no, question_score FROM {question_table} WHERE exam_id = {eid}",
     )
     questions_by_no = {str(r.get("question_no") or "").strip(): r for r in q_rows if r.get("question_no")}
     return {
@@ -996,8 +1321,23 @@ def _validate_detail_rows(
     return valid, errors
 
 
+def _coerce_int_id(value: Any) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
 def _build_detail_write_rows(resolved: list[dict[str, Any]], dims: dict) -> list[dict]:
-    exam_id = str((dims.get("exam") or {}).get("id") or "")
+    exam_raw = (dims.get("exam") or {}).get("id")
+    exam_id = _coerce_int_id(exam_raw)
+    if exam_id is None:
+        exam_id = exam_raw
     questions_by_no = dims.get("questions_by_no") or {}
     out: list[dict] = []
     for item in resolved:
@@ -1009,13 +1349,57 @@ def _build_detail_write_rows(resolved: list[dict[str, Any]], dims: dict) -> list
                     "exam_id": exam_id,
                     "student_id": item["anon_stu_id"],
                     "question_no": q_no,
-                    "question_id": "",
+                    "question_id": _coerce_int_id(q.get("id") or q.get("question_id")),
                     "score": score,
                     "question_score": q.get("question_score"),
                     "class": item["class_name"],
                 }
             )
     return out
+
+
+def _detail_preview_sample_and_columns(
+    valid: list[dict[str, Any]],
+    questions: list[dict[str, Any]],
+    dims: dict,
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    exam_id = str((dims.get("exam") or {}).get("id") or "")
+    q_nos = [str(q.get("question_no") or "") for q in questions if q.get("question_no")]
+    q_titles = {
+        str(q.get("question_no") or ""): str(q.get("raw_header") or q.get("question_no") or "")
+        for q in questions
+        if q.get("question_no")
+    }
+    keys = ["exam_id", "student_id", "class", "ksh", "sfzh", "xm", "xx", *q_nos]
+    columns = [
+        {
+            "key": key,
+            "title": _DETAIL_PREVIEW_COMMENTS.get(key)
+            or _OVERVIEW_COL_COMMENTS.get(key)
+            or q_titles.get(key)
+            or key,
+        }
+        for key in keys
+    ]
+    overview_by_sfzh = dims.get("overview_by_sfzh") or {}
+    sample: list[dict[str, Any]] = []
+    for item in valid:
+        r: RawDetailRow = item["row"]
+        ov = overview_by_sfzh.get(r.sfzh) or {}
+        rec: dict[str, Any] = {
+            "anon_stu_id": item["anon_stu_id"],
+            "exam_id": exam_id,
+            "student_id": item["anon_stu_id"],
+            "class": item["class_name"],
+            "ksh": r.ksh or _normalize_id_str(ov.get("ksh")),
+            "sfzh": r.sfzh,
+            "xm": r.xm or str(ov.get("xm") or "").strip(),
+            "xx": r.school_name or str(ov.get("xx") or "").strip(),
+        }
+        for q_no in q_nos:
+            rec[q_no] = r.scores.get(q_no)
+        sample.append(rec)
+    return sample, columns
 
 
 def preview_raw_detail_import(
@@ -1049,14 +1433,9 @@ def preview_raw_detail_import(
     valid, val_errors = _validate_detail_rows(rows, questions, dims, scope)
     result.error_rows.extend(val_errors)
     result.valid_rows = len(valid)
-    result.preview_sample = [
-        {
-            "anon_stu_id": item["anon_stu_id"],
-            "class": item["class_name"],
-            "questions": len(item["row"].scores),
-        }
-        for item in valid[:10]
-    ]
+    sample, columns = _detail_preview_sample_and_columns(valid, questions, dims)
+    result.preview_sample = sample
+    result.preview_columns = columns
     result.resolved_rows = valid  # type: ignore[assignment]
     result.summary["students_matched"] = len(valid)
     result.summary["detail_rows"] = sum(len(item["row"].scores) for item in valid)
@@ -1105,11 +1484,210 @@ def execute_raw_detail_import(
             db_type, config, detail_table, cols, ("exam_id", "student_id", "question_no"), filtered
         )
     except RuntimeError as e:
+        logger.error("raw detail import write failed: %s", e)
         preview.error_rows.append(ImportErrorRow(row=0, field="写入", message=str(e)))
         return preview
     preview.summary["detail_upserted"] = int(count)
     preview.summary["students_matched"] = len(valid)
     return preview
+
+
+def _workbook_bytes(wb: Workbook) -> bytes:
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _question_header_label(question_no: str, question_score: Any) -> str:
+    try:
+        n = float(question_score)
+    except (TypeError, ValueError):
+        n = 0.0
+    return f"{question_no}（{n:.1f}分）"
+
+
+def _is_choice_question_no(question_no: str) -> bool:
+    return question_no.startswith("单选") or question_no.startswith("多选")
+
+
+def _style_template_grid(ws, *, max_row: int, max_col: int, header_rows: int) -> None:
+    for row_idx in range(1, max_row + 1):
+        for col_idx in range(1, max_col + 1):
+            cell = ws.cell(row_idx, col_idx)
+            cell.border = _THIN_BORDER
+            if row_idx <= header_rows:
+                cell.fill = _HEADER_FILL
+                cell.font = _HEADER_FONT
+                cell.alignment = _HEADER_ALIGN
+
+
+def _set_template_col_widths(ws, max_col: int, *, default: float, widths: dict[int, float]) -> None:
+    for col_idx in range(1, max_col + 1):
+        ws.column_dimensions[get_column_letter(col_idx)].width = widths.get(col_idx, default)
+
+
+def _detail_score_headers(questions: list[dict[str, Any]]) -> tuple[list[str], int | None]:
+    headers: list[str] = []
+    paper2_offset: int | None = None
+    for q in questions:
+        qno = str(q.get("question_no") or "").strip()
+        if not qno:
+            continue
+        if paper2_offset is None and not _is_choice_question_no(qno):
+            paper2_offset = len(headers)
+        headers.append(_question_header_label(qno, q.get("question_score")))
+        if _is_choice_question_no(qno):
+            headers.append(f"{qno}_答案")
+    return headers, paper2_offset
+
+
+def _merge_if_span(ws, *, start_row: int, start_col: int, end_row: int, end_col: int) -> None:
+    if end_row < start_row or end_col < start_col:
+        return
+    if end_row == start_row and end_col == start_col:
+        return
+    ws.merge_cells(
+        start_row=start_row,
+        start_column=start_col,
+        end_row=end_row,
+        end_column=end_col,
+    )
+
+
+def _apply_detail_header_merges(ws, total_cols: int, paper2_offset: int | None) -> None:
+    """表头合并对齐教科院小题分：标题整行、身份列竖向、科目盖住合计列、1卷/2卷盖住题列。"""
+    _merge_if_span(ws, start_row=1, start_col=1, end_row=1, end_col=total_cols)
+    for col in range(1, 6):
+        _merge_if_span(ws, start_row=2, start_col=col, end_row=3, end_col=col)
+    _merge_if_span(ws, start_row=2, start_col=6, end_row=2, end_col=8)
+    q_start = 9
+    if q_start > total_cols:
+        return
+    if paper2_offset is None:
+        _merge_if_span(ws, start_row=2, start_col=q_start, end_row=2, end_col=total_cols)
+        return
+    paper2_start = q_start + paper2_offset
+    _merge_if_span(ws, start_row=2, start_col=q_start, end_row=2, end_col=paper2_start - 1)
+    _merge_if_span(ws, start_row=2, start_col=paper2_start, end_row=2, end_col=total_cols)
+
+
+def build_raw_overview_template() -> bytes:
+    """生成成绩宽表导入模板（第一张表为数据表，pandas 按 sheet 0 读取）。"""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "成绩宽表"
+    headers = list(_OVERVIEW_TEMPLATE_COLS)
+    ws.append(headers)
+    max_col = len(headers)
+    max_row = 1 + _TEMPLATE_PLACEHOLDER_ROWS
+    _style_template_grid(ws, max_row=max_row, max_col=max_col, header_rows=1)
+    _set_template_col_widths(
+        ws,
+        max_col,
+        default=10,
+        widths={1: 16, 2: 18, 3: 12, 20: 16, 31: 14},
+    )
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(max_col)}1"
+    note = wb.create_sheet("填写说明")
+    note.append(["成绩宽表导入说明"])
+    note.append(["1. 请使用本工作簿第一张表「成绩宽表」填写，表头 38 列及顺序须与教科院成绩宽表一致，不要改英文列名。"])
+    note.append(["2. 必填：KSH（考生号）、SFZH（身份证号/学号）、XM（姓名）、XX（学校，须与系统校名完全一致）、ZF6M（全科总分）。"])
+    note.append(["3. 科目列为空表示未选考，不要填非数字。转换分/等级/选考组合等列按教科院原表填写。"])
+    note.append(["4. 班级由考生号第 4-5 位自动解析，无需 BJ 列。"])
+    note.append(["5. 从第 2 行起填写学生数据。"])
+    note.append([])
+    note.append(["列名", "含义"])
+    for col in _OVERVIEW_TEMPLATE_COLS:
+        note.append([col, _OVERVIEW_COL_COMMENTS.get(col.lower(), "")])
+    return _workbook_bytes(wb)
+
+
+def build_raw_detail_template(subject: str, questions: list[dict[str, Any]]) -> bytes:
+    """生成小题分导入模板。表头合并对齐教科院各科小题分。"""
+    subj = str(subject or "").strip() or "未命名"
+    qs = [q for q in questions if str(q.get("question_no") or "").strip()]
+    if not qs:
+        raise ValueError("该试卷没有题目，无法生成小题分模板")
+    q_headers, paper2_offset = _detail_score_headers(qs)
+    prefix = [*_DETAIL_IDENTITY_HEADERS, subj, "", ""]
+    row2 = [*prefix, *([""] * len(q_headers))]
+    if q_headers:
+        if paper2_offset != 0:
+            row2[len(_DETAIL_IDENTITY_HEADERS) + 3] = "1卷"
+        if paper2_offset is not None:
+            row2[len(prefix) + paper2_offset] = "2卷"
+    row3 = ["", "", "", "", "", "全卷", "1卷", "2卷", *q_headers]
+    total_cols = max(len(row2), len(row3), 8)
+    while len(row2) < total_cols:
+        row2.append("")
+    while len(row3) < total_cols:
+        row3.append("")
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "小题分"
+    ws.append([f"小题分({subj})", *([""] * (total_cols - 1))])
+    ws.append(row2)
+    ws.append(row3)
+    max_row = 3 + _TEMPLATE_PLACEHOLDER_ROWS
+    _style_template_grid(ws, max_row=max_row, max_col=total_cols, header_rows=3)
+    _apply_detail_header_merges(ws, total_cols, paper2_offset)
+    _style_template_grid(ws, max_row=max_row, max_col=total_cols, header_rows=3)
+    _set_template_col_widths(
+        ws,
+        total_cols,
+        default=14,
+        widths={1: 16, 2: 16, 3: 12, 4: 18, 5: 10},
+    )
+    ws.row_dimensions[1].height = 22
+    ws.freeze_panes = "A4"
+    note = wb.create_sheet("填写说明")
+    note.append(["小题分导入说明"])
+    note.append(["1. 请先在导入页选择科目再下载，题号列按该卷真实题目生成。"])
+    note.append(["2. 第一行必须是「小题分(科目)」，科目须与所选试卷一致，例如 小题分(地理)。"])
+    note.append(["3. 第二行：学号、考号、姓名、学校、区域竖向合并；科目名盖住全卷/1卷/2卷合计列；1卷/2卷再盖住对应题列。"])
+    note.append(["4. 第三行：全卷、1卷、2卷合计列之后是题号，格式如 单选1（5.0分）。选择题后可留「单选N_答案」列。"])
+    note.append(["5. 学号填身份证号，须已出现在本批次成绩宽表中。从第 4 行起填写学生得分。"])
+    note.append(["6. 导入时会跳过答案列与全卷/1卷/2卷合计列。"])
+    return _workbook_bytes(wb)
+
+
+def load_raw_detail_template_meta(
+    db_type: str,
+    config: dict[str, Any],
+    exam_id: int,
+) -> tuple[str, list[dict[str, Any]]]:
+    """读取试卷科目与题目，供生成带真实题号的小题分模板。"""
+    tables = _table_names()
+    exam_table = tables.get("exam", "tb_exam")
+    question_table = tables.get("exam_question", "tb_exam_question")
+    eid = int(exam_id)
+    exam_rows = _sql_ok(
+        db_type,
+        config,
+        f"SELECT id, subject FROM {exam_table} WHERE id = {eid}",
+    )
+    if not exam_rows:
+        raise ValueError(f"试卷不存在: {eid}")
+    exam = _normalize_exam_row(exam_rows[0])
+    subject = str(exam.get("subject_name") or exam.get("subject") or "").strip() or "未命名"
+    q_rows = _sql_ok(
+        db_type,
+        config,
+        (
+            f"SELECT question_no, question_score FROM {question_table} "
+            f"WHERE exam_id = {eid} ORDER BY question_no"
+        ),
+    )
+    questions = [
+        {
+            "question_no": str(r.get("question_no") or "").strip(),
+            "question_score": r.get("question_score"),
+        }
+        for r in q_rows
+        if str(r.get("question_no") or "").strip()
+    ]
+    return subject, questions
 
 
 __all__ = [
@@ -1120,9 +1698,14 @@ __all__ = [
     "_generate_anon_stu_id",
     "_ksh_to_class_name",
     "_load_overview_dimensions",
+    "_overview_import_status",
+    "_detail_import_status_by_exam",
+    "_empty_detail_status",
+    "_coerce_int_id",
     "_normalize_id_str",
     "_parse_detail_excel",
     "_parse_overview_excel",
+    "_build_detail_write_rows",
     "_validate_detail_rows",
     "_validate_overview_rows",
     "assert_raw_import_role_allowed",
@@ -1131,4 +1714,8 @@ __all__ = [
     "execute_raw_overview_import",
     "preview_raw_detail_import",
     "preview_raw_overview_import",
+    "build_raw_overview_template",
+    "build_raw_detail_template",
+    "load_raw_detail_template_meta",
+    "_OVERVIEW_TEMPLATE_COLS",
 ]

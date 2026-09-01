@@ -73,7 +73,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["x-trace-id"],
+    expose_headers=["x-trace-id", "Content-Disposition"],
 )
 
 # Register exception handlers
