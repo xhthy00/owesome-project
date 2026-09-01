@@ -42,6 +42,11 @@ import {
   type MetaOptions
 } from "@/api/education";
 import { exportReportAsWord, sanitizeFileName } from "@/utils/exportReportWord";
+import {
+  bindIframeWatermark,
+  captureElementWithWatermark,
+  stampHtmlWatermark
+} from "@/utils/userWatermark";
 
 /** 分析工具已开放的报告类型 */
 const OPEN_REPORT_TYPES = new Set([
@@ -445,7 +450,7 @@ export default function AnalysisToolPage() {
       return;
     }
     const title = sanitizeName(reportTitle);
-    const blob = new Blob([safeReportHtml], { type: "text/html;charset=utf-8" });
+    const blob = new Blob([stampHtmlWatermark(safeReportHtml)], { type: "text/html;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -488,7 +493,7 @@ export default function AnalysisToolPage() {
       ]);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const JsPDF = (jspdfMod as any).jsPDF;
-      const canvas = await html2canvas(doc.body, {
+      const canvas = await captureElementWithWatermark(doc.body, html2canvas, {
         scale: 2,
         useCORS: true,
         backgroundColor: "#ffffff"
@@ -802,6 +807,7 @@ export default function AnalysisToolPage() {
                       sandbox="allow-scripts allow-same-origin"
                       referrerPolicy="no-referrer"
                       style={{ width: "100%", height: "100%", minHeight: 480, border: 0, display: "block" }}
+                      onLoad={(e) => bindIframeWatermark(e.currentTarget)}
                     />
                   </div>
                 </Card>
@@ -878,6 +884,7 @@ export default function AnalysisToolPage() {
                 sandbox="allow-scripts allow-same-origin"
                 referrerPolicy="no-referrer"
                 style={{ width: "100%", height: "75vh", border: 0 }}
+                onLoad={(e) => bindIframeWatermark(e.currentTarget)}
               />
             ) : null}
           </Modal>

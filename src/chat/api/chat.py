@@ -238,6 +238,16 @@ def update_report_review(
         reports = json.loads(record.reports) if record.reports else []
     except (TypeError, ValueError):
         reports = []
+    if not isinstance(reports, list):
+        reports = []
+    if report_index < 0 or report_index >= len(reports):
+        try:
+            tool_calls = json.loads(record.tool_calls) if record.tool_calls else []
+        except (TypeError, ValueError):
+            tool_calls = []
+        from src.chat.utils.report_payload import coalesce_record_reports
+
+        reports = coalesce_record_reports(reports, tool_calls)
     if not isinstance(reports, list) or report_index < 0 or report_index >= len(reports):
         raise HTTPException(status_code=404, detail="Report not found")
 
@@ -683,6 +693,8 @@ def _persist_record(
     if not chat_request.conversation_id:
         return 0
     try:
+        from src.chat.utils.report_payload import coalesce_record_reports
+
         record = chat_crud.create_conversation_record(
             session=session,
             conversation_id=chat_request.conversation_id,
@@ -701,7 +713,7 @@ def _persist_record(
             plan_states=plan_states,
             tool_calls=tool_calls,
             summary=summary,
-            reports=reports,
+            reports=coalesce_record_reports(reports, tool_calls),
             workspace_oid=workspace_oid,
         )
         return record.id or 0

@@ -35,6 +35,11 @@ import {
   hasRecommendationsSection
 } from "@/utils/reportRecommendations";
 import { exportReportAsWord } from "@/utils/exportReportWord";
+import {
+  bindIframeWatermark,
+  captureElementWithWatermark,
+  stampHtmlWatermark
+} from "@/utils/userWatermark";
 import AgentTeamStrip from "@/components/chat/AgentTeamStrip";
 import {
   activePipelineAgent,
@@ -362,14 +367,14 @@ export default function ChatExecutionPanel({
     /execute failed|failed|error|异常|失败/i.test(detailText);
   const copyReportHtml = async () => {
     try {
-      await navigator.clipboard.writeText(safeReportHtml);
+      await navigator.clipboard.writeText(stampHtmlWatermark(safeReportHtml));
       message.success("HTML 已复制");
     } catch {
       message.error("复制失败");
     }
   };
   const downloadReportHtml = () => {
-    const blob = new Blob([safeReportHtml], { type: "text/html;charset=utf-8" });
+    const blob = new Blob([stampHtmlWatermark(safeReportHtml)], { type: "text/html;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -412,7 +417,11 @@ export default function ChatExecutionPanel({
       ]);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const JsPDF = (jspdfMod as any).jsPDF;
-      const canvas = await html2canvas(doc.body, { scale: 2, useCORS: true, backgroundColor: "#ffffff" });
+      const canvas = await captureElementWithWatermark(doc.body, html2canvas, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: "#ffffff"
+      });
       const pdf = new JsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
       const pageW = pdf.internal.pageSize.getWidth();
       const pageH = pdf.internal.pageSize.getHeight();
@@ -945,6 +954,7 @@ export default function ChatExecutionPanel({
                       srcDoc={safeReportHtml}
                       sandbox="allow-scripts allow-same-origin"
                       referrerPolicy="no-referrer"
+                      onLoad={(e) => bindIframeWatermark(e.currentTarget)}
                     />
                   </div>
                 </div>
@@ -1123,6 +1133,7 @@ export default function ChatExecutionPanel({
           srcDoc={safeReportHtml}
           sandbox="allow-scripts allow-same-origin"
           referrerPolicy="no-referrer"
+          onLoad={(e) => bindIframeWatermark(e.currentTarget)}
         />
       </Modal>
       <Modal

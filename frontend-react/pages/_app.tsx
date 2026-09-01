@@ -1,5 +1,5 @@
 import { ApartmentOutlined, LogoutOutlined, UserOutlined } from "@ant-design/icons";
-import { App as AntApp, ConfigProvider, Dropdown, Select, theme } from "antd";
+import { App as AntApp, ConfigProvider, Dropdown, Select, Watermark, theme } from "antd";
 import type { MenuProps } from "antd";
 import type { AppProps } from "next/app";
 import { useRouter } from "next/router";
@@ -9,6 +9,7 @@ import { ChatContext, ChatContextProvider } from "@/app/chat-context";
 import { systemApi } from "@/api/system";
 import { clearAccessToken, getAccessToken } from "@/auth/session";
 import SideBar from "@/components/layout/side-bar";
+import { setCachedWatermarkText, userWatermarkText } from "@/utils/userWatermark";
 import "../styles/globals.css";
 
 const APP_MODE_KEY = "frontend_react_mode";
@@ -26,6 +27,7 @@ function LayoutWrapper({
   const [workspaceOptions, setWorkspaceOptions] = useState<Array<{ value: number; label: string }>>([]);
   const [workspaceOid, setWorkspaceOid] = useState<number | undefined>(undefined);
   const [loginAccount, setLoginAccount] = useState("");
+  const [loginName, setLoginName] = useState("");
   /** 仅在用户切换工作空间时递增，用于强制主内容区 remount，刷新当前页状态与接口数据 */
   const [mainContentKey, setMainContentKey] = useState(0);
   const isBypassLayout =
@@ -43,6 +45,9 @@ function LayoutWrapper({
 
   const onUserMenuClick: MenuProps["onClick"] = ({ key }) => {
     if (key !== "logout") return;
+    setLoginAccount("");
+    setLoginName("");
+    setCachedWatermarkText("");
     clearAccessToken();
     const redirect = encodeURIComponent(router.asPath || "/");
     void router.replace(`/login?redirect=${redirect}`);
@@ -69,7 +74,11 @@ function LayoutWrapper({
         if (!active) return;
         const opts = workspaces.map((w) => ({ value: Number(w.id), label: w.name || `工作空间 ${w.id}` }));
         setWorkspaceOptions(opts);
-        setLoginAccount(String(user.account || "").trim());
+        const account = String(user.account || "").trim();
+        const name = String(user.name || "").trim();
+        setLoginAccount(account);
+        setLoginName(name);
+        setCachedWatermarkText(userWatermarkText(account, name));
         const fromStorage = Number(window.localStorage.getItem(WORKSPACE_OID_KEY) || "");
         const hasStorage = Number.isFinite(fromStorage) && opts.some((o) => o.value === fromStorage);
         const preferred = hasStorage ? fromStorage : Number(user.oid);
@@ -85,11 +94,18 @@ function LayoutWrapper({
         if (!active) return;
         setWorkspaceOptions([]);
         setLoginAccount("");
+        setLoginName("");
+        setCachedWatermarkText("");
       });
     return () => {
       active = false;
     };
   }, [isBypassLayout]);
+
+  const watermarkText = useMemo(
+    () => userWatermarkText(loginAccount, loginName),
+    [loginAccount, loginName]
+  );
 
   const themeConfig = useMemo(
     () => ({
@@ -108,7 +124,18 @@ function LayoutWrapper({
         {isBypassLayout ? (
           children
         ) : (
-          <div className="flex h-screen w-screen overflow-hidden">
+          <Watermark
+            inherit={false}
+            content={watermarkText || undefined}
+            gap={[200, 160]}
+            rotate={-22}
+            font={{
+              fontSize: 20,
+              color: mode === "dark" ? "rgba(255,255,255,0.18)" : "rgba(0,0,0,0.16)"
+            }}
+            className="h-screen w-screen"
+          >
+          <div className="flex h-full w-full overflow-hidden">
             <div className="hidden shrink-0 md:block">
               <SideBar />
             </div>
@@ -157,6 +184,7 @@ function LayoutWrapper({
               </div>
             </div>
           </div>
+          </Watermark>
         )}
       </AntApp>
     </ConfigProvider>

@@ -5,6 +5,8 @@
  * 因此按「已渲染预览」截图嵌入文档，保证样式与 HTML/PDF 观感一致。
  */
 
+import { captureElementWithWatermark } from "@/utils/userWatermark";
+
 export function sanitizeFileName(name: string): string {
   return (name || "report").replace(/[\\/:*?"<>|]+/g, "_").trim() || "report";
 }
@@ -111,7 +113,7 @@ export async function exportReportAsWord(options: {
   });
 
   const { default: html2canvas } = await import("html2canvas");
-  const canvas = await html2canvas(body, {
+  const canvas = await captureElementWithWatermark(body, html2canvas, {
     scale: 2,
     useCORS: true,
     allowTaint: true,

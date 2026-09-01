@@ -2267,6 +2267,9 @@ def _persist_sync(
         from src.common.core.database import get_db_session
 
         with get_db_session() as session:
+            from src.chat.utils.report_payload import coalesce_record_reports
+
+            persist_reports = coalesce_record_reports(reports, tool_calls)
             record = chat_crud.create_conversation_record(
                 session=session,
                 conversation_id=request.conversation_id,
@@ -2286,7 +2289,7 @@ def _persist_sync(
                 plan_states=plan_states,
                 tool_calls=tool_calls,
                 summary=summary,
-                reports=reports,
+                reports=persist_reports,
                 total_tokens=total_tokens,
                 elapsed_ms=elapsed_ms,
                 workspace_oid=workspace_oid,
