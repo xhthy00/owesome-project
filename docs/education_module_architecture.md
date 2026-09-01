@@ -83,6 +83,7 @@
 | `report_edit.py` | 164 | 报告建议区提取/回写（审核流） | `extract_recommendations_text`(L26)、`replace_recommendations_html`(L37)、`has_recommendations_section`(L48) | 被 chat/api/chat.py(L252) 使用 | 纯 |
 | `report_quality.py` | 82 | 报告空壳质量检测 | `report_html_is_sparse`(L32)、`report_html_empty_exam_signals`(L52)、`report_html_has_all_dash_score_table`(L57)、`report_html_quality_issues`(L70) | 被 agent_runner(L2191)/edu_e2e_eval(L116) 使用 | 纯 |
 | `score_import.py` | 1104 | Excel 成绩导入（唯一写外部数据源模块）；两种模板 total→tb_score / detail→tb_score_detail（openpyxl，L19-26）；7 步校验链（`validate_and_resolve` L537）；UPSERT：PG `ON CONFLICT DO UPDATE` / MySQL `ON DUPLICATE KEY UPDATE`（L755）、500 行/块、≥800 行 4 线程并行写（L957）、缺学号自动补 `tb_student`（L883） | `parse_excel`(L147)、`validate_and_resolve`(L537)、`preview_import`(L819)、`import_scores`(L993)、`import_result_to_dict`(L1094)、`template_path`(L109)、数据类 ParsedRow/ResolvedRow/ImportErrorRow/ImportResult(L60-99)；⚠️**无 `__all__`** | datasource.db.db（非 SQLAlchemy 模型） | DB 写（tb_score/tb_score_detail/tb_student） |
+| `raw_import.py` | 1112 | 教科院原始成绩导入（新入口）：宽表→`tb_score_overview`/`tb_student`/`tb_score`，小题分→`tb_score_detail`；固定写入 `database=edu` 的已登记数据源，无环境配置、不选手动数据源；9 科试卷预检；校管理员整文件拒绝；小题分无学校列回退；成功只扫异常不重算达线 | `preview_raw_overview_import` / `execute_raw_overview_import` / `preview_raw_detail_import` / `execute_raw_detail_import` / `assert_raw_import_role_allowed` / `resolve_edu_datasource_id` | 复用 score_import UPSERT；被 api.py `/raw-score-import/*` 调用 | DB 写（overview/student/score/detail） |
 
 ### 1.6 工具 / API / 门面
 

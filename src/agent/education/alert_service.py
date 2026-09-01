@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from copy import copy
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import func
 from sqlmodel import Session, col, select
@@ -715,24 +715,73 @@ def scan_alerts_after_import(
     workspace_oid: int,
     datasource_id: int,
     resolved_rows: list[Any],
+    exam_batch_id: int | None = None,
 ) -> dict[str, Any]:
-    """导入成功后：按 (school_id, exam_id) 去重扫描；仅覆盖本次导入涉及的班级。"""
+    """导入成功后扫描异常提醒。
+
+    - 仅 ``resolved_rows``：按 (school_id, exam_id) 去重，并按涉及班级过滤。
+    - 同时传 ``exam_batch_id``：扫描该批次全部试卷 × resolved 中的学校，不按班级过滤。
+    """
+    from datasource.db.db import execute_sql
+
     pairs: dict[tuple[str, str], str] = {}
     classes_by_pair: dict[tuple[str, str], set[str]] = {}
-    for r in resolved_rows or []:
-        school_id = str(getattr(r, "school_id", None) or (r.get("school_id") if isinstance(r, dict) else "") or "").strip()
-        exam_id = str(getattr(r, "exam_id", None) or (r.get("exam_id") if isinstance(r, dict) else "") or "").strip()
-        exam_name = str(
-            getattr(r, "exam_name", None) or (r.get("exam_name") if isinstance(r, dict) else "") or ""
-        ).strip()
-        class_name = str(
-            getattr(r, "class_name", None) or (r.get("class_name") if isinstance(r, dict) else "") or ""
-        ).strip()
-        if school_id and exam_id:
-            pairs[(school_id, exam_id)] = exam_name or pairs.get((school_id, exam_id), "")
-            classes_by_pair.setdefault((school_id, exam_id), set())
-            if class_name:
-                classes_by_pair[(school_id, exam_id)].add(class_name)
+
+    if exam_batch_id is not None:
+        school_ids: set[str] = set()
+        for r in resolved_rows or []:
+            sid = str(
+                getattr(r, "school_id", None)
+                or (r.get("school_id") if isinstance(r, dict) else "")
+                or getattr(r, "school_token", None)
+                or (r.get("school_token") if isinstance(r, dict) else "")
+                or ""
+            ).strip()
+            if sid:
+                school_ids.add(sid)
+        if not school_ids:
+            return {"inserted": 0, "updated": 0, "skipped": 0, "detected": 0, "exams": 0}
+        batch_id = int(exam_batch_id)
+        ok, _msg, data = execute_sql(
+            db_type,
+            config,
+            f"SELECT id, exam_name FROM tb_exam WHERE exam_batch_id = {batch_id}",
+        )
+        exam_rows: list[dict[str, Any]] = []
+        if ok and isinstance(data, dict):
+            cols = list(data.get("columns") or [])
+            for row in data.get("rows") or []:
+                if isinstance(row, dict):
+                    exam_rows.append(row)
+                elif isinstance(row, (list, tuple)):
+                    exam_rows.append({cols[i]: row[i] for i in range(min(len(cols), len(row)))})
+        for exam in exam_rows:
+            eid = str(exam.get("id") or "").strip()
+            ename = str(exam.get("exam_name") or "")
+            if not eid:
+                continue
+            for sid in school_ids:
+                pairs[(sid, eid)] = ename
+        classes_by_pair = {pair: set() for pair in pairs}
+    else:
+        for r in resolved_rows or []:
+            school_id = str(
+                getattr(r, "school_id", None) or (r.get("school_id") if isinstance(r, dict) else "") or ""
+            ).strip()
+            exam_id = str(
+                getattr(r, "exam_id", None) or (r.get("exam_id") if isinstance(r, dict) else "") or ""
+            ).strip()
+            exam_name = str(
+                getattr(r, "exam_name", None) or (r.get("exam_name") if isinstance(r, dict) else "") or ""
+            ).strip()
+            class_name = str(
+                getattr(r, "class_name", None) or (r.get("class_name") if isinstance(r, dict) else "") or ""
+            ).strip()
+            if school_id and exam_id:
+                pairs[(school_id, exam_id)] = exam_name or pairs.get((school_id, exam_id), "")
+                classes_by_pair.setdefault((school_id, exam_id), set())
+                if class_name:
+                    classes_by_pair[(school_id, exam_id)].add(class_name)
 
     totals = {"inserted": 0, "updated": 0, "skipped": 0, "detected": 0, "exams": 0}
     for (school_id, exam_id), exam_name in pairs.items():

@@ -18,6 +18,7 @@ ALTER TABLE tb_exam_batch
     ADD COLUMN IF NOT EXISTS exam_time TIMESTAMP;
 
 CREATE INDEX IF NOT EXISTS idx_exam_batch_exam_time ON tb_exam_batch (exam_time);
+CREATE UNIQUE INDEX IF NOT EXISTS uk_exam_batch_batch_name ON tb_exam_batch (batch_name);
 
 ALTER TABLE tb_exam
     ADD COLUMN IF NOT EXISTS exam_batch_id BIGINT;

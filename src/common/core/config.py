@@ -1,16 +1,20 @@
 """Configuration management using pydantic-settings."""
 
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal, Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_ENV_FILE = _REPO_ROOT / ".env"
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_ENV_FILE) if _ENV_FILE.is_file() else ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
     )

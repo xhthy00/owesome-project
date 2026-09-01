@@ -15,7 +15,7 @@ import asyncio
 import json
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -1437,3 +1437,309 @@ async def confirm_anomaly_alert(
         if row is None:
             return error_response(code=404, message="异常提醒不存在或无权确认")
         return success_response(alert_to_dict(row), message="已确认处理")
+
+
+def _prepare_raw_import(current_user: UserResponse, workspace_oid: int):
+    from common.core.database import get_db_session
+    from common.exceptions.base import ForbiddenException
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.agent.education.raw_import import (
+        assert_raw_import_role_allowed,
+        resolve_edu_datasource_id,
+    )
+    from src.agent.resource.tool.business import _load_datasource
+    from system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        ds_id = resolve_edu_datasource_id(session, workspace_oid)
+        if not ds_id:
+            raise BadRequestException("当前工作空间未登记 edu 业务库，无法导入原始成绩")
+        assert_datasource_accessible(session, current_user, ds_id, workspace_oid)
+        user = get_user_by_id(session, int(current_user.id))
+        scope = parse_edu_scope(user)
+        err = assert_raw_import_role_allowed(scope)
+        if err:
+            raise ForbiddenException(err)
+    db_type, config, _ = _load_datasource(ds_id, workspace_oid)
+    return ds_id, scope, db_type, config
+
+
+def _read_raw_upload_file(file: UploadFile) -> bytes:
+    name = (file.filename or "").lower()
+    if not name.endswith((".xlsx", ".xls")):
+        raise BadRequestException("请上传 .xlsx/.xls 格式的 Excel 文件")
+    data = file.file.read()
+    if not data:
+        raise BadRequestException("上传文件为空")
+    return data
+
+
+def _raw_result_payload(result) -> dict:
+    from src.agent.education.score_import import import_result_to_dict
+
+    payload = import_result_to_dict(result)
+    warnings = list(payload.get("warnings") or [])
+    mismatch = (result.summary or {}).get("subject_mismatch")
+    if mismatch:
+        warnings.append({"row": 0, "message": str(mismatch)})
+    payload["warnings"] = warnings
+    return payload
+
+
+def _raw_execute_error(result, payload: dict) -> dict:
+    write_failed = any(getattr(e, "field", "") == "写入" for e in (result.error_rows or []))
+    if write_failed:
+        return error_response(
+            code=400,
+            message="写入失败，部分数据可能已入库，请整文件重导",
+            data=payload,
+        )
+    return error_response(code=400, message="校验未通过", data=payload)
+
+
+@router.get("/raw-score-import/batches")
+@audit_access(query_arg="current_user.id")
+async def list_raw_import_batches(
+    request: Request,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from datasource.db.db import execute_sql
+
+    _ds_id, _scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    ok, msg, data = execute_sql(
+        db_type,
+        config,
+        "SELECT id, batch_name, exam_time FROM tb_exam_batch ORDER BY exam_time DESC NULLS LAST, id DESC LIMIT 500",
+    )
+    if not ok:
+        raise BadRequestException(msg or "查询批次失败")
+    cols = list((data or {}).get("columns") or [])
+    rows = []
+    for row in (data or {}).get("rows") or []:
+        if isinstance(row, dict):
+            rec = row
+        else:
+            rec = {cols[i]: row[i] for i in range(min(len(cols), len(row)))}
+        rows.append(
+            {
+                "id": rec.get("id"),
+                "batch_name": rec.get("batch_name"),
+                "exam_time": rec.get("exam_time"),
+            }
+        )
+    return success_response(data={"batches": rows})
+
+
+@router.post("/raw-score-import/batches")
+@audit_access(query_arg="batch_name")
+async def create_raw_import_batch(
+    request: Request,
+    batch_name: str = Form(...),
+    exam_time: str = Form(...),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from datasource.db.db import WriteDbSession
+
+    name = (batch_name or "").strip()
+    when = (exam_time or "").strip()
+    if not name:
+        raise BadRequestException("批次名称不能为空")
+    _ds_id, _scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    with WriteDbSession(db_type, config) as session:
+        ok, msg, data = session.execute_query(
+            "SELECT id, batch_name, exam_time FROM tb_exam_batch WHERE batch_name = %s",
+            (name,),
+        )
+        if not ok:
+            raise BadRequestException(msg or "查询批次失败")
+        cols = list((data or {}).get("columns") or [])
+        existing = (data or {}).get("rows") or []
+        if existing:
+            row = existing[0]
+            rec = (
+                row
+                if isinstance(row, dict)
+                else {cols[i]: row[i] for i in range(min(len(cols), len(row)))}
+            )
+            return error_response(
+                code=400,
+                message=f"批次『{name}』已存在",
+                data={
+                    "id": rec.get("id"),
+                    "batch_name": rec.get("batch_name"),
+                    "exam_time": rec.get("exam_time"),
+                },
+            )
+        ok, msg, _ = session.execute_write(
+            "INSERT INTO tb_exam_batch (batch_name, exam_time) VALUES (%s, %s)",
+            (name, when),
+        )
+        if not ok:
+            session.rollback()
+            raise BadRequestException(msg or "创建批次失败")
+        session.commit()
+        ok2, _msg2, data2 = session.execute_query(
+            "SELECT id, batch_name, exam_time FROM tb_exam_batch WHERE batch_name = %s",
+            (name,),
+        )
+    if not ok2:
+        raise BadRequestException("创建批次后查询失败")
+    cols2 = list((data2 or {}).get("columns") or [])
+    row2 = ((data2 or {}).get("rows") or [None])[0]
+    if row2 is None:
+        raise BadRequestException("创建批次后未找到记录")
+    rec = row2 if isinstance(row2, dict) else {cols2[i]: row2[i] for i in range(min(len(cols2), len(row2)))}
+    return success_response(
+        data={"id": rec.get("id"), "batch_name": rec.get("batch_name"), "exam_time": rec.get("exam_time")}
+    )
+
+
+@router.get("/raw-score-import/papers")
+@audit_access(query_arg="exam_batch_id")
+async def list_raw_import_papers(
+    request: Request,
+    exam_batch_id: int = Query(...),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from datasource.db.db import execute_sql
+    from src.agent.education.raw_import import _REQUIRED_SUBJECTS
+
+    _ds_id, _scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    ok, msg, data = execute_sql(
+        db_type,
+        config,
+        (
+            "SELECT id, subject, exam_score FROM tb_exam "
+            f"WHERE exam_batch_id = {int(exam_batch_id)}"
+        ),
+    )
+    if not ok:
+        raise BadRequestException(msg or "查询试卷失败")
+    cols = list((data or {}).get("columns") or [])
+    papers = []
+    seen: dict[str, int] = {}
+    duplicate_subjects: list[str] = []
+    for row in (data or {}).get("rows") or []:
+        rec = row if isinstance(row, dict) else {cols[i]: row[i] for i in range(min(len(cols), len(row)))}
+        subject = str(rec.get("subject") or rec.get("subject_name") or "").strip()
+        papers.append(
+            {
+                "exam_id": rec.get("id"),
+                "subject": subject,
+                "exam_score": rec.get("exam_score"),
+            }
+        )
+        if subject:
+            seen[subject] = seen.get(subject, 0) + 1
+            if seen[subject] == 2:
+                duplicate_subjects.append(subject)
+    present = {p["subject"] for p in papers if p["subject"]}
+    missing_subjects = [s for s in _REQUIRED_SUBJECTS if s not in present]
+    return success_response(
+        data={
+            "papers": papers,
+            "missing_subjects": missing_subjects,
+            "duplicate_subjects": duplicate_subjects,
+        }
+    )
+
+
+@router.post("/raw-score-import/overview-preview")
+@audit_access(query_arg="exam_batch_id")
+async def preview_raw_overview(
+    request: Request,
+    exam_batch_id: int = Form(...),
+    file: UploadFile = File(...),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from src.agent.education.raw_import import preview_raw_overview_import
+
+    file_bytes = _read_raw_upload_file(file)
+    _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    result = preview_raw_overview_import(file_bytes, exam_batch_id, scope, db_type, config)
+    return success_response(data=_raw_result_payload(result))
+
+
+@router.post("/raw-score-import/overview-execute")
+@audit_access(query_arg="exam_batch_id")
+async def execute_raw_overview(
+    request: Request,
+    exam_batch_id: int = Form(...),
+    file: UploadFile = File(...),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from common.core.database import get_db_session
+    from src.agent.education.alert_service import scan_alerts_after_import
+    from src.agent.education.raw_import import execute_raw_overview_import
+
+    file_bytes = _read_raw_upload_file(file)
+    ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    result = execute_raw_overview_import(file_bytes, exam_batch_id, scope, db_type, config)
+    payload = _raw_result_payload(result)
+    if result.error_rows:
+        return _raw_execute_error(result, payload)
+    warnings = list(payload.get("warnings") or [])
+    try:
+        with get_db_session() as session:
+            scan_summary = scan_alerts_after_import(
+                session,
+                db_type=db_type,
+                config=config,
+                workspace_oid=int(workspace_oid),
+                datasource_id=int(ds_id),
+                resolved_rows=list(result.resolved_rows or []),
+                exam_batch_id=int(exam_batch_id),
+            )
+        payload.setdefault("summary", {})["alert_scan"] = scan_summary
+    except Exception:  # noqa: BLE001
+        import logging
+
+        logging.getLogger(__name__).exception("raw overview alert scan failed")
+        warnings.append({"row": 0, "message": "异常扫描失败，导入已成功，请稍后在异常提醒中重试"})
+    payload["warnings"] = warnings
+    return success_response(data=payload)
+
+
+@router.post("/raw-score-import/detail-preview")
+@audit_access(query_arg="exam_id")
+async def preview_raw_detail(
+    request: Request,
+    exam_batch_id: int = Form(...),
+    exam_id: int = Form(...),
+    file: UploadFile = File(...),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from src.agent.education.raw_import import preview_raw_detail_import
+
+    file_bytes = _read_raw_upload_file(file)
+    _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    result = preview_raw_detail_import(file_bytes, exam_batch_id, exam_id, scope, db_type, config)
+    return success_response(data=_raw_result_payload(result))
+
+
+@router.post("/raw-score-import/detail-execute")
+@audit_access(query_arg="exam_id")
+async def execute_raw_detail(
+    request: Request,
+    exam_batch_id: int = Form(...),
+    exam_id: int = Form(...),
+    file: UploadFile = File(...),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from src.agent.education.raw_import import execute_raw_detail_import
+
+    file_bytes = _read_raw_upload_file(file)
+    _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    result = execute_raw_detail_import(file_bytes, exam_batch_id, exam_id, scope, db_type, config)
+    payload = _raw_result_payload(result)
+    if result.error_rows:
+        return _raw_execute_error(result, payload)
+    return success_response(data=payload)
+
