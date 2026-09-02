@@ -186,6 +186,19 @@ def test_extract_school_target_from_full_name():
     assert extract_school_target(q) == "南京市第一中学"
 
 
+def test_extract_school_target_after_ask_filler_long_name():
+    """「帮我分析」+ 较长校名（扬州大学附属中学）不能抽空。"""
+    assert (
+        extract_school_target("帮我分析扬州大学附属中学的成绩")
+        == "扬州大学附属中学"
+    )
+    assert (
+        extract_school_target("请帮我分析扬州大学附属中学的成绩")
+        == "扬州大学附属中学"
+    )
+    assert extract_school_target("帮我看看扬州大学附属中学") == "扬州大学附属中学"
+
+
 def test_extract_school_target_before_particle_zai():
     """「扬州中学在连淮扬镇…」校名后接「在」时仍能抽出。"""
     q = "扬州中学在连淮扬镇数学考试中各个班级的横向多维对比分析"

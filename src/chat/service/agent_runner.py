@@ -290,17 +290,9 @@ class _RunConstraints:
 
 
 def _load_edu_scope_summary(user_id: int) -> dict[str, Any]:
-    if not user_id:
-        return {}
-    from datasource.service.edu_permission import edu_scope_summary
-    from src.common.core.database import get_db_session
-    from src.system.crud.crud_user import get_user_by_id
+    from datasource.service.edu_permission import edu_scope_dict_for_user_id
 
-    with get_db_session() as session:
-        user = get_user_by_id(session, user_id)
-        if user is None:
-            return {}
-        return edu_scope_summary(user)
+    return edu_scope_dict_for_user_id(user_id)
 
 
 def _build_shared_constraints(question: str, user_id: int) -> _RunConstraints:

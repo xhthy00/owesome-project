@@ -37,6 +37,31 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
+
+
+def _edu_out_of_scope_message(
+    user_id: int,
+    question: str,
+    *,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+) -> str | None:
+    """教师/校管点名越权班校时拒绝；读范围失败则放行。"""
+    from datasource.service.edu_permission import edu_scope_dict_for_user_id
+    from src.agent.education.scope_guard import out_of_scope_question
+
+    return out_of_scope_question(
+        edu_scope_dict_for_user_id(user_id),
+        question,
+        datasource_id=datasource_id,
+        workspace_oid=workspace_oid,
+    )
+
 
 # ============== Conversation Management ==============
 
@@ -774,6 +799,23 @@ async def chat_stream(
     )
 
     current_user_id = current_user.id
+    denied = _edu_out_of_scope_message(
+        int(current_user_id),
+        chat_request.question,
+        datasource_id=chat_request.datasource_id,
+        workspace_oid=workspace_oid,
+    )
+    if denied:
+
+        async def deny_stream() -> AsyncGenerator[str, None]:
+            yield _sse_event("error", {"error": denied})
+            yield _sse_event("done", {"record_id": 0})
+
+        return StreamingResponse(
+            deny_stream(),
+            media_type="text/event-stream",
+            headers={**_SSE_HEADERS, "X-Trace-Id": trace_id},
+        )
 
     queue: asyncio.Queue = asyncio.Queue()
     loop = asyncio.get_event_loop()
@@ -1032,12 +1074,7 @@ async def chat_stream(
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-            "X-Trace-Id": trace_id,
-        }
+        headers={**_SSE_HEADERS, "X-Trace-Id": trace_id},
     )
 
 

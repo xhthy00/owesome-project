@@ -171,6 +171,26 @@ def _build_orchestrator(
     )
 
 
+def _raise_if_out_of_scope(
+    user_id: int,
+    *parts: Any,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+) -> None:
+    from common.exceptions.base import ForbiddenException
+    from datasource.service.edu_permission import edu_scope_dict_for_user_id
+    from src.agent.education.scope_guard import out_of_scope_named
+
+    msg = out_of_scope_named(
+        edu_scope_dict_for_user_id(int(user_id)),
+        *parts,
+        datasource_id=datasource_id,
+        workspace_oid=workspace_oid,
+    )
+    if msg:
+        raise ForbiddenException(msg)
+
+
 @router.post("/batch-report")
 @audit_access(datasource_id_arg="req.datasource_id", query_arg="req.question")
 async def batch_report(
@@ -194,6 +214,14 @@ async def batch_report(
 
     with get_db_session() as session:
         assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
+    _raise_if_out_of_scope(
+        int(current_user.id),
+        question,
+        *req.class_names,
+        (req.filters or {}).get("school_name") or (req.filters or {}).get("school"),
+        datasource_id=req.datasource_id,
+        workspace_oid=workspace_oid,
+    )
     ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
     orch = _build_orchestrator(req.datasource_id, ws_oid, user_id=int(current_user.id))
 
@@ -273,6 +301,12 @@ async def diagnostic_report(
 
     with get_db_session() as session:
         assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
+    _raise_if_out_of_scope(
+        int(current_user.id),
+        req.question,
+        datasource_id=req.datasource_id,
+        workspace_oid=workspace_oid,
+    )
     ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
     orch = _build_orchestrator(req.datasource_id, ws_oid, user_id=int(current_user.id))
     res = await orch.run(req.question, audience_hint=req.audience)
@@ -359,6 +393,13 @@ async def generate_report(
             raise BadRequestException(f"无效的受众: {req.audience}") from exc
 
     filters = {str(k): str(v) for k, v in (req.filters or {}).items() if v is not None and str(v).strip()}
+    _raise_if_out_of_scope(
+        int(current_user.id),
+        filters.get("class_name") or filters.get("class"),
+        filters.get("school_name") or filters.get("school"),
+        datasource_id=req.datasource_id,
+        workspace_oid=workspace_oid,
+    )
     spec = ReportSpec(
         report_type=report_type,
         audience=audience,

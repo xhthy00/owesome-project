@@ -244,10 +244,25 @@ def edu_scope_summary(user: SysUser | None) -> dict[str, Any]:
     }
 
 
+def edu_scope_dict_for_user_id(user_id: int) -> dict[str, Any]:
+    """按 user_id 读教育范围；读库失败时返回空（调用方应放行，不拦截）。"""
+    if not user_id:
+        return {}
+    try:
+        from src.common.core.database import get_db_session
+        from src.system.crud.crud_user import get_user_by_id
+
+        with get_db_session() as session:
+            return edu_scope_summary(get_user_by_id(session, int(user_id)))
+    except Exception:
+        return {}
+
+
 __all__ = [
     "EduScope",
     "build_edu_row_predicates",
     "clear_edu_scope_from_variables",
+    "edu_scope_dict_for_user_id",
     "edu_scope_summary",
     "list_edu_roles",
     "load_edu_permission_config",
