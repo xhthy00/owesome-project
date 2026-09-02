@@ -180,6 +180,10 @@ def _auth_client(monkeypatch):
             id=datasource_id, oid=workspace_oid
         ),
     )
+    monkeypatch.setattr(
+        "src.agent.education.api._require_exam_datasource",
+        lambda session: SimpleNamespace(id=1, oid=1, name="exam"),
+    )
 
     app = FastAPI()
     register_exception_handlers(app)
@@ -836,6 +840,52 @@ def test_fraction_bar_list_api(monkeypatch):
     assert r.status_code == 200
     assert r.json()["data"]["exams"][0]["exam_name"] == "5月模考"
     assert r.json()["data"]["batches"][0]["id"] == 12
+
+
+def test_fraction_bar_list_without_datasource_id(monkeypatch):
+    client = _auth_client(monkeypatch)
+    _mock_line_reach_session(monkeypatch, edu_role="bureau_admin")
+    monkeypatch.setattr(
+        "src.agent.education.score_indicator.list_fraction_bars",
+        lambda *a, **k: {
+            "columns": ["exam_name"],
+            "line_catalog": [],
+            "exams": [{"exam_name": "5月模考", "exam_batch_id": 12, "lines": []}],
+            "batches": [{"id": 12, "batch_name": "5月模考"}],
+        },
+    )
+    r = client.get("/api/v1/education/fraction-bar")
+    assert r.status_code == 200
+    assert r.json()["data"]["exams"][0]["exam_name"] == "5月模考"
+
+
+def test_require_exam_datasource_ignores_workspace(monkeypatch):
+    from src.agent.education.api import _require_exam_datasource
+
+    ds = SimpleNamespace(id=7, oid=99, name="exam")
+    monkeypatch.setattr(
+        "datasource.crud.crud_datasource.get_datasource_by_name",
+        lambda session, name: ds if str(name).lower() == "exam" else None,
+    )
+    got = _require_exam_datasource(SimpleNamespace())
+    assert got.id == 7
+    assert got.oid == 99
+
+
+def test_require_exam_datasource_missing(monkeypatch):
+    from common.exceptions.base import NotFoundException
+    from src.agent.education.api import _require_exam_datasource
+
+    monkeypatch.setattr(
+        "datasource.crud.crud_datasource.get_datasource_by_name",
+        lambda *a, **k: None,
+    )
+    try:
+        _require_exam_datasource(SimpleNamespace())
+    except NotFoundException as exc:
+        assert "exam" in exc.message
+        return
+    raise AssertionError("expected NotFoundException")
 
 
 def test_score_indicator_recompute_api(monkeypatch):

@@ -527,10 +527,8 @@ export const educationApi = {
     return body.data;
   },
 
-  async getLineReachMeta(datasourceId: number): Promise<LineReachMeta> {
-    const params = new URLSearchParams();
-    params.set("datasource_id", String(datasourceId));
-    const resp = await fetch(`${getApiBaseUrl()}/education/dashboards/line-reach/meta?${params}`, {
+  async getLineReachMeta(): Promise<LineReachMeta> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/dashboards/line-reach/meta`, {
       headers: await authHeaders()
     });
     if (resp.status === 401) throw new Error("Unauthorized");
@@ -544,14 +542,17 @@ export const educationApi = {
     return body.data;
   },
 
-  async getLineReach(query: LineReachQuery): Promise<LineReachResult> {
+  async getLineReach(query: LineReachQuery = {}): Promise<LineReachResult> {
     const params = new URLSearchParams();
-    params.set("datasource_id", String(query.datasource_id));
     if (query.exam_name) params.set("exam_name", query.exam_name);
     if (query.track) params.set("track", query.track);
-    const resp = await fetch(`${getApiBaseUrl()}/education/dashboards/line-reach?${params}`, {
-      headers: await authHeaders()
-    });
+    const qs = params.toString();
+    const resp = await fetch(
+      `${getApiBaseUrl()}/education/dashboards/line-reach${qs ? `?${qs}` : ""}`,
+      {
+        headers: await authHeaders()
+      }
+    );
     if (resp.status === 401) throw new Error("Unauthorized");
     const body = (await resp.json()) as { code?: number; message?: string; data?: LineReachResult };
     if ((body.code ?? 200) === 403) {
@@ -563,10 +564,8 @@ export const educationApi = {
     return body.data;
   },
 
-  async listFractionBar(datasourceId: number): Promise<FractionBarListResult> {
-    const params = new URLSearchParams();
-    params.set("datasource_id", String(datasourceId));
-    const resp = await fetch(`${getApiBaseUrl()}/education/fraction-bar?${params}`, {
+  async listFractionBar(): Promise<FractionBarListResult> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/fraction-bar`, {
       headers: await authHeaders()
     });
     if (resp.status === 401) throw new Error("Unauthorized");
@@ -614,7 +613,6 @@ export const educationApi = {
   },
 
   async recomputeScoreIndicator(
-    datasourceId: number,
     examName?: string
   ): Promise<{ indicator_rows: number; skipped?: string[] }> {
     const resp = await fetch(`${getApiBaseUrl()}/education/score-indicator/recompute`, {
@@ -624,7 +622,6 @@ export const educationApi = {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        datasource_id: datasourceId,
         exam_name: examName || undefined
       })
     });
@@ -929,7 +926,7 @@ export interface FractionBarListResult {
 }
 
 export interface FractionBarUpsertPayload {
-  datasource_id: number;
+  datasource_id?: number;
   exam_batch_id?: number | null;
   exam_name?: string;
   lines: Array<{ track: string; line_code: string; threshold: number | null }>;
@@ -977,7 +974,6 @@ export interface LineReachMeta {
 }
 
 export interface LineReachQuery {
-  datasource_id: number;
   exam_name?: string;
   track?: string;
 }

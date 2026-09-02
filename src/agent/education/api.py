@@ -20,7 +20,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from audit.service.decorators import audit_access
-from common.exceptions.base import BadRequestException
+from common.exceptions.base import BadRequestException, NotFoundException
 from common.schemas.response import error_response, success_response
 from src.agent.education import config_store
 from src.agent.education.config import config_to_public_dict
@@ -957,27 +957,22 @@ async def _load_line_reach_bar_rows(execute) -> list[dict[str, Any]]:
 
 @router.get("/dashboards/line-reach/meta")
 async def line_reach_meta(
-    datasource_id: int,
+    datasource_id: str | None = Query(None, description="已忽略；始终解析名为 exam 的数据源"),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     """达线看板筛选项：考试、选科方向。"""
-    from datasource.service.edu_permission import parse_edu_scope
     from src.agent.education.line_reach import (
         build_line_reach_payload,
         can_access_line_reach,
     )
-    from src.common.core.database import get_db_session
-    from system.crud.crud_user import get_user_by_id
 
-    with get_db_session() as session:
-        assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
-        user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
+    _ = datasource_id, workspace_oid
+    ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
     if not can_access_line_reach(scope):
         return error_response(code=403, message="学生账号不可查看达线看板")
 
-    orch = _build_orchestrator(datasource_id, workspace_oid, user_id=int(current_user.id))
+    orch = _build_orchestrator(ds_id, ds_oid, user_id=int(current_user.id))
     bar_rows = await _load_line_reach_bar_rows(orch._execute_sql)
     payload = build_line_reach_payload(
         bar_rows,
@@ -996,14 +991,13 @@ async def line_reach_meta(
 
 @router.get("/dashboards/line-reach")
 async def line_reach_dashboard(
-    datasource_id: int,
+    datasource_id: str | None = Query(None, description="已忽略；始终解析名为 exam 的数据源"),
     exam_name: Optional[str] = None,
     track: Optional[str] = None,
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     """各地区预测线达线看板：全市 KPI + 区县表（可含学校展开）。"""
-    from datasource.service.edu_permission import parse_edu_scope
     from src.agent.education.line_reach import (
         can_access_line_reach,
         normalize_fraction_bars,
@@ -1011,17 +1005,13 @@ async def line_reach_dashboard(
         remap_agg_rows,
         rows_as_dicts,
     )
-    from src.common.core.database import get_db_session
-    from system.crud.crud_user import get_user_by_id
 
-    with get_db_session() as session:
-        assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
-        user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
+    _ = datasource_id, workspace_oid
+    ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
     if not can_access_line_reach(scope):
         return error_response(code=403, message="学生账号不可查看达线看板")
 
-    orch = _build_orchestrator(datasource_id, workspace_oid, user_id=int(current_user.id))
+    orch = _build_orchestrator(ds_id, ds_oid, user_id=int(current_user.id))
     execute = orch._execute_sql
     exam = (exam_name or "").strip()
     track_v = (track or "").strip()
@@ -1087,15 +1077,41 @@ class FractionBarLinePayload(BaseModel):
 
 
 class FractionBarUpsertRequest(BaseModel):
-    datasource_id: int
+    datasource_id: Optional[int] = Field(None, description="已忽略；始终解析名为 exam 的数据源")
     exam_batch_id: Optional[int] = Field(None, description="tb_exam_batch.id；优先按批次写入")
     exam_name: Optional[str] = Field(None, description="无 exam_batch_id 时的兜底考试名")
     lines: list[FractionBarLinePayload] = Field(default_factory=list)
 
 
 class ScoreIndicatorRecomputeRequest(BaseModel):
-    datasource_id: int
+    datasource_id: Optional[int] = Field(None, description="已忽略；始终解析名为 exam 的数据源")
     exam_name: Optional[str] = Field(None, description="空则重算分数线表中全部考试")
+
+
+_EXAM_DATASOURCE_NAME = "exam"
+
+
+def _require_exam_datasource(session: Any) -> Any:
+    """全市考试库：按名称 exam 全局查找，不跟当前工作空间走。"""
+    from datasource.crud import crud_datasource
+
+    ds = crud_datasource.get_datasource_by_name(session, _EXAM_DATASOURCE_NAME)
+    if ds is None:
+        raise NotFoundException("未找到 exam 数据源")
+    return ds
+
+
+def _exam_line_tool_context(current_user: UserResponse) -> tuple[int, int, Any]:
+    """返回 (datasource_id, ds_oid, edu_scope)。"""
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.common.core.database import get_db_session
+    from system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        ds = _require_exam_datasource(session)
+        user = get_user_by_id(session, int(current_user.id))
+        scope = parse_edu_scope(user)
+        return int(ds.id), int(ds.oid), scope
 
 
 def _deny_student_line_tools(scope: Any) -> dict | None:
@@ -1108,25 +1124,20 @@ def _deny_student_line_tools(scope: Any) -> dict | None:
 
 @router.get("/fraction-bar")
 async def list_fraction_bar(
-    datasource_id: int,
+    datasource_id: str | None = Query(None, description="已忽略；始终解析名为 exam 的数据源"),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     """列出 tb_fraction_bar 已有考试与可录入线种列。"""
-    from datasource.service.edu_permission import parse_edu_scope
     from src.agent.education.score_indicator import list_fraction_bars
     from src.agent.resource.tool.business import _load_datasource
-    from src.common.core.database import get_db_session
-    from system.crud.crud_user import get_user_by_id
 
-    with get_db_session() as session:
-        assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
-        user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
+    _ = datasource_id, workspace_oid
+    ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
     denied = _deny_student_line_tools(scope)
     if denied is not None:
         return denied
-    db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
+    db_type, config, _ = _load_datasource(ds_id, ds_oid)
     data = await asyncio.to_thread(list_fraction_bars, db_type, config)
     return success_response(data)
 
@@ -1138,23 +1149,18 @@ async def upsert_fraction_bar(
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     """新增或更新一场考试的预测分数线，并重算 tb_score_indicator。"""
-    from datasource.service.edu_permission import parse_edu_scope
     from src.agent.education.score_indicator import upsert_fraction_bar_and_recompute
     from src.agent.resource.tool.business import _load_datasource
-    from src.common.core.database import get_db_session
-    from system.crud.crud_user import get_user_by_id
 
+    _ = workspace_oid
     exam = (req.exam_name or "").strip()
     if req.exam_batch_id is None and not exam:
         raise BadRequestException("请选择考试")
-    with get_db_session() as session:
-        assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
-        user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
+    ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
     denied = _deny_student_line_tools(scope)
     if denied is not None:
         return denied
-    db_type, config, _ = _load_datasource(req.datasource_id, workspace_oid)
+    db_type, config, _ = _load_datasource(ds_id, ds_oid)
     lines = [x.model_dump() for x in req.lines]
     try:
         stats = await asyncio.to_thread(
@@ -1182,20 +1188,15 @@ async def recompute_score_indicator(
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     """按考试重算 tb_score_indicator；exam_name 为空则回填全部已有分数线考试。"""
-    from datasource.service.edu_permission import parse_edu_scope
     from src.agent.education.score_indicator import recompute_exams
     from src.agent.resource.tool.business import _load_datasource
-    from src.common.core.database import get_db_session
-    from system.crud.crud_user import get_user_by_id
 
-    with get_db_session() as session:
-        assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
-        user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
+    _ = workspace_oid
+    ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
     denied = _deny_student_line_tools(scope)
     if denied is not None:
         return denied
-    db_type, config, _ = _load_datasource(req.datasource_id, workspace_oid)
+    db_type, config, _ = _load_datasource(ds_id, ds_oid)
     exam = (req.exam_name or "").strip()
     names = [exam] if exam else None
     try:
