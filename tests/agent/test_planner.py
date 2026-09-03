@@ -185,18 +185,16 @@ def test_planner_desc_has_school_item_diagnosis_template():
     assert "【XX学校】" in PLANNER_DESC
 
 
-def test_build_citywide_team_plan_items_three_steps():
+def test_build_citywide_team_plan_items_one_step():
     from src.agent.expand.planner import build_citywide_team_plan_items
 
     q = "帮我分析全市的江苏省高一上学期数学期末质量检测试卷的成绩分析，形成详细报告"
     items = build_citywide_team_plan_items(q)
-    assert len(items) == 3
-    assert items[0]["sub_task_agent"] == "DataAnalyst"
-    assert items[1]["sub_task_agent"] == "ToolExpert"
-    assert items[2]["sub_task_agent"] == "ToolExpert"
-    assert "fetch_subject_diagnosis_data_tool" in items[1]["sub_task"]
-    assert "build_diagnostic_report_data_tool" in items[2]["sub_task"]
-    assert "数学" in items[0]["sub_task"]
+    assert len(items) == 1
+    assert items[0]["sub_task_agent"] == "ToolExpert"
+    assert "build_diagnostic_report_data_tool" in items[0]["sub_task"]
+    assert "fetch_subject_diagnosis_data_tool" not in items[0]["sub_task"]
+    assert "build_comprehensive_report_data_tool" not in items[0]["sub_task"]
 
 
 def test_run_planner_phase_citywide_skips_llm(monkeypatch):
@@ -224,7 +222,7 @@ def test_run_planner_phase_citywide_skips_llm(monkeypatch):
             emit=_emit,
         )
     )
-    assert len(items) == 3
+    assert len(items) == 1
     assert any(evt == "agent_speak" and data.get("deterministic") for evt, data in emitted)
 
 

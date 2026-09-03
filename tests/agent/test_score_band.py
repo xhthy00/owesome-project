@@ -143,3 +143,19 @@ def test_parse_blocks_crop():
     assert "学科五分段" not in data["primary"]
     assert "英语" not in data["primary"]
     assert "语数英" not in data["primary"]
+
+
+def test_shifen_and_wufen_render_bar_charts():
+    rows = normalize_students([_stu(anon_stu_id="a", zf6m=685, yw=100, hxzh=90)])
+    shifen = build_score_band_tables(
+        rows, question="各区县总分十分段情况", exam_name="1月"
+    )
+    assert "edu-band-chart" in shifen["primary"]
+    assert '"type": "bar"' in shifen["primary"]
+    assert "681 - 690" in shifen["primary"]
+    wufen = build_score_band_tables(
+        rows, question="各区县化学五分段分析", exam_name="1月"
+    )
+    assert "edu-band-chart" in wufen["primary"]
+    assert '"type": "bar"' in wufen["primary"]
+    assert "86 - 90" in wufen["primary"]

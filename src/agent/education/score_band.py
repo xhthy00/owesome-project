@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import itertools
 from collections import defaultdict
 from typing import Any
 
@@ -43,6 +44,7 @@ SUBJECTS: tuple[tuple[str, str], ...] = (
     ("swzh", "生物"),
 )
 _METRIC_HEADERS = ("人数", "比例(%)", "累计人数", "累计比例(%)")
+_chart_ids = itertools.count(1)
 
 
 def band_lo(score: float, width: int) -> int:
@@ -176,22 +178,70 @@ def _empty_metrics() -> tuple[int, float, int, float]:
     return (0, 0.0, 0, 0.0)
 
 
-def _band_table(
+def _band_frame(
     columns: dict[str, list[float]],
     col_order: list[str],
     width: int,
-) -> str:
+) -> tuple[list[int], dict[str, dict[int, tuple[int, float, int, float]]]]:
     hists = {name: _hist(columns.get(name) or [], width) for name in col_order}
     all_los: set[int] = set()
     for h in hists.values():
         all_los.update(h)
     if not all_los:
-        return "<p class='edu-sub'>暂无分段数据。</p>"
+        return [], hists
     los = sorted(all_los, reverse=True)
     kept: list[int] = []
     for lo in los:
         if any((hists[name].get(lo) or _empty_metrics())[0] > 0 for name in col_order):
             kept.append(lo)
+    return kept, hists
+
+
+def _band_chart_html(
+    columns: dict[str, list[float]],
+    col_order: list[str],
+    width: int,
+    title: str,
+) -> str:
+    from src.agent.education.charts import build_chart_option
+
+    kept, hists = _band_frame(columns, col_order, width)
+    if not kept:
+        return ""
+    labels = [band_label(lo, width) for lo in sorted(kept)]
+    metrics: list[dict[str, Any]] = []
+    for name in col_order:
+        vals = [(hists[name].get(lo) or _empty_metrics())[0] for lo in sorted(kept)]
+        if any(v > 0 for v in vals):
+            metrics.append({"name": name, "values": vals})
+    if not metrics:
+        return ""
+    option = build_chart_option(
+        "group_compare_bar",
+        {
+            "groups": labels,
+            "metrics": metrics,
+            "y_name": "人数",
+            "x_rotate": 45 if len(labels) > 8 else 0,
+            "show_label": len(labels) <= 12,
+        },
+        title=title,
+    )
+    if not option:
+        return ""
+    cid = f"bandBar{next(_chart_ids)}"
+    return (
+        f"<div id='{cid}' class='edu-chart edu-band-chart'></div>"
+        f"<script type='application/json' id='{cid}Data'>{option}</script>"
+    )
+
+
+def _band_table(
+    columns: dict[str, list[float]],
+    col_order: list[str],
+    width: int,
+) -> str:
+    kept, hists = _band_frame(columns, col_order, width)
     if not kept:
         return "<p class='edu-sub'>暂无分段数据。</p>"
 
@@ -253,7 +303,12 @@ def _total_section(
     for t in tracks:
         subset = [r for r in rows if r.get("track") == t]
         cols = _slice_rows(subset, col_order, kind, "zf6m")
-        parts.append(f"<h3>{t.replace('类', '方向')}</h3>" + _band_table(cols, col_order, 10))
+        heading = f"{t.replace('类', '方向')}"
+        parts.append(
+            f"<h3>{heading}</h3>"
+            + _band_chart_html(cols, col_order, 10, f"{heading}总分十分段人数")
+            + _band_table(cols, col_order, 10)
+        )
     return "".join(parts) if parts else "<p class='edu-sub'>暂无总分分段。</p>"
 
 
@@ -268,7 +323,11 @@ def _subject_section(
     parts: list[str] = []
     for key, name in wanted:
         cols = _slice_rows(rows, col_order, kind, key)
-        parts.append(f"<h3>{name}</h3>" + _band_table(cols, col_order, 5))
+        parts.append(
+            f"<h3>{name}</h3>"
+            + _band_chart_html(cols, col_order, 5, f"{name}五分段人数")
+            + _band_table(cols, col_order, 5)
+        )
     return "".join(parts) if parts else "<p class='edu-sub'>暂无学科分段。</p>"
 
 

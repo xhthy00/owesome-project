@@ -1,90 +1,142 @@
-"""区域结构化诊断：多场考试动态性（S3）组装。"""
+"""全市结构化诊断：物理类/历史类达线、总分十分段、热力图、雷达图。"""
 
-from src.agent.education.aggregation import prepare_score_rows_for_kpi
-from src.agent.education.diagnostic_report import (
-    _exam_avg_trend_from_rows,
-    _student_progress_from_rows,
-    build_diagnostic_data,
-)
+from __future__ import annotations
 
+import json
 
-def _multi_exam_rows():
-    rows = []
-    for exam, base in [("一模", 100.0), ("二模", 120.0)]:
-        for i, bump in enumerate([0.0, -8.0, 15.0]):
-            rows.append(
-                {
-                    "exam_name": exam,
-                    "student_id": f"S{i}",
-                    "student_name": f"学生{i}",
-                    "score": base + bump,
-                    "exam_score": 150,
-                    "subject": "数学",
-                    "class": "高一1班",
-                    "school_name": "扬州中学",
-                }
-            )
-    return rows
+from src.agent.education.diagnostic_report import build_diagnostic_data
 
 
-def test_student_progress_from_multi_exam():
-    rows = _multi_exam_rows()
-    prog = _student_progress_from_rows(rows)
-    assert len(prog) == 3
-    by_name = {p["name"]: p["delta"] for p in prog}
-    assert by_name["学生0"] == 20.0  # 120-100
-    assert by_name["学生1"] == 20.0  # 112-92
-    assert by_name["学生2"] == 20.0  # 135-115
+def _ov(
+    *,
+    track_xkkm: str,
+    dq: str,
+    zf6m: float,
+    yw: float = 110,
+    sx: float = 100,
+    yy: float = 105,
+    wl: float | None = 70,
+    hxzh: float | None = 65,
+    swzh: float | None = 68,
+    ls: float | None = None,
+    zzzh: float | None = None,
+    dlzh: float | None = None,
+    xx: str = "GZ_A",
+) -> dict:
+    return {
+        "xkkm": track_xkkm,
+        "dq": dq,
+        "xx": xx,
+        "zf6m": zf6m,
+        "yw": yw,
+        "sx": sx,
+        "yy": yy,
+        "wl": wl,
+        "hxzh": hxzh,
+        "swzh": swzh,
+        "ls": ls,
+        "zzzh": zzzh,
+        "dlzh": dlzh,
+    }
 
 
-def test_diagnostic_s3_uses_progress_not_exam_avg_only():
-    """S3 需要学生 delta；仅传考试均分趋势时须另算 progress。"""
-    rows = _multi_exam_rows()
-    kpi = prepare_score_rows_for_kpi(rows)
-    assert len({r.get("exam_name") for r in kpi}) == 1  # KPI 被收敛为单场
+def _ind(
+    *,
+    track: str,
+    district: str,
+    school_id: str,
+    line_name: str,
+    candidates: int,
+    reached_count: int,
+) -> dict:
+    return {
+        "exam_name": "2026届高三1月期末",
+        "track": track,
+        "district": district,
+        "school_id": school_id,
+        "school_name": school_id,
+        "line_name": line_name,
+        "candidates": candidates,
+        "reached_count": reached_count,
+        "reach_rate": round(100.0 * reached_count / candidates, 2) if candidates else 0,
+    }
 
-    trend = _exam_avg_trend_from_rows(rows)
-    assert len(trend) == 2
-    progress = _student_progress_from_rows(rows)
 
+def _sample() -> tuple[list[dict], list[dict]]:
+    overview = [
+        _ov(track_xkkm="物理", dq="市直", zf6m=655, xx="GZ_1"),
+        _ov(track_xkkm="物理", dq="市直", zf6m=612, xx="GZ_1"),
+        _ov(track_xkkm="物理", dq="邗江区", zf6m=501, xx="GZ_2"),
+        _ov(track_xkkm="历史", dq="邗江区", zf6m=548, xx="GZ_3", wl=None, hxzh=None, swzh=None, ls=72, zzzh=70, dlzh=68),
+        _ov(track_xkkm="历史", dq="邗江区", zf6m=490, xx="GZ_3", wl=None, hxzh=None, swzh=None, ls=60, zzzh=58, dlzh=55),
+    ]
+    indicator = [
+        _ind(track="物理类", district="市直", school_id="GZ_1", line_name="特控线", candidates=2, reached_count=2),
+        _ind(track="物理类", district="邗江区", school_id="GZ_2", line_name="特控线", candidates=1, reached_count=0),
+        _ind(track="物理类", district="市直", school_id="GZ_1", line_name="本科线", candidates=2, reached_count=2),
+        _ind(track="物理类", district="邗江区", school_id="GZ_2", line_name="本科线", candidates=1, reached_count=1),
+        _ind(track="历史类", district="邗江区", school_id="GZ_3", line_name="特控线", candidates=2, reached_count=1),
+        _ind(track="历史类", district="邗江区", school_id="GZ_3", line_name="本科线", candidates=2, reached_count=2),
+    ]
+    return overview, indicator
+
+
+def test_diagnostic_focuses_track_reach_and_total_bands():
+    overview, indicator = _sample()
     data = build_diagnostic_data(
-        kpi,
-        trend_records=trend,
-        progress_records=progress,
-        scope_label="扬州中学",
-        exam_name="一模、二模",
-        subject_name="数学",
+        overview_rows=overview,
+        indicator_rows=indicator,
+        exam_name="2026届高三1月期末",
+        scope_label="全市",
     )
-    assert "暂无多次考试数据" not in data["DYNAMIC_INSIGHT"]
-    assert "2" in data["DYNAMIC_INSIGHT"]
-    assert data["GENERAL_TREND_CHART"]
-    assert data["TREND_LINE_CHART"] or data["PROGRESS_REGRESS_TABLE"]
-    assert "trend_line" in data["GENERAL_TREND_CHART"] or "line" in data["GENERAL_TREND_CHART"]
+    kpi = data["KPI_GRID"]
+    assert "物理类" in kpi
+    assert "历史类" in kpi
+    reach = data["REACH_TABLE"]
+    assert "特控" in reach
+    assert "本科" in reach
+    assert "物理类" in reach
+    bands = data["BAND_TABLE"]
+    assert "物理方向" in bands or "物理类" in bands
+    assert "历史方向" in bands or "历史类" in bands
+    assert "分数段" in bands
+    assert "edu-band-chart" in bands
+    assert '"type": "bar"' in bands
+    assert "退步生" not in (data.get("AT_RISK_SUMMARY") or "")
+    assert "一般性 → 特殊性 → 动态性" not in (data.get("REPORT_SUBTITLE") or "")
 
 
-def test_diagnostic_s2_regression_matches_s3():
-    """多场时 S2 退步生人数与 S3 退步人数一致。"""
-    import re
-
-    rows = _multi_exam_rows()
-    # 让部分学生明显退步：二模比一模低约 20+
-    for r in rows:
-        if r["exam_name"] == "二模" and r["student_name"] in ("学生0", "学生1"):
-            r["score"] = float(r["score"]) - 40
-
-    kpi = prepare_score_rows_for_kpi(rows)
-    trend = _exam_avg_trend_from_rows(rows)
-    progress = _student_progress_from_rows(rows)
+def test_diagnostic_band_heatmap_is_district_by_shifen():
+    overview, indicator = _sample()
     data = build_diagnostic_data(
-        kpi,
-        trend_records=trend,
-        progress_records=progress,
-        scope_label="扬州中学",
-        exam_name="一模、二模",
-        subject_name="数学",
+        overview_rows=overview,
+        indicator_rows=indicator,
+        exam_name="2026届高三1月期末",
     )
-    m_s2 = re.search(r"退步生\s*(\d+)\s*人", data["AT_RISK_SUMMARY"])
-    m_s3 = re.search(r"退步\s*(\d+)\s*人", data["DYNAMIC_INSIGHT"])
-    assert m_s2 and m_s3
-    assert int(m_s2.group(1)) == int(m_s3.group(1))
-    assert int(m_s3.group(1)) >= 1
+    raw = data["BAND_HEATMAP"]
+    assert raw
+    opt = json.loads(raw)
+    assert opt["series"][0]["type"] == "heatmap"
+    y = opt["yAxis"]["data"]
+    assert any("市直" in str(v) for v in y)
+    x = opt["xAxis"]["data"]
+    assert any("-" in str(v) or str(v).isdigit() for v in x)
+
+
+def test_diagnostic_radar_has_physics_and_history_series():
+    overview, indicator = _sample()
+    data = build_diagnostic_data(
+        overview_rows=overview,
+        indicator_rows=indicator,
+        exam_name="2026届高三1月期末",
+    )
+    raw = data["SUBJECT_RADAR"]
+    assert raw
+    opt = json.loads(raw)
+    assert opt["series"][0]["type"] == "radar"
+    names = [d.get("name") for d in opt["series"][0]["data"]]
+    assert "物理类" in names
+    assert "历史类" in names
+    indicators = [i["name"] for i in opt["radar"]["indicator"]]
+    assert "语文" in indicators
+    assert "数学" in indicators

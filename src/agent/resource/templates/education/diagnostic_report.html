@@ -77,123 +77,44 @@
     <section class="edu-card">
       <h2>核心指标</h2>
       {{KPI_GRID}}
+      <div class="edu-insight">{{GENERAL_INSIGHT}}</div>
     </section>
 
     <section class="edu-card">
-      <h2>S1 一般性分析</h2>
-      <p class="edu-sub">区域与年级整体趋势、共性问题</p>
-      <div class="edu-insight">{{GENERAL_INSIGHT}}</div>
-      <div id="districtCompare" class="edu-chart"></div>
-      <script type="application/json" id="districtCompareData">{{DISTRICT_COMPARE_CHART}}</script>
-      <script>
-        (function () {
-          var el = document.getElementById('districtCompare');
-          var raw = (document.getElementById('districtCompareData').textContent || '').trim();
-          if (!raw) { if (el) el.style.display = 'none'; return; }
-          try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) { if (el) el.style.display = 'none'; }
-        })();
-      </script>
-      <h3>区县对比明细</h3>
+      <h2>文理达线</h2>
+      <p class="edu-sub">物理类 / 历史类 × 特控、本科（人数按学校去重后加总，达线率 = 达线人数 / 参考人数）</p>
+      {% if REACH_CHART %}
+      <div id="reachChart" class="edu-chart"></div>
+      <script type="application/json" id="reachChartData">{{REACH_CHART}}</script>
+      {% endif %}
+      <div>{{REACH_TABLE}}</div>
+      <h3>区县达线</h3>
       <div>{{DISTRICT_SUMMARY}}</div>
     </section>
 
     <section class="edu-card">
-      <h2>S2 特殊性分析</h2>
-      <p class="edu-sub">班级、分数段、学生群体差异（退步生与 S3 同口径：末场相对首场降幅 &gt; 5 分）</p>
-      <div class="edu-insight">{{SPECIAL_INSIGHT}}</div>
-      <p class="edu-risk">{{AT_RISK_SUMMARY}}</p>
-      <div class="edu-split edu-split--chart-table">
-        <div>
-          <h3>班级 × 分数段热力图</h3>
-          <div id="classHeatmap" class="edu-chart"></div>
-          <script type="application/json" id="classHeatmapData">{{CLASS_DIFF_HEATMAP}}</script>
-          <script>
-            (function () {
-              var el = document.getElementById('classHeatmap');
-              var raw = (document.getElementById('classHeatmapData').textContent || '').trim();
-              if (!raw) { if (el) el.parentElement.style.display = 'none'; return; }
-              try {
-                var opt = JSON.parse(raw);
-                opt.tooltip = opt.tooltip || {};
-                opt.tooltip.formatter = function (p) {
-                  if (!p || !p.data) return '';
-                  var x = (opt.xAxis && opt.xAxis.data) ? opt.xAxis.data[p.data[0]] : p.data[0];
-                  var y = (opt.yAxis && opt.yAxis.data) ? opt.yAxis.data[p.data[1]] : p.data[1];
-                  return y + ' · ' + x + '<br/>均分: ' + p.data[2];
-                };
-                echarts.init(el).setOption(opt);
-              } catch (e) { if (el) el.style.display = 'none'; }
-            })();
-          </script>
-        </div>
-        <div>
-          <h3>分数段分布</h3>
-          <div>{{SEGMENT_COMPARE_TABLE}}</div>
-        </div>
-      </div>
+      <h2>总分十分段</h2>
+      <p class="edu-sub">六门总分 zf6m，按物理类 / 历史类分轨；累计从高分段往下</p>
+      <div>{{BAND_TABLE}}</div>
     </section>
 
+    {% if BAND_HEATMAP %}
     <section class="edu-card">
-      <h2>S3 动态性分析</h2>
-      <p class="edu-sub">发展趋势与进退步</p>
-      <div class="edu-insight">{{DYNAMIC_INSIGHT}}</div>
-      {% if GENERAL_TREND_CHART %}
-      <h3>整体均分趋势</h3>
-      <div id="generalTrend" class="edu-chart"></div>
-      <script type="application/json" id="generalTrendData">{{GENERAL_TREND_CHART}}</script>
-      {% endif %}
-      {% if TREND_LINE_CHART %}
-      <h3>进退步分布</h3>
-      <div id="trendLine" class="edu-chart"></div>
-      <script type="application/json" id="trendLineData">{{TREND_LINE_CHART}}</script>
-      {% endif %}
-      <div>{{PROGRESS_REGRESS_TABLE}}</div>
+      <h2>分数段热力图</h2>
+      <p class="edu-sub">各区县 × 十分段人数占比（%），颜色越深该段占比越高</p>
+      <div id="bandHeatmap" class="edu-chart" style="height:420px"></div>
+      <script type="application/json" id="bandHeatmapData">{{BAND_HEATMAP}}</script>
     </section>
+    {% endif %}
 
-    <section class="edu-card" id="detailSegmentSection">
-      <h2>分数段分布</h2>
-      <div class="edu-split edu-split--chart-table">
-        <div id="scoreDist" class="edu-chart"></div>
-        <div>{{SEGMENT_TABLE}}</div>
-      </div>
-      <script type="application/json" id="scoreDistData">{{SCORE_DIST_CHART}}</script>
-      <script>
-        (function () {
-          var el = document.getElementById('scoreDist');
-          var sec = document.getElementById('detailSegmentSection');
-          var raw = (document.getElementById('scoreDistData').textContent || '').trim();
-          if (!raw) {
-            if (el) el.style.display = 'none';
-            return;
-          }
-          try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) { if (el) el.style.display = 'none'; }
-        })();
-      </script>
+    {% if SUBJECT_RADAR %}
+    <section class="edu-card">
+      <h2>文理各科均分雷达</h2>
+      <p class="edu-sub">语数英为原始分；化生政地为转换分。物理类 / 历史类分系列</p>
+      <div id="subjectRadar" class="edu-chart" style="height:400px"></div>
+      <script type="application/json" id="subjectRadarData">{{SUBJECT_RADAR}}</script>
     </section>
-
-    <section class="edu-card" id="detailItemSection">
-      <h2>小题明细</h2>
-      <div>{{ITEM_TABLE}}</div>
-      <script>
-        (function () {
-          var sec = document.getElementById('detailItemSection');
-          var html = (sec && sec.querySelector('div') && sec.querySelector('div').innerHTML || '').trim();
-          if (!html || html.indexOf('<table') < 0) { if (sec) sec.style.display = 'none'; }
-        })();
-      </script>
-    </section>
-
-    <section class="edu-card" id="detailKnowledgeSection">
-      <h2>知识点掌握诊断</h2>
-      <div>{{KNOWLEDGE_TABLE}}</div>
-      <script>
-        (function () {
-          var sec = document.getElementById('detailKnowledgeSection');
-          var html = (sec && sec.querySelector('div') && sec.querySelector('div').innerHTML || '').trim();
-          if (!html || html.indexOf('<table') < 0) { if (sec) sec.style.display = 'none'; }
-        })();
-      </script>
-    </section>
+    {% endif %}
 
     <section class="edu-card">
       <h2>综合结论</h2>
@@ -217,8 +138,12 @@
         if (!raw) { el.style.display = 'none'; return; }
         try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) { el.style.display = 'none'; }
       }
-      init('generalTrend', 'generalTrendData');
-      init('trendLine', 'trendLineData');
+      init('reachChart', 'reachChartData');
+      init('bandHeatmap', 'bandHeatmapData');
+      init('subjectRadar', 'subjectRadarData');
+      document.querySelectorAll('.edu-band-chart').forEach(function (el) {
+        init(el.id, el.id + 'Data');
+      });
     })();
   </script>
 </body>

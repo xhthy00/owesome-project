@@ -28,7 +28,7 @@ class ReportType(str, Enum):
     TIER_ALERT = "tier_alert"                # 分层预警
     GROUP_FEATURE = "group_feature"          # 群体特征
     COMPREHENSIVE = "comprehensive"          # 多次考试综合分析报告
-    DIAGNOSTIC_REPORT = "diagnostic_report"  # 结构化诊断报告（一般性/特殊性/动态性）
+    DIAGNOSTIC_REPORT = "diagnostic_report"  # 全市文理达线 + 总分十分段
     LINE_REACH = "line_reach"                # 全市达线情况分析（环比）
     SUBJECT_AVG = "subject_avg"              # 区县/学校均分（三四五六门+九科）
     ASSIGN_GRADE = "assign_grade"            # 再选科目 ABCDE

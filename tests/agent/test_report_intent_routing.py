@@ -15,6 +15,7 @@ from src.agent.education.intent_router import (
 )
 from src.agent.education.orchestrator import ReportIntentResolver
 from src.agent.education.query_parse import (
+    extract_class_target,
     extract_exam_name_hint,
     extract_school_target,
     extract_school_type_target,
@@ -154,6 +155,11 @@ def _route(question: str) -> str:
         ),
         (
             "帮我分析全市数学详细分析",
+            ReportType.DIAGNOSTIC_REPORT,
+            "citywide",
+        ),
+        (
+            "2026届高三1月各校考试分析",
             ReportType.DIAGNOSTIC_REPORT,
             "citywide",
         ),
@@ -867,3 +873,50 @@ def test_school_vs_leading_subject_avg_is_fact_uses_xxlb():
     fixed_blob = " ".join(p["sub_task"] for p in fixed)
     assert "调 build_subject_avg_report_data_tool" not in fixed_blob
     assert "xxlb" in fixed_blob
+
+
+def test_gexiao_exam_analysis_is_citywide_not_class_comprehensive():
+    """「各校考试分析」是全市诊断，禁止缩成高三(1)班综合报告。"""
+    q = "2026届高三1月各校考试分析"
+    assert extract_class_target(q) is None
+    assert extract_school_target(q) is None
+    assert extract_exam_name_hint(q) == "2026届高三1月"
+    assert is_citywide_analysis_query(q) is True
+
+    spec = ReportIntentResolver().resolve(q)
+    assert spec.report_type == ReportType.DIAGNOSTIC_REPORT
+    assert spec.filters.get("scope") == "全市"
+    assert "class_name" not in spec.filters
+    assert spec.filters.get("exam_name") == "2026届高三1月"
+
+    wrong = [
+        {
+            "sub_task": "调 build_comprehensive_report_data_tool(class_name=高三(1)班)",
+            "sub_task_agent": "ToolExpert",
+        },
+    ]
+    fixed = coerce_plan_items_if_needed(q, wrong)
+    blob = " ".join(p["sub_task"] for p in fixed)
+    assert "build_diagnostic_report_data_tool" in blob
+    assert "build_comprehensive_report_data_tool" not in blob
+    assert "class_name=高三(1)班" not in blob
+
+    q2 = "2026届高三1月各学校考试分析"
+    assert extract_school_target(q2) is None
+    assert is_citywide_analysis_query(q2) is True
+    assert classify_report_intent_sync(q2).report_type == ReportType.DIAGNOSTIC_REPORT
+
+    from src.agent.education.tools import _guard_comprehensive_when_all_schools
+
+    blocked = _guard_comprehensive_when_all_schools({"user_question": q})
+    assert blocked is not None
+    assert blocked.data["error"] == "all_schools_not_class_comprehensive"
+    assert _guard_comprehensive_when_all_schools(
+        {"user_question": "扬州中学高三(11)班所有数学考试成绩分析"}
+    ) is None
+
+
+def test_gexiao_avg_compare_without_fenxi_is_not_citywide_diagnostic():
+    """「各校平均分横向对比」没有「分析」，不抢全市诊断。"""
+    q = "扬州各高中高三3月数学考试各校平均分横向对比"
+    assert is_citywide_analysis_query(q) is False

@@ -167,17 +167,39 @@ def _subject_radar(data: dict[str, Any], title: str) -> dict[str, Any]:
         ]
     else:
         indicators = [{"name": name, "max": default_max} for name in subjects]
-    values = list(data.get("values") or [])
-    return {
+    raw_series = data.get("series")
+    radar_data: list[dict[str, Any]] = []
+    legend: list[str] = []
+    if isinstance(raw_series, list) and raw_series:
+        for item in raw_series:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "")
+            legend.append(name)
+            radar_data.append(
+                {
+                    "value": list(item.get("values") or []),
+                    "name": name,
+                    "areaStyle": {"opacity": 0.18},
+                }
+            )
+    if not radar_data:
+        radar_data = [
+            {
+                "value": list(data.get("values") or []),
+                "name": data.get("series_name", "均分"),
+                "areaStyle": {"opacity": 0.25},
+            }
+        ]
+    option: dict[str, Any] = {
         "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
         "tooltip": {},
         "radar": {"indicator": indicators},
-        "series": [{
-            "type": "radar",
-            "data": [{"value": values, "name": data.get("series_name", "均分")}],
-            "areaStyle": {"opacity": 0.25},
-        }],
+        "series": [{"type": "radar", "data": radar_data}],
     }
+    if legend:
+        option["legend"] = {"data": legend, "top": 28}
+    return option
 
 
 def _class_compare_bar(data: dict[str, Any], title: str) -> dict[str, Any]:
@@ -270,23 +292,31 @@ def _group_compare_bar(data: dict[str, Any], title: str) -> dict[str, Any]:
     metrics = data.get("metrics") or []
     y_name = data.get("y_name") or "分数"
     y_max = data.get("y_max")
+    show_label = data.get("show_label", True)
     series = []
     for metric in metrics:
         series.append({
             "type": "bar",
             "name": metric.get("name", ""),
             "data": list(metric.get("values") or []),
-            "label": {"show": True, "position": "top"},
+            "label": {"show": bool(show_label), "position": "top"},
         })
     y_axis: dict[str, Any] = {"type": "value", "name": y_name}
     if y_max is not None:
         y_axis["max"] = y_max
+    try:
+        rotate = int(data.get("x_rotate") or 0)
+    except (TypeError, ValueError):
+        rotate = 0
+    x_axis: dict[str, Any] = {"type": "category", "data": groups}
+    if rotate:
+        x_axis["axisLabel"] = {"rotate": rotate, "interval": 0}
     return {
         "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
         "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
         "legend": {"top": 24},
         "grid": {"left": "8%", "right": "8%", "bottom": "12%", "containLabel": True},
-        "xAxis": {"type": "category", "data": groups},
+        "xAxis": x_axis,
         "yAxis": y_axis,
         "series": series,
     }

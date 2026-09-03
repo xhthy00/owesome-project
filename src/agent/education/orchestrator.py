@@ -25,7 +25,6 @@ from typing import Any, Awaitable, Callable
 
 from src.agent.education.charts import build_chart_option
 from src.agent.education.config import EducationConfig, load_config
-from src.agent.education.diagnostic_report import build_diagnostic_data
 from src.agent.education.knowledge_tier import (
     build_ability_tier_summary,
     build_ability_tier_table_html,
@@ -994,6 +993,91 @@ class ReportOrchestrator:
         data["REPORT_TIME"] = _now_str()
         return data
 
+    async def _gather_difficulty_curve(self, spec: ReportSpec) -> dict[str, Any]:
+        """单科难度曲线：卷面十分段 × 全卷/小题得分率。"""
+        from src.agent.education.bureau_analysis import overview_select_sql
+        from src.agent.education.difficulty_curve import (
+            assemble_curve_template_data,
+            build_curve_report_data,
+            exam_full_score_sql,
+            extract_question_target,
+            item_band_sql,
+            item_catalog_sql,
+            match_question_nos,
+            subject_column,
+            subject_full_score,
+        )
+        from src.agent.education.line_reach_report import sql_result_to_dicts
+
+        q = str(spec.filters.get("question") or "")
+        subject = str(spec.filters.get("subject") or "").strip()
+        exam = str(spec.filters.get("exam_name") or "").strip()
+        school = str(spec.filters.get("school_name") or "").strip()
+        class_name = str(spec.filters.get("class_name") or "").strip()
+        clue = extract_question_target(q) or ""
+        students: list[dict[str, Any]] = []
+        item_rows: list[dict[str, Any]] = []
+        catalog: list[str] = []
+        full: float | None = None
+
+        async def _dicts(sql: str) -> list[dict[str, Any]]:
+            try:
+                return sql_result_to_dicts(await self._execute_sql(sql))
+            except Exception:
+                logger.exception("难度曲线 SQL 失败")
+                return []
+
+        if exam and subject_column(subject):
+            students = await _dicts(overview_select_sql(exam))
+            catalog = [
+                str(r.get("question_no") or "").strip()
+                for r in await _dicts(item_catalog_sql(exam, subject))
+                if str(r.get("question_no") or "").strip()
+            ]
+            matched = match_question_nos(clue, catalog) if clue else []
+            col = subject_column(subject) or "sx"
+            if (clue and matched) or (not clue and catalog):
+                item_rows = await _dicts(
+                    item_band_sql(
+                        exam,
+                        subject,
+                        col,
+                        matched or None,
+                        school=school,
+                        class_name=class_name,
+                    )
+                )
+            fs_rows = await _dicts(exam_full_score_sql(exam, subject))
+            if fs_rows:
+                try:
+                    full = float(fs_rows[0].get("exam_score") or 0) or None
+                except (TypeError, ValueError):
+                    full = None
+
+        data = build_curve_report_data(
+            exam_name=exam,
+            subject_name=subject,
+            students=students,
+            item_rows=item_rows,
+            catalog=catalog,
+            question_clue=clue,
+            school=school,
+            class_name=class_name,
+            full_score=full if full else (subject_full_score(subject) if subject else None),
+            report_time=_now_str(),
+        )
+        if data.get("error"):
+            return assemble_curve_template_data(
+                exam_name=exam or "本次考试",
+                subject_name=subject,
+                paper_curve=[],
+                item_curves={},
+                school=school,
+                class_name=class_name,
+                report_time=_now_str(),
+            )
+        return data
+
     async def _gather_subject_research(self, spec: ReportSpec) -> dict[str, Any]:
         """一校一场学科教研分析：tb_score 均分 + type 层级 + 明细卷别。"""
         from src.agent.education.bureau_analysis import fraction_bar_select_sql
@@ -1180,40 +1264,15 @@ class ReportOrchestrator:
         school_name: str,
         class_name: str,
     ) -> None:
-        from src.agent.education.aggregation import prepare_score_rows_for_kpi
-        from src.agent.education.diagnostic_report import (
-            _exam_avg_trend_from_rows,
-            _student_progress_from_rows,
-            build_diagnostic_data,
-        )
+        del cfg, school_name, class_name
+        from src.agent.education.diagnostic_report import build_diagnostic_data
 
-        score_rows = [
-            {
-                "score": r.get("score"),
-                "exam_score": r.get("exam_score"),
-                "class": r.get("class") or class_name,
-                "class_name": r.get("class") or class_name,
-                "school_name": r.get("school_name") or school_name,
-                "district": r.get("district"),
-                "subject": r.get("subject") or subject,
-                "student_id": r.get("student_id"),
-                "student_name": r.get("student_name"),
-                # 勿用多选考试展示名回填，否则会污染跨场分组
-                "exam_name": str(r.get("exam_name") or "").strip(),
-            }
-            for r in rows
-        ]
-        # S1/S2 用单场 KPI 口径，避免人次膨胀；S3 动态性必须用全量多场
-        kpi_rows = prepare_score_rows_for_kpi(score_rows)
-        exam_trend = _exam_avg_trend_from_rows(score_rows)
-        progress = _student_progress_from_rows(score_rows)
         diag = build_diagnostic_data(
-            kpi_rows or score_rows,
-            trend_records=exam_trend or None,
-            progress_records=progress or None,
-            config=cfg,
-            scope_label=scope_label,
+            overview_rows=rows,
+            indicator_rows=[],
             exam_name=exam_name or "",
+            scope_label=scope_label or "全市",
+            question=str(spec.filters.get("question") or ""),
             subject_name=subject or "",
         )
         diag["REPORT_TIME"] = _now_str()

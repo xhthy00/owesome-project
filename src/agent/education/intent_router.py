@@ -53,8 +53,8 @@ _REPORT_TYPE_DEFS: dict[ReportType, str] = {
     ReportType.TREND_TRACKING: "成绩趋势/走势/进退步折线（非综合九维）",
     ReportType.TIER_ALERT: "临界生/退步/偏科分层预警",
     ReportType.GROUP_FEATURE: "明确「群体特征/按X群体」的分维画像，不是「班级横向对比」",
-    ReportType.COMPREHENSIVE: "班级多次/历次考试综合复盘（九维）",
-    ReportType.DIAGNOSTIC_REPORT: "全市或结构化区县诊断报告",
+    ReportType.COMPREHENSIVE: "班级多次/历次考试综合复盘（九维）；各校/全市不是本类型",
+    ReportType.DIAGNOSTIC_REPORT: "全市/各校文理达线与总分十分段（物理类/历史类），不是班级综合、不是单科小题诊断",
     ReportType.LINE_REACH: "全市达线情况分析（人数/率 + 较上场环比），不是结构化诊断",
     ReportType.SUBJECT_AVG: "区县/学校均分情况（三四五六门+各科），不是班级总览",
     ReportType.ASSIGN_GRADE: "再选科目 ABCDE 等级人数与率",
@@ -216,7 +216,7 @@ _POSITIVE_HINTS: dict[ReportType, tuple[str, ...]] = {
         "对比特征",
     ),
     ReportType.COMPREHENSIVE: ("综合分析", "综合报告", "综合复盘", "所有考试", "历次考试"),
-    ReportType.DIAGNOSTIC_REPORT: ("全市", "结构化诊断", "区县诊断", "质量检测"),
+    ReportType.DIAGNOSTIC_REPORT: ("全市", "各校", "各学校", "结构化诊断", "区县诊断", "质量检测"),
     ReportType.LINE_REACH: ("达线情况", "达线分析", "达线报告", "达线环比", "预测线分析"),
     ReportType.SUBJECT_AVG: ("均分情况", "各科均分", "三门总均分", "六门总均分"),
     ReportType.ASSIGN_GRADE: ("ABCDE", "选考等级", "等级赋分"),
@@ -365,6 +365,7 @@ def _candidate_pool(question: str) -> list[ReportType]:
     """规则硬约束：仅在需要报告时收缩候选类型。"""
     from src.agent.education.query_parse import (
         extract_school_target,
+        is_all_schools_scope_query,
         is_citywide_analysis_query,
         is_difficulty_curve_report_query,
         is_individual_student_analysis_query,
@@ -443,6 +444,10 @@ def _candidate_pool(question: str) -> list[ReportType]:
         candidates.add(ReportType.TREND_TRACKING)
     if is_multi_exam_class_analysis_query(q):
         pass
+    if is_all_schools_scope_query(q):
+        candidates.discard(ReportType.COMPREHENSIVE)
+        candidates.discard(ReportType.CLASS_OVERVIEW)
+        candidates.discard(ReportType.STUDENT_PROFILE)
 
     if not candidates:
         return [ReportType.CLASS_OVERVIEW]
@@ -809,6 +814,8 @@ def _build_classify_prompt(question: str, candidates: list[ReportType]) -> list[
         "不是科目诊断、不是十分段，仍调难度曲线工具\n"
         "- 整卷难度曲线/难度分析/试卷得分率分析（未点名具体题号）→ difficulty_curve 报告，"
         "不是十分段人数、不是科目诊断\n"
+        "- 「各校/各学校/各高中」+考试分析且未点名班级 → diagnostic_report，"
+        "禁止 comprehensive，禁止把「高三1月」理解成「高三(1)班」\n"
         "- 拿不准时 needs_report=false（宁可只回答，不强行出报告）\n"
     )
     user = f"候选报告类型（仅 needs_report=true 时选用）：\n{catalog}\n\n用户问题：{question}"

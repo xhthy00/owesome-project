@@ -397,6 +397,25 @@ def extract_district_target(question: str) -> str | None:
 
 
 _CITYWIDE_MARKERS = ("全市", "全域", "市域", "全区县", "各区县")
+#: 校际范围口语；不并入 _CITYWIDE_MARKERS，以免老师权限把「各校」当成全市放开本校过滤
+_ALL_SCHOOLS_SCOPE_MARKERS = ("各校", "各学校", "各高中")
+_GENERIC_SCHOOL_LABELS = frozenset(
+    {
+        "各学校",
+        "某学校",
+        "该学校",
+        "本学校",
+        "此学校",
+        "所有学校",
+        "每所学校",
+        "各所学校",
+        "各中学",
+        "某中学",
+        "该中学",
+        "各高中",
+        "某高中",
+    }
+)
 _CITYWIDE_ANALYSIS_HINTS = (
     "成绩分析",
     "详细报告",
@@ -720,14 +739,32 @@ def is_bureau_report_query(question: str) -> bool:
     )
 
 
-def is_citywide_analysis_query(question: str) -> bool:
-    """判断是否为全市/全域范围的考试成绩分析类问题。"""
+def is_all_schools_scope_query(question: str) -> bool:
+    """问句是各校/各学校范围，且未点名具体学校或班级。"""
     q = (question or "").strip()
     if not q:
         return False
-    if not any(m in q for m in _CITYWIDE_MARKERS):
+    if not any(m in q for m in _ALL_SCHOOLS_SCOPE_MARKERS):
+        return False
+    if extract_class_target(q):
         return False
     if extract_school_target(q) or "本校" in q or "我校" in q:
+        return False
+    return True
+
+
+def is_citywide_analysis_query(question: str) -> bool:
+    """判断是否为全市/全域/各校范围的考试成绩分析类问题。"""
+    q = (question or "").strip()
+    if not q:
+        return False
+    has_city = any(m in q for m in _CITYWIDE_MARKERS)
+    has_all_schools = is_all_schools_scope_query(q)
+    if not has_city and not has_all_schools:
+        return False
+    if extract_school_target(q) or "本校" in q or "我校" in q:
+        return False
+    if extract_class_target(q) and not has_city:
         return False
     if is_line_reach_query(q):
         return False
@@ -1151,6 +1188,8 @@ def extract_school_target(question: str) -> str | None:
             if name.startswith("月") and re.search(rf"\d月{re.escape(name[1:])}", q):
                 name = name[1:]
             if _is_regional_exam_label(name):
+                return None
+            if name in _GENERIC_SCHOOL_LABELS:
                 return None
             return name or None
     return None
@@ -2167,6 +2206,7 @@ __all__ = [
     "extract_student_target",
     "format_scope_constraints",
     "is_citywide_analysis_query",
+    "is_all_schools_scope_query",
     "extract_class_target",
     "is_line_reach_citywide_scope",
     "is_line_reach_query",

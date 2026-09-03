@@ -164,14 +164,9 @@ PLANNER_DESC = """[你的职责]
 - **学科教研分析报告**（如「扬州中学 3 月学科教研分析报告」）——
   **只 1 个子任务**，走 `build_subject_research_report_data_tool`，一校一场九科（或点名一科）：
   [{"task": "调 build_subject_research_report_data_tool(render=true) 生成学科教研分析 HTML；**禁止** build_subject_diagnosis_sections_tool / build_class_overview_report_data_tool / build_elite_roster_report_data_tool / describe_table；完成后 terminate", "sub_task_agent": "ToolExpert"}]
-- 结构化诊断报告（diagnostic_report，一般性/特殊性/动态性三节）：
-  ["查询【范围】成绩明细（含 class/district/subject）用于聚合",
-   {"task": "调 build_diagnostic_report_data_tool(scope_label=【范围】, exam_name=【考试】, subject_name=【科目】, render=true) 生成结构化诊断 HTML（勿手传 score_rows/fetch_data）", "sub_task_agent": "ToolExpert"}]
-- **全市 + 考试 + 科目成绩分析**（如「帮我分析全市的江苏省高一上学期数学期末质量检测成绩，形成详细报告」）——
-  **拆 3 个子任务**，与学校科目诊断同构（先查数、再 fetch、再组装），**禁止**一步调用 `build_citywide_exam_analysis_report_tool`：
-  ["查询全市【XX考试】【XX科目】学生成绩 KPI 与明细（SQL 须 JOIN tb_school sch ON sc.school_id=sch.id JOIN tb_exam e ON sc.exam_id=e.id LEFT JOIN tb_exam_batch eb ON e.exam_batch_id=eb.id，SELECT sc.score, sc.exam_score, sc.class, sch.district, sch.name AS school_name, sc.student_id, sc.subject_name；按 subject_name 与 COALESCE(eb.batch_name, e.exam_name) 过滤；全市范围**不传** school_name/class_name；**禁止** sch.s_name）",
-   {"task": "调 fetch_subject_diagnosis_data_tool(subject_name=【科目】, exam_name=【考试】) 查询全市小题明细与知识点——**本步仅 fetch，禁止 render**；完成后 terminate（**禁止**调 build_diagnostic_report_data_tool）", "sub_task_agent": "ToolExpert"},
-   {"task": "调 build_diagnostic_report_data_tool(scope_label=全市, exam_name=【考试】, subject_name=【科目】, render=true) **一步完成区县对比+分数段+小题/知识点+HTML**；**禁止**再调 fetch_subject_diagnosis_data_tool（工具自动读取上游成绩与 fetch 数据）；完成后 terminate", "sub_task_agent": "ToolExpert"}]
+- 结构化诊断 / 全市各校考试分析（diagnostic_report，物理类/历史类达线+总分十分段）：
+  **只 1 个子任务**：
+  [{"task": "调 build_diagnostic_report_data_tool(scope_label=全市, exam_name=【考试】, render=true) 生成文理达线、十分段、热力图与雷达 HTML；禁止 fetch 小题 / comprehensive / class_name", "sub_task_agent": "ToolExpert"}]
 
 简单问题（如"三班数学平均分"）不生成报告，返回 plans=[原问题] 即可。
 **例外**：问题含学号/「学生xxx」且询问「得分情况/成绩/知识点」——**不算简单问题**，
@@ -203,40 +198,19 @@ def _plan_label(value: str, *, missing: str) -> str:
 
 
 def build_citywide_team_plan_items(question: str) -> list[dict[str, str]]:
-    """全市考试成绩分析的标准 3 步 Team 计划（不依赖 Planner LLM）。"""
+    """全市/各校考试分析：一步出文理达线与总分十分段诊断。"""
     exam = _plan_exam_name(question)
-    subject = _plan_subject_name(question)
     exam_l = _plan_label(exam, missing="问题中的考试")
-    subject_l = _plan_label(subject, missing="问题中的科目")
     return [
         {
             "sub_task": (
-                f"查询全市【{exam_l}】【{subject_l}】学生成绩 KPI 与明细"
-                "（SQL 须 JOIN tb_school sch ON sc.school_id=sch.id JOIN tb_exam e ON sc.exam_id=e.id LEFT JOIN tb_exam_batch eb ON e.exam_batch_id=eb.id，"
-                "SELECT sc.score, sc.exam_score, sc.class, sch.district, sch.name AS school_name, "
-                "sc.student_id, sc.subject_name；按 subject_name 与 COALESCE(eb.batch_name, e.exam_name) 过滤；"
-                "全市范围**不传** school_name/class_name；**禁止** sch.s_name；"
-                "**exam_name / subject_name 必须取自问题原文，禁止填「本次考试」「该科目」**）"
-            ),
-            "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
-        },
-        {
-            "sub_task": (
-                f"调 fetch_subject_diagnosis_data_tool(subject_name={subject}, exam_name={exam}) "
-                "查询全市小题明细与知识点——**本步仅 fetch，禁止 render**；"
-                "完成后 terminate（**禁止**调 build_diagnostic_report_data_tool）"
+                f"调 build_diagnostic_report_data_tool(scope_label=全市, exam_name={exam}, render=true) "
+                f"生成【{exam_l}】全市物理类/历史类达线、总分十分段、热力图与雷达 HTML；"
+                "完成后 terminate。"
+                "**禁止** fetch 小题、班级综合报告、填写 class_name、把「高三1月」当成「高三(1)班」"
             ),
             "sub_task_agent": _TOOL_EXPERT_AGENT,
-        },
-        {
-            "sub_task": (
-                f"调 build_diagnostic_report_data_tool(scope_label=全市, exam_name={exam}, "
-                f"subject_name={subject}, render=true) **一步完成区县对比+分数段+小题/知识点+HTML**；"
-                "**禁止**再调 fetch_subject_diagnosis_data_tool（工具自动读取上游成绩与 fetch 数据）；"
-                "完成后 terminate"
-            ),
-            "sub_task_agent": _TOOL_EXPERT_AGENT,
-        },
+        }
     ]
 
 
@@ -1214,17 +1188,15 @@ def should_replace_with_citywide_plan(
     question: str,
     plan_items: list[dict[str, str]],
 ) -> bool:
-    """Planner 回落为单任务时，全市分析类问题改用确定性 3 步计划。"""
+    """Planner 未走诊断工具时，全市/各校分析改用确定性 1 步计划。"""
     from src.agent.education.query_parse import is_citywide_analysis_query
 
     if not is_citywide_analysis_query(question):
         return False
-    q = (question or "").strip()
-    if len(plan_items) <= 1:
-        return True
-    if len(plan_items) == 1 and (plan_items[0].get("sub_task") or "").strip() == q:
-        return True
-    return False
+    blob = " ".join(str(it.get("sub_task") or "") for it in plan_items)
+    if "build_diagnostic_report_data_tool" in blob and "build_comprehensive_report_data_tool" not in blob:
+        return False
+    return True
 
 
 class PlanAction(Action):

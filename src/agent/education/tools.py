@@ -105,6 +105,35 @@ def _guard_report_when_fact_query(
     )
 
 
+def _guard_comprehensive_when_all_schools(
+    tool_runtime_ctx: dict[str, Any] | None,
+) -> ToolResult | None:
+    """各校/全市问句禁止缩成单班综合分析报告。"""
+    from src.agent.education.query_parse import (
+        is_all_schools_scope_query,
+        is_citywide_analysis_query,
+    )
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    q = str(
+        ctx.get("user_question")
+        or (ctx.get("constraints") or {}).get("user_question")
+        or ""
+    )
+    if not q:
+        return None
+    if not (is_citywide_analysis_query(q) or is_all_schools_scope_query(q)):
+        return None
+    return ToolResult(
+        content=(
+            "本题是各校/全市范围，不能生成单班综合分析报告。"
+            "请改用 build_diagnostic_report_data_tool(scope_label=全市, exam_name=问题中的考试, render=true)；"
+            "禁止填写 class_name，禁止把「高三1月」当成「高三(1)班」。"
+        ),
+        data={"error": "all_schools_not_class_comprehensive"},
+    )
+
+
 def _run_edu_sql(
     sql: str,
     *,
@@ -3890,6 +3919,9 @@ def build_comprehensive_report_data_tool(
     )
     if blocked is not None:
         return blocked
+    blocked_scope = _guard_comprehensive_when_all_schools(ctx)
+    if blocked_scope is not None:
+        return blocked_scope
     records, rows, columns, used_upstream = resolve_comprehensive_table_input(
         records=records,
         rows=rows,
@@ -4635,96 +4667,41 @@ def build_citywide_exam_analysis_report_tool(
     user_id: int | None = None,
     render: bool = True,
 ) -> ToolResult:
-    """一键生成「全市 + 考试 + 科目」结构化诊断报告（含区县对比、分数段、小题/知识点）。
+    """全市考试分析：与 ``build_diagnostic_report_data_tool`` 同口径（文理达线+十分段）。"""
+    from src.agent.resource.tool.business import _render_template_html, _sanitize_report_html
 
-    **快捷路径**：内部一次性查数并渲染，适合单 Agent 直调。
-    Team 模式请走 Planner 拆分的 3 步路径（DataAnalyst 查数 → fetch →
-    ``build_diagnostic_report_data_tool``），以便工具链可观测。
-    """
-    from src.agent.resource.tool.business import _load_datasource, _render_template_html, _sanitize_report_html
-
-    try:
-        db_type, _config, ds_name = _load_datasource(datasource_id, workspace_oid)
-    except Exception as e:
-        return ToolResult(content=f"build_citywide_exam_analysis_report_tool 失败：{e}", data={"error": str(e)})
-
-    bundle = _fetch_subject_diagnosis_rows(
-        datasource_id=datasource_id,
+    exam, prev_exam, overview, curr, prev_rows, err = _fetch_citywide_diagnostic_inputs(
+        exam_hint=(exam_name or "").strip(),
+        datasource_id=int(datasource_id),
         workspace_oid=workspace_oid,
         user_id=user_id,
-        subject_name=subject_name,
-        exam_name=exam_name,
-        db_type=db_type,
+        user_q="",
+        chat_fn=None,
     )
-    score_rows = bundle.get("score_rows") or []
-    score_values = bundle.get("score_values") or []
-    item_rows = bundle.get("item_rows") or []
-    knowledge_rows = enrich_knowledge_rows(bundle.get("knowledge_rows") or [])
-    full_score = bundle.get("full_score")
-    sql_logs = bundle.get("sql_logs") or []
-    warnings = bundle.get("warnings") or []
-    errors = bundle.get("errors") or []
-
-    if not score_rows and not score_values:
-        return ToolResult(
-            content=(
-                f"全市考试分析未查到成绩（ds={ds_name}，subject={subject_name}，exam={exam_name}）。\n"
-                f"SQL 记录：\n{_format_diagnosis_sql_logs(sql_logs)}"
-            ),
-            data={"error": "no data", "sql_logs": sql_logs},
-        )
-
-    if not score_rows and score_values:
-        score_rows = [
-            {"score": v, "exam_score": full_score, "subject": subject_name}
-            for v in score_values
-        ]
-
-    cfg = _get_effective_config()
-    scope_label = "全市"
+    if err is not None:
+        return err
     report_data = _build_diagnostic_data(
-        score_rows,
-        config=cfg,
-        scope_label=scope_label,
-        exam_name=exam_name,
+        overview_rows=overview,
+        indicator_rows=curr,
+        prev_indicator_rows=prev_rows,
+        exam_name=exam,
+        prev_exam_name=prev_exam,
+        scope_label="全市",
         subject_name=subject_name,
     )
-    stats = _compute_stats(score_values, cfg, full_score)
-    segments = _normalize_segments(stats.get("segments") or [], full_score=stats.get("full_score"))
     report_data["REPORT_TIME"] = _now_str()
-    report_data["SCOPE"] = scope_label
-    report_data["SEGMENT_TABLE"] = _segment_table_html(segments, full_score=stats.get("full_score"))
-    report_data["SCORE_DIST_CHART"] = _build_chart_option(
-        "score_distribution",
-        {
-            "segments": [{"label": s.get("label", ""), "count": s.get("count", 0)} for s in segments],
-            "pass_rate": stats.get("pass_rate") or 0,
-        },
-        title="全市分数段分布",
-    )
-    if item_rows:
-        report_data["ITEM_TABLE"] = build_item_table_html(_compute_item_metrics(item_rows))
-    if knowledge_rows:
-        report_data["KNOWLEDGE_TABLE"] = build_knowledge_table_html(knowledge_rows)
-    if warnings:
-        report_data["GENERAL_INSIGHT"] = (report_data.get("GENERAL_INSIGHT") or "") + (
-            "<p class='edu-sub'>" + "；".join(warnings) + "</p>"
-        )
-
     if not render:
         return ToolResult(
-            content=f"全市考试分析 data 已组装（{len(score_rows)} 条成绩，区县表已生成）。",
+            content=f"全市考试分析 data 已组装（{len(overview)} 人）。",
             data=report_data,
         )
-
     template_name = "education/diagnostic_report.html"
     title = report_data.get("REPORT_TITLE") or "全市结构化诊断报告"
     try:
         raw_html = _render_template_html(template_name, report_data)
         safe_html = _sanitize_report_html(raw_html.strip())
     except Exception as e:  # noqa: BLE001
-        return ToolResult(content=f"全市诊断报告渲染失败：{e}", data={"error": str(e), **report_data})
-
+        return ToolResult(content=f"全市诊断报告渲染失败：{e}", data={"error": str(e)})
     payload = {
         "output_type": "html",
         "title": title,
@@ -4732,15 +4709,99 @@ def build_citywide_exam_analysis_report_tool(
         "mode": "template",
         "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
     }
-    district_note = "含区县对比" if report_data.get("DISTRICT_SUMMARY") else "区县字段缺失，已降级为全市 KPI"
     return _html_report_tool_result(
-        (
-            f"全市考试分析报告已渲染（{len(score_rows)} 条成绩，{district_note}，"
-            f"小题 {len(item_rows)}、知识点 {len(knowledge_rows)}、HTML {len(safe_html)} 字符）。"
-        ),
+        f"全市考试分析报告已渲染（{len(overview)} 人，HTML {len(safe_html)} 字符）。",
         payload,
         report_type=ReportType.DIAGNOSTIC_REPORT,
     )
+
+def _fetch_citywide_diagnostic_inputs(
+    *,
+    exam_hint: str,
+    datasource_id: int,
+    workspace_oid: Any,
+    user_id: Any,
+    user_q: str,
+    chat_fn: Any,
+) -> tuple[str, str, list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], ToolResult | None]:
+    """读取一场考试的 overview + 达线指标（含上场）。"""
+    from src.agent.education.bureau_analysis import overview_select_sql
+    from src.agent.education.line_reach_report import (
+        exam_batch_select_sql,
+        indicator_select_sql,
+        ordered_exam_names,
+        pick_exam_for_question,
+        pick_previous_exam,
+        sql_result_to_dicts,
+    )
+
+    ok_b, msg_b, batch_res, _ = _run_edu_sql(
+        exam_batch_select_sql(),
+        datasource_id=int(datasource_id),
+        workspace_oid=workspace_oid,
+        user_id=user_id,
+    )
+    names = ordered_exam_names(sql_result_to_dicts(batch_res if ok_b else None))
+    exam = pick_exam_for_question(
+        names, question=user_q, hint=exam_hint, chat_fn=chat_fn
+    )
+    prev_exam = pick_previous_exam(names, exam) if exam else None
+    if not exam:
+        return (
+            "",
+            "",
+            [],
+            [],
+            [],
+            ToolResult(
+                content=(
+                    "结构化诊断失败：未解析到考试名称，且 tb_exam_batch 为空。"
+                    + (f"（批次查询：{msg_b}）" if not ok_b and msg_b else "")
+                ),
+                data={"error": "missing exam_name"},
+            ),
+        )
+    ok_s, msg_s, stu_res, _ = _run_edu_sql(
+        overview_select_sql(exam),
+        datasource_id=int(datasource_id),
+        workspace_oid=workspace_oid,
+        user_id=user_id,
+    )
+    if not ok_s:
+        return (
+            exam,
+            prev_exam or "",
+            [],
+            [],
+            [],
+            ToolResult(
+                content=f"读取 tb_score_overview 失败：{msg_s}",
+                data={"error": msg_s or "overview_query_failed"},
+            ),
+        )
+    overview = sql_result_to_dicts(stu_res)
+    ok_c, msg_c, curr_res, _ = _run_edu_sql(
+        indicator_select_sql(exam),
+        datasource_id=int(datasource_id),
+        workspace_oid=workspace_oid,
+        user_id=user_id,
+    )
+    curr: list[dict[str, Any]] = sql_result_to_dicts(curr_res) if ok_c else []
+    if not ok_c:
+        logger.warning("诊断报告达线指标查询失败: %s", msg_c)
+    prev_rows: list[dict[str, Any]] = []
+    if prev_exam:
+        ok_p, msg_p, prev_res, _ = _run_edu_sql(
+            indicator_select_sql(prev_exam),
+            datasource_id=int(datasource_id),
+            workspace_oid=workspace_oid,
+            user_id=user_id,
+        )
+        if ok_p:
+            prev_rows = sql_result_to_dicts(prev_res)
+        else:
+            logger.warning("诊断报告上场指标查询失败: %s", msg_p)
+    return exam, prev_exam or "", overview, curr, prev_rows, None
 
 
 @tool()
@@ -4757,21 +4818,23 @@ def build_diagnostic_report_data_tool(
     render: bool = True,
     report_data: dict[str, Any] | None = None,
     sub_task: str = "",
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
     tool_runtime_ctx: dict[str, Any] | None = None,
 ) -> ToolResult:
-    """组装结构化诊断报告（一般性/特殊性/动态性）并可选渲染 HTML。
+    """全市结构化诊断：物理类/历史类达线、总分十分段、热力图与雷达。
 
-    Team 多步路径：DataAnalyst 查数 → fetch → 本工具组装。
-    ``report_data`` / ``sub_task`` / ``tool_runtime_ctx`` 由运行时注入；
-    ``score_rows`` / ``fetch_data`` 缺省时自动从上游还原。
-    **禁止**手传大字典（易 JSON 截断成空表）。
+    自行读取 ``tb_score_indicator`` 与 ``tb_score_overview``，
+    **禁止**手传成绩大字典，**禁止**改走班级综合报告。
     """
     from src.agent.education.query_parse import (
-        extract_upstream_participant_count,
         resolve_diagnostic_score_rows,
-        resolve_subject_diagnosis_fetch_data,
         sub_task_primary_tool,
     )
+    from src.agent.resource.tool.business import _render_template_html, _sanitize_report_html
+
+    _ = (trend_records, item_rows, knowledge_rows, score_result)
 
     task_text = (sub_task or "").strip()
     if render and sub_task_primary_tool(task_text) == "fetch_subject_diagnosis_data_tool":
@@ -4790,118 +4853,107 @@ def build_diagnostic_report_data_tool(
     )
     if blocked is not None:
         return blocked
-    fetch_data = resolve_subject_diagnosis_fetch_data(
-        fetch_data if isinstance(fetch_data, dict) else None,
-        report_data=report_data or ctx.get("report_data"),
-        tool_runtime_ctx=ctx,
+
+    ds_id = datasource_id if datasource_id is not None else ctx.get("datasource_id")
+    ws_oid = workspace_oid if workspace_oid is not None else ctx.get("workspace_oid")
+    uid = user_id if user_id is not None else ctx.get("user_id")
+    user_q = str(
+        ctx.get("user_question")
+        or (ctx.get("constraints") or {}).get("question")
+        or ""
     )
 
-    # 空 list / 空 dict 视为未传，避免 LLM 截断空参盖掉真实上游
-    if isinstance(fetch_data, dict):
-        if not item_rows:
-            item_rows = fetch_data.get("item_rows")
-        if not knowledge_rows:
-            knowledge_rows = fetch_data.get("knowledge_rows")
-        if not score_result:
-            score_result = fetch_data.get("score_result")
-
-    rows = resolve_diagnostic_score_rows(
-        score_rows=score_rows if score_rows else None,
-        report_data=report_data or ctx.get("report_data"),
-        fetch_data=fetch_data if isinstance(fetch_data, dict) else None,
-    )
-    expected_count = extract_upstream_participant_count(
-        report_data or ctx.get("report_data")
-    )
-    if expected_count and len(rows) < expected_count:
-        upstream_only = resolve_diagnostic_score_rows(
-            score_rows=None,
-            report_data=report_data or ctx.get("report_data"),
-            fetch_data=None,
+    def _finish(data: dict[str, Any]) -> ToolResult:
+        data["REPORT_TIME"] = _now_str()
+        if not render:
+            return ToolResult(content="诊断报告 data 已组装。", data=data)
+        template_name = "education/diagnostic_report.html"
+        title = data.get("REPORT_TITLE") or "结构化诊断报告"
+        try:
+            raw_html = _render_template_html(template_name, data)
+            safe_html = _sanitize_report_html(raw_html.strip())
+        except Exception as e:  # noqa: BLE001
+            return ToolResult(content=f"诊断报告渲染失败：{e}", data={"error": str(e)})
+        payload = {
+            "output_type": "html",
+            "title": title,
+            "html": safe_html,
+            "mode": "template",
+            "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
+        }
+        return _html_report_tool_result(
+            f"结构化诊断报告已渲染（HTML {len(safe_html)} 字符）。",
+            payload,
+            report_type=ReportType.DIAGNOSTIC_REPORT,
         )
-        if len(upstream_only) >= expected_count:
-            rows = upstream_only
 
-    cfg = _get_effective_config()
+    if not ds_id:
+        rows = resolve_diagnostic_score_rows(
+            score_rows=score_rows if score_rows else None,
+            report_data=report_data or ctx.get("report_data"),
+            fetch_data=fetch_data if isinstance(fetch_data, dict) else None,
+        )
+        last_fetch = ctx.get("last_fetch_data")
+        if not rows and isinstance(last_fetch, dict):
+            rows = list(last_fetch.get("score_rows") or [])
+        if not rows:
+            return ToolResult(
+                content="build_diagnostic_report_data_tool 失败：缺少 datasource_id。",
+                data={"error": "missing datasource_id"},
+            )
+        overview = [
+            {
+                "dq": r.get("district") or r.get("dq"),
+                "xx": r.get("school_name") or r.get("xx"),
+                "xkkm": r.get("xkkm") or r.get("track") or "",
+                "zf6m": r.get("zf6m") if r.get("zf6m") is not None else r.get("score"),
+                "yw": r.get("yw"),
+                "sx": r.get("sx"),
+                "yy": r.get("yy"),
+                "wl": r.get("wl"),
+                "hxzh": r.get("hxzh"),
+                "swzh": r.get("swzh"),
+                "ls": r.get("ls"),
+                "zzzh": r.get("zzzh"),
+                "dlzh": r.get("dlzh"),
+            }
+            for r in rows
+            if isinstance(r, dict)
+        ]
+        data = _build_diagnostic_data(
+            overview_rows=overview,
+            indicator_rows=[],
+            exam_name=exam_name,
+            scope_label=scope_label or "全市",
+            question=user_q,
+            subject_name=subject_name,
+        )
+        return _finish(data)
+
+    chat_fn = ctx.get("exam_pick_chat")
+    if not callable(chat_fn):
+        chat_fn = None
+    exam, prev_exam, overview, curr, prev_rows, err = _fetch_citywide_diagnostic_inputs(
+        exam_hint=(exam_name or "").strip(),
+        datasource_id=int(ds_id),
+        workspace_oid=ws_oid,
+        user_id=uid,
+        user_q=user_q,
+        chat_fn=chat_fn,
+    )
+    if err is not None:
+        return err
     data = _build_diagnostic_data(
-        rows,
-        trend_records=trend_records if trend_records else None,
-        config=cfg,
-        scope_label=scope_label,
-        exam_name=exam_name,
+        overview_rows=overview,
+        indicator_rows=curr,
+        prev_indicator_rows=prev_rows,
+        exam_name=exam,
+        prev_exam_name=prev_exam,
+        scope_label=scope_label or "全市",
+        question=user_q,
         subject_name=subject_name,
     )
-    data["REPORT_TIME"] = _now_str()
-    if scope_label:
-        data["SCOPE"] = scope_label
-
-    score_values = [
-        float(r["score"]) for r in rows if r.get("score") is not None
-    ]
-    full_score = None
-    for r in rows:
-        if r.get("exam_score") is not None:
-            full_score = float(r["exam_score"])
-            break
-    if not score_values and isinstance(score_result, dict):
-        cols = score_result.get("columns") or []
-        raw = score_result.get("rows") or []
-        if cols and raw:
-            si = cols.index("score") if "score" in cols else 0
-            for row in raw:
-                try:
-                    score_values.append(float(row[si]))
-                except (TypeError, ValueError, IndexError):
-                    continue
-            fs_idx = cols.index("exam_score") if "exam_score" in cols else -1
-            if fs_idx >= 0 and raw:
-                try:
-                    full_score = float(raw[0][fs_idx])
-                except (TypeError, ValueError, IndexError):
-                    pass
-
-    if score_values:
-        stats = _compute_stats(score_values, cfg, full_score)
-        segments = _normalize_segments(stats.get("segments") or [], full_score=stats.get("full_score"))
-        data["SEGMENT_TABLE"] = _segment_table_html(segments, full_score=stats.get("full_score"))
-        data["SCORE_DIST_CHART"] = _build_chart_option(
-            "score_distribution",
-            {
-                "segments": [{"label": s.get("label", ""), "count": s.get("count", 0)} for s in segments],
-                "pass_rate": stats.get("pass_rate") or 0,
-            },
-            title="分数段分布",
-        )
-
-    items = list(item_rows or [])
-    knowledge = enrich_knowledge_rows(list(knowledge_rows or []))
-    if items:
-        data["ITEM_TABLE"] = build_item_table_html(_compute_item_metrics(items))
-    if knowledge:
-        data["KNOWLEDGE_TABLE"] = build_knowledge_table_html(knowledge)
-
-    if not render:
-        return ToolResult(content="诊断报告 data 已组装。", data=data)
-    from src.agent.resource.tool.business import _render_template_html, _sanitize_report_html
-    template_name = "education/diagnostic_report.html"
-    title = data.get("REPORT_TITLE") or "结构化诊断报告"
-    try:
-        raw_html = _render_template_html(template_name, data)
-        safe_html = _sanitize_report_html(raw_html.strip())
-    except Exception as e:  # noqa: BLE001
-        return ToolResult(content=f"诊断报告渲染失败：{e}", data={"error": str(e)})
-    payload = {
-        "output_type": "html",
-        "title": title,
-        "html": safe_html,
-        "mode": "template",
-        "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
-    }
-    return _html_report_tool_result(
-        f"结构化诊断报告已渲染（HTML {len(safe_html)} 字符）。",
-        payload,
-        report_type=ReportType.DIAGNOSTIC_REPORT,
-    )
+    return _finish(data)
 
 
 def _pick_student_overview_from_report(

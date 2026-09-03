@@ -28,6 +28,7 @@ import {
   formatReportDisplayTitle
 } from "@/hooks/useChat";
 import G2Chart, { G2ChartType, formatQuerySetLabel, inferChartFields, pickYField } from "@/components/chat/G2Chart";
+import { labelColumn } from "@/utils/columnLabels";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -1049,7 +1050,7 @@ export default function ChatExecutionPanel({
                           <tr>
                             {activeQuery.columns.map((col) => (
                               <th key={col} className="border border-[#e5e7eb] px-2 py-1 text-left dark:border-[#2f3441]">
-                                {col}
+                                {labelColumn(col)}
                               </th>
                             ))}
                           </tr>

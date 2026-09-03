@@ -264,6 +264,8 @@ def test_score_band_report_html():
     html = data["PRIMARY_TABLE"]
     assert "物理方向" in html
     assert "681 - 690" in html
+    assert "edu-band-chart" in html
+    assert '"type": "bar"' in html
     assert data["REPORT_TYPE"] == "分段统计"
     assert data["SECONDARY_TABLE"] == ""
     assert "各区县分段" in data["PRIMARY_TITLE"]

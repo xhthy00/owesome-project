@@ -116,6 +116,19 @@ def test_own_school_vs_city_uses_bound_school():
     assert not ctx.get("target_school")
 
 
+def test_teacher_gexiao_query_still_binds_own_school():
+    """「各校」是报告范围口语，不放开老师的本校过滤。"""
+    edu = {
+        "edu_role": "teacher",
+        "school_name": "南京市第一中学",
+        "school_id": "SCH001",
+        "class_names": ["高三(1)班"],
+    }
+    ctx = build_edu_aware_constraints("2026届高三1月各校考试分析", edu)
+    assert ctx["target_school"] == "南京市第一中学"
+    assert ctx["target_classes"] == ["高三(1)班"]
+
+
 def test_format_scope_constraints_allows_citywide_metrics():
     text = format_scope_constraints(
         {

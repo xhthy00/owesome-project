@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from "react";
 import { Chart } from "@antv/g2";
+import { labelColumn } from "@/utils/columnLabels";
 
 export type G2ChartType = "column" | "bar" | "line" | "pie";
 
@@ -84,11 +85,13 @@ export function formatQuerySetLabel(opts: {
   total: number;
 }): string {
   const title = opts.chartTitle?.trim();
+  const yLabel = opts.yField ? labelColumn(opts.yField) : "";
+  const xLabel = opts.xField ? labelColumn(opts.xField) : "";
   const chartName =
     title ||
-    (opts.yField && opts.xField && opts.xField !== opts.yField
-      ? `${opts.yField}（按${opts.xField}）`
-      : opts.yField) ||
+    (yLabel && xLabel && opts.xField !== opts.yField
+      ? `${yLabel}（按${xLabel}）`
+      : yLabel) ||
     "数据图";
   if (opts.total <= 1) return chartName;
   const prefix = opts.isFinal ? "最终" : `查询 ${opts.index + 1}`;
@@ -138,7 +141,7 @@ export default function G2Chart({
       const metricCols = numericCols.filter((col) => scoreYColumn(col) > 0);
       const useCols = metricCols.length >= 2 ? metricCols : numericCols;
       const chartData: Record<string, unknown>[] = useCols.map((col) => ({
-        [xField]: col,
+        [xField]: labelColumn(col),
         [yField]: data[0][col]
       }));
       return { xField, yField, chartData };
@@ -198,7 +201,10 @@ export default function G2Chart({
     } else {
       const mark = type === "line" ? chart.line() : chart.interval();
       mark.data(chartData).encode("x", xField).encode("y", yField);
-      mark.tooltip({ title: xField, items: [yField] });
+      mark.tooltip({
+        title: (d: Record<string, unknown>) => String(d[xField] ?? ""),
+        items: [{ field: yField, name: labelColumn(yField) }]
+      });
       if (dashboard) {
         chart.legend(false);
         mark.legend(false);
@@ -219,7 +225,7 @@ export default function G2Chart({
         mark.style("radiusTopRight", 6);
       } else {
         mark.encode("color", xField);
-        mark.axis("y", { title: yField });
+        mark.axis("y", { title: labelColumn(yField) });
         mark.legend("color", { title: false });
       }
       if (showLabel) {

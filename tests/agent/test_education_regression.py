@@ -90,15 +90,17 @@ def test_build_segment_table_has_wrap_and_num_class():
 
 
 def test_diagnostic_report_data_keys():
-    rows = [
-        {"score": 85, "class": "高一(1)班", "exam_score": 100, "district": "鼓楼区"},
-        {"score": 75, "class": "高一(2)班", "exam_score": 100, "district": "鼓楼区"},
-    ]
-    data = build_diagnostic_data(rows, scope_label="南京市第一中学", subject_name="数学")
-    assert "GENERAL_INSIGHT" in data
-    assert "SPECIAL_INSIGHT" in data
-    assert "DYNAMIC_INSIGHT" in data
+    data = build_diagnostic_data(
+        overview_rows=[{"xkkm": "物理", "dq": "市直", "zf6m": 600, "yw": 110, "sx": 100, "yy": 105}],
+        indicator_rows=[],
+        scope_label="全市",
+        exam_name="一模",
+    )
     assert "KPI_GRID" in data
+    assert "REACH_TABLE" in data
+    assert "BAND_TABLE" in data
+    assert "BAND_HEATMAP" in data
+    assert "SUBJECT_RADAR" in data
 
 
 def test_diagnostic_report_type_registered():
@@ -175,13 +177,18 @@ def test_extract_score_rows_from_report_data():
 
 def test_diagnostic_report_district_summary():
     rows = [
-        {"score": 85, "class": "高一(1)班", "exam_score": 100, "district": "鼓楼区"},
-        {"score": 75, "class": "高一(2)班", "exam_score": 100, "district": "玄武区"},
+        {"xkkm": "物理", "dq": "鼓楼区", "zf6m": 620, "xx": "A", "yw": 110, "sx": 100, "yy": 105},
+        {"xkkm": "物理", "dq": "玄武区", "zf6m": 540, "xx": "B", "yw": 100, "sx": 90, "yy": 95},
     ]
-    data = build_diagnostic_data(rows, scope_label="全市", subject_name="数学", exam_name="期末检测")
-    assert data.get("DISTRICT_SUMMARY")
-    assert "鼓楼区" in data["DISTRICT_SUMMARY"]
-    assert data.get("DISTRICT_COMPARE_CHART")
+    data = build_diagnostic_data(
+        overview_rows=rows,
+        indicator_rows=[],
+        scope_label="全市",
+        exam_name="期末检测",
+    )
+    assert data.get("BAND_TABLE")
+    assert "鼓楼" in data["BAND_TABLE"] or "玄武" in data["BAND_TABLE"]
+    assert data.get("BAND_HEATMAP")
 
 
 def test_fetch_blocks_repeat_in_build_subtask():
@@ -493,7 +500,7 @@ def test_build_diagnostic_report_kpi_uses_full_upstream_rows():
 
 
 def test_build_diagnostic_ignores_empty_llm_fetch_and_uses_upstream():
-    """空 fetch_data / item_rows 不得盖掉上游非空小题与成绩。"""
+    """空 fetch_data / score_rows 不得盖掉上游非空成绩；小题不再进入诊断报告。"""
     from src.agent.education.tools import build_diagnostic_report_data_tool
 
     fetch_payload = {
@@ -543,11 +550,10 @@ def test_build_diagnostic_ignores_empty_llm_fetch_and_uses_upstream():
         report_data=report_data,
         sub_task="调 build_diagnostic_report_data_tool(scope_label=全市, render=true)",
     )
-    assert "ITEM_TABLE" in result.data
-    assert "函数" in result.data["ITEM_TABLE"]
-    assert "KNOWLEDGE_TABLE" in result.data
     assert "KPI_GRID" in result.data
     assert ">5<" in result.data.get("KPI_GRID", "")
+    assert "ITEM_TABLE" not in result.data
+    assert "KNOWLEDGE_TABLE" not in result.data
 
 
 def test_build_diagnostic_uses_last_fetch_data_ctx():
@@ -569,5 +575,7 @@ def test_build_diagnostic_uses_last_fetch_data_ctx():
         tool_runtime_ctx={"last_fetch_data": fetch_payload},
         sub_task="调 build_diagnostic_report_data_tool(scope_label=全市, render=true)",
     )
-    assert "导数" in result.data.get("ITEM_TABLE", "")
-    assert "导数" in result.data.get("KNOWLEDGE_TABLE", "")
+    assert "KPI_GRID" in result.data
+    assert ">3<" in result.data.get("KPI_GRID", "")
+    assert "ITEM_TABLE" not in result.data
+    assert "KNOWLEDGE_TABLE" not in result.data
