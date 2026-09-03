@@ -244,8 +244,8 @@ export default function SideBar() {
     <div className="flex h-screen w-[240px] min-w-[240px] flex-col border-r border-[#cfd8e8] bg-[#d7dfed] px-4 pt-4 dark:border-[#34384a] dark:bg-[#232734]">
       <div className="dbgpt-ui-font flex shrink-0 items-center justify-between p-2 pb-4">
         <Link href="/" className="flex items-center gap-2">
-          <Image src="/logo-mark.svg" alt="logo" width={40} height={40} className="rounded-md" />
-          <span className="text-sm font-semibold tracking-[0.03em] text-[#243149] dark:text-white">扬州电教馆</span>
+          <Image src="/logo-mark.svg" alt="logo" width={30} height={30} className="rounded-md" />
+          <span className="text-sm font-semibold tracking-[0.03em] text-[#243149] dark:text-white">AI学情分析智能体</span>
         </Link>
         <Tooltip title="收起侧栏">
           <div

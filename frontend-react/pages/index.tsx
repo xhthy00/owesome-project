@@ -77,7 +77,7 @@ export default function HomePage() {
           <span className="relative inline-flex h-14 w-14 items-center justify-center overflow-hidden rounded-xl border border-gray-100 bg-white shadow-md dark:border-[#33353b] dark:bg-[#1a1b1e]">
             <Image src="/logo-mark.svg" alt="logo" width={140} height={140} className="rounded-lg" />
           </span>
-          学情（考情）AI智能分析助手
+          学情AI智能分析助手
         </Typography.Title>
         <Typography.Text className="dbgpt-subtitle-font mb-10 !text-sm md:!text-base !font-light text-gray-400 dark:text-gray-500">
           Agentic Data Driven Decisions
