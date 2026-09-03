@@ -11,6 +11,7 @@ const routes = [
   { key: "report-history", label: "报告历史" },
   { key: "datasource", label: "数据源" },
   { key: "score-import", label: "成绩导入" },
+  { key: "raw-score-import", label: "原始成绩导入" },
   { key: "fraction-bar", label: "预测分数线" },
   { key: "permission", label: "权限管理" },
   { key: "system", label: "日志管理" }

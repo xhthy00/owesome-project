@@ -16,17 +16,24 @@ from fastapi.testclient import TestClient
 
 from src.chat.api.chat import router as chat_router
 from system.api.auth_deps import get_current_user
+from system.workspace_scope import get_workspace_oid
 
 
-def _build_app() -> FastAPI:
+def _build_app(monkeypatch) -> FastAPI:
+    monkeypatch.setattr(
+        "src.chat.api.chat.assert_datasource_accessible",
+        lambda *_a, **_k: None,
+    )
     app = FastAPI()
     app.include_router(chat_router, prefix="/api/v1")
 
     class _AuthUser:
         id = 1
         account = "admin"
+        oid = 1
 
     app.dependency_overrides[get_current_user] = lambda: _AuthUser()
+    app.dependency_overrides[get_workspace_oid] = lambda: 1
     return app
 
 
@@ -99,7 +106,7 @@ def test_agent_mode_defaults_to_agent_branch(monkeypatch):
     _patch_legacy(monkeypatch, flag)
 
     body = _stream_body(
-        TestClient(_build_app()),
+        TestClient(_build_app(monkeypatch)),
         {"question": "hi", "datasource_id": 1},
     )
 
@@ -117,7 +124,7 @@ def test_agent_mode_explicit_team_routes_to_team_runner(monkeypatch):
     _patch_legacy(monkeypatch, flag)
 
     body = _stream_body(
-        TestClient(_build_app()),
+        TestClient(_build_app(monkeypatch)),
         {"question": "hi", "datasource_id": 1, "agent_mode": "team"},
     )
 
@@ -134,7 +141,7 @@ def test_team_mode_can_disable_tool_agent(monkeypatch):
     _patch_legacy(monkeypatch, flag)
 
     _stream_body(
-        TestClient(_build_app()),
+        TestClient(_build_app(monkeypatch)),
         {
             "question": "hi",
             "datasource_id": 1,
@@ -152,7 +159,7 @@ def test_agent_mode_explicit_legacy_routes_to_sql_generator(monkeypatch):
     _patch_legacy(monkeypatch, flag)
 
     body = _stream_body(
-        TestClient(_build_app()),
+        TestClient(_build_app(monkeypatch)),
         {"question": "hi", "datasource_id": 1, "agent_mode": "legacy"},
     )
 
@@ -167,7 +174,7 @@ def test_agent_mode_rejects_unknown_value(monkeypatch):
     _patch_agent(monkeypatch, flag)
     _patch_legacy(monkeypatch, flag)
 
-    resp = TestClient(_build_app()).post(
+    resp = TestClient(_build_app(monkeypatch)).post(
         "/api/v1/chat/chat-stream",
         json={"question": "hi", "datasource_id": 1, "agent_mode": "wizard"},
     )
@@ -180,7 +187,7 @@ def test_chat_stream_emits_x_trace_id_header(monkeypatch):
     flag = _fresh_flag()
     _patch_agent(monkeypatch, flag)
     _patch_legacy(monkeypatch, flag)
-    client = TestClient(_build_app())
+    client = TestClient(_build_app(monkeypatch))
 
     _, headers_1 = _stream_response(client, {"question": "q1", "datasource_id": 1})
     _, headers_2 = _stream_response(client, {"question": "q2", "datasource_id": 1})
@@ -191,3 +198,28 @@ def test_chat_stream_emits_x_trace_id_header(monkeypatch):
     assert tid_2, f"X-Trace-Id missing, headers={headers_2}"
     assert tid_1 != tid_2, "每次请求应分配独立 trace_id"
     assert len(tid_1) >= 8 and tid_1 != "-"
+
+
+def test_chat_stream_denies_teacher_other_class_before_runner(monkeypatch):
+    from src.agent.education.scope_guard import OUT_OF_SCOPE_MESSAGE
+
+    flag = _fresh_flag()
+    _patch_agent(monkeypatch, flag)
+    _patch_legacy(monkeypatch, flag)
+    monkeypatch.setattr(
+        "datasource.service.edu_permission.edu_scope_dict_for_user_id",
+        lambda _uid: {
+            "edu_role": "teacher",
+            "school_name": "扬州中学",
+            "class_names": ["高一(1)班"],
+        },
+    )
+    body = _stream_body(
+        TestClient(_build_app(monkeypatch)),
+        {"question": "高一(3)班数学均分", "datasource_id": 1, "agent_mode": "team"},
+    )
+    assert flag["team_called"] is False
+    assert flag["agent_called"] is False
+    assert flag["legacy_called"] is False
+    assert OUT_OF_SCOPE_MESSAGE in body
+    assert "event: error" in body

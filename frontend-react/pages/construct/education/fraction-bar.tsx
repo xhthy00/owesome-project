@@ -20,9 +20,6 @@ import {
   type FractionBarExam,
   type FractionBarLineCatalog
 } from "@/api/education";
-import { datasourceApi } from "@/api/datasource";
-
-const EXAM_DS_NAME = "exam";
 
 const PANEL_CARD =
   "overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white shadow-sm dark:border-[#334155] dark:bg-[#141923]";
@@ -66,7 +63,6 @@ function examLineMap(exam: FractionBarExam | null): Record<string, number | null
 
 export default function FractionBarPage() {
   const [form] = Form.useForm();
-  const [datasourceId, setDatasourceId] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [denied, setDenied] = useState("");
@@ -76,28 +72,11 @@ export default function FractionBarPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<FractionBarExam | null>(null);
 
-  const loadDatasource = useCallback(async () => {
-    try {
-      const res = await datasourceApi.list({ limit: 200 });
-      const items = res.items || [];
-      const examDs = items.find((d) => d.name.toLowerCase() === EXAM_DS_NAME);
-      if (!examDs) {
-        message.error("未找到 exam 数据源");
-        setDatasourceId(null);
-        return;
-      }
-      setDatasourceId(examDs.id);
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : "加载数据源失败");
-    }
-  }, []);
-
   const loadData = useCallback(async () => {
-    if (!datasourceId) return;
     setLoading(true);
     setDenied("");
     try {
-      const data = await educationApi.listFractionBar(datasourceId);
+      const data = await educationApi.listFractionBar();
       setExams(data.exams || []);
       setBatches(data.batches || []);
       setCatalog(data.line_catalog || []);
@@ -112,15 +91,11 @@ export default function FractionBarPage() {
     } finally {
       setLoading(false);
     }
-  }, [datasourceId]);
+  }, []);
 
   useEffect(() => {
-    void loadDatasource();
-  }, [loadDatasource]);
-
-  useEffect(() => {
-    if (datasourceId) void loadData();
-  }, [datasourceId, loadData]);
+    void loadData();
+  }, [loadData]);
 
   const batchSelectOptions = useMemo(() => {
     const usedIds = new Set(
@@ -168,7 +143,6 @@ export default function FractionBarPage() {
   };
 
   const handleSave = async () => {
-    if (!datasourceId) return;
     const values = (await form.validateFields()) as LineFormValue & { exam_batch_id?: number };
     const examBatchId =
       typeof values.exam_batch_id === "number" && values.exam_batch_id > 0
@@ -202,7 +176,6 @@ export default function FractionBarPage() {
     setSaving(true);
     try {
       const res = await educationApi.upsertFractionBar({
-        datasource_id: datasourceId,
         exam_batch_id: examBatchId ?? undefined,
         exam_name: examName,
         lines
@@ -218,10 +191,9 @@ export default function FractionBarPage() {
   };
 
   const handleRecompute = async (examName?: string) => {
-    if (!datasourceId) return;
     setLoading(true);
     try {
-      const res = await educationApi.recomputeScoreIndicator(datasourceId, examName);
+      const res = await educationApi.recomputeScoreIndicator(examName);
       message.success(`已重算 ${res.indicator_rows} 条达线指标`);
     } catch (err) {
       message.error(err instanceof Error ? err.message : "重算失败");

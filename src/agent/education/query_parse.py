@@ -18,6 +18,36 @@ _SCHOOL_PATTERNS = (
         rf"(?<![\u4e00-\u9fff])([\u4e00-\u9fff]{{2,8}}{_SCHOOL_SUFFIX}){_SCHOOL_TRAIL}"
     ),
 )
+# 最长优先。请求语会把「扬州大学附属中学」卡在非汉字边界之外，匹配前先挖掉。
+_SCHOOL_ASK_FILLERS = (
+    "请帮我分析",
+    "请帮我看看",
+    "请帮我看一下",
+    "请帮我看下",
+    "请帮我看",
+    "请帮我",
+    "帮我分析",
+    "帮我看看",
+    "帮我看一下",
+    "帮我看下",
+    "帮我看",
+    "帮我",
+    "我想看一下",
+    "我想看下",
+    "我想看",
+    "分析一下",
+    "分析下",
+    "查询一下",
+    "统计一下",
+    "查看一下",
+    "看看",
+    "分析",
+    "查询",
+    "统计",
+    "查看",
+    "了解",
+    "生成",
+)
 _SUBJECT_NAME_TOKENS = (
     "数学", "语文", "英语", "物理", "化学", "生物", "政治", "历史", "地理", "科学",
 )
@@ -459,13 +489,23 @@ _CLASS_TARGET_RE = re.compile(
 )
 
 
-def extract_class_target(question: str) -> str | None:
-    """从问题中抽取班级名（如「高三(18)班」）。"""
+def extract_class_targets(question: str) -> list[str]:
+    """从问题中抽取全部班级名（如「高三(18)班」），保持出现顺序去重。"""
     text = normalize_fullwidth_parentheses(question or "")
     if not text:
-        return None
-    m = _CLASS_TARGET_RE.search(text)
-    return m.group(0) if m else None
+        return []
+    seen: list[str] = []
+    for m in _CLASS_TARGET_RE.finditer(text):
+        tok = m.group(0)
+        if tok and tok not in seen:
+            seen.append(tok)
+    return seen
+
+
+def extract_class_target(question: str) -> str | None:
+    """从问题中抽取班级名（如「高三(18)班」）。"""
+    found = extract_class_targets(question)
+    return found[0] if found else None
 
 
 def is_line_reach_citywide_scope(question: str) -> bool:
@@ -1170,8 +1210,8 @@ def is_school_exam_report_query(question: str) -> bool:
     return False
 
 
-def extract_school_target(question: str) -> str | None:
-    """从问题中抽取目标学校/机构名（如「南京市第一中学」）。"""
+def extract_school_targets(question: str) -> list[str]:
+    """从问题中抽取全部学校名，保持出现顺序去重。"""
     q = (question or "").strip()
     if not q:
         return None
@@ -1193,6 +1233,36 @@ def extract_school_target(question: str) -> str | None:
                 return None
             return name or None
     return None
+        return []
+    blobs = [q]
+    blanked = q
+    for filler in _SCHOOL_ASK_FILLERS:
+        blanked = blanked.replace(filler, " ")
+    if blanked != q:
+        blobs.append(blanked)
+    seen: list[str] = []
+    for blob in blobs:
+        for pat in _SCHOOL_PATTERNS:
+            for m in pat.finditer(blob):
+                name = re.sub(r"\s+", "", m.group(1))
+                for prefix in _SCHOOL_ASK_FILLERS:
+                    if name.startswith(prefix):
+                        name = name[len(prefix):]
+                        break
+                # 「3月扬州中学」勿把月份的「月」拼进校名
+                if name.startswith("月") and re.search(rf"\d月{re.escape(name[1:])}", q):
+                    name = name[1:]
+                if not name or _is_regional_exam_label(name):
+                    continue
+                if name not in seen:
+                    seen.append(name)
+    return seen
+
+
+def extract_school_target(question: str) -> str | None:
+    """从问题中抽取目标学校/机构名（如「南京市第一中学」）。"""
+    found = extract_school_targets(question)
+    return found[0] if found else None
 
 
 def _is_regional_exam_label(name: str) -> bool:
@@ -2208,6 +2278,7 @@ __all__ = [
     "is_citywide_analysis_query",
     "is_all_schools_scope_query",
     "extract_class_target",
+    "extract_class_targets",
     "is_line_reach_citywide_scope",
     "is_line_reach_query",
     "is_line_reach_report_query",

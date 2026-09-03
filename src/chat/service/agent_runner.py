@@ -290,17 +290,9 @@ class _RunConstraints:
 
 
 def _load_edu_scope_summary(user_id: int) -> dict[str, Any]:
-    if not user_id:
-        return {}
-    from datasource.service.edu_permission import edu_scope_summary
-    from src.common.core.database import get_db_session
-    from src.system.crud.crud_user import get_user_by_id
+    from datasource.service.edu_permission import edu_scope_dict_for_user_id
 
-    with get_db_session() as session:
-        user = get_user_by_id(session, user_id)
-        if user is None:
-            return {}
-        return edu_scope_summary(user)
+    return edu_scope_dict_for_user_id(user_id)
 
 
 def _build_shared_constraints(question: str, user_id: int) -> _RunConstraints:
@@ -2267,6 +2259,9 @@ def _persist_sync(
         from src.common.core.database import get_db_session
 
         with get_db_session() as session:
+            from src.chat.utils.report_payload import coalesce_record_reports
+
+            persist_reports = coalesce_record_reports(reports, tool_calls)
             record = chat_crud.create_conversation_record(
                 session=session,
                 conversation_id=request.conversation_id,
@@ -2286,7 +2281,7 @@ def _persist_sync(
                 plan_states=plan_states,
                 tool_calls=tool_calls,
                 summary=summary,
-                reports=reports,
+                reports=persist_reports,
                 total_tokens=total_tokens,
                 elapsed_ms=elapsed_ms,
                 workspace_oid=workspace_oid,

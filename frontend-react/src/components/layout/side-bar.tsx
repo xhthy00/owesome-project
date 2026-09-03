@@ -36,6 +36,7 @@ const routes = [
   { key: "report-history", path: "/construct/analysis/history", label: "报告历史", icon: <HistoryOutlined /> },
   { key: "datasource", path: "/construct/database", label: "数据源", icon: <DatabaseOutlined /> },
   { key: "score-import", path: "/construct/education/score-import", label: "成绩导入", icon: <UploadOutlined /> },
+  { key: "raw-score-import", path: "/construct/education/raw-score-import", label: "原始成绩导入", icon: <UploadOutlined /> },
   { key: "fraction-bar", path: "/construct/education/fraction-bar", label: "预测分数线", icon: <LineChartOutlined /> },
   { key: "anomaly-alerts", path: "/construct/education/anomaly-alerts", label: "异常提醒", icon: <AlertOutlined /> },
   { key: "anomaly-rules", path: "/construct/education/anomaly-rules", label: "异常规则", icon: <ControlOutlined /> },
@@ -243,8 +244,8 @@ export default function SideBar() {
     <div className="flex h-screen w-[240px] min-w-[240px] flex-col border-r border-[#cfd8e8] bg-[#d7dfed] px-4 pt-4 dark:border-[#34384a] dark:bg-[#232734]">
       <div className="dbgpt-ui-font flex shrink-0 items-center justify-between p-2 pb-4">
         <Link href="/" className="flex items-center gap-2">
-          <Image src="/logo-mark.svg" alt="logo" width={40} height={40} className="rounded-md" />
-          <span className="text-sm font-semibold tracking-[0.03em] text-[#243149] dark:text-white">扬州电教馆</span>
+          <Image src="/logo-mark.svg" alt="logo" width={30} height={30} className="rounded-md" />
+          <span className="text-sm font-semibold tracking-[0.03em] text-[#243149] dark:text-white">AI学情分析智能体</span>
         </Link>
         <Tooltip title="收起侧栏">
           <div

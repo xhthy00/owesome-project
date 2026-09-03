@@ -1198,13 +1198,40 @@ export function useChat() {
       const rid = target.recordId;
       const ridx = target.reportIndex;
       if (cid && rid != null && ridx != null) {
-        const resp = await updateReportReview({
-          conversationId: cid,
-          recordId: rid,
-          reportIndex: ridx,
-          recommendations_text: patch.recommendationsText,
-          review_status: patch.reviewStatus
-        });
+        const persistBody = (list: ReportPayload[]) =>
+          list
+            .filter((r) => r.recordId === rid)
+            .sort((a, b) => (a.reportIndex ?? 0) - (b.reportIndex ?? 0))
+            .map((r) => ({
+              title: r.title,
+              html: r === target ? next.html : r.html,
+              mode: r.mode,
+              sub_task_index: r.subTaskIndex,
+              report_type: r.reportType,
+              report_type_label: r.reportTypeLabel,
+              review_status: r === target ? next.reviewStatus : r.reviewStatus || "pending"
+            }));
+        const runUpdate = () =>
+          updateReportReview({
+            conversationId: cid,
+            recordId: rid,
+            reportIndex: ridx,
+            recommendations_text: patch.recommendationsText,
+            review_status: patch.reviewStatus
+          });
+        let resp: Awaited<ReturnType<typeof updateReportReview>> | undefined;
+        try {
+          resp = await runUpdate();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (!msg.includes("404")) throw err;
+          await replaceRecordReports({
+            conversationId: cid,
+            recordId: rid,
+            reports: persistBody(reports)
+          });
+          resp = await runUpdate();
+        }
         if (resp?.report?.html) {
           next.html = asText(resp.report.html);
         }
@@ -1223,7 +1250,7 @@ export function useChat() {
       );
       return next;
     },
-    [conversationId]
+    [conversationId, reports]
   );
 
   return {

@@ -39,6 +39,73 @@ export interface ScoreImportResponse {
   data: ScoreImportResult | null;
 }
 
+export interface RawImportWarning {
+  row: number;
+  message: string;
+}
+
+export interface RawDetailStatus {
+  imported: boolean;
+  row_count: number;
+  student_count: number;
+}
+
+export interface RawPaperOption {
+  exam_id: number;
+  subject: string;
+  exam_score?: number | null;
+  detail?: RawDetailStatus;
+}
+
+export interface RawOverviewStatus {
+  imported: boolean;
+  row_count: number;
+  school_count: number;
+  last_write_time?: string | null;
+}
+
+export interface RawPapersResponse {
+  papers: RawPaperOption[];
+  missing_subjects: string[];
+  duplicate_subjects: string[];
+  overview?: RawOverviewStatus;
+}
+
+export interface RawPreviewColumn {
+  key: string;
+  title: string;
+}
+
+export interface RawImportResult {
+  total_rows: number;
+  valid_rows: number;
+  error_rows: ScoreImportErrorRow[];
+  warnings?: RawImportWarning[];
+  summary: Record<string, unknown>;
+  preview_sample: Array<Record<string, unknown>>;
+  preview_columns?: RawPreviewColumn[];
+}
+
+export interface RawImportResponse {
+  ok: boolean;
+  message: string;
+  data: RawImportResult | null;
+}
+
+const RAW_IMPORT_TIMEOUT_MS = 300_000;
+
+function rawImportTimeoutSignal(): AbortSignal {
+  const timeout = AbortSignal as typeof AbortSignal & {
+    timeout?: (ms: number) => AbortSignal;
+  };
+  if (typeof timeout.timeout === "function") {
+    return timeout.timeout(RAW_IMPORT_TIMEOUT_MS);
+  }
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), RAW_IMPORT_TIMEOUT_MS);
+  return controller.signal;
+}
+
 export interface GenerateReportRequest {
   datasource_id: number;
   report_type: string;
@@ -460,10 +527,8 @@ export const educationApi = {
     return body.data;
   },
 
-  async getLineReachMeta(datasourceId: number): Promise<LineReachMeta> {
-    const params = new URLSearchParams();
-    params.set("datasource_id", String(datasourceId));
-    const resp = await fetch(`${getApiBaseUrl()}/education/dashboards/line-reach/meta?${params}`, {
+  async getLineReachMeta(): Promise<LineReachMeta> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/dashboards/line-reach/meta`, {
       headers: await authHeaders()
     });
     if (resp.status === 401) throw new Error("Unauthorized");
@@ -477,14 +542,17 @@ export const educationApi = {
     return body.data;
   },
 
-  async getLineReach(query: LineReachQuery): Promise<LineReachResult> {
+  async getLineReach(query: LineReachQuery = {}): Promise<LineReachResult> {
     const params = new URLSearchParams();
-    params.set("datasource_id", String(query.datasource_id));
     if (query.exam_name) params.set("exam_name", query.exam_name);
     if (query.track) params.set("track", query.track);
-    const resp = await fetch(`${getApiBaseUrl()}/education/dashboards/line-reach?${params}`, {
-      headers: await authHeaders()
-    });
+    const qs = params.toString();
+    const resp = await fetch(
+      `${getApiBaseUrl()}/education/dashboards/line-reach${qs ? `?${qs}` : ""}`,
+      {
+        headers: await authHeaders()
+      }
+    );
     if (resp.status === 401) throw new Error("Unauthorized");
     const body = (await resp.json()) as { code?: number; message?: string; data?: LineReachResult };
     if ((body.code ?? 200) === 403) {
@@ -496,10 +564,8 @@ export const educationApi = {
     return body.data;
   },
 
-  async listFractionBar(datasourceId: number): Promise<FractionBarListResult> {
-    const params = new URLSearchParams();
-    params.set("datasource_id", String(datasourceId));
-    const resp = await fetch(`${getApiBaseUrl()}/education/fraction-bar?${params}`, {
+  async listFractionBar(): Promise<FractionBarListResult> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/fraction-bar`, {
       headers: await authHeaders()
     });
     if (resp.status === 401) throw new Error("Unauthorized");
@@ -547,7 +613,6 @@ export const educationApi = {
   },
 
   async recomputeScoreIndicator(
-    datasourceId: number,
     examName?: string
   ): Promise<{ indicator_rows: number; skipped?: string[] }> {
     const resp = await fetch(`${getApiBaseUrl()}/education/score-indicator/recompute`, {
@@ -557,7 +622,6 @@ export const educationApi = {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        datasource_id: datasourceId,
         exam_name: examName || undefined
       })
     });
@@ -574,6 +638,179 @@ export const educationApi = {
       throw new Error(body.message || "重算失败");
     }
     return body.data;
+  },
+
+  async listRawImportBatches(): Promise<ExamBatchOption[]> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/raw-score-import/batches`, {
+      headers: await authHeaders(),
+      signal: rawImportTimeoutSignal()
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: { batches?: ExamBatchOption[] };
+    };
+    if ((body.code ?? 200) !== 200) {
+      throw new Error(body.message || "加载批次失败");
+    }
+    return body.data?.batches ?? [];
+  },
+
+  async createRawImportBatch(
+    batchName: string,
+    examTime: string
+  ): Promise<{ ok: boolean; message: string; data: ExamBatchOption | null }> {
+    const fd = new FormData();
+    fd.append("batch_name", batchName);
+    fd.append("exam_time", examTime);
+    const resp = await fetch(`${getApiBaseUrl()}/education/raw-score-import/batches`, {
+      method: "POST",
+      headers: await authHeaders(),
+      body: fd,
+      signal: rawImportTimeoutSignal()
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: ExamBatchOption;
+    };
+    return {
+      ok: (body.code ?? 200) === 200,
+      message: body.message || "",
+      data: body.data ?? null
+    };
+  },
+
+  async listRawImportPapers(examBatchId: number): Promise<RawPapersResponse> {
+    const params = new URLSearchParams({ exam_batch_id: String(examBatchId) });
+    const resp = await fetch(
+      `${getApiBaseUrl()}/education/raw-score-import/papers?${params.toString()}`,
+      {
+        headers: await authHeaders(),
+        signal: rawImportTimeoutSignal()
+      }
+    );
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: RawPapersResponse;
+    };
+    if ((body.code ?? 200) !== 200 || !body.data) {
+      throw new Error(body.message || "加载试卷失败");
+    }
+    return {
+      papers: body.data.papers ?? [],
+      missing_subjects: body.data.missing_subjects ?? [],
+      duplicate_subjects: body.data.duplicate_subjects ?? [],
+      overview: body.data.overview ?? {
+        imported: false,
+        row_count: 0,
+        school_count: 0,
+        last_write_time: null
+      }
+    };
+  },
+
+  async downloadRawImportTemplate(
+    kind: "overview" | "detail",
+    examId?: number,
+    subject?: string
+  ): Promise<void> {
+    const params = new URLSearchParams();
+    if (examId != null) params.set("exam_id", String(examId));
+    const qs = params.toString();
+    const resp = await fetch(
+      `${getApiBaseUrl()}/education/raw-score-import/templates/${kind}${qs ? `?${qs}` : ""}`,
+      {
+        headers: await authHeaders()
+      }
+    );
+    if (resp.status === 401) throw new Error("Unauthorized");
+    if (!resp.ok) {
+      let msg = "下载模板失败";
+      try {
+        const body = (await resp.json()) as { message?: string };
+        if (body.message) msg = body.message;
+      } catch {
+        /* ignore */
+      }
+      throw new Error(msg);
+    }
+    const blob = await resp.blob();
+    const header = resp.headers.get("Content-Disposition") || "";
+    const star = /filename\*=UTF-8''([^;]+)/i.exec(header);
+    let fromHeader = "";
+    if (star?.[1]) {
+      try {
+        fromHeader = decodeURIComponent(star[1]);
+      } catch {
+        fromHeader = star[1];
+      }
+    }
+    const looksOfficial =
+      fromHeader.includes("小题分导入模板") || fromHeader.includes("成绩宽表导入模板");
+    const filename = looksOfficial
+      ? fromHeader
+      : kind === "overview"
+        ? "成绩宽表导入模板.xlsx"
+        : subject
+          ? `小题分导入模板(${subject}).xlsx`
+          : fromHeader || "小题分导入模板.xlsx";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
+
+  async postRawOverviewImport(
+    endpoint: "overview-preview" | "overview-execute",
+    formData: FormData
+  ): Promise<RawImportResponse> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/raw-score-import/${endpoint}`, {
+      method: "POST",
+      headers: await authHeaders(),
+      body: formData,
+      signal: rawImportTimeoutSignal()
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const payload = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: RawImportResult;
+    };
+    return {
+      ok: (payload.code ?? 200) === 200,
+      message: payload.message || "",
+      data: payload.data ?? null
+    };
+  },
+
+  async postRawDetailImport(
+    endpoint: "detail-preview" | "detail-execute",
+    formData: FormData
+  ): Promise<RawImportResponse> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/raw-score-import/${endpoint}`, {
+      method: "POST",
+      headers: await authHeaders(),
+      body: formData,
+      signal: rawImportTimeoutSignal()
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const payload = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: RawImportResult;
+    };
+    return {
+      ok: (payload.code ?? 200) === 200,
+      message: payload.message || "",
+      data: payload.data ?? null
+    };
   }
 };
 
@@ -678,6 +915,7 @@ export interface FractionBarExam {
 export interface ExamBatchOption {
   id: number;
   batch_name: string;
+  exam_time?: string | null;
 }
 
 export interface FractionBarListResult {
@@ -688,7 +926,7 @@ export interface FractionBarListResult {
 }
 
 export interface FractionBarUpsertPayload {
-  datasource_id: number;
+  datasource_id?: number;
   exam_batch_id?: number | null;
   exam_name?: string;
   lines: Array<{ track: string; line_code: string; threshold: number | null }>;
@@ -736,7 +974,6 @@ export interface LineReachMeta {
 }
 
 export interface LineReachQuery {
-  datasource_id: number;
   exam_name?: string;
   track?: string;
 }

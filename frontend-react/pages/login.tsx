@@ -116,7 +116,7 @@ export default function LoginPage() {
                   <div className="relative z-10">
                     <div className="mb-9 text-center">
                       <h2 className="m-0 text-white text-[20px] sm:text-[22px] font-semibold leading-snug tracking-wide">
-                        <span className="block">扬州市学情/考情分析</span>
+                        <span className="block">扬州市学情分析</span>
                         <span className="block mt-1.5 text-[18px] sm:text-[20px] font-medium text-white/95">
                           智能体
                         </span>

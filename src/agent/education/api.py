@@ -15,12 +15,12 @@ import asyncio
 import json
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, Request, UploadFile
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from audit.service.decorators import audit_access
-from common.exceptions.base import BadRequestException
+from common.exceptions.base import BadRequestException, NotFoundException
 from common.schemas.response import error_response, success_response
 from src.agent.education import config_store
 from src.agent.education.config import config_to_public_dict
@@ -171,6 +171,26 @@ def _build_orchestrator(
     )
 
 
+def _raise_if_out_of_scope(
+    user_id: int,
+    *parts: Any,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+) -> None:
+    from common.exceptions.base import ForbiddenException
+    from datasource.service.edu_permission import edu_scope_dict_for_user_id
+    from src.agent.education.scope_guard import out_of_scope_named
+
+    msg = out_of_scope_named(
+        edu_scope_dict_for_user_id(int(user_id)),
+        *parts,
+        datasource_id=datasource_id,
+        workspace_oid=workspace_oid,
+    )
+    if msg:
+        raise ForbiddenException(msg)
+
+
 @router.post("/batch-report")
 @audit_access(datasource_id_arg="req.datasource_id", query_arg="req.question")
 async def batch_report(
@@ -194,6 +214,14 @@ async def batch_report(
 
     with get_db_session() as session:
         assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
+    _raise_if_out_of_scope(
+        int(current_user.id),
+        question,
+        *req.class_names,
+        (req.filters or {}).get("school_name") or (req.filters or {}).get("school"),
+        datasource_id=req.datasource_id,
+        workspace_oid=workspace_oid,
+    )
     ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
     orch = _build_orchestrator(req.datasource_id, ws_oid, user_id=int(current_user.id))
 
@@ -273,6 +301,12 @@ async def diagnostic_report(
 
     with get_db_session() as session:
         assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
+    _raise_if_out_of_scope(
+        int(current_user.id),
+        req.question,
+        datasource_id=req.datasource_id,
+        workspace_oid=workspace_oid,
+    )
     ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
     orch = _build_orchestrator(req.datasource_id, ws_oid, user_id=int(current_user.id))
     res = await orch.run(req.question, audience_hint=req.audience)
@@ -359,6 +393,13 @@ async def generate_report(
             raise BadRequestException(f"无效的受众: {req.audience}") from exc
 
     filters = {str(k): str(v) for k, v in (req.filters or {}).items() if v is not None and str(v).strip()}
+    _raise_if_out_of_scope(
+        int(current_user.id),
+        filters.get("class_name") or filters.get("class"),
+        filters.get("school_name") or filters.get("school"),
+        datasource_id=req.datasource_id,
+        workspace_oid=workspace_oid,
+    )
     spec = ReportSpec(
         report_type=report_type,
         audience=audience,
@@ -916,27 +957,22 @@ async def _load_line_reach_bar_rows(execute) -> list[dict[str, Any]]:
 
 @router.get("/dashboards/line-reach/meta")
 async def line_reach_meta(
-    datasource_id: int,
+    datasource_id: str | None = Query(None, description="已忽略；始终解析名为 exam 的数据源"),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     """达线看板筛选项：考试、选科方向。"""
-    from datasource.service.edu_permission import parse_edu_scope
     from src.agent.education.line_reach import (
         build_line_reach_payload,
         can_access_line_reach,
     )
-    from src.common.core.database import get_db_session
-    from system.crud.crud_user import get_user_by_id
 
-    with get_db_session() as session:
-        assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
-        user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
+    _ = datasource_id, workspace_oid
+    ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
     if not can_access_line_reach(scope):
         return error_response(code=403, message="学生账号不可查看达线看板")
 
-    orch = _build_orchestrator(datasource_id, workspace_oid, user_id=int(current_user.id))
+    orch = _build_orchestrator(ds_id, ds_oid, user_id=int(current_user.id))
     bar_rows = await _load_line_reach_bar_rows(orch._execute_sql)
     payload = build_line_reach_payload(
         bar_rows,
@@ -955,14 +991,13 @@ async def line_reach_meta(
 
 @router.get("/dashboards/line-reach")
 async def line_reach_dashboard(
-    datasource_id: int,
+    datasource_id: str | None = Query(None, description="已忽略；始终解析名为 exam 的数据源"),
     exam_name: Optional[str] = None,
     track: Optional[str] = None,
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     """各地区预测线达线看板：全市 KPI + 区县表（可含学校展开）。"""
-    from datasource.service.edu_permission import parse_edu_scope
     from src.agent.education.line_reach import (
         can_access_line_reach,
         normalize_fraction_bars,
@@ -970,17 +1005,13 @@ async def line_reach_dashboard(
         remap_agg_rows,
         rows_as_dicts,
     )
-    from src.common.core.database import get_db_session
-    from system.crud.crud_user import get_user_by_id
 
-    with get_db_session() as session:
-        assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
-        user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
+    _ = datasource_id, workspace_oid
+    ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
     if not can_access_line_reach(scope):
         return error_response(code=403, message="学生账号不可查看达线看板")
 
-    orch = _build_orchestrator(datasource_id, workspace_oid, user_id=int(current_user.id))
+    orch = _build_orchestrator(ds_id, ds_oid, user_id=int(current_user.id))
     execute = orch._execute_sql
     exam = (exam_name or "").strip()
     track_v = (track or "").strip()
@@ -1046,15 +1077,41 @@ class FractionBarLinePayload(BaseModel):
 
 
 class FractionBarUpsertRequest(BaseModel):
-    datasource_id: int
+    datasource_id: Optional[int] = Field(None, description="已忽略；始终解析名为 exam 的数据源")
     exam_batch_id: Optional[int] = Field(None, description="tb_exam_batch.id；优先按批次写入")
     exam_name: Optional[str] = Field(None, description="无 exam_batch_id 时的兜底考试名")
     lines: list[FractionBarLinePayload] = Field(default_factory=list)
 
 
 class ScoreIndicatorRecomputeRequest(BaseModel):
-    datasource_id: int
+    datasource_id: Optional[int] = Field(None, description="已忽略；始终解析名为 exam 的数据源")
     exam_name: Optional[str] = Field(None, description="空则重算分数线表中全部考试")
+
+
+_EXAM_DATASOURCE_NAME = "exam"
+
+
+def _require_exam_datasource(session: Any) -> Any:
+    """全市考试库：按名称 exam 全局查找，不跟当前工作空间走。"""
+    from datasource.crud import crud_datasource
+
+    ds = crud_datasource.get_datasource_by_name(session, _EXAM_DATASOURCE_NAME)
+    if ds is None:
+        raise NotFoundException("未找到 exam 数据源")
+    return ds
+
+
+def _exam_line_tool_context(current_user: UserResponse) -> tuple[int, int, Any]:
+    """返回 (datasource_id, ds_oid, edu_scope)。"""
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.common.core.database import get_db_session
+    from system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        ds = _require_exam_datasource(session)
+        user = get_user_by_id(session, int(current_user.id))
+        scope = parse_edu_scope(user)
+        return int(ds.id), int(ds.oid), scope
 
 
 def _deny_student_line_tools(scope: Any) -> dict | None:
@@ -1067,25 +1124,20 @@ def _deny_student_line_tools(scope: Any) -> dict | None:
 
 @router.get("/fraction-bar")
 async def list_fraction_bar(
-    datasource_id: int,
+    datasource_id: str | None = Query(None, description="已忽略；始终解析名为 exam 的数据源"),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     """列出 tb_fraction_bar 已有考试与可录入线种列。"""
-    from datasource.service.edu_permission import parse_edu_scope
     from src.agent.education.score_indicator import list_fraction_bars
     from src.agent.resource.tool.business import _load_datasource
-    from src.common.core.database import get_db_session
-    from system.crud.crud_user import get_user_by_id
 
-    with get_db_session() as session:
-        assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
-        user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
+    _ = datasource_id, workspace_oid
+    ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
     denied = _deny_student_line_tools(scope)
     if denied is not None:
         return denied
-    db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
+    db_type, config, _ = _load_datasource(ds_id, ds_oid)
     data = await asyncio.to_thread(list_fraction_bars, db_type, config)
     return success_response(data)
 
@@ -1097,23 +1149,18 @@ async def upsert_fraction_bar(
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     """新增或更新一场考试的预测分数线，并重算 tb_score_indicator。"""
-    from datasource.service.edu_permission import parse_edu_scope
     from src.agent.education.score_indicator import upsert_fraction_bar_and_recompute
     from src.agent.resource.tool.business import _load_datasource
-    from src.common.core.database import get_db_session
-    from system.crud.crud_user import get_user_by_id
 
+    _ = workspace_oid
     exam = (req.exam_name or "").strip()
     if req.exam_batch_id is None and not exam:
         raise BadRequestException("请选择考试")
-    with get_db_session() as session:
-        assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
-        user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
+    ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
     denied = _deny_student_line_tools(scope)
     if denied is not None:
         return denied
-    db_type, config, _ = _load_datasource(req.datasource_id, workspace_oid)
+    db_type, config, _ = _load_datasource(ds_id, ds_oid)
     lines = [x.model_dump() for x in req.lines]
     try:
         stats = await asyncio.to_thread(
@@ -1141,20 +1188,15 @@ async def recompute_score_indicator(
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     """按考试重算 tb_score_indicator；exam_name 为空则回填全部已有分数线考试。"""
-    from datasource.service.edu_permission import parse_edu_scope
     from src.agent.education.score_indicator import recompute_exams
     from src.agent.resource.tool.business import _load_datasource
-    from src.common.core.database import get_db_session
-    from system.crud.crud_user import get_user_by_id
 
-    with get_db_session() as session:
-        assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
-        user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
+    _ = workspace_oid
+    ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
     denied = _deny_student_line_tools(scope)
     if denied is not None:
         return denied
-    db_type, config, _ = _load_datasource(req.datasource_id, workspace_oid)
+    db_type, config, _ = _load_datasource(ds_id, ds_oid)
     exam = (req.exam_name or "").strip()
     names = [exam] if exam else None
     try:
@@ -1437,3 +1479,396 @@ async def confirm_anomaly_alert(
         if row is None:
             return error_response(code=404, message="异常提醒不存在或无权确认")
         return success_response(alert_to_dict(row), message="已确认处理")
+
+
+def _prepare_raw_import(current_user: UserResponse, workspace_oid: int):
+    from common.core.database import get_db_session
+    from common.exceptions.base import ForbiddenException
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.agent.education.raw_import import (
+        assert_raw_import_role_allowed,
+        resolve_edu_datasource_id,
+    )
+    from src.agent.resource.tool.business import _load_datasource
+    from system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        ds_id = resolve_edu_datasource_id(session, workspace_oid)
+        if not ds_id:
+            raise BadRequestException("当前工作空间未登记 edu 业务库，无法导入原始成绩")
+        assert_datasource_accessible(session, current_user, ds_id, workspace_oid)
+        user = get_user_by_id(session, int(current_user.id))
+        scope = parse_edu_scope(user)
+        err = assert_raw_import_role_allowed(scope)
+        if err:
+            raise ForbiddenException(err)
+    db_type, config, _ = _load_datasource(ds_id, workspace_oid)
+    return ds_id, scope, db_type, config
+
+
+def _read_raw_upload_file(file: UploadFile) -> bytes:
+    name = (file.filename or "").lower()
+    if not name.endswith((".xlsx", ".xls")):
+        raise BadRequestException("请上传 .xlsx/.xls 格式的 Excel 文件")
+    data = file.file.read()
+    if not data:
+        raise BadRequestException("上传文件为空")
+    return data
+
+
+def _raw_result_payload(result) -> dict:
+    from src.agent.education.score_import import import_result_to_dict
+
+    payload = import_result_to_dict(result)
+    warnings = list(payload.get("warnings") or [])
+    mismatch = (result.summary or {}).get("subject_mismatch")
+    if mismatch:
+        warnings.append({"row": 0, "message": str(mismatch)})
+    payload["warnings"] = warnings
+    return payload
+
+
+def _run_raw_overview_alert_scan(
+    *,
+    db_type: str,
+    config: dict,
+    workspace_oid: int,
+    datasource_id: int,
+    resolved_rows: list,
+    exam_batch_id: int,
+) -> None:
+    """宽表写入成功后的异常扫描：放后台跑，失败只记日志，不阻断导入响应。"""
+    import logging
+
+    from common.core.database import get_db_session
+    from src.agent.education.alert_service import scan_alerts_after_import
+
+    try:
+        with get_db_session() as session:
+            scan_alerts_after_import(
+                session,
+                db_type=db_type,
+                config=config,
+                workspace_oid=int(workspace_oid),
+                datasource_id=int(datasource_id),
+                resolved_rows=list(resolved_rows or []),
+                exam_batch_id=int(exam_batch_id),
+            )
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("raw overview alert scan failed")
+
+
+def _raw_execute_error(result, payload: dict) -> dict:
+    write_failed = any(getattr(e, "field", "") == "写入" for e in (result.error_rows or []))
+    if write_failed:
+        return error_response(
+            code=400,
+            message="写入失败，部分数据可能已入库，请整文件重导",
+            data=payload,
+        )
+    return error_response(code=400, message="校验未通过", data=payload)
+
+
+@router.get("/raw-score-import/batches")
+@audit_access(query_arg="current_user.id")
+async def list_raw_import_batches(
+    request: Request,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from datasource.db.db import execute_sql
+
+    _ds_id, _scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    ok, msg, data = execute_sql(
+        db_type,
+        config,
+        "SELECT id, batch_name, exam_time FROM tb_exam_batch ORDER BY exam_time DESC NULLS LAST, id DESC LIMIT 500",
+    )
+    if not ok:
+        raise BadRequestException(msg or "查询批次失败")
+    cols = list((data or {}).get("columns") or [])
+    rows = []
+    for row in (data or {}).get("rows") or []:
+        if isinstance(row, dict):
+            rec = row
+        else:
+            rec = {cols[i]: row[i] for i in range(min(len(cols), len(row)))}
+        rows.append(
+            {
+                "id": rec.get("id"),
+                "batch_name": rec.get("batch_name"),
+                "exam_time": rec.get("exam_time"),
+            }
+        )
+    return success_response(data={"batches": rows})
+
+
+@router.post("/raw-score-import/batches")
+@audit_access(query_arg="batch_name")
+async def create_raw_import_batch(
+    request: Request,
+    batch_name: str = Form(...),
+    exam_time: str = Form(...),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from datasource.db.db import WriteDbSession
+
+    name = (batch_name or "").strip()
+    when = (exam_time or "").strip()
+    if not name:
+        raise BadRequestException("批次名称不能为空")
+    _ds_id, _scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    with WriteDbSession(db_type, config) as session:
+        ok, msg, data = session.execute_query(
+            "SELECT id, batch_name, exam_time FROM tb_exam_batch WHERE batch_name = %s",
+            (name,),
+        )
+        if not ok:
+            raise BadRequestException(msg or "查询批次失败")
+        cols = list((data or {}).get("columns") or [])
+        existing = (data or {}).get("rows") or []
+        if existing:
+            row = existing[0]
+            rec = (
+                row
+                if isinstance(row, dict)
+                else {cols[i]: row[i] for i in range(min(len(cols), len(row)))}
+            )
+            return error_response(
+                code=400,
+                message=f"批次『{name}』已存在",
+                data={
+                    "id": rec.get("id"),
+                    "batch_name": rec.get("batch_name"),
+                    "exam_time": rec.get("exam_time"),
+                },
+            )
+        ok, msg, _ = session.execute_write(
+            "INSERT INTO tb_exam_batch (batch_name, exam_time) VALUES (%s, %s)",
+            (name, when),
+        )
+        if not ok:
+            session.rollback()
+            raise BadRequestException(msg or "创建批次失败")
+        session.commit()
+        ok2, _msg2, data2 = session.execute_query(
+            "SELECT id, batch_name, exam_time FROM tb_exam_batch WHERE batch_name = %s",
+            (name,),
+        )
+    if not ok2:
+        raise BadRequestException("创建批次后查询失败")
+    cols2 = list((data2 or {}).get("columns") or [])
+    row2 = ((data2 or {}).get("rows") or [None])[0]
+    if row2 is None:
+        raise BadRequestException("创建批次后未找到记录")
+    rec = row2 if isinstance(row2, dict) else {cols2[i]: row2[i] for i in range(min(len(cols2), len(row2)))}
+    return success_response(
+        data={"id": rec.get("id"), "batch_name": rec.get("batch_name"), "exam_time": rec.get("exam_time")}
+    )
+
+
+@router.get("/raw-score-import/papers")
+@audit_access(query_arg="exam_batch_id")
+async def list_raw_import_papers(
+    request: Request,
+    exam_batch_id: int = Query(...),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from datasource.db.db import execute_sql
+    from src.agent.education.raw_import import (
+        _REQUIRED_SUBJECTS,
+        _coerce_int_id,
+        _detail_import_status_by_exam,
+        _empty_detail_status,
+        _overview_import_status,
+    )
+
+    _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    ok, msg, data = execute_sql(
+        db_type,
+        config,
+        (
+            "SELECT id, subject, exam_score FROM tb_exam "
+            f"WHERE exam_batch_id = {int(exam_batch_id)}"
+        ),
+    )
+    if not ok:
+        raise BadRequestException(msg or "查询试卷失败")
+    cols = list((data or {}).get("columns") or [])
+    papers = []
+    seen: dict[str, int] = {}
+    duplicate_subjects: list[str] = []
+    for row in (data or {}).get("rows") or []:
+        rec = row if isinstance(row, dict) else {cols[i]: row[i] for i in range(min(len(cols), len(row)))}
+        subject = str(rec.get("subject") or rec.get("subject_name") or "").strip()
+        papers.append(
+            {
+                "exam_id": rec.get("id"),
+                "subject": subject,
+                "exam_score": rec.get("exam_score"),
+            }
+        )
+        if subject:
+            seen[subject] = seen.get(subject, 0) + 1
+            if seen[subject] == 2:
+                duplicate_subjects.append(subject)
+    present = {p["subject"] for p in papers if p["subject"]}
+    missing_subjects = [s for s in _REQUIRED_SUBJECTS if s not in present]
+    overview = _overview_import_status(db_type, config, int(exam_batch_id), scope)
+    detail_by_exam = _detail_import_status_by_exam(
+        db_type, config, [p.get("exam_id") for p in papers], scope
+    )
+    for paper in papers:
+        eid = _coerce_int_id(paper.get("exam_id"))
+        paper["detail"] = dict(
+            detail_by_exam.get(eid, _empty_detail_status())
+            if eid is not None
+            else _empty_detail_status()
+        )
+    return success_response(
+        data={
+            "papers": papers,
+            "missing_subjects": missing_subjects,
+            "duplicate_subjects": duplicate_subjects,
+            "overview": overview,
+        }
+    )
+
+
+@router.get("/raw-score-import/templates/{kind}")
+@audit_access(query_arg="exam_id")
+async def download_raw_import_template(
+    request: Request,
+    kind: str,
+    exam_id: int | None = Query(None),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> Response:
+    from urllib.parse import quote
+
+    from src.agent.education.raw_import import (
+        build_raw_detail_template,
+        build_raw_overview_template,
+        load_raw_detail_template_meta,
+    )
+
+    _ds_id, _scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    name = (kind or "").strip().lower()
+    if name == "overview":
+        payload = build_raw_overview_template()
+        filename = "成绩宽表导入模板.xlsx"
+    elif name == "detail":
+        if exam_id is None:
+            raise BadRequestException("请选择科目后再下载小题分模板")
+        try:
+            subject, questions = load_raw_detail_template_meta(db_type, config, int(exam_id))
+        except ValueError as e:
+            raise BadRequestException(str(e)) from e
+        if not questions:
+            raise BadRequestException("该试卷没有题目，无法生成小题分模板")
+        payload = build_raw_detail_template(subject=subject, questions=questions)
+        filename = f"小题分导入模板({subject}).xlsx"
+    else:
+        raise BadRequestException("模板类型须为 overview 或 detail")
+    ascii_name = "overview-template.xlsx" if name == "overview" else "detail-template.xlsx"
+    return Response(
+        content=payload,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{quote(filename)}'
+            )
+        },
+    )
+
+
+@router.post("/raw-score-import/overview-preview")
+@audit_access(query_arg="exam_batch_id")
+async def preview_raw_overview(
+    request: Request,
+    exam_batch_id: int = Form(...),
+    file: UploadFile = File(...),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from src.agent.education.raw_import import preview_raw_overview_import
+
+    file_bytes = _read_raw_upload_file(file)
+    _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    result = preview_raw_overview_import(file_bytes, exam_batch_id, scope, db_type, config)
+    return success_response(data=_raw_result_payload(result))
+
+
+@router.post("/raw-score-import/overview-execute")
+@audit_access(query_arg="exam_batch_id")
+async def execute_raw_overview(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    exam_batch_id: int = Form(...),
+    file: UploadFile = File(...),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from src.agent.education.raw_import import execute_raw_overview_import
+
+    file_bytes = _read_raw_upload_file(file)
+    ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    result = await asyncio.to_thread(
+        execute_raw_overview_import, file_bytes, exam_batch_id, scope, db_type, config
+    )
+    payload = _raw_result_payload(result)
+    if result.error_rows:
+        return _raw_execute_error(result, payload)
+    payload.setdefault("summary", {})["alert_scan"] = {"pending": True}
+    background_tasks.add_task(
+        _run_raw_overview_alert_scan,
+        db_type=db_type,
+        config=config,
+        workspace_oid=int(workspace_oid),
+        datasource_id=int(ds_id),
+        resolved_rows=list(result.resolved_rows or []),
+        exam_batch_id=int(exam_batch_id),
+    )
+    return success_response(data=payload)
+
+
+@router.post("/raw-score-import/detail-preview")
+@audit_access(query_arg="exam_id")
+async def preview_raw_detail(
+    request: Request,
+    exam_batch_id: int = Form(...),
+    exam_id: int = Form(...),
+    file: UploadFile = File(...),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from src.agent.education.raw_import import preview_raw_detail_import
+
+    file_bytes = _read_raw_upload_file(file)
+    _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    result = preview_raw_detail_import(file_bytes, exam_batch_id, exam_id, scope, db_type, config)
+    return success_response(data=_raw_result_payload(result))
+
+
+@router.post("/raw-score-import/detail-execute")
+@audit_access(query_arg="exam_id")
+async def execute_raw_detail(
+    request: Request,
+    exam_batch_id: int = Form(...),
+    exam_id: int = Form(...),
+    file: UploadFile = File(...),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from src.agent.education.raw_import import execute_raw_detail_import
+
+    file_bytes = _read_raw_upload_file(file)
+    _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    result = execute_raw_detail_import(file_bytes, exam_batch_id, exam_id, scope, db_type, config)
+    payload = _raw_result_payload(result)
+    if result.error_rows:
+        return _raw_execute_error(result, payload)
+    return success_response(data=payload)
+

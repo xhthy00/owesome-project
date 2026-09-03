@@ -3,15 +3,29 @@
 from datetime import datetime
 from typing import List, Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from common.utils.aes import decrypt_conf, encrypt_conf
 from datasource.models.datasource import CoreDatasource
-from common.utils.aes import encrypt_conf, decrypt_conf
 
 
 def get_datasource_by_id(session: Session, datasource_id: int) -> Optional[CoreDatasource]:
     """Get datasource by ID."""
     return session.query(CoreDatasource).filter(CoreDatasource.id == datasource_id).first()
+
+
+def get_datasource_by_name(session: Session, name: str) -> Optional[CoreDatasource]:
+    """按名称全局查找（不限工作空间）；同名取 id 最小的一条。"""
+    key = (name or "").strip().lower()
+    if not key:
+        return None
+    return (
+        session.query(CoreDatasource)
+        .filter(func.lower(CoreDatasource.name) == key)
+        .order_by(CoreDatasource.id.asc())
+        .first()
+    )
 
 
 def get_datasources(

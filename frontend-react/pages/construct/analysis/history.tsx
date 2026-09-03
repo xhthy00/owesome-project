@@ -15,6 +15,7 @@ import {
   type ReportHistoryItem
 } from "@/api/education";
 import { sanitizeFileName } from "@/utils/exportReportWord";
+import { bindIframeWatermark, stampHtmlWatermark } from "@/utils/userWatermark";
 
 export default function AnalysisReportHistoryPage() {
   const [loading, setLoading] = useState(false);
@@ -65,7 +66,7 @@ export default function AnalysisReportHistoryPage() {
       return;
     }
     const title = sanitizeFileName(row.title || "report");
-    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const blob = new Blob([stampHtmlWatermark(html)], { type: "text/html;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -204,6 +205,7 @@ export default function AnalysisReportHistoryPage() {
             sandbox="allow-scripts allow-same-origin"
             referrerPolicy="no-referrer"
             style={{ width: "100%", height: "75vh", border: 0 }}
+            onLoad={(e) => bindIframeWatermark(e.currentTarget)}
           />
         ) : (
           <div style={{ padding: 24, color: "rgba(0,0,0,0.45)" }}>暂无内容</div>

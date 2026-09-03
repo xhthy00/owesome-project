@@ -25,7 +25,7 @@
   "skills": [
     {
       "id": "class_overview",
-      "name": "单次学情（考情）诊断",
+      "name": "单次学情诊断",
       "icon": "dashboard-outlined",
       "tags": [
         "班级总览",
@@ -41,7 +41,7 @@
     },
     {
       "id": "grade_comparison",
-      "name": "学情（考情）横向比对",
+      "name": "学情横向比对",
       "icon": "apartment-outlined",
       "tags": [
         "班级对比",

@@ -56,6 +56,8 @@ dependencies = [
     "python-docx>=1.2.0",
     "jinja2>=3.1,<4.0",
     "pymupdf>=1.24.0",
+    "xlwt",
+    "xlutils",
 ]
 
 [project.optional-dependencies]

@@ -23,10 +23,7 @@ import {
   type LineReachSchoolRow,
   type LineReachView
 } from "@/api/education";
-import { datasourceApi } from "@/api/datasource";
 import G2Chart from "@/components/chat/G2Chart";
-
-const EXAM_DS_NAME = "exam";
 
 type ScopeTab = "all" | "physics" | "history";
 
@@ -117,7 +114,6 @@ function KpiCard({
 }
 
 export default function LineReachPage() {
-  const [datasourceId, setDatasourceId] = useState<number | null>(null);
   const [examName, setExamName] = useState<string>("");
   const [scopeTab, setScopeTab] = useState<ScopeTab>("all");
   const [chartLine, setChartLine] = useState<string>("");
@@ -137,33 +133,11 @@ export default function LineReachPage() {
       }
     : null;
 
-  const loadDatasource = useCallback(async () => {
-    try {
-      const res = await datasourceApi.list({ limit: 200 });
-      const items = res.items || [];
-      const examDs = items.find((d) => d.name.toLowerCase() === EXAM_DS_NAME);
-      if (!examDs) {
-        message.error("未找到 exam 数据源");
-        setDatasourceId(null);
-        return;
-      }
-      setDatasourceId(examDs.id);
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : "加载数据源失败");
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadDatasource();
-  }, [loadDatasource]);
-
   const loadData = useCallback(async () => {
-    if (!datasourceId) return;
     setLoading(true);
     setDenied("");
     try {
       const data = await educationApi.getLineReach({
-        datasource_id: datasourceId,
         exam_name: examName || undefined
       });
       setExams(data.exams || []);
@@ -184,12 +158,11 @@ export default function LineReachPage() {
     } finally {
       setLoading(false);
     }
-  }, [datasourceId, examName]);
+  }, [examName]);
 
   useEffect(() => {
-    if (!datasourceId) return;
     void loadData();
-  }, [datasourceId, examName, loadData]);
+  }, [examName, loadData]);
 
   const lines = result?.lines || [];
 

@@ -135,6 +135,7 @@ class WriteDbSession:
                 self.rollback()
             except Exception:
                 pass
+            logger.exception("SQL write failed")
             return False, f"SQL execution failed: {str(e)}", {}
 
     def execute_upsert_batch(
@@ -207,6 +208,7 @@ class WriteDbSession:
                 self.rollback()
             except Exception:
                 pass
+            logger.exception("SQL upsert failed")
             return False, f"SQL execution failed: {str(e)}", {}
 
     def execute_query(

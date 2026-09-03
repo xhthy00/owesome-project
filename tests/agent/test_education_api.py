@@ -171,10 +171,18 @@ def _auth_client(monkeypatch):
         fake_exec_by_user_id,
     )
     monkeypatch.setattr(
+        "datasource.service.edu_permission.edu_scope_dict_for_user_id",
+        lambda _uid: {},
+    )
+    monkeypatch.setattr(
         "src.agent.education.api.assert_datasource_accessible",
         lambda session, user, datasource_id, workspace_oid: SimpleNamespace(
             id=datasource_id, oid=workspace_oid
         ),
+    )
+    monkeypatch.setattr(
+        "src.agent.education.api._require_exam_datasource",
+        lambda session: SimpleNamespace(id=1, oid=1, name="exam"),
     )
 
     app = FastAPI()
@@ -215,6 +223,32 @@ def test_generate_report_class_overview(monkeypatch):
     assert "edu-container" in data["html"]
     assert "初三1班" in data["html"]
     assert data["title"]
+
+
+def test_generate_report_denies_teacher_other_class(monkeypatch):
+    from src.agent.education.scope_guard import OUT_OF_SCOPE_MESSAGE
+
+    client = _auth_client(monkeypatch)
+    monkeypatch.setattr(
+        "datasource.service.edu_permission.edu_scope_dict_for_user_id",
+        lambda _uid: {
+            "edu_role": "teacher",
+            "school_name": "扬州中学",
+            "class_names": ["高一(1)班"],
+        },
+    )
+    r = client.post(
+        "/api/v1/education/generate-report",
+        json={
+            "datasource_id": 1,
+            "report_type": "class_overview",
+            "filters": {"class_name": "高一(3)班", "exam_name": "期中"},
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["code"] == 403
+    assert body["message"] == OUT_OF_SCOPE_MESSAGE
 
 
 def test_generate_report_rejects_unsupported_type(monkeypatch):
@@ -806,6 +840,52 @@ def test_fraction_bar_list_api(monkeypatch):
     assert r.status_code == 200
     assert r.json()["data"]["exams"][0]["exam_name"] == "5月模考"
     assert r.json()["data"]["batches"][0]["id"] == 12
+
+
+def test_fraction_bar_list_without_datasource_id(monkeypatch):
+    client = _auth_client(monkeypatch)
+    _mock_line_reach_session(monkeypatch, edu_role="bureau_admin")
+    monkeypatch.setattr(
+        "src.agent.education.score_indicator.list_fraction_bars",
+        lambda *a, **k: {
+            "columns": ["exam_name"],
+            "line_catalog": [],
+            "exams": [{"exam_name": "5月模考", "exam_batch_id": 12, "lines": []}],
+            "batches": [{"id": 12, "batch_name": "5月模考"}],
+        },
+    )
+    r = client.get("/api/v1/education/fraction-bar")
+    assert r.status_code == 200
+    assert r.json()["data"]["exams"][0]["exam_name"] == "5月模考"
+
+
+def test_require_exam_datasource_ignores_workspace(monkeypatch):
+    from src.agent.education.api import _require_exam_datasource
+
+    ds = SimpleNamespace(id=7, oid=99, name="exam")
+    monkeypatch.setattr(
+        "datasource.crud.crud_datasource.get_datasource_by_name",
+        lambda session, name: ds if str(name).lower() == "exam" else None,
+    )
+    got = _require_exam_datasource(SimpleNamespace())
+    assert got.id == 7
+    assert got.oid == 99
+
+
+def test_require_exam_datasource_missing(monkeypatch):
+    from common.exceptions.base import NotFoundException
+    from src.agent.education.api import _require_exam_datasource
+
+    monkeypatch.setattr(
+        "datasource.crud.crud_datasource.get_datasource_by_name",
+        lambda *a, **k: None,
+    )
+    try:
+        _require_exam_datasource(SimpleNamespace())
+    except NotFoundException as exc:
+        assert "exam" in exc.message
+        return
+    raise AssertionError("expected NotFoundException")
 
 
 def test_score_indicator_recompute_api(monkeypatch):
