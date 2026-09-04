@@ -20,13 +20,16 @@ from src.agent.education.raw_import import (
     RawDetailRow,
     RawOverviewRow,
     _build_detail_write_rows,
+    _build_score_rows,
     _encode_school_token,
     _generate_anon_stu_id,
     _ksh_to_class_name,
     _load_overview_dimensions,
     _normalize_id_str,
     _parse_detail_excel,
+    _parse_jc_year,
     _parse_overview_excel,
+    _resolve_overview_jc,
     _validate_detail_rows,
     _validate_overview_rows,
     assert_raw_import_role_allowed,
@@ -149,6 +152,16 @@ def test_school_token_matches_golden_pair():
 
 def test_anon_stu_id_matches_golden_pair():
     assert _generate_anon_stu_id("GZ_F57E7326", "261081010844") == "GZ_F57E7326_54558B0F"
+
+
+def test_parse_jc_year_from_names():
+    assert _parse_jc_year("2026届高三1月期末") == "2026"
+    assert _parse_jc_year("2026届高三1月期末-成绩宽表.xlsx") == "2026"
+    assert _parse_jc_year("成绩宽表.xlsx") is None
+    assert _resolve_overview_jc(2025, "2026届高三1月期末-成绩宽表.xlsx") == "2025"
+    assert _resolve_overview_jc(None, "2026届高三1月期末-成绩宽表.xlsx") == "2026"
+    assert _resolve_overview_jc(None, "成绩宽表.xlsx", "2026届高三1月期末") == "2026"
+    assert _resolve_overview_jc("2024.0") == "2024"
 
 
 def test_ksh_to_class_name():
@@ -297,6 +310,65 @@ def test_validate_overview_score_out_of_range():
     assert any("超满分" in e.message for e in errors)
 
 
+def test_validate_overview_ignores_unelected_over_max():
+    scores = {s: 80.0 for s in _SUBJECTS}
+    scores["地理"] = 200.0
+    row = _raw_row(scores=scores, others={"XKKM": "物化生"})
+    valid, errors = _validate_overview_rows([row], _overview_dims())
+    assert valid == [row]
+    assert errors == []
+
+
+def test_validate_overview_elected_over_max_still_errors():
+    scores = {s: 80.0 for s in _SUBJECTS}
+    scores["地理"] = 200.0
+    row = _raw_row(scores=scores, others={"XKKM": "物化地"})
+    valid, errors = _validate_overview_rows([row], _overview_dims())
+    assert valid == []
+    assert any("地理" in e.message and "超满分" in e.message for e in errors)
+
+
+def test_build_score_rows_skips_unelected_zero_subjects():
+    scores = {s: 80.0 for s in _SUBJECTS}
+    scores["历史"] = 0.0
+    scores["政治"] = 0.0
+    scores["地理"] = 0.0
+    row = _raw_row(scores=scores, others={"XKKM": "物化生"})
+    out = _build_score_rows([row], _overview_dims(), set())
+    assert {r["subject_name"] for r in out} == {"语文", "数学", "英语", "物理", "化学", "生物"}
+
+
+def test_build_score_rows_keeps_elected_zero_score():
+    scores = {s: 0.0 for s in _SUBJECTS}
+    scores["语文"] = 110.0
+    scores["数学"] = 120.0
+    scores["英语"] = 90.0
+    scores["历史"] = 70.0
+    scores["政治"] = 60.0
+    scores["地理"] = 0.0
+    row = _raw_row(scores=scores, others={"XKKM": "史政地"})
+    out = _build_score_rows([row], _overview_dims(), set())
+    by_name = {r["subject_name"]: r["score"] for r in out}
+    assert set(by_name) == {"语文", "数学", "英语", "历史", "政治", "地理"}
+    assert by_name["地理"] == 0.0
+
+
+def test_build_score_rows_history_accepts_li_marker():
+    scores = {s: None for s in _SUBJECTS}
+    scores["语文"] = 100.0
+    scores["历史"] = 70.0
+    row = _raw_row(scores=scores, others={"XKKM": "历政地"})
+    out = _build_score_rows([row], _overview_dims(), set())
+    assert {r["subject_name"] for r in out} == {"语文", "历史"}
+
+
+def test_build_score_rows_empty_xkkm_skips_electives():
+    scores = {s: 80.0 for s in _SUBJECTS}
+    row = _raw_row(scores=scores)
+    out = _build_score_rows([row], _overview_dims(), set())
+    assert {r["subject_name"] for r in out} == {"语文", "数学", "英语"}
+
+
 def test_validate_overview_missing_required_paper():
     exams = _full_exams_by_subject()
     del exams["物理"]
@@ -408,6 +480,7 @@ _OVERVIEW_SCHEMA_COLS = {
     "xx",
     "bj",
     "anon_stu_id",
+    "jc",
     "yw",
     "sx",
     "yy",
@@ -506,6 +579,7 @@ def test_execute_overview_upserts_three_tables_for_two_subjects(monkeypatch):
     assert ov["exam_name"] == "2026届高三1月期末"
     assert ov["anon_stu_id"] == "GZ_F57E7326_54558B0F"
     assert ov["bj"] == "高三(10)班"
+    assert ov["jc"] == "2026"
     assert ov["yw"] == 110.0
     assert ov["sx"] == 120.0
     assert student_call["conflict_cols"] == ("id",)
@@ -521,6 +595,96 @@ def test_execute_overview_upserts_three_tables_for_two_subjects(monkeypatch):
     assert result.summary["students_upserted"] == 1
     assert result.summary["score_upserted"] == 2
     assert all(isinstance(v, int) for v in result.summary.values())
+
+
+def test_execute_overview_skips_unelected_subject_zeros(monkeypatch):
+    calls = _patch_overview_io(monkeypatch)
+    data = _build_overview_workbook(
+        [
+            _overview_row(
+                YY=90,
+                WL=80,
+                HX=70,
+                SW=60,
+                LS=0,
+                ZZ=0,
+                DL=0,
+                XKKM="物化生",
+            )
+        ]
+    )
+    result = execute_raw_overview_import(
+        data,
+        1,
+        EduScope(edu_role="bureau_admin"),
+        "pg",
+        {},
+    )
+    assert result.error_rows == []
+    score_call = calls[2]
+    subjects = {r["subject_name"] for r in score_call["rows"]}
+    assert subjects == {"语文", "数学", "英语", "物理", "化学", "生物"}
+    assert all(r["score"] != 0 for r in score_call["rows"])
+
+
+def test_execute_overview_writes_explicit_jc_over_filename(monkeypatch):
+    calls = _patch_overview_io(monkeypatch)
+    data = _build_overview_workbook([_two_subject_overview_row()])
+    result = execute_raw_overview_import(
+        data,
+        1,
+        EduScope(edu_role="bureau_admin"),
+        "pg",
+        {},
+        jc=2025,
+        source_name="2026届高三1月期末-成绩宽表.xlsx",
+    )
+    assert result.error_rows == []
+    overview_call, student_call, _score_call = calls
+    assert overview_call["rows"][0]["jc"] == "2025"
+    assert student_call["rows"][0]["jc"] == "2025"
+
+
+def test_execute_overview_uses_filename_jc_when_batch_has_none(monkeypatch):
+    calls = _patch_overview_io(
+        monkeypatch,
+        dims=_overview_dims(
+            batch={"id": 1, "batch_name": "高三1月期末", "exam_time": "2026-01-15"}
+        ),
+    )
+    data = _build_overview_workbook([_two_subject_overview_row()])
+    result = execute_raw_overview_import(
+        data,
+        1,
+        EduScope(edu_role="bureau_admin"),
+        "pg",
+        {},
+        source_name="2026届高三1月期末-成绩宽表.xlsx",
+    )
+    assert result.error_rows == []
+    overview_call, student_call, _score_call = calls
+    assert overview_call["rows"][0]["jc"] == "2026"
+    assert student_call["rows"][0]["jc"] == "2026"
+
+
+def test_execute_overview_requires_jc_when_unresolvable(monkeypatch):
+    calls = _patch_overview_io(
+        monkeypatch,
+        dims=_overview_dims(
+            batch={"id": 1, "batch_name": "高三1月期末", "exam_time": "2026-01-15"}
+        ),
+    )
+    data = _build_overview_workbook([_two_subject_overview_row()])
+    result = execute_raw_overview_import(
+        data,
+        1,
+        EduScope(edu_role="bureau_admin"),
+        "pg",
+        {},
+        source_name="成绩宽表.xlsx",
+    )
+    assert any(e.field == "届次" for e in result.error_rows)
+    assert calls == []
 
 
 def test_execute_overview_upsert_raise_is_write_error(monkeypatch):
@@ -582,6 +746,7 @@ def test_preview_sample_includes_identity_cols(monkeypatch):
     assert sample["xm"] == "张三"
     assert sample["xx"] == "A05仪征中学"
     assert sample["bj"] == "高三(10)班"
+    assert sample["jc"] == "2026"
     assert sample["zf6m"] == 530.0
     assert sample["yw"] == 110.0
     titles = {c["key"]: c["title"] for c in result.preview_columns}
@@ -590,6 +755,7 @@ def test_preview_sample_includes_identity_cols(monkeypatch):
     assert titles["sfzh"] == "学号"
     assert titles["xm"] == "姓名"
     assert titles["bj"] == "班级"
+    assert titles["jc"] == "届次"
     assert titles["xx"] == "学校"
     assert titles["zf6m"] == "全科总分"
     assert titles["yw"] == "语文"
@@ -652,6 +818,8 @@ def test_preview_sample_follows_excel_and_hides_ry_cols(monkeypatch):
     assert "xm" in keys
     assert "bj" in keys
     assert keys.index("bj") == keys.index("xx") + 1
+    assert "jc" in keys
+    assert keys.index("jc") == keys.index("bj") + 1
     assert "dq" in keys
     assert "xkkm" in keys
     assert sample["dq"] == "仪征"
@@ -665,6 +833,22 @@ def test_preview_sample_follows_excel_and_hides_ry_cols(monkeypatch):
     titles = {c["key"]: c["title"] for c in result.preview_columns}
     assert titles["dq"] == "地区"
     assert titles["xkkm"] == "选考科目组合"
+
+
+def test_preview_sample_uses_explicit_jc(monkeypatch):
+    _patch_overview_io(monkeypatch)
+    data = _build_overview_workbook([_two_subject_overview_row()])
+    result = preview_raw_overview_import(
+        data,
+        1,
+        EduScope(edu_role="bureau_admin"),
+        "pg",
+        {},
+        jc=2025,
+        source_name="2026届高三1月期末-成绩宽表.xlsx",
+    )
+    assert result.error_rows == []
+    assert result.preview_sample[0]["jc"] == "2025"
 
 
 def test_school_admin_foreign_file_execute_does_not_write(monkeypatch):

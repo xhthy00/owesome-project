@@ -1891,6 +1891,7 @@ def _fetch_subject_diagnosis_rows(
     exam_name: str = "",
     class_name: str = "",
     student_id: str = "",
+    exam_ids: list[str] | None = None,
     db_type: str = "pg",
 ) -> dict[str, Any]:
     """查小题/知识点/成绩，带考试名放宽与 exam_id 回退。
@@ -1904,6 +1905,9 @@ def _fetch_subject_diagnosis_rows(
         "exam_name": exam_name,
         "student_id": student_id,
     }
+    pinned_exam_ids = [str(x).strip() for x in (exam_ids or []) if str(x).strip()]
+    if pinned_exam_ids:
+        base_kw["exam_ids"] = pinned_exam_ids
     item_rows: list[dict[str, Any]] = []
     knowledge_rows: list[dict[str, Any]] = []
     score_values: list[float] = []
@@ -2068,6 +2072,7 @@ def _fetch_subject_diagnosis_rows(
         (exam_name or want_class_compare)
         and not student_id
         and score_rows
+        and not pinned_exam_ids
     ):
         from src.agent.education.aggregation import pick_primary_exam_id
 
@@ -5971,6 +5976,349 @@ def compare_knowledge_cohort_tool(
     )
 
 
+def _lookup_school_id_for_display_name(
+    school_name: str,
+    *,
+    datasource_id: int,
+    workspace_oid: int | None,
+    user_id: int | None,
+) -> tuple[str, list[dict[str, Any]]]:
+    """把口语校名解析成 ``tb_school.id``（脱敏码），供 ``sc.school_id`` 过滤。
+
+    仅薄弱学科工具使用，不改共享 ``_school_scope_predicate``。
+    """
+    from src.agent.education.class_weak_subject import school_query_candidates
+
+    raw = (school_name or "").strip()
+    logs: list[dict[str, Any]] = []
+    if not raw:
+        return "", logs
+    if _looks_like_school_id(raw):
+        return raw, logs
+
+    def _ids_from(sql: str, phase: str) -> list[str]:
+        ok, msg, result, sql_run = _run_edu_sql(
+            sql,
+            datasource_id=int(datasource_id),
+            workspace_oid=workspace_oid,
+            user_id=user_id,
+        )
+        rows = _rows_to_dicts(result) if ok else []
+        logs.append(
+            {
+                "label": phase,
+                "success": ok,
+                "row_count": len(rows),
+                "message": msg if not ok else "",
+                "sql_preview": (sql_run or sql)[:400],
+            }
+        )
+        out: list[str] = []
+        seen: set[str] = set()
+        for r in rows:
+            sid = str(r.get("id") or "").strip()
+            if sid and sid not in seen:
+                seen.add(sid)
+                out.append(sid)
+        return out
+
+    for cand in school_query_candidates(raw):
+        lit = _esc(cand)
+        sql = (
+            "SELECT id FROM tb_school "
+            f"WHERE s_name = '{lit}' OR name = '{lit}' OR id = '{lit}' "
+            "LIMIT 5"
+        )
+        ids = _ids_from(sql, f"school_id_exact/{cand}")
+        if len(ids) == 1:
+            return ids[0], logs
+
+    for cand in school_query_candidates(raw):
+        lit = _esc(cand)
+        sql = (
+            "SELECT id FROM tb_school "
+            f"WHERE s_name LIKE '%{lit}' OR name LIKE '%{lit}' "
+            "LIMIT 5"
+        )
+        ids = _ids_from(sql, f"school_id_like/{cand}")
+        if len(ids) == 1:
+            return ids[0], logs
+    return raw, logs
+
+
+@tool()
+def build_class_weak_subject_report_data_tool(
+    class_name: str = "",
+    exam_name: str = "",
+    school_name: str = "",
+    render: bool = True,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """指定班级薄弱学科：同校同年级同一学科、不同班级对比，不是本班各科互比。
+
+    按班际名次/均分差选出薄弱科；有薄弱才下钻最弱 1～2 科小题。
+    """
+    from src.agent.education.class_weak_subject import (
+        build_class_weak_subject_report_data,
+        compare_class_items_vs_peers,
+        compare_class_subjects_vs_peers,
+        identify_weak_subjects,
+        missing_required_slots,
+        pick_drill_subjects,
+        pick_exam_batch_name,
+        render_class_weak_subject_html,
+    )
+    from src.agent.education.query_parse import (
+        _clean_exam_name_candidate,
+        normalize_fullwidth_parentheses,
+    )
+    from src.agent.resource.tool.business import _load_datasource, _sanitize_report_html
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    blocked = _guard_report_when_fact_query(
+        ctx, tool_name="build_class_weak_subject_report_data_tool"
+    )
+    if blocked is not None:
+        return blocked
+
+    cls = normalize_fullwidth_parentheses((class_name or "").strip())
+    exam_raw = (exam_name or "").strip()
+    exam = _clean_exam_name_candidate(exam_raw) or exam_raw
+    if exam and "班" in exam:
+        for token in ("期末", "期中", "月考", "摸底", "模拟"):
+            if token in exam_raw or token in exam:
+                exam = token
+                break
+    school = (school_name or "").strip()
+    school_display = school
+
+    slot_err = missing_required_slots(school, cls, exam)
+    if slot_err:
+        return ToolResult(
+            content=f"build_class_weak_subject_report_data_tool 失败：{slot_err}",
+            data={"error": "missing_required_slots"},
+        )
+
+    ds_id = datasource_id if datasource_id is not None else ctx.get("datasource_id")
+    ws_oid = workspace_oid if workspace_oid is not None else ctx.get("workspace_oid")
+    uid = user_id if user_id is not None else ctx.get("user_id")
+    if not ds_id:
+        return ToolResult(
+            content="build_class_weak_subject_report_data_tool 失败：缺少 datasource_id。",
+            data={"error": "missing datasource_id"},
+        )
+
+    try:
+        db_type, _config, ds_name = _load_datasource(int(ds_id), ws_oid)
+    except Exception as e:
+        return ToolResult(
+            content=f"build_class_weak_subject_report_data_tool 失败：{e}",
+            data={"error": str(e)},
+        )
+
+    sql_logs: list[dict[str, Any]] = []
+    warnings: list[str] = []
+
+    overview_school = _resolve_school_for_class_overview(
+        school_display, tool_runtime_ctx=ctx
+    )
+    if _looks_like_school_id(overview_school):
+        school = overview_school
+    else:
+        school, look_logs = _lookup_school_id_for_display_name(
+            school_display,
+            datasource_id=int(ds_id),
+            workspace_oid=ws_oid,
+            user_id=uid,
+        )
+        sql_logs.extend(look_logs)
+        if school != school_display and _looks_like_school_id(school):
+            warnings.append(f"校名 `{school_display}` 已对齐 school_id={school}")
+
+    def _fetch_scores(
+        *,
+        exam_name_f: str = "",
+        exam_ids_f: list[str] | None = None,
+        skip_exam: bool = False,
+        phase: str,
+    ) -> list[dict[str, Any]]:
+        _detail_wc, score_wc = _diagnosis_where_clause_pair(
+            school_name=school,
+            class_name="",
+            subject_name="",
+            exam_name=exam_name_f,
+            exam_ids=exam_ids_f,
+            skip_exam_name=skip_exam,
+        )
+        _, _, score_sql, _ = _diagnosis_sql_bundle(_detail_wc, score_wc, db_type)
+        ok, msg, score_result, sql_run = _run_edu_sql(
+            score_sql,
+            datasource_id=int(ds_id),
+            workspace_oid=ws_oid,
+            user_id=uid,
+        )
+        sql_logs.append(
+            {
+                "label": f"score/{phase}",
+                "success": ok,
+                "row_count": len((score_result or {}).get("rows") or []) if score_result else 0,
+                "message": msg if not ok else "",
+                "sql_preview": (sql_run or score_sql)[:600],
+            }
+        )
+        if not ok:
+            return []
+        return _rows_to_dicts(score_result)
+
+    score_rows = _fetch_scores(exam_name_f=exam, phase="primary") if exam else []
+    if not score_rows and exam:
+        score_rows = _fetch_scores(skip_exam=True, phase="fallback_no_exam_name")
+        if score_rows:
+            warnings.append(f"考试名 `{exam_raw or exam}` 未命中，已按学校放宽查询")
+    if not score_rows and not exam:
+        score_rows = _fetch_scores(skip_exam=True, phase="no_exam")
+
+    batch: str | None = None
+    if score_rows:
+        user_q = str(
+            ctx.get("user_question")
+            or (ctx.get("constraints") or {}).get("question")
+            or ""
+        )
+        batch = pick_exam_batch_name(
+            score_rows,
+            class_name=cls,
+            question=user_q or exam_raw,
+            exam_hint=exam,
+        )
+        exam_keys = {
+            str(r.get("exam_id") or "").strip()
+            for r in score_rows
+            if isinstance(r, dict) and str(r.get("exam_id") or "").strip()
+        }
+        if batch:
+            batch_ids = sorted(
+                {
+                    str(r.get("exam_id") or "").strip()
+                    for r in score_rows
+                    if isinstance(r, dict)
+                    and str(r.get("exam_name") or "").strip() == batch
+                    and str(r.get("exam_id") or "").strip()
+                }
+            )
+            if batch_ids:
+                kept = [
+                    r
+                    for r in score_rows
+                    if isinstance(r, dict)
+                    and str(r.get("exam_name") or "").strip() == batch
+                ]
+                narrowed = _fetch_scores(
+                    exam_ids_f=batch_ids, skip_exam=True, phase="narrow_exam_batch"
+                )
+                if narrowed:
+                    score_rows = narrowed
+                elif kept:
+                    score_rows = kept
+                if len(exam_keys) > 1:
+                    warnings.append(
+                        f"匹配到多场考试（{len(exam_keys)}），"
+                        f"已按问句/班级收敛至「{batch}」共 {len(batch_ids)} 场"
+                    )
+
+    display_exam = batch if score_rows and batch else (exam or exam_raw)
+
+    comparisons = compare_class_subjects_vs_peers(score_rows, class_name=cls)
+    weak = identify_weak_subjects(comparisons)
+    drill_subjects = pick_drill_subjects(weak)
+
+    item_by_subject: dict[str, Any] = {}
+    if drill_subjects:
+        for sub in drill_subjects:
+            sub_exam_ids = sorted(
+                {
+                    str(r.get("exam_id") or "").strip()
+                    for r in score_rows
+                    if isinstance(r, dict)
+                    and str(r.get("subject") or r.get("subject_name") or "").strip() == sub
+                    and str(r.get("exam_id") or "").strip()
+                }
+            )
+            fetched = _fetch_subject_diagnosis_rows(
+                datasource_id=int(ds_id),
+                workspace_oid=ws_oid,
+                user_id=uid,
+                school_name=school,
+                subject_name=sub,
+                exam_name=display_exam or exam,
+                class_name="",
+                exam_ids=sub_exam_ids or None,
+                db_type=db_type,
+            )
+            sql_logs.extend(list(fetched.get("sql_logs") or []))
+            warnings.extend(list(fetched.get("warnings") or []))
+            item_by_subject[sub] = compare_class_items_vs_peers(
+                list(fetched.get("item_class_rows") or []),
+                class_name=cls,
+            )
+
+    report = build_class_weak_subject_report_data(
+        school_name=school_display,
+        class_name=cls,
+        exam_name=display_exam,
+        comparisons=comparisons,
+        weak_subjects=weak,
+        drill_subjects=drill_subjects,
+        item_by_subject=item_by_subject,
+        score_row_count=len(score_rows),
+    )
+
+    if not render:
+        return ToolResult(
+            content=(
+                f"薄弱学科 data 已组装（成绩 {len(score_rows)} 行，"
+                f"薄弱 {len(weak)} 科，下钻 {len(drill_subjects)} 科）。"
+            ),
+            data={**report, "sql_logs": sql_logs, "warnings": warnings},
+        )
+
+    safe_html = _sanitize_report_html(render_class_weak_subject_html(report))
+    if not safe_html.strip():
+        return ToolResult(
+            content="薄弱学科报告渲染失败：HTML 为空。",
+            data={"error": "empty html", **report, "sql_logs": sql_logs},
+        )
+
+    title = str(report.get("title") or "薄弱学科")
+    payload: dict[str, Any] = {
+        "output_type": "html",
+        "title": title,
+        "html": safe_html,
+        "mode": "inline",
+        "report_type": "class_weak_subject",
+        "report_type_label": "薄弱学科",
+        "chunks": [{"output_type": "html", "title": title, "content": safe_html}],
+        "sql_logs": sql_logs,
+        "warnings": warnings,
+        "empty": not score_rows,
+        "empty_weak": bool(report.get("empty_weak")),
+    }
+    empty_note = "未查到成绩，" if not score_rows else ""
+    return ToolResult(
+        content=(
+            f"薄弱学科报告已渲染（ds={ds_name}，{empty_note}"
+            f"薄弱 {len(weak)} 科，下钻 {len(drill_subjects)} 科，"
+            f"HTML {len(safe_html)} 字符）。"
+        )
+        + "\n任务已完成，无需再调用其他工具。",
+        data=payload,
+        is_final=True,
+    )
+
+
 @tool()
 def build_line_reach_report_data_tool(
     exam_name: str = "",
@@ -6929,6 +7277,7 @@ EDUCATION_TOOLS = [
     build_difficulty_curve_report_data_tool,
     build_knowledge_tier_sections_tool,
     compare_knowledge_cohort_tool,
+    build_class_weak_subject_report_data_tool,
 ]
 
 
@@ -6959,6 +7308,7 @@ __all__ = [
     "build_subject_diagnosis_sections_tool",
     "build_tier_alert_report_data_tool",
     "compare_knowledge_cohort_tool",
+    "build_class_weak_subject_report_data_tool",
     "compute_rankings_tool",
     "compute_score_stats_tool",
     "cross_analyze_tool",

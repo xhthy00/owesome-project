@@ -565,6 +565,7 @@ def fallback_classify_report_intent(question: str) -> ReportRoute:
     from src.agent.education.query_parse import (
         is_citywide_analysis_query,
         is_class_overview_query,
+        is_class_weak_subject_query,
         is_difficulty_curve_report_query,
         is_group_feature_query,
         is_individual_student_analysis_query,
@@ -694,6 +695,14 @@ def fallback_classify_report_intent(question: str) -> ReportRoute:
             reason="硬约束知识点分层对比（后十 vs 中位组）",
             source="hard",
         )
+    if is_class_weak_subject_query(q):
+        return ReportRoute(
+            needs_report=True,
+            report_type=ReportType.SUBJECT_DIAGNOSIS,
+            confidence=0.95,
+            reason="硬约束班级薄弱学科（同校同科班际对比）",
+            source="hard",
+        )
 
     wants_report = _has_explicit_report_intent(q) or any(
         (
@@ -739,6 +748,7 @@ def should_use_deterministic_report_plan(question: str, route: ReportRoute) -> b
     from src.agent.education.query_parse import (
         is_citywide_analysis_query,
         is_class_overview_query,
+        is_class_weak_subject_query,
         is_group_feature_query,
         is_individual_student_analysis_query,
         is_knowledge_cohort_gap_query,
@@ -763,6 +773,7 @@ def should_use_deterministic_report_plan(question: str, route: ReportRoute) -> b
             is_citywide_analysis_query(q),
             is_individual_student_analysis_query(q),
             is_knowledge_cohort_gap_query(q),
+            is_class_weak_subject_query(q),
             is_multi_exam_class_analysis_query(q),
             is_tier_alert_query(q),
             is_class_overview_query(q),
@@ -890,6 +901,7 @@ async def classify_report_intent(
     """异步分类：优先 LLM，失败则规则兜底。"""
     from src.agent.education.query_parse import (
         is_citywide_analysis_query,
+        is_class_weak_subject_query,
         is_difficulty_curve_report_query,
         is_individual_student_analysis_query,
         is_item_difficulty_curve_query,
@@ -985,6 +997,14 @@ async def classify_report_intent(
             reason="硬约束知识点分层对比（后十 vs 中位组）",
             source="hard",
         )
+    if is_class_weak_subject_query(q):
+        return ReportRoute(
+            needs_report=True,
+            report_type=ReportType.SUBJECT_DIAGNOSIS,
+            confidence=0.95,
+            reason="硬约束班级薄弱学科（同校同科班际对比）",
+            source="hard",
+        )
 
     pool = _candidate_pool(q)
 
@@ -1070,9 +1090,17 @@ EXPECTED_PLAN_TOOLS: dict[ReportType, frozenset[str]] = {
 
 def plan_items_for_route(route: ReportRoute, question: str) -> list[dict[str, str]]:
     """按路由生成计划：无报告 → 事实查询；有报告 → 按类型 builder。"""
-    from src.agent.education.query_parse import is_knowledge_cohort_gap_query
-    from src.agent.expand.planner import build_knowledge_cohort_plan_items
+    from src.agent.education.query_parse import (
+        is_class_weak_subject_query,
+        is_knowledge_cohort_gap_query,
+    )
+    from src.agent.expand.planner import (
+        build_class_weak_subject_plan_items,
+        build_knowledge_cohort_plan_items,
+    )
 
+    if is_class_weak_subject_query(question or ""):
+        return build_class_weak_subject_plan_items(question)
     if is_knowledge_cohort_gap_query(question or ""):
         return build_knowledge_cohort_plan_items(question)
     if not route.needs_report:
@@ -1090,11 +1118,13 @@ def plan_items_for_report_type(
     """按报告类型生成确定性 Team 计划（调用方须已确认 needs_report）。"""
     from src.agent.education.query_parse import (
         is_citywide_analysis_query,
+        is_class_weak_subject_query,
         is_knowledge_cohort_gap_query,
     )
     from src.agent.expand.planner import (
         build_citywide_team_plan_items,
         build_class_overview_plan_items,
+        build_class_weak_subject_plan_items,
         build_comprehensive_class_plan_items,
         build_fact_query_plan_items,
         build_group_feature_plan_items,
@@ -1109,6 +1139,8 @@ def plan_items_for_report_type(
     )
 
     q = question or ""
+    if is_class_weak_subject_query(q):
+        return build_class_weak_subject_plan_items(q)
     if is_knowledge_cohort_gap_query(q):
         return build_knowledge_cohort_plan_items(q)
     if report_type is None:
@@ -1174,6 +1206,8 @@ def plan_matches_report_type(
     """当前计划是否已包含该报告类型的关键工具。"""
     blob = " ".join(str(it.get("sub_task") or "") for it in (plan_items or []))
     # 知识点分层对比优先：计划已含专用工具即视为匹配
+    if "build_class_weak_subject_report_data_tool" in blob:
+        return True
     if "compare_knowledge_cohort_tool" in blob:
         return True
     if report_type is None:
@@ -1217,6 +1251,7 @@ def plan_is_fact_query(plan_items: list[dict[str, str]] | None) -> bool:
             "build_elite_roster_report_data_tool",
             "build_score_band_report_data_tool",
             "compare_knowledge_cohort_tool",
+            "build_class_weak_subject_report_data_tool",
             "render_html_report",
         )
     ):
@@ -1230,9 +1265,20 @@ def coerce_plan_to_route(
     route: ReportRoute,
 ) -> list[dict[str, str]]:
     """若计划与路由不一致，替换为对应确定性计划。"""
-    from src.agent.education.query_parse import is_knowledge_cohort_gap_query
+    from src.agent.education.query_parse import (
+        is_class_weak_subject_query,
+        is_knowledge_cohort_gap_query,
+    )
 
     q = (question or "").strip()
+    if is_class_weak_subject_query(q):
+        blob = " ".join(str(it.get("sub_task") or "") for it in (plan_items or []))
+        if "build_class_weak_subject_report_data_tool" in blob:
+            return plan_items
+        logger.info(
+            "intent coerce: class_weak_subject → build_class_weak_subject_report_data_tool plan"
+        )
+        return plan_items_for_route(route, question)
     if is_knowledge_cohort_gap_query(q):
         blob = " ".join(str(it.get("sub_task") or "") for it in (plan_items or []))
         if "compare_knowledge_cohort_tool" in blob:

@@ -171,3 +171,89 @@ body {
     #94a3b8 100%
   );
 }
+
+/* 对话摘要 Markdown 表格：与学情报告 edu-table 同一套视觉 */
+.edu-md-table-wrap {
+  overflow-x: auto;
+  margin: 12px 0;
+  border: 1px solid #e8edf3;
+  border-radius: 12px;
+  background: #fff;
+}
+.edu-md-table-wrap table {
+  width: 100%;
+  min-width: 280px;
+  margin: 0;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.edu-md-table-wrap th,
+.edu-md-table-wrap td {
+  border: none;
+  border-bottom: 1px solid #e8edf3;
+  padding: 11px 14px;
+  text-align: left;
+  vertical-align: middle;
+  color: rgba(0, 0, 0, 0.88);
+}
+.edu-md-table-wrap thead th {
+  background: linear-gradient(180deg, #f3f8ff 0%, #e6f4ff 100%);
+  color: #3b6fb8;
+  font-weight: 650;
+  white-space: nowrap;
+  font-size: 12.5px;
+  letter-spacing: 0.02em;
+}
+.edu-md-table-wrap tbody tr:nth-child(even) td {
+  background: #fafcfe;
+}
+.edu-md-table-wrap tbody tr:hover td {
+  background: #f0f7ff;
+}
+.edu-md-table-wrap tbody tr:last-child td {
+  border-bottom: none;
+}
+.edu-md-table-wrap th.num,
+.edu-md-table-wrap td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.edu-md-table-wrap tbody tr.is-weak td {
+  background: #fff7e6;
+}
+.edu-md-table-wrap tbody tr.is-weak:hover td {
+  background: #fff1d6;
+}
+.edu-md-table-wrap td.is-weak-label {
+  color: #cf1322;
+  font-weight: 650;
+}
+.dark .edu-md-table-wrap {
+  border-color: #2f3441;
+  background: #141923;
+}
+.dark .edu-md-table-wrap th,
+.dark .edu-md-table-wrap td {
+  border-bottom-color: #2f3441;
+  color: #e2e8f0;
+}
+.dark .edu-md-table-wrap thead th {
+  background: linear-gradient(180deg, #1e3a5f 0%, #172554 100%);
+  color: #93c5fd;
+}
+.dark .edu-md-table-wrap tbody tr:nth-child(even) td {
+  background: rgba(15, 20, 31, 0.6);
+}
+.dark .edu-md-table-wrap tbody tr:hover td {
+  background: #1e293b;
+}
+.dark .edu-md-table-wrap tbody tr.is-weak td {
+  background: rgba(207, 19, 34, 0.16);
+}
+.dark .edu-md-table-wrap tbody tr.is-weak:hover td {
+  background: rgba(207, 19, 34, 0.24);
+}
+.dark .edu-md-table-wrap td.is-weak-label {
+  color: #ff7875;
+}

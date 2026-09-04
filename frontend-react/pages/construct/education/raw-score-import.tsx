@@ -10,6 +10,7 @@ import {
   Collapse,
   DatePicker,
   Input,
+  InputNumber,
   Modal,
   Select,
   Space,
@@ -70,6 +71,13 @@ const STEP_META = [
 function guessSubjectFromFilename(name: string): string {
   const matched = name.match(/小题分[（(]([^)）]+)[)）]/);
   return matched ? matched[1].trim() : "";
+}
+
+function parseJcYearFromName(name?: string | null): number | null {
+  const matched = String(name || "").match(/(\d{4})届/);
+  if (!matched) return null;
+  const year = Number(matched[1]);
+  return year >= 1990 && year <= 2099 ? year : null;
 }
 
 function warningCount(result: RawImportResult | null): number {
@@ -155,6 +163,8 @@ export default function RawScoreImportPage() {
   const [overviewDone, setOverviewDone] = useState(false);
   const [overviewMessage, setOverviewMessage] = useState("");
   const [dbOverview, setDbOverview] = useState<RawOverviewStatus | null>(null);
+  const [jcYear, setJcYear] = useState<number | null>(null);
+  const [jcManual, setJcManual] = useState(false);
   const [detailTemplateExamId, setDetailTemplateExamId] = useState<number | null>(null);
 
   const [detailItems, setDetailItems] = useState<DetailItem[]>([]);
@@ -222,12 +232,20 @@ export default function RawScoreImportPage() {
     void loadBatches();
   }, [loadBatches]);
 
+  useEffect(() => {
+    if (jcManual) return;
+    const batchName = batches.find((b) => b.id === batchId)?.batch_name;
+    setJcYear(parseJcYearFromName(overviewFile?.name) ?? parseJcYearFromName(batchName));
+  }, [overviewFile, batchId, batches, jcManual]);
+
   const resetImportState = () => {
     setOverviewFile(null);
     setOverviewPreview(null);
     setOverviewDone(false);
     setOverviewMessage("");
     setDbOverview(null);
+    setJcYear(null);
+    setJcManual(false);
     setDetailTemplateExamId(null);
     setDetailItems([]);
   };
@@ -299,9 +317,14 @@ export default function RawScoreImportPage() {
       message.warning("请先选择批次并上传宽表");
       return;
     }
+    if (endpoint === "overview-execute" && jcYear == null) {
+      message.warning("请填写届次");
+      return;
+    }
     const fd = new FormData();
     fd.append("exam_batch_id", String(batchId));
     fd.append("file", overviewFile);
+    if (jcYear != null) fd.append("jc", String(jcYear));
     setLoading(true);
     try {
       const res = await educationApi.postRawOverviewImport(endpoint, fd);
@@ -481,7 +504,11 @@ export default function RawScoreImportPage() {
 
   const selectedBatch = batches.find((b) => b.id === batchId) || null;
   const overviewCanExecute = Boolean(
-    overviewPreview && overviewPreview.error_rows.length === 0 && overviewPreview.valid_rows > 0
+    overviewPreview &&
+      overviewPreview.error_rows.length === 0 &&
+      overviewPreview.valid_rows > 0 &&
+      jcYear != null &&
+      !overviewDone
   );
 
   const renderKpis = (result: RawImportResult | null) => {
@@ -741,13 +768,17 @@ export default function RawScoreImportPage() {
               beforeUpload={(file) => {
                 setOverviewFile(file);
                 setOverviewPreview(null);
+                setOverviewDone(false);
                 setOverviewMessage("");
+                setJcManual(false);
                 return false;
               }}
               onRemove={() => {
                 setOverviewFile(null);
                 setOverviewPreview(null);
+                setOverviewDone(false);
                 setOverviewMessage("");
+                setJcManual(false);
               }}
               fileList={
                 overviewFile
@@ -757,6 +788,21 @@ export default function RawScoreImportPage() {
             >
               <p className="ant-upload-text">点击或拖拽上传成绩宽表（.xlsx）</p>
             </Upload.Dragger>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <span className="text-sm text-slate-600 dark:text-slate-300">届次</span>
+              <InputNumber
+                min={1990}
+                max={2099}
+                precision={0}
+                value={jcYear ?? undefined}
+                placeholder="如 2026"
+                onChange={(value) => {
+                  setJcManual(true);
+                  setJcYear(typeof value === "number" ? value : null);
+                }}
+              />
+              <span className="text-xs text-slate-400">优先从宽表文件名识别，可手动修改</span>
+            </div>
             <Space className="mt-4">
               <Button icon={<DownloadOutlined />} onClick={() => void downloadTemplate("overview")}>
                 下载宽表模板

@@ -15,7 +15,7 @@ _SCHOOL_PATTERNS = (
         rf"{_SCHOOL_TRAIL}"
     ),
     re.compile(
-        rf"(?<![\u4e00-\u9fff])([\u4e00-\u9fff]{{2,8}}{_SCHOOL_SUFFIX}){_SCHOOL_TRAIL}"
+        rf"(?<![\u4e00-\u9fff])((?:[A-Za-z]\d{{2}})?[\u4e00-\u9fff]{{2,8}}{_SCHOOL_SUFFIX}){_SCHOOL_TRAIL}"
     ),
 )
 # 最长优先。请求语会把「扬州大学附属中学」卡在非汉字边界之外，匹配前先挖掉。
@@ -1047,6 +1047,36 @@ def is_knowledge_cohort_gap_query(question: str) -> bool:
     return has_bottom and has_median and has_kn
 
 
+_CLASS_WEAK_SUBJECT_HINTS = (
+    "薄弱学科",
+    "薄弱科目",
+    "学科薄弱",
+    "科目薄弱",
+)
+_NAMED_CLASS_RE = re.compile(
+    r"高[一二三]\(\d+\)班|"
+    r"(?:初三|初二|初一|高三|高二|高一|九年级|八年级|七年级)[\d班]*\d?班"
+)
+
+
+def is_class_weak_subject_query(question: str) -> bool:
+    """指定班级的薄弱学科（同校同科班际对比），不是各科互比、不是薄弱知识点。"""
+    q = (question or "").strip()
+    if not q:
+        return False
+    if not any(h in q for h in _CLASS_WEAK_SUBJECT_HINTS):
+        return False
+    if not _NAMED_CLASS_RE.search(q):
+        return False
+    if is_citywide_analysis_query(q) or is_individual_student_analysis_query(q):
+        return False
+    if is_subject_research_report_query(q):
+        return False
+    if is_school_class_comparison_query(q):
+        return False
+    return True
+
+
 #: 仅匹配明确「群体特征」口径，避免夺走「各班横向对比」等既有路由。
 _GROUP_FEATURE_HINTS = (
     "群体特征",
@@ -1210,6 +1240,38 @@ def is_school_exam_report_query(question: str) -> bool:
     return False
 
 
+_CODED_SCHOOL_PREFIX_RE = re.compile(r"学校([A-Za-z]\d{2})")
+
+
+def _normalize_school_extract_blob(blob: str) -> str:
+    """请求语挖空 + 「学校B11仙城中学」去掉泛称「学校」。"""
+    out = blob
+    for filler in _SCHOOL_ASK_FILLERS:
+        out = out.replace(filler, " ")
+    return _CODED_SCHOOL_PREFIX_RE.sub(r" \1", out)
+
+
+def _school_name_stem(name: str) -> str:
+    return re.sub(_SCHOOL_SUFFIX + r"$", "", name)
+
+
+def _is_request_speech_school_name(name: str) -> bool:
+    """「请分析一下学校」挖空请求语后只剩校名后缀，不是真校名。"""
+    stem = _school_name_stem(name)
+    if stem.startswith("请"):
+        stem = stem[1:]
+    fillers = sorted(_SCHOOL_ASK_FILLERS, key=len, reverse=True)
+    changed = True
+    while changed and stem:
+        changed = False
+        for prefix in fillers:
+            if stem.startswith(prefix):
+                stem = stem[len(prefix):]
+                changed = True
+                break
+    return not stem
+
+
 def extract_school_targets(question: str) -> list[str]:
     """从问题中抽取全部学校名，保持出现顺序去重。"""
     q = (question or "").strip()
@@ -1234,12 +1296,10 @@ def extract_school_targets(question: str) -> list[str]:
             return name or None
     return None
         return []
-    blobs = [q]
-    blanked = q
-    for filler in _SCHOOL_ASK_FILLERS:
-        blanked = blanked.replace(filler, " ")
-    if blanked != q:
-        blobs.append(blanked)
+    processed = _normalize_school_extract_blob(q)
+    blobs = [processed] if processed != q else [q]
+    if q not in blobs:
+        blobs.append(q)
     seen: list[str] = []
     for blob in blobs:
         for pat in _SCHOOL_PATTERNS:
@@ -1252,7 +1312,15 @@ def extract_school_targets(question: str) -> list[str]:
                 # 「3月扬州中学」勿把月份的「月」拼进校名
                 if name.startswith("月") and re.search(rf"\d月{re.escape(name[1:])}", q):
                     name = name[1:]
-                if not name or _is_regional_exam_label(name):
+                if (
+                    not name
+                    or not _school_name_stem(name)
+                    or _is_request_speech_school_name(name)
+                    or _is_regional_exam_label(name)
+                ):
+                    continue
+                seen = [s for s in seen if not (name.endswith(s) and s != name)]
+                if any(s.endswith(name) and s != name for s in seen):
                     continue
                 if name not in seen:
                     seen.append(name)
@@ -2307,6 +2375,7 @@ __all__ = [
     "is_structured_diagnostic_query",
     "is_tier_alert_query",
     "is_knowledge_cohort_gap_query",
+    "is_class_weak_subject_query",
     "is_group_feature_query",
     "is_class_overview_query",
     "infer_group_feature_dimension",

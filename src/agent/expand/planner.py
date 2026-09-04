@@ -860,6 +860,40 @@ def build_knowledge_cohort_plan_items(question: str) -> list[dict[str, str]]:
     ]
 
 
+def build_class_weak_subject_plan_items(question: str) -> list[dict[str, str]]:
+    """指定班级薄弱学科：同校同科班际对比，一键工具。"""
+    from src.agent.education.orchestrator import _extract_class_name
+    from src.agent.education.query_parse import extract_school_target
+
+    school = extract_school_target(question) or ""
+    class_name = _extract_class_name(question) or ""
+    exam = _plan_exam_name(question)
+    scope_args: list[str] = []
+    if school:
+        scope_args.append(f"school_name={school}")
+    if class_name:
+        scope_args.append(f"class_name={class_name}")
+    if exam:
+        scope_args.append(f"exam_name={exam}")
+    tool_args = (", ".join(scope_args) + ", ") if scope_args else ""
+    class_l = class_name or "该班"
+    exam_l = _plan_label(exam, missing="问题中的考试")
+    school_l = school or "该校"
+    return [
+        {
+            "sub_task": (
+                f"调 build_class_weak_subject_report_data_tool({tool_args}render=true) "
+                f"分析【{school_l}】【{class_l}】【{exam_l}】薄弱学科"
+                "（同校同年级同一学科不同班级对比，禁止本班各科互比）；"
+                "有薄弱则下钻最弱 1～2 科小题；完成后 terminate。"
+                "**禁止** build_class_overview_report_data_tool / "
+                "build_subject_diagnosis_sections_tool / execute_sql 自行比各科均分"
+            ),
+            "sub_task_agent": _TOOL_EXPERT_AGENT,
+        },
+    ]
+
+
 def build_group_feature_plan_items(question: str) -> list[dict[str, str]]:
     """群体特征：按维度聚合全校/范围成绩并渲染 group_feature 报告。"""
     from src.agent.education.orchestrator import _extract_subject

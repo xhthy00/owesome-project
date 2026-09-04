@@ -17,6 +17,7 @@ import {
 } from "@/new-components/chat/assistant";
 import { normalizeAssistantMarkdown, type StoryPhase } from "@/utils/toolLabels";
 import { formatElapsed, formatTokenCount, type RunMetrics } from "@/utils/runMetrics";
+import { eduMarkdownComponents } from "@/new-components/chat/content/eduMarkdownComponents";
 
 type Props = {
   userMessage: string;
@@ -219,20 +220,14 @@ export default function OpenCodeSessionTurn({
           ) : null}
 
           {assistantMessage ? (
-            <div
-              className="assistant-md max-w-none overflow-x-auto text-sm leading-6 text-[#1f2937] dark:text-[#e2e8f0]
+            <div className="assistant-md max-w-none overflow-x-auto text-sm leading-6 text-[#1f2937] dark:text-[#e2e8f0]
                 [&_h1]:mb-2 [&_h1]:mt-3 [&_h1]:text-lg [&_h1]:font-bold
                 [&_h2]:mb-2 [&_h2]:mt-3 [&_h2]:text-base [&_h2]:font-semibold
                 [&_h3]:mb-1.5 [&_h3]:mt-2.5 [&_h3]:text-sm [&_h3]:font-semibold
                 [&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5
-                [&_strong]:font-semibold
-                [&_table]:my-3 [&_table]:w-full [&_table]:min-w-[240px] [&_table]:border-collapse [&_table]:text-xs
-                [&_thead]:bg-[#f8fafc] dark:[&_thead]:bg-[#141923]
-                [&_th]:border [&_th]:border-[#d0d7e2] [&_th]:px-3 [&_th]:py-2 [&_th]:text-left [&_th]:font-semibold [&_th]:text-[#334155] dark:[&_th]:border-[#334155] dark:[&_th]:text-[#e2e8f0]
-                [&_td]:border [&_td]:border-[#e5e7eb] [&_td]:px-3 [&_td]:py-2 [&_td]:text-[#475569] dark:[&_td]:border-[#2f3441] dark:[&_td]:text-[#cbd5e1]
-                [&_tr:nth-child(even)_td]:bg-[#fafbfc] dark:[&_tr:nth-child(even)_td]:bg-[#0f141f]/60"
+                [&_strong]:font-semibold"
             >
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              <ReactMarkdown remarkPlugins={[remarkGfm]} components={eduMarkdownComponents}>
                 {normalizeAssistantMarkdown(assistantMessage)}
               </ReactMarkdown>
             </div>

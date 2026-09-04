@@ -966,9 +966,60 @@ function isMdTableLine(line: string): boolean {
   return /^\|.+\|\s*$/.test(t) || /^\|[-:| \t]+\|\s*$/.test(t);
 }
 
+function mdTableCells(line: string): string[] {
+  let inner = line.trim();
+  if (inner.startsWith("|")) inner = inner.slice(1);
+  if (inner.endsWith("|")) inner = inner.slice(0, -1);
+  return inner.split("|").map((c) => c.trim());
+}
+
+function isMdSeparatorRow(cells: string[]): boolean {
+  return cells.length > 0 && cells.every((c) => c === "" || /^:?-+:?$/.test(c.replace(/\s/g, "")));
+}
+
+function cellsToMdRow(cells: string[]): string {
+  return `| ${cells.join(" | ")} |`;
+}
+
+/** 仅当一行里粘了「相同列数的两行」、中间空单元格当胶水时才拆开；普通空单元格保留。 */
+function unglueMdTableLine(line: string, cols?: number): string[] {
+  const cells = mdTableCells(line);
+  if (cells.length < 2) return [line];
+  if (cols != null && cells.length === cols) return [line];
+
+  if (cols != null && cells.length > cols) {
+    const rows: string[] = [];
+    let rest = cells;
+    while (rest.length >= cols) {
+      if (rest.length === cols) {
+        rows.push(cellsToMdRow(rest));
+        return rows;
+      }
+      if (rest[cols] === "" && rest.length >= cols * 2 + 1) {
+        rows.push(cellsToMdRow(rest.slice(0, cols)));
+        rest = rest.slice(cols + 1);
+        continue;
+      }
+      return [line];
+    }
+    return rows.length ? rows : [line];
+  }
+
+  for (let i = 1; i < cells.length - 1; i++) {
+    if (cells[i] !== "") continue;
+    const left = cells.slice(0, i);
+    const right = cells.slice(i + 1);
+    if (left.length >= 2 && left.length === right.length) {
+      return [cellsToMdRow(left), cellsToMdRow(right)];
+    }
+  }
+  return [line];
+}
+
 /**
  * 修复助手 Markdown，使 GFM 表格可被 remark-gfm 解析。
  * 常见问题：模型把多行表格粘成 `| a | | b |`（行间换行丢失）。
+ * 不可把行内空单元格 `| |` 拆成换行，否则表头与数据列错位。
  * 表格行之间不能插空行，否则 GFM 会断开表格。
  */
 export function normalizeAssistantMarkdown(md: string): string {
@@ -976,17 +1027,28 @@ export function normalizeAssistantMarkdown(md: string): string {
   if (text.includes("\\n")) {
     text = text.replace(/\\n/g, "\n");
   }
-  // 粘连行：`| 单元格 | | 下一行 |` → 断行；正常 `| 内容 | 内容 |` 不会命中
-  text = text.replace(/\|\s+\|/g, "|\n|");
 
   const lines = text.split("\n");
   const out: string[] = [];
+  let tableCols: number | undefined;
   for (const line of lines) {
+    if (!isMdTableLine(line)) {
+      tableCols = undefined;
+      out.push(line);
+      continue;
+    }
+    const parts = unglueMdTableLine(line, tableCols);
+    if (tableCols == null && parts[0]) {
+      const firstCells = mdTableCells(parts[0]);
+      if (!isMdSeparatorRow(firstCells) && firstCells.length >= 2) {
+        tableCols = firstCells.length;
+      }
+    }
     const prev = out.length ? out[out.length - 1] : undefined;
-    if (isMdTableLine(line) && prev != null && prev.trim() !== "" && !isMdTableLine(prev)) {
+    if (prev != null && prev.trim() !== "" && !isMdTableLine(prev)) {
       out.push("");
     }
-    out.push(line);
+    out.push(...parts);
   }
   return out.join("\n");
 }

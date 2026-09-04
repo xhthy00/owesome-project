@@ -1790,6 +1790,7 @@ async def preview_raw_overview(
     request: Request,
     exam_batch_id: int = Form(...),
     file: UploadFile = File(...),
+    jc: Optional[int] = Form(None),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
@@ -1797,7 +1798,9 @@ async def preview_raw_overview(
 
     file_bytes = _read_raw_upload_file(file)
     _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
-    result = preview_raw_overview_import(file_bytes, exam_batch_id, scope, db_type, config)
+    result = preview_raw_overview_import(
+        file_bytes, exam_batch_id, scope, db_type, config, jc=jc, source_name=file.filename
+    )
     return success_response(data=_raw_result_payload(result))
 
 
@@ -1808,6 +1811,7 @@ async def execute_raw_overview(
     background_tasks: BackgroundTasks,
     exam_batch_id: int = Form(...),
     file: UploadFile = File(...),
+    jc: Optional[int] = Form(None),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
@@ -1816,7 +1820,14 @@ async def execute_raw_overview(
     file_bytes = _read_raw_upload_file(file)
     ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
     result = await asyncio.to_thread(
-        execute_raw_overview_import, file_bytes, exam_batch_id, scope, db_type, config
+        execute_raw_overview_import,
+        file_bytes,
+        exam_batch_id,
+        scope,
+        db_type,
+        config,
+        jc,
+        file.filename,
     )
     payload = _raw_result_payload(result)
     if result.error_rows:

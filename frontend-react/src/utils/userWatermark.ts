@@ -68,9 +68,59 @@ export function applyDocumentWatermark(doc: Document, text?: string): void {
   if (!existing) body.appendChild(overlay);
 }
 
+/** 数字列：表头与单元格同为右对齐，并套上学情报告表格外观。 */
+export function alignEduTableNumericHeaders(doc: Document): void {
+  doc.querySelectorAll("table").forEach((table) => {
+    table.classList.add("edu-table");
+    if (!table.closest(".edu-table-wrap")) {
+      const wrap = doc.createElement("div");
+      wrap.className = "edu-table-wrap";
+      table.parentNode?.insertBefore(wrap, table);
+      wrap.appendChild(table);
+    }
+    const ths = table.querySelectorAll("thead th");
+    const row = table.querySelector("tbody tr");
+    if (!ths.length || !row) return;
+    row.querySelectorAll("td").forEach((td, i) => {
+      if (td.classList.contains("num") && ths[i]) {
+        ths[i].classList.add("num");
+      }
+    });
+    table.querySelectorAll("tbody tr").forEach((tr) => {
+      const weak = Array.from(tr.querySelectorAll("td")).some((td) => {
+        const t = (td.textContent || "").replace(/\s/g, "");
+        return t === "薄弱" || t.startsWith("薄弱（") || t.startsWith("薄弱(");
+      });
+      if (weak) tr.classList.add("is-weak");
+    });
+  });
+  const styleId = "edu-table-num-align";
+  const css = [
+    ".edu-table-wrap{overflow-x:auto;margin:8px 0 12px;border:1px solid #e8edf3;border-radius:12px;background:#fff}",
+    "table,.edu-table{width:100%;border-collapse:collapse;font-size:13px}",
+    "table th,table td,.edu-table th,.edu-table td{border:none;border-bottom:1px solid #e8edf3;padding:11px 14px;text-align:left;vertical-align:middle}",
+    "table thead th,.edu-table thead th{background:linear-gradient(180deg,#f3f8ff 0%,#e6f4ff 100%);color:#3b6fb8;font-weight:650;white-space:nowrap;font-size:12.5px}",
+    "table tbody tr:nth-child(even) td,.edu-table tbody tr:nth-child(even) td{background:#fafcfe}",
+    "table tbody tr:hover td,.edu-table tbody tr:hover td{background:#f0f7ff}",
+    "table tbody tr.is-weak td,.edu-table tbody tr.is-weak td{background:#fff7e6}",
+    "table tbody tr.is-weak:hover td,.edu-table tbody tr.is-weak:hover td{background:#fff1d6}",
+    "table tbody tr:last-child td,.edu-table tbody tr:last-child td{border-bottom:none}",
+    "table th.num,table td.num,.edu-table th.num,.edu-table td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}",
+    ".edu-badge-weak{display:inline-block;padding:1px 7px;border-radius:999px;font-size:11px;background:#fff1f0;color:#cf1322;font-weight:650;vertical-align:middle}"
+  ].join("");
+  let style = doc.getElementById(styleId) as HTMLStyleElement | null;
+  if (!style) {
+    style = doc.createElement("style");
+    style.id = styleId;
+    (doc.head || doc.documentElement).appendChild(style);
+  }
+  style.textContent = css;
+}
+
 export function bindIframeWatermark(iframe: HTMLIFrameElement | null): void {
   const doc = iframe?.contentDocument;
   if (!doc?.body) return;
+  alignEduTableNumericHeaders(doc);
   applyDocumentWatermark(doc);
   window.setTimeout(() => applyDocumentWatermark(doc), 600);
 }

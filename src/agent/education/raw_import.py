@@ -57,6 +57,15 @@ _BATCH_SIZE = 500
 _PARALLEL_THRESHOLD = 800
 _PARALLEL_WORKERS = 4
 _SUBJECT_NAME_TO_CODE = {name: code.lower() for code, name in _SUBJECT_CODE_TO_NAME.items()}
+_CORE_SUBJECTS = frozenset({"语文", "数学", "英语"})
+_ELECTIVE_MARKERS = {
+    "物理": ("物",),
+    "化学": ("化",),
+    "生物": ("生",),
+    "历史": ("史", "历"),
+    "政治": ("政",),
+    "地理": ("地",),
+}
 _OVERVIEW_CORE_COLS = (
     "ksh",
     "exam_name",
@@ -65,6 +74,7 @@ _OVERVIEW_CORE_COLS = (
     "xm",
     "xx",
     "bj",
+    "jc",
     "anon_stu_id",
 )
 _SCORE_WRITE_COLS = (
@@ -629,6 +639,23 @@ def _detail_import_status_by_exam(
         return {}
 
 
+def _xkkm_of(row: RawOverviewRow) -> str:
+    others = row.others or {}
+    return str(others.get("XKKM") or others.get("xkkm") or "").strip()
+
+
+def _should_write_subject_score(subject: str, score: float | None, xkkm: str) -> bool:
+    """语数英有分即写；六门选科须 xkkm 含对应标记。未选考填 0 也不写。"""
+    if score is None:
+        return False
+    if subject in _CORE_SUBJECTS:
+        return True
+    marks = _ELECTIVE_MARKERS.get(subject)
+    if not marks:
+        return False
+    return any(mark in xkkm for mark in marks)
+
+
 def _validate_overview_rows(
     rows: list[RawOverviewRow],
     dims: dict,
@@ -660,8 +687,9 @@ def _validate_overview_rows(
             row_errors.append(ImportErrorRow(row=r.row_num, field="XX", message=f"学校『{r.xx}』不存在"))
         if not _ksh_to_class_name(r.ksh, batch_name):
             row_errors.append(ImportErrorRow(row=r.row_num, field="KSH", message="考号过短"))
+        xkkm = _xkkm_of(r)
         for subject, score in r.scores.items():
-            if score is None:
+            if not _should_write_subject_score(subject, score, xkkm):
                 continue
             exam = exams_by_subject.get(subject) or {}
             if score < 0:
@@ -772,6 +800,7 @@ def _build_overview_write_rows(
     rows: list[RawOverviewRow],
     dims: dict,
     available_overview_cols: set[str],
+    jc: str | None = None,
 ) -> list[dict]:
     batch = dims.get("batch") or {}
     batch_name = str(batch.get("batch_name") or "")
@@ -787,6 +816,7 @@ def _build_overview_write_rows(
             "xm": r.xm,
             "xx": r.xx,
             "bj": bj,
+            "jc": jc,
             "anon_stu_id": anon,
         }
         for subject, score in r.scores.items():
@@ -802,20 +832,59 @@ def _build_overview_write_rows(
     return out
 
 
-def _parse_jc_year(batch_name: str) -> str | None:
-    matched = _JC_YEAR_RE.search(str(batch_name or ""))
-    return matched.group(1) if matched else None
+def _parse_jc_year(name: str | None) -> str | None:
+    matched = _JC_YEAR_RE.search(str(name or ""))
+    if not matched:
+        return None
+    year = int(matched.group(1))
+    if 1990 <= year <= 2099:
+        return str(year)
+    return None
+
+
+def _normalize_jc_year(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float):
+        if not value.is_integer():
+            return None
+        year = int(value)
+    elif isinstance(value, int):
+        year = value
+    else:
+        text = str(value).strip()
+        trailing = _EXCEL_TRAILING_DOT_ZERO.match(text)
+        if trailing:
+            text = trailing.group(1)
+        try:
+            year = int(text)
+        except (TypeError, ValueError):
+            return None
+    if 1990 <= year <= 2099:
+        return year
+    return None
+
+
+def _resolve_overview_jc(explicit: Any = None, *names: str | None) -> str | None:
+    year = _normalize_jc_year(explicit)
+    if year is not None:
+        return str(year)
+    for name in names:
+        parsed = _parse_jc_year(name)
+        if parsed is not None:
+            return parsed
+    return None
 
 
 def _build_student_rows(
     rows: list[RawOverviewRow],
     dims: dict,
     available_student_cols: set[str],
+    jc: str | None = None,
 ) -> list[dict]:
-    batch = dims.get("batch") or {}
-    batch_name = str(batch.get("batch_name") or "")
     include_jc = (not available_student_cols) or ("jc" in available_student_cols)
-    jc = _parse_jc_year(batch_name) if include_jc else None
     out: list[dict] = []
     seen: set[str] = set()
     for r in rows:
@@ -824,7 +893,7 @@ def _build_student_rows(
             continue
         seen.add(anon)
         rec: dict[str, Any] = {"id": anon, "school_id": token, "class": bj}
-        if jc is not None:
+        if include_jc and jc is not None:
             rec["jc"] = jc
         out.append(_filter_available(rec, available_student_cols))
     return out
@@ -839,8 +908,9 @@ def _build_score_rows(
     out: list[dict] = []
     for r in rows:
         token, anon, bj = _token_and_anon(r, dims)
+        xkkm = _xkkm_of(r)
         for subject, score in r.scores.items():
-            if score is None:
+            if not _should_write_subject_score(subject, score, xkkm):
                 continue
             exam = exams_by_subject.get(subject) or {}
             rec = {
@@ -868,6 +938,7 @@ def _write_overview_to_db(
     config: dict[str, Any],
     rows: list[RawOverviewRow],
     dims: dict,
+    jc: str | None = None,
 ) -> dict[str, int]:
     tables = _table_names()
     overview_table = tables.get("score_overview") or "tb_score_overview"
@@ -878,8 +949,8 @@ def _write_overview_to_db(
     st_available = _schema_columns(db_type, config, student_table)
     sc_available = _schema_columns(db_type, config, score_table)
 
-    ov_rows = _build_overview_write_rows(rows, dims, ov_available)
-    st_rows = _build_student_rows(rows, dims, st_available)
+    ov_rows = _build_overview_write_rows(rows, dims, ov_available, jc=jc)
+    st_rows = _build_student_rows(rows, dims, st_available, jc=jc)
     sc_rows = _build_score_rows(rows, dims, sc_available)
 
     ov_preferred: list[str] = list(_OVERVIEW_CORE_COLS)
@@ -928,14 +999,21 @@ def _preview_column_keys(excel_headers: list[str]) -> list[str]:
             _add("bj")
     if "bj" not in seen:
         keys.insert(1, "bj")
+    if "jc" not in seen:
+        idx = keys.index("bj") + 1 if "bj" in keys else 1
+        keys.insert(idx, "jc")
     return keys
 
 
-def _overview_preview_cell(r: RawOverviewRow, key: str, anon: str, bj: str) -> Any:
+def _overview_preview_cell(
+    r: RawOverviewRow, key: str, anon: str, bj: str, jc: str | None = None
+) -> Any:
     if key == "anon_stu_id":
         return anon
     if key == "bj":
         return bj
+    if key == "jc":
+        return jc
     if key == "xx":
         return r.xx
     if key == "xm":
@@ -961,7 +1039,10 @@ def _preview_columns(keys: list[str], excel_headers: list[str]) -> list[dict[str
 
 
 def _preview_sample_and_resolved(
-    valid: list[RawOverviewRow], dims: dict, excel_headers: list[str]
+    valid: list[RawOverviewRow],
+    dims: dict,
+    excel_headers: list[str],
+    jc: str | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, str]]]:
     keys = _preview_column_keys(excel_headers)
     columns = _preview_columns(keys, excel_headers)
@@ -969,7 +1050,7 @@ def _preview_sample_and_resolved(
     resolved: list[dict[str, Any]] = []
     for r in valid:
         token, anon, bj = _token_and_anon(r, dims)
-        sample.append({key: _overview_preview_cell(r, key, anon, bj) for key in keys})
+        sample.append({key: _overview_preview_cell(r, key, anon, bj, jc) for key in keys})
         resolved.append({"school_id": token})
     return sample, resolved, columns
 
@@ -980,6 +1061,8 @@ def preview_raw_overview_import(
     scope: EduScope,
     db_type: str,
     config: dict[str, Any],
+    jc: Any = None,
+    source_name: str | None = None,
 ) -> ImportResult:
     rows, parse_errors, excel_headers = _parse_overview_excel(file_bytes)
     per_row_parse = sum(1 for e in parse_errors if e.row > 0)
@@ -997,7 +1080,11 @@ def preview_raw_overview_import(
     valid, val_errors = _validate_overview_rows(rows, dims, scope=scope)
     result.error_rows.extend(val_errors)
     result.valid_rows = len(valid)
-    sample, resolved, columns = _preview_sample_and_resolved(valid, dims, excel_headers)
+    batch_name = str((dims.get("batch") or {}).get("batch_name") or "")
+    resolved_jc = _resolve_overview_jc(jc, source_name, batch_name)
+    sample, resolved, columns = _preview_sample_and_resolved(
+        valid, dims, excel_headers, jc=resolved_jc
+    )
     result.preview_sample = sample
     result.preview_columns = columns
     result.resolved_rows = resolved  # type: ignore[assignment]
@@ -1010,8 +1097,12 @@ def execute_raw_overview_import(
     scope: EduScope,
     db_type: str,
     config: dict[str, Any],
+    jc: Any = None,
+    source_name: str | None = None,
 ) -> ImportResult:
-    preview = preview_raw_overview_import(file_bytes, exam_batch_id, scope, db_type, config)
+    preview = preview_raw_overview_import(
+        file_bytes, exam_batch_id, scope, db_type, config, jc=jc, source_name=source_name
+    )
     if preview.error_rows:
         return preview
     if not preview.valid_rows:
@@ -1030,8 +1121,15 @@ def execute_raw_overview_import(
         preview.error_rows = list(val_errors)
         preview.valid_rows = len(valid)
         return preview
+    batch_name = str((dims.get("batch") or {}).get("batch_name") or "")
+    resolved_jc = _resolve_overview_jc(jc, source_name, batch_name)
+    if not resolved_jc:
+        preview.error_rows.append(
+            ImportErrorRow(row=0, field="届次", message="请填写届次（四位年份），或使用含「xxxx届」的宽表文件名")
+        )
+        return preview
     try:
-        counts = _write_overview_to_db(db_type, config, valid, dims)
+        counts = _write_overview_to_db(db_type, config, valid, dims, jc=resolved_jc)
     except RuntimeError as e:
         logger.error("raw overview import write failed: %s", e)
         preview.error_rows.append(ImportErrorRow(row=0, field="写入", message=str(e)))
@@ -1593,7 +1691,7 @@ def build_raw_overview_template() -> bytes:
     note.append(["成绩宽表导入说明"])
     note.append(["1. 请使用本工作簿第一张表「成绩宽表」填写，表头 38 列及顺序须与教科院成绩宽表一致，不要改英文列名。"])
     note.append(["2. 必填：KSH（考生号）、SFZH（身份证号/学号）、XM（姓名）、XX（学校，须与系统校名完全一致）、ZF6M（全科总分）。"])
-    note.append(["3. 科目列为空表示未选考，不要填非数字。转换分/等级/选考组合等列按教科院原表填写。"])
+    note.append(["3. 语数英有分即写入；物化生史政地是否写入以 XKKM 为准（未选考列填 0 也不落科成绩）。转换分/等级等列按教科院原表填写。"])
     note.append(["4. 班级由考生号第 4-5 位自动解析，无需 BJ 列。"])
     note.append(["5. 从第 2 行起填写学生数据。"])
     note.append([])
