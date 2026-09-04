@@ -5976,6 +5976,53 @@ def compare_knowledge_cohort_tool(
     )
 
 
+def _plain_school_label(s_name: str = "", name: str = "") -> str:
+    """报告标题用明文校名；脱敏码（如 GZ_…）不算展示名。"""
+    for cand in (s_name, name):
+        t = str(cand or "").strip()
+        if t and not _looks_like_school_id(t):
+            return t
+    return ""
+
+
+def _lookup_display_name_for_school_id(
+    school_id: str,
+    *,
+    datasource_id: int,
+    workspace_oid: int | None,
+    user_id: int | None,
+) -> tuple[str, list[dict[str, Any]]]:
+    """把 ``tb_school.id`` 还原成 ``s_name`` 明文，仅供薄弱学科报告标题。"""
+    raw = (school_id or "").strip()
+    logs: list[dict[str, Any]] = []
+    if not raw or not _looks_like_school_id(raw):
+        return "", logs
+    sql = (
+        "SELECT s_name, name FROM tb_school "
+        f"WHERE id = '{_esc(raw)}' LIMIT 1"
+    )
+    ok, msg, result, sql_run = _run_edu_sql(
+        sql,
+        datasource_id=int(datasource_id),
+        workspace_oid=workspace_oid,
+        user_id=user_id,
+    )
+    rows = _rows_to_dicts(result) if ok else []
+    logs.append(
+        {
+            "label": "school_display_by_id",
+            "success": ok,
+            "row_count": len(rows),
+            "message": msg if not ok else "",
+            "sql_preview": (sql_run or sql)[:400],
+        }
+    )
+    if not rows:
+        return "", logs
+    row = rows[0]
+    return _plain_school_label(str(row.get("s_name") or ""), str(row.get("name") or "")), logs
+
+
 def _lookup_school_id_for_display_name(
     school_name: str,
     *,
@@ -6093,7 +6140,9 @@ def build_class_weak_subject_report_data_tool(
                 exam = token
                 break
     school = (school_name or "").strip()
-    school_display = school
+    if not school:
+        school = _resolve_school_for_class_overview("", tool_runtime_ctx=ctx)
+    school_display = _plain_school_label(school)
 
     slot_err = missing_required_slots(school, cls, exam)
     if slot_err:
@@ -6123,13 +6172,13 @@ def build_class_weak_subject_report_data_tool(
     warnings: list[str] = []
 
     overview_school = _resolve_school_for_class_overview(
-        school_display, tool_runtime_ctx=ctx
+        school, tool_runtime_ctx=ctx
     )
     if _looks_like_school_id(overview_school):
         school = overview_school
     else:
         school, look_logs = _lookup_school_id_for_display_name(
-            school_display,
+            school,
             datasource_id=int(ds_id),
             workspace_oid=ws_oid,
             user_id=uid,
@@ -6137,6 +6186,33 @@ def build_class_weak_subject_report_data_tool(
         sql_logs.extend(look_logs)
         if school != school_display and _looks_like_school_id(school):
             warnings.append(f"校名 `{school_display}` 已对齐 school_id={school}")
+
+    if not school_display:
+        constraints = (
+            ctx.get("constraints") if isinstance(ctx.get("constraints"), dict) else {}
+        )
+        edu = (
+            constraints.get("edu_scope")
+            if isinstance(constraints.get("edu_scope"), dict)
+            else None
+        )
+        if not isinstance(edu, dict):
+            edu = ctx.get("edu_scope") if isinstance(ctx.get("edu_scope"), dict) else {}
+        if isinstance(edu, dict):
+            school_display = _plain_school_label(str(edu.get("school_name") or ""))
+
+    if not school_display and _looks_like_school_id(school):
+        looked, disp_logs = _lookup_display_name_for_school_id(
+            school,
+            datasource_id=int(ds_id),
+            workspace_oid=ws_oid,
+            user_id=uid,
+        )
+        sql_logs.extend(disp_logs)
+        if looked:
+            school_display = looked
+    if not school_display:
+        school_display = school
 
     def _fetch_scores(
         *,
