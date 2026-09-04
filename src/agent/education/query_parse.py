@@ -1276,25 +1276,6 @@ def extract_school_targets(question: str) -> list[str]:
     """从问题中抽取全部学校名，保持出现顺序去重。"""
     q = (question or "").strip()
     if not q:
-        return None
-    _VERB_PREFIXES = ("帮我分析", "帮我", "分析", "查询", "统计", "查看", "了解", "生成")
-    for pat in _SCHOOL_PATTERNS:
-        m = pat.search(q)
-        if m:
-            name = re.sub(r"\s+", "", m.group(1))
-            for prefix in _VERB_PREFIXES:
-                if name.startswith(prefix):
-                    name = name[len(prefix):]
-                    break
-            # 「3月扬州中学」勿把月份的「月」拼进校名
-            if name.startswith("月") and re.search(rf"\d月{re.escape(name[1:])}", q):
-                name = name[1:]
-            if _is_regional_exam_label(name):
-                return None
-            if name in _GENERIC_SCHOOL_LABELS:
-                return None
-            return name or None
-    return None
         return []
     processed = _normalize_school_extract_blob(q)
     blobs = [processed] if processed != q else [q]
@@ -1317,6 +1298,7 @@ def extract_school_targets(question: str) -> list[str]:
                     or not _school_name_stem(name)
                     or _is_request_speech_school_name(name)
                     or _is_regional_exam_label(name)
+                    or name in _GENERIC_SCHOOL_LABELS
                 ):
                     continue
                 seen = [s for s in seen if not (name.endswith(s) and s != name)]

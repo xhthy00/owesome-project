@@ -620,7 +620,7 @@ export default function RawScoreImportPage() {
         <div>
           <Typography.Title level={4} className="!mb-1">
             <UploadOutlined className="mr-2" />
-            原始成绩导入
+            成绩导入
           </Typography.Title>
           <Typography.Text className="oc-muted">
             教科院材料两步导入：成绩宽表 → 各科小题分
