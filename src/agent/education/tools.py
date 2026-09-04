@@ -6059,7 +6059,7 @@ def build_class_weak_subject_report_data_tool(
 ) -> ToolResult:
     """指定班级薄弱学科：同校同年级同一学科、不同班级对比，不是本班各科互比。
 
-    按班际名次/均分差选出薄弱科；有薄弱才下钻最弱 1～2 科小题。
+    按班际名次/均分差选出薄弱科；有薄弱则对所有薄弱科下钻小题。
     """
     from src.agent.education.class_weak_subject import (
         build_class_weak_subject_report_data,

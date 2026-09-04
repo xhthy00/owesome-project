@@ -16,7 +16,6 @@ WEAK_RANK_RATIO = 0.30
 WEAK_AVG_GAP = 5.0
 LAST_N_MIN_CLASSES = 10
 LAST_N = 3
-DRILL_TOP_N = 2
 MIN_CLASS_N = 3
 ITEM_LAG_PP = -8.0
 COMMON_HARD_RATE = 60.0
@@ -24,7 +23,6 @@ MAX_LAGGING_ITEMS = 15
 MAX_COMMON_ITEMS = 8
 
 __all__ = [
-    "DRILL_TOP_N",
     "build_class_weak_subject_report_data",
     "build_recommendations_html",
     "compare_class_items_vs_peers",
@@ -161,11 +159,8 @@ def identify_weak_subjects(comparisons: list[dict[str, Any]]) -> list[dict[str, 
     return weak
 
 
-def pick_drill_subjects(
-    weak: list[dict[str, Any]],
-    top_n: int = DRILL_TOP_N,
-) -> list[str]:
-    return [str(w.get("subject") or "") for w in weak[:top_n] if w.get("subject")]
+def pick_drill_subjects(weak: list[dict[str, Any]]) -> list[str]:
+    return [str(w.get("subject") or "") for w in weak if w.get("subject")]
 
 
 def pick_exam_batch_name(

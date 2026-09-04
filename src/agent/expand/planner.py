@@ -885,7 +885,7 @@ def build_class_weak_subject_plan_items(question: str) -> list[dict[str, str]]:
                 f"调 build_class_weak_subject_report_data_tool({tool_args}render=true) "
                 f"分析【{school_l}】【{class_l}】【{exam_l}】薄弱学科"
                 "（同校同年级同一学科不同班级对比，禁止本班各科互比）；"
-                "有薄弱则下钻最弱 1～2 科小题；完成后 terminate。"
+                "有薄弱则对所有薄弱科下钻小题；完成后 terminate。"
                 "**禁止** build_class_overview_report_data_tool / "
                 "build_subject_diagnosis_sections_tool / execute_sql 自行比各科均分"
             ),
