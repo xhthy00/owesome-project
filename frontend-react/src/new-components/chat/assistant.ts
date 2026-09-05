@@ -6,7 +6,9 @@ export const ASSISTANT_THINKING = "助手正在抓紧分析您的提问…";
 export const ASSISTANT_WELCOME_TITLE = "您好，我是智学助手";
 export const ASSISTANT_WELCOME_DESC = "用自然语言提问即可，我会协助分析成绩、生成图表与报告，并给出可行建议。";
 export const ASSISTANT_SUGGESTIONS = [
-  "生成高三2班班级总览报告",
+  "邗江中学2026届高三1月考试整体在全市处于什么水平？哪些学科需要重点关注？",
+  "扬州中学2026届高三1月考试整体在全市处于什么水平？哪些学科需要重点关注？",
+  "生成高三(2)班班级总览报告",
   "对比各班本次月考成绩",
   "哪些学生需要分层预警"
 ] as const;

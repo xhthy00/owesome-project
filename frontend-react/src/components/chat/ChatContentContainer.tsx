@@ -2,6 +2,7 @@ import { BulbOutlined, VerticalAlignBottomOutlined, VerticalAlignTopOutlined } f
 import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { ExecutionStep, Message, ReportPayload } from "@/hooks/useChat";
 import type { RunMetrics } from "@/utils/runMetrics";
+import type { ClarifyPayload } from "@/api/adapter/chatAdapter";
 import {
   ASSISTANT_NAME,
   ASSISTANT_SUGGESTIONS,
@@ -31,6 +32,7 @@ type Props = {
   summaryByRunId?: Record<string, string>;
   runMetrics?: RunMetrics;
   metricsByRunId?: Record<string, RunMetrics>;
+  clarifyByRunId?: Record<string, ClarifyPayload>;
 };
 
 function toText(value: unknown): string {
@@ -58,15 +60,32 @@ function WelcomePanel({ onPick }: { onPick: (text: string) => void }) {
             key={item}
             type="button"
             onClick={() => onPick(item)}
-            className="flex items-center gap-2 rounded-xl border border-[#e7eaf0] bg-white px-4 py-3 text-left text-sm text-[#334155] shadow-[0_1px_2px_rgba(16,24,40,0.04)] transition-colors hover:border-[#91caff] hover:bg-[#f0f7ff] dark:border-[#2f3441] dark:bg-[#111723] dark:text-[#e2e8f0] dark:hover:border-[#3b82f6]"
+            className="flex items-start gap-2 rounded-xl border border-[#e7eaf0] bg-white px-4 py-3 text-left text-sm leading-6 text-[#334155] shadow-[0_1px_2px_rgba(16,24,40,0.04)] transition-colors hover:border-[#91caff] hover:bg-[#f0f7ff] dark:border-[#2f3441] dark:bg-[#111723] dark:text-[#e2e8f0] dark:hover:border-[#3b82f6]"
           >
-            <BulbOutlined className="text-[#0c75fc]" />
-            <span>{item}</span>
+            <BulbOutlined className="mt-1 shrink-0 text-[#0c75fc]" />
+            <span className="min-w-0">{item}</span>
           </button>
         ))}
       </div>
     </div>
   );
+}
+
+function clarifyChips(payload?: ClarifyPayload): string[] {
+  if (!payload?.options) return [];
+  const raw = payload.options;
+  if (Array.isArray(raw)) {
+    return raw.map((x) => String(x || "").trim()).filter(Boolean);
+  }
+  const out: string[] = [];
+  for (const vals of Object.values(raw)) {
+    if (!Array.isArray(vals)) continue;
+    for (const v of vals) {
+      const s = String(v || "").trim();
+      if (s && !out.includes(s)) out.push(s);
+    }
+  }
+  return out;
 }
 
 export default function ChatContentContainer({
@@ -79,7 +98,8 @@ export default function ChatContentContainer({
   reports = [],
   summaryByRunId = {},
   runMetrics,
-  metricsByRunId = {}
+  metricsByRunId = {},
+  clarifyByRunId = {}
 }: Props) {
   const { handleChat } = useContext(ChatContentContext);
   const ref = useRef<HTMLDivElement>(null);
@@ -179,7 +199,7 @@ export default function ChatContentContainer({
         thinkText: extractThinkFromSteps(steps)
       }
     ];
-  }, [userMessages, steps, stepWithoutRunId, messages, summaryByRunId, reports, loading, activity]);
+  }, [userMessages, steps, stepWithoutRunId, messages, summaryByRunId, reports, loading, activity, clarifyByRunId]);
 
   return (
     <div className="relative h-full min-h-0">
@@ -205,7 +225,15 @@ export default function ChatContentContainer({
                   thinkText={entry.thinkText || undefined}
                   storySummary={entry.summary.label}
                   storyPhases={entry.phases}
-                  followups={!loading && isLatest && entry.answer ? getFollowups(entry.reportType) : []}
+                  followups={
+                    !loading && isLatest
+                      ? clarifyChips(clarifyByRunId[runId]).length
+                        ? clarifyChips(clarifyByRunId[runId])
+                        : entry.answer
+                          ? getFollowups(entry.reportType)
+                          : []
+                      : []
+                  }
                   selectedStepId={selectedStepId}
                   onSelectStep={onSelectStep}
                   onFollowup={(text) => void handleChat(text)}

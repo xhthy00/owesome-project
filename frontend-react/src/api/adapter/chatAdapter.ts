@@ -108,6 +108,15 @@ export type ChatStreamPayload = {
   enable_tool_agent?: boolean;
 };
 
+export type ClarifyPayload = {
+  prompt?: string;
+  missing?: string[];
+  options?: Record<string, string[]> | string[];
+  filled?: Record<string, string>;
+  original_question?: string;
+  report_type?: string | null;
+};
+
 type StreamHandlers = {
   onStep?: (step: { name?: string; label?: string; status?: string; elapsed_ms?: number; detail?: string }) => void;
   onAgentSpeak?: (payload: { agent?: string; status?: string; error?: string }) => void;
@@ -154,6 +163,7 @@ type StreamHandlers = {
   }) => void;
   onError?: (msg: string) => void;
   onDone?: (recordId: number) => void;
+  onClarify?: (payload: ClarifyPayload) => void;
 };
 
 export async function createConversation(payload: { title?: string; datasource_id: number }) {
@@ -312,6 +322,16 @@ export async function sendMessageStream(
               typeof data.completion_tokens === "number" ? data.completion_tokens : undefined,
             total_tokens: typeof data.total_tokens === "number" ? data.total_tokens : undefined,
             delta_total: typeof data.delta_total === "number" ? data.delta_total : undefined
+          });
+          break;
+        case "clarify":
+          handlers.onClarify?.({
+            prompt: (data.prompt as string) ?? "",
+            missing: Array.isArray(data.missing) ? (data.missing as string[]) : [],
+            options: (data.options as ClarifyPayload["options"]) ?? {},
+            filled: (data.filled as Record<string, string>) ?? {},
+            original_question: (data.original_question as string) ?? "",
+            report_type: (data.report_type as string) ?? null
           });
           break;
         case "error":

@@ -468,7 +468,7 @@ def aggregate_subject_avg(
     for name, group in buckets.items():
         item: dict[str, Any] = {"name": name, "count": len(group)}
         for key, _label in _AVG_METRICS:
-            vals = [float(r[key]) for r in group if r.get(key) is not None]
+            vals = [v for r in group if (v := _num(r.get(key))) is not None]
             item[key] = _mean(vals)
             item[f"{key}_n"] = len(vals)
         out.append(item)
@@ -477,7 +477,7 @@ def aggregate_subject_avg(
         "count": len(rows),
     }
     for key, _label in _AVG_METRICS:
-        vals = [float(r[key]) for r in rows if r.get(key) is not None]
+        vals = [v for r in rows if (v := _num(r.get(key))) is not None]
         city[key] = _mean(vals)
         city[f"{key}_n"] = len(vals)
     ranked = [r for r in out if r["name"] not in ("扬州市", "合计")]

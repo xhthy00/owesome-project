@@ -3720,6 +3720,14 @@ def build_class_overview_report_data_tool(
         return blocked
     rd = report_data if isinstance(report_data, dict) else ctx.get("report_data")
     rd_out: dict[str, Any] = dict(rd) if isinstance(rd, dict) else {}
+    class_name = _resolve_class_for_class_overview(
+        class_name, tool_runtime_ctx=ctx, report_data=rd_out
+    )
+    if not class_name:
+        return ToolResult(
+            content="请指定班级，例如「高三(10)班」。",
+            data={"error": "missing_class_name"},
+        )
 
     ds_id = datasource_id if datasource_id is not None else ctx.get("datasource_id")
     ws_oid = workspace_oid if workspace_oid is not None else ctx.get("workspace_oid")
@@ -3815,6 +3823,48 @@ def build_class_overview_report_data_tool(
         payload,
         report_type=ReportType.CLASS_OVERVIEW,
     )
+
+
+def _unique_class_names(raw: Any) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for item in raw:
+        s = str(item or "").strip()
+        if s and s not in out:
+            out.append(s)
+    return out
+
+
+def _resolve_class_for_class_overview(
+    class_name: str = "",
+    *,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+    report_data: dict[str, Any] | None = None,
+) -> str:
+    """班级总览必须有明确班级：问句、参数或权限唯一绑定。"""
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    rd = report_data if isinstance(report_data, dict) else {}
+    for cand in (
+        class_name,
+        rd.get("CLASS_NAME"),
+        rd.get("class_name"),
+    ):
+        s = str(cand or "").strip()
+        if s:
+            return s
+    constraints = ctx.get("constraints") if isinstance(ctx.get("constraints"), dict) else {}
+    edu = constraints.get("edu_scope") if isinstance(constraints.get("edu_scope"), dict) else {}
+    if not isinstance(edu, dict):
+        edu = ctx.get("edu_scope") if isinstance(ctx.get("edu_scope"), dict) else {}
+    classes = _unique_class_names(constraints.get("target_classes"))
+    if not classes:
+        classes = _unique_class_names(ctx.get("target_classes"))
+    if not classes and isinstance(edu, dict):
+        classes = _unique_class_names(edu.get("class_names"))
+    if len(classes) == 1:
+        return classes[0]
+    return ""
 
 
 def _resolve_school_for_class_overview(
@@ -5709,6 +5759,7 @@ def compare_knowledge_cohort_tool(
     from src.agent.education.query_parse import (
         _clean_exam_name_candidate,
         normalize_fullwidth_parentheses,
+        text_has_exam_kind_token,
     )
 
     cls = normalize_fullwidth_parentheses((class_name or "").strip())
@@ -5718,7 +5769,9 @@ def compare_knowledge_cohort_tool(
     # 仍含「班」误吞时，回落短词，避免 LIKE '%班数学期末考试%' 空结果
     if exam and "班" in exam:
         for token in ("期末", "期中", "月考", "摸底", "模拟"):
-            if token in exam_raw or token in exam:
+            if text_has_exam_kind_token(exam_raw, token) or text_has_exam_kind_token(
+                exam, token
+            ):
                 exam = token
                 break
     school = (school_name or "").strip()
@@ -6121,6 +6174,7 @@ def build_class_weak_subject_report_data_tool(
     from src.agent.education.query_parse import (
         _clean_exam_name_candidate,
         normalize_fullwidth_parentheses,
+        text_has_exam_kind_token,
     )
     from src.agent.resource.tool.business import _load_datasource, _sanitize_report_html
 
@@ -6136,7 +6190,9 @@ def build_class_weak_subject_report_data_tool(
     exam = _clean_exam_name_candidate(exam_raw) or exam_raw
     if exam and "班" in exam:
         for token in ("期末", "期中", "月考", "摸底", "模拟"):
-            if token in exam_raw or token in exam:
+            if text_has_exam_kind_token(exam_raw, token) or text_has_exam_kind_token(
+                exam, token
+            ):
                 exam = token
                 break
     school = (school_name or "").strip()
@@ -7317,10 +7373,112 @@ def peek_edu_filter_values(
     return ToolResult(content=format_peek_payload(payload), data=payload)
 
 
+@tool()
+def query_certified_metric_tool(
+    metric_id: str = "",
+    exam_name: str = "",
+    school_name: str = "",
+    class_name: str = "",
+    subject_name: str = "",
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """按认证指标编译 SQL 并出数（均分/达线/总分/优势薄弱）。禁止手写口径。"""
+    from src.agent.education.config_store import get_config
+    from src.agent.education.kpi_sql import kpi_row_to_stats
+    from src.agent.education.metric_catalog import (
+        METRIC_SCORE_KPI,
+        compile_metric_sql,
+        metric_by_id,
+        resolve_metric,
+    )
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    q = str(ctx.get("user_question") or ctx.get("user_utterance") or "")
+    spec = metric_by_id(metric_id) or resolve_metric(q)
+    if spec is None:
+        return ToolResult(
+            content="未命中认证指标，请改用 execute_sql 按已绑定范围查询。",
+            data={"error": "metric_not_found"},
+        )
+    bound = {
+        "exam_name": exam_name or ctx.get("target_exam") or "",
+        "school_name": school_name or ctx.get("target_school") or "",
+        "class_name": class_name or "",
+        "subject_name": subject_name or ctx.get("target_subject") or "",
+    }
+    classes = ctx.get("target_classes")
+    if not bound["class_name"] and isinstance(classes, list) and classes:
+        bound["class_name"] = str(classes[0])
+    if not bound.get("exam_name"):
+        return ToolResult(
+            content="认证指标缺少考试专名，请先确认考试后再查。",
+            data={"error": "missing_exam"},
+        )
+    sql = compile_metric_sql(spec, bound, question=q, config=get_config())
+    ds_id = datasource_id if datasource_id is not None else ctx.get("datasource_id")
+    if not ds_id:
+        return ToolResult(
+            content="query_certified_metric_tool 失败：缺少 datasource_id。",
+            data={"error": "missing datasource_id", "sql": sql},
+        )
+    ws_oid = workspace_oid if workspace_oid is not None else ctx.get("workspace_oid")
+    uid = user_id if user_id is not None else ctx.get("user_id")
+    ok, msg, result, sql_run = _run_edu_sql(
+        sql,
+        datasource_id=int(ds_id),
+        workspace_oid=int(ws_oid) if ws_oid is not None else None,
+        user_id=int(uid) if uid is not None else None,
+    )
+    if not ok:
+        return ToolResult(
+            content=f"认证指标查询失败：{msg}",
+            data={"error": msg, "sql": sql_run, "metric_id": spec.id},
+        )
+    data = result if isinstance(result, dict) else {}
+    rows = data.get("rows") or []
+    cols = [str(c) for c in (data.get("columns") or [])]
+    payload: dict[str, Any] = {
+        "metric_id": spec.id,
+        "bound": bound,
+        "sql": sql_run,
+        "columns": cols,
+        "rows": rows,
+    }
+    if spec.id == METRIC_SCORE_KPI and rows:
+        row_map = {cols[i]: rows[0][i] for i in range(min(len(cols), len(rows[0])))} if rows[0] else {}
+        stats = kpi_row_to_stats(row_map, get_config())
+        payload["stats"] = stats
+        content = (
+            f"认证指标 {spec.id}：均分 {stats.get('avg')}，"
+            f"参考人数 {stats.get('count')}，及格率 {stats.get('pass_rate')}%，"
+            f"优秀率 {stats.get('excellent_rate')}%。"
+            "面向用户不要写表名或 SQL。"
+        )
+        return ToolResult(content=content, data=payload)
+    if not rows:
+        return ToolResult(
+            content="该范围暂无成绩。请对照考试专名后重试，禁止断言数据未纳入。",
+            data={**payload, "error": "empty"},
+        )
+    preview = "；".join(
+        ", ".join(f"{cols[i]}={row[i]}" for i in range(min(len(cols), len(row))))
+        for row in rows[:8]
+        if isinstance(row, (list, tuple))
+    )
+    return ToolResult(
+        content=f"认证指标 {spec.id} 已出数：{preview}。面向用户不要写表名或 SQL。",
+        data=payload,
+    )
+
+
 # 暴露给 ``build_default_toolpack`` 的列表（与 business.py 工具并列）。
 EDUCATION_TOOLS = [
     resolve_score_schema,
     peek_edu_filter_values,
+    query_certified_metric_tool,
     query_school_vs_city_avg_tool,
     compute_score_stats_tool,
     compute_rankings_tool,
@@ -7391,6 +7549,7 @@ __all__ = [
     "fetch_subject_diagnosis_data_tool",
     "identify_at_risk_students_tool",
     "peek_edu_filter_values",
+    "query_certified_metric_tool",
     "query_school_vs_city_avg_tool",
     "resolve_score_schema",
     "select_report_template_tool",

@@ -505,7 +505,9 @@ def test_orchestrator_config_edu_sql_includes_exam_name_and_student():
     )
     score_sql = next(s for s in captured if "AS score" in s and "FROM tb_score" in s and "LIMIT" in s)
     assert "exam_name" in score_sql
-    assert "student_id AS student_name" in score_sql or "student_name" in score_sql
+    assert "ov.xm" in score_sql
+    assert "sch.s_name" in score_sql
+    assert "student_name" in score_sql
     assert "st.name" not in score_sql
     assert "LIMIT 50000" in score_sql
 
@@ -688,3 +690,31 @@ def test_orchestrator_subject_diagnosis_includes_item_table():
     assert "知识点" in res.html
     assert "函数" in res.html
     assert "需加强" in res.html or "薄弱" in res.html
+
+
+def test_normalize_jc_label_from_exam_name():
+    from src.agent.education.schema_mapping import extract_jc_labels, normalize_jc_label
+
+    assert normalize_jc_label("2026届") == "2026届"
+    assert normalize_jc_label("2026") == "2026届"
+    assert normalize_jc_label("2026届高三5月模拟") == "2026届"
+    assert normalize_jc_label("高三期中") == ""
+    assert extract_jc_labels(["2026届高三5月模拟", "2027届高二期末", "2026届一模"]) == [
+        "2027届",
+        "2026届",
+    ]
+
+
+def test_filters_to_where_includes_jc_and_plain_school():
+    from src.agent.education.orchestrator import _filters_to_where
+
+    where = _filters_to_where(
+        {"school_name": "扬州中学", "jc": "2026"},
+        "sch.name",
+        "sc.class",
+        "sc.subject_name",
+        "COALESCE(eb.batch_name, e.exam_name)",
+    )
+    assert "sch.s_name LIKE '%扬州中学%'" in where
+    assert "2026届" in where
+    assert "COALESCE(eb.batch_name, e.exam_name) LIKE '%2026届%'" in where

@@ -325,6 +325,23 @@ def _has_explicit_report_intent(question: str) -> bool:
     return any(h in q for h in _EXPLICIT_REPORT_HINTS)
 
 
+def _is_score_stat_fact(question: str) -> bool:
+    """单场均分/均衡等事实问，不能因考试名含「期末」被收成全市诊断报告。"""
+    from src.agent.education.query_parse import is_score_stat_query
+
+    q = question or ""
+    if not is_score_stat_query(q):
+        return False
+    return not _has_explicit_report_intent(q)
+
+
+def _is_subject_strength_fact(question: str) -> bool:
+    """优势/薄弱学科按各科均分全市排名，不是本校各科互比、不是班际报告。"""
+    from src.agent.education.query_parse import is_subject_strength_query
+
+    return is_subject_strength_query(question or "")
+
+
 def _is_parent_child_xueqing(question: str) -> bool:
     q = question or ""
     return "学情报告" in q and any(
@@ -399,6 +416,10 @@ def _candidate_pool(question: str) -> list[ReportType]:
     if is_line_reach_query(q):
         return []
     if is_score_threshold_fact_query(q):
+        return []
+    if _is_score_stat_fact(q):
+        return []
+    if _is_subject_strength_fact(q):
         return []
     if is_school_vs_city_avg_query(q):
         return []
@@ -667,6 +688,22 @@ def fallback_classify_report_intent(question: str) -> ReportRoute:
             report_type=None,
             confidence=0.95,
             reason="学校均分与引领/支撑/发展校比较走 overview 事实查询",
+            source="hard",
+        )
+    if _is_score_stat_fact(q):
+        return ReportRoute(
+            needs_report=False,
+            report_type=None,
+            confidence=0.95,
+            reason="单场均分/均衡等走 overview 事实查询",
+            source="hard",
+        )
+    if _is_subject_strength_fact(q):
+        return ReportRoute(
+            needs_report=False,
+            report_type=None,
+            confidence=0.95,
+            reason="优势/薄弱学科按各科均分全市排名",
             source="hard",
         )
 
@@ -987,6 +1024,22 @@ async def classify_report_intent(
             report_type=None,
             confidence=0.95,
             reason="学校均分与引领/支撑/发展校比较走 overview 事实查询",
+            source="hard",
+        )
+    if _is_score_stat_fact(q):
+        return ReportRoute(
+            needs_report=False,
+            report_type=None,
+            confidence=0.95,
+            reason="单场均分/均衡等走 overview 事实查询",
+            source="hard",
+        )
+    if _is_subject_strength_fact(q):
+        return ReportRoute(
+            needs_report=False,
+            report_type=None,
+            confidence=0.95,
+            reason="优势/薄弱学科按各科均分全市排名",
             source="hard",
         )
     if is_knowledge_cohort_gap_query(q):

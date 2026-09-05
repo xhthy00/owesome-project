@@ -154,7 +154,7 @@ class ChatRequest(BaseModel):
     @field_validator("question")
     @classmethod
     def _normalize_class_parentheses(cls, v: str) -> str:
-        """查询前把班级全角括号统一成半角，如 高三（10）班 → 高三(10)班。"""
+        """查询前统一班级写法：高三（10）班 / 高三2班 → 高三(10)班 / 高三(2)班。"""
         from src.agent.education.query_parse import normalize_fullwidth_parentheses
 
         return normalize_fullwidth_parentheses(v or "")

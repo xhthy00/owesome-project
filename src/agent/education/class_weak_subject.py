@@ -10,6 +10,7 @@ from typing import Any
 
 from src.agent.education.config import EducationConfig
 from src.agent.education.dimension_parse import parse_grade_from_class
+from src.agent.education.query_parse import text_has_exam_kind_token
 from src.agent.education.stats import compute_score_stats
 
 WEAK_RANK_RATIO = 0.30
@@ -202,7 +203,7 @@ def pick_exam_batch_name(
         if month and re.search(rf"(?<!\d){re.escape(month)}", name):
             s += 8
         for tok in ("期末", "期中", "月考", "模拟", "摸底"):
-            if tok in q and tok in name:
+            if text_has_exam_kind_token(q, tok) and tok in name:
                 s += 3
                 break
         return s

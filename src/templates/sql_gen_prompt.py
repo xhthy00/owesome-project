@@ -223,6 +223,133 @@ LIMIT 1000;
 -- 语文=yw。缺考 yw=0 不计入均分分母（否则 113.05 会被拉成 112.99）。引领校用 overview.xxlb 且在籍生；禁止 JOIN tb_school 算均分；禁止 GROUP BY xx 再平均；引领校支不要排除扬州中学</suggestion-answer>
   </example>
   <example>
+    <question>扬州中学1月期末各科均分</question>
+    <suggestion-answer>SELECT
+  COUNT(*) AS n_stu,
+  ROUND(AVG(yw) FILTER (WHERE yw &gt; 0), 1) AS 语文,
+  COUNT(*) FILTER (WHERE yw &gt; 0) AS 语文人数,
+  ROUND(AVG(sx) FILTER (WHERE sx &gt; 0), 1) AS 数学,
+  COUNT(*) FILTER (WHERE sx &gt; 0) AS 数学人数,
+  ROUND(AVG(yy) FILTER (WHERE yy &gt; 0), 1) AS 英语,
+  COUNT(*) FILTER (WHERE yy &gt; 0) AS 英语人数,
+  ROUND(AVG(wl) FILTER (WHERE wl &gt; 0), 1) AS 物理,
+  COUNT(*) FILTER (WHERE wl &gt; 0) AS 物理人数,
+  ROUND(AVG(ls) FILTER (WHERE ls &gt; 0), 1) AS 历史,
+  COUNT(*) FILTER (WHERE ls &gt; 0) AS 历史人数,
+  ROUND(AVG(hx) FILTER (WHERE hx &gt; 0), 1) AS 化学,
+  COUNT(*) FILTER (WHERE hx &gt; 0) AS 化学人数,
+  ROUND(AVG(sw) FILTER (WHERE sw &gt; 0), 1) AS 生物,
+  COUNT(*) FILTER (WHERE sw &gt; 0) AS 生物人数,
+  ROUND(AVG(zz) FILTER (WHERE zz &gt; 0), 1) AS 政治,
+  COUNT(*) FILTER (WHERE zz &gt; 0) AS 政治人数,
+  ROUND(AVG(dl) FILTER (WHERE dl &gt; 0), 1) AS 地理,
+  COUNT(*) FILTER (WHERE dl &gt; 0) AS 地理人数
+FROM tb_score_overview
+WHERE exam_name LIKE '%1月期末%'
+  AND xx LIKE '%扬州中学%'
+LIMIT 1000;
+-- 未选考/缺考宽表为 0。多科均分必须 AVG(col) FILTER (WHERE col &gt; 0)，禁止 AVG(ls) 除以全体人数（历史会变成个位数）。禁止 WHERE ls&gt;0（会把语数英也滤成选考历史的人）。该科参考人数用 COUNT(*) FILTER</suggestion-answer>
+  </example>
+  <example>
+    <question>2026届高三1月扬州中学高三(1)班数学成绩全市排名</question>
+    <suggestion-answer>WITH class_avg AS (
+  SELECT xx, bj, ROUND(AVG(sx) FILTER (WHERE sx &gt; 0), 2) AS avg_sx
+  FROM tb_score_overview
+  WHERE exam_name LIKE '%2026届高三1月%'
+    AND xsxz = '在籍生'
+  GROUP BY xx, bj
+  HAVING AVG(sx) FILTER (WHERE sx &gt; 0) IS NOT NULL
+)
+SELECT xx, bj, avg_sx,
+       RANK() OVER (ORDER BY avg_sx DESC) AS city_rank,
+       COUNT(*) OVER () AS n_class
+FROM class_avg
+WHERE xx LIKE '%扬州中学%' AND bj LIKE '%高三(1)班%'
+LIMIT 1000;
+-- 全市班级排名必须 xsxz='在籍生'。市报生/往届是虚拟班，计入会把正取班从第1挤到第4。数学=sx 且 FILTER sx&gt;0</suggestion-answer>
+  </example>
+  <example>
+    <question>2026届高三1月新华中学的优势学科</question>
+    <suggestion-answer>WITH school_avg AS (
+  SELECT xx,
+         ROUND(AVG(yw) FILTER (WHERE yw &gt; 0), 2) AS yw,
+         ROUND(AVG(sx) FILTER (WHERE sx &gt; 0), 2) AS sx,
+         ROUND(AVG(yy) FILTER (WHERE yy &gt; 0), 2) AS yy,
+         ROUND(AVG(wl) FILTER (WHERE wl &gt; 0), 2) AS wl,
+         ROUND(AVG(ls) FILTER (WHERE ls &gt; 0), 2) AS ls,
+         ROUND(AVG(hxzh) FILTER (WHERE hxzh &gt; 0), 2) AS hxzh,
+         ROUND(AVG(swzh) FILTER (WHERE swzh &gt; 0), 2) AS swzh,
+         ROUND(AVG(zzzh) FILTER (WHERE zzzh &gt; 0), 2) AS zzzh,
+         ROUND(AVG(dlzh) FILTER (WHERE dlzh &gt; 0), 2) AS dlzh
+  FROM tb_score_overview
+  WHERE exam_name LIKE '%2026届高三1月%'
+    AND xsxz = '在籍生'
+  GROUP BY xx
+),
+ranked AS (
+  SELECT xx, '语文' AS subject, yw AS avg_score, RANK() OVER (ORDER BY yw DESC NULLS LAST) AS city_rank FROM school_avg WHERE yw IS NOT NULL
+  UNION ALL SELECT xx, '数学', sx, RANK() OVER (ORDER BY sx DESC NULLS LAST) FROM school_avg WHERE sx IS NOT NULL
+  UNION ALL SELECT xx, '英语', yy, RANK() OVER (ORDER BY yy DESC NULLS LAST) FROM school_avg WHERE yy IS NOT NULL
+  UNION ALL SELECT xx, '物理', wl, RANK() OVER (ORDER BY wl DESC NULLS LAST) FROM school_avg WHERE wl IS NOT NULL
+  UNION ALL SELECT xx, '历史', ls, RANK() OVER (ORDER BY ls DESC NULLS LAST) FROM school_avg WHERE ls IS NOT NULL
+  UNION ALL SELECT xx, '化学', hxzh, RANK() OVER (ORDER BY hxzh DESC NULLS LAST) FROM school_avg WHERE hxzh IS NOT NULL
+  UNION ALL SELECT xx, '生物', swzh, RANK() OVER (ORDER BY swzh DESC NULLS LAST) FROM school_avg WHERE swzh IS NOT NULL
+  UNION ALL SELECT xx, '政治', zzzh, RANK() OVER (ORDER BY zzzh DESC NULLS LAST) FROM school_avg WHERE zzzh IS NOT NULL
+  UNION ALL SELECT xx, '地理', dlzh, RANK() OVER (ORDER BY dlzh DESC NULLS LAST) FROM school_avg WHERE dlzh IS NOT NULL
+)
+SELECT subject, avg_score, city_rank, COUNT(*) OVER (PARTITION BY subject) AS n_school
+FROM ranked
+WHERE xx LIKE '%新华中学%'
+ORDER BY city_rank, subject
+LIMIT 1000;
+-- 优势/薄弱学科=该校各科均分的全市学校排名相对位置：名次/参赛数≤25%为前列（优势），≥50%为靠后（薄弱）。禁止把本校各科里名次较差的直接叫薄弱。禁止用该校语文均分和数学均分互比。点名班级则 GROUP BY xx,bj 做全市班级排名。必须 xsxz='在籍生'，单科 FILTER col&gt;0</suggestion-answer>
+  </example>
+  <example>
+    <question>全市均衡性最好的学科</question>
+    <suggestion-answer>SELECT * FROM (
+  SELECT '语文' AS subject,
+         ROUND((STDDEV_SAMP(yw) FILTER (WHERE yw &gt; 0))::numeric, 2) AS stdev,
+         ROUND((AVG(yw) FILTER (WHERE yw &gt; 0))::numeric, 1) AS avg_score,
+         COUNT(*) FILTER (WHERE yw &gt; 0) AS n
+  FROM tb_score_overview WHERE exam_name LIKE '%目标考试%'
+  UNION ALL
+  SELECT '数学', ROUND((STDDEV_SAMP(sx) FILTER (WHERE sx &gt; 0))::numeric, 2),
+         ROUND((AVG(sx) FILTER (WHERE sx &gt; 0))::numeric, 1), COUNT(*) FILTER (WHERE sx &gt; 0)
+  FROM tb_score_overview WHERE exam_name LIKE '%目标考试%'
+  UNION ALL
+  SELECT '英语', ROUND((STDDEV_SAMP(yy) FILTER (WHERE yy &gt; 0))::numeric, 2),
+         ROUND((AVG(yy) FILTER (WHERE yy &gt; 0))::numeric, 1), COUNT(*) FILTER (WHERE yy &gt; 0)
+  FROM tb_score_overview WHERE exam_name LIKE '%目标考试%'
+  UNION ALL
+  SELECT '物理', ROUND((STDDEV_SAMP(wl) FILTER (WHERE wl &gt; 0))::numeric, 2),
+         ROUND((AVG(wl) FILTER (WHERE wl &gt; 0))::numeric, 1), COUNT(*) FILTER (WHERE wl &gt; 0)
+  FROM tb_score_overview WHERE exam_name LIKE '%目标考试%'
+  UNION ALL
+  SELECT '历史', ROUND((STDDEV_SAMP(ls) FILTER (WHERE ls &gt; 0))::numeric, 2),
+         ROUND((AVG(ls) FILTER (WHERE ls &gt; 0))::numeric, 1), COUNT(*) FILTER (WHERE ls &gt; 0)
+  FROM tb_score_overview WHERE exam_name LIKE '%目标考试%'
+  UNION ALL
+  SELECT '化学', ROUND((STDDEV_SAMP(hxzh) FILTER (WHERE hxzh &gt; 0))::numeric, 2),
+         ROUND((AVG(hxzh) FILTER (WHERE hxzh &gt; 0))::numeric, 1), COUNT(*) FILTER (WHERE hxzh &gt; 0)
+  FROM tb_score_overview WHERE exam_name LIKE '%目标考试%'
+  UNION ALL
+  SELECT '生物', ROUND((STDDEV_SAMP(swzh) FILTER (WHERE swzh &gt; 0))::numeric, 2),
+         ROUND((AVG(swzh) FILTER (WHERE swzh &gt; 0))::numeric, 1), COUNT(*) FILTER (WHERE swzh &gt; 0)
+  FROM tb_score_overview WHERE exam_name LIKE '%目标考试%'
+  UNION ALL
+  SELECT '政治', ROUND((STDDEV_SAMP(zzzh) FILTER (WHERE zzzh &gt; 0))::numeric, 2),
+         ROUND((AVG(zzzh) FILTER (WHERE zzzh &gt; 0))::numeric, 1), COUNT(*) FILTER (WHERE zzzh &gt; 0)
+  FROM tb_score_overview WHERE exam_name LIKE '%目标考试%'
+  UNION ALL
+  SELECT '地理', ROUND((STDDEV_SAMP(dlzh) FILTER (WHERE dlzh &gt; 0))::numeric, 2),
+         ROUND((AVG(dlzh) FILTER (WHERE dlzh &gt; 0))::numeric, 1), COUNT(*) FILTER (WHERE dlzh &gt; 0)
+  FROM tb_score_overview WHERE exam_name LIKE '%目标考试%'
+) t
+ORDER BY stdev ASC
+LIMIT 1000;
+-- 均衡性=标准差越小越均衡。未选考/缺考为 0，STDDEV/AVG 必须 FILTER col&gt;0，否则选考科均分被拉低、离散被夸大。化学/生物/政治/地理用转换分 hxzh/swzh/zzzh/dlzh</suggestion-answer>
+  </example>
+  <example>
     <question>2026届高三5月模拟理科语数外三门均分的学校排名</question>
     <suggestion-answer>SELECT xx AS school,
        COUNT(*) AS candidates,
@@ -412,11 +539,12 @@ _INTENT_EXAMPLE_KEYS: dict[str, tuple[str, ...]] = {
         "广陵区本科线达线人数和达线率",
     ),
     "overview_avg": (
+        "扬州中学1月期末各科均分",
+        "全市均衡性最好的学科",
+        "2026届高三1月扬州中学高三(1)班数学成绩全市排名",
+        "2026届高三1月新华中学的优势学科",
         "扬州中学对比引领校语文单科",
         "扬州中学物理类均分与全市",
-        "全科总分均分",
-        "语数外三门均分的学校排名",
-        "邗江区 2026届高三5月模拟数学均分",
     ),
     "class_score": (
         "高一(1)班数学平均分和人数",
@@ -429,6 +557,7 @@ _INTENT_EXAMPLE_KEYS: dict[str, tuple[str, ...]] = {
         "高一(1)班数学平均分和人数",
     ),
     "default": (
+        "扬州中学1月期末各科均分",
         "高一(1)班数学平均分和人数",
         "邗江区 2026届高三5月模拟数学均分",
         "对比三所学校数学均分排名",
@@ -439,10 +568,10 @@ _INTENT_TERM_WORDS: dict[str, tuple[str, ...]] = {
     "line_reach": ("达线", "考试", "姓名", "学校"),
     "class_line_reach": ("达线", "班级", "考试", "姓名"),
     "score_band": ("分以上", "十分段", "10分段", "考试"),
-    "overview_avg": ("语数外", "均分", "考试", "学校", "姓名"),
-    "class_score": ("班级", "学校", "及格", "考试", "姓名"),
+    "overview_avg": ("语数外", "均分", "各科", "选考", "选课", "均衡", "排名", "优势", "薄弱", "在籍", "考试", "学校", "姓名"),
+    "class_score": ("班级", "学校", "及格", "考试", "姓名", "选考", "排名", "在籍"),
     "knowledge": ("知识点", "小题", "考试", "学校", "姓名"),
-    "default": ("学校", "班级", "考试", "及格", "姓名"),
+    "default": ("学校", "班级", "考试", "均分", "选考", "及格", "姓名", "排名", "在籍"),
 }
 
 
@@ -473,6 +602,7 @@ def resolve_edu_sql_intent(question: str) -> str:
         is_school_vs_city_avg_query,
         is_school_vs_school_type_avg_query,
         is_score_threshold_fact_query,
+        is_subject_strength_query,
     )
 
     q = (question or "").strip()
@@ -485,6 +615,14 @@ def resolve_edu_sql_intent(question: str) -> str:
     if is_score_threshold_fact_query(q):
         return "score_band"
     if is_school_vs_city_avg_query(q) or is_school_vs_school_type_avg_query(q) or is_overview_total_query(q):
+        return "overview_avg"
+    if is_subject_strength_query(q):
+        return "overview_avg"
+    if any(h in q for h in ("各科均分", "各科成绩", "考试整体", "整体情况", "均衡", "标准差", "离散")):
+        return "overview_avg"
+    if "全市排名" in q or (
+        "排名" in q and any(m in q for m in ("全市", "全域", "市域"))
+    ):
         return "overview_avg"
     if any(h in q for h in ("知识点", "小题", "逐题", "得分率")):
         return "knowledge"
@@ -584,6 +722,14 @@ def education_terminologies_block() -> str:
   <terminology>
     <words><word>语数外</word><word>语数英</word><word>三门</word><word>三门均分</word><word>三门总均分</word><word>四门</word><word>六门</word><word>理科</word><word>文科</word></words>
     <description>语数外/三门均分=tb_score_overview.zf3m 的校均（三科总分，约 300–450，禁止除以 3，禁止写满分 150，禁止对 tb_score 语文/数学/英语 AVG(score)）。四门=zf4m，六门/全科总分=zf6m。理科=物理类（xkkm LIKE '物%'），文科=历史类（xkkm LIKE '史%' 或 LIKE '历%'）。点名学校均分与全市比较：结果必须两行 scope+avg_zf6m+n（该校/全市 UNION ALL）；overview.xx 是学校明文，用 xx LIKE '%校名%'；禁止把 GZ_ 校码 / tb_school.id / tb_school.name 当作 xx。学校 vs 引领/支撑/发展校单科：语文=yw 且 yw&gt;0（缺考 0 分不计入均分），校类用 xxlb LIKE '%引领%' 且 xsxz=在籍生，禁止 JOIN tb_school 算均分，禁止 GROUP BY xx 再平均。禁止套用班级横向对比报告。学校排名 GROUP BY xx ORDER BY AVG(zf3m) DESC。参考人数 COUNT(*)</description>
+  </terminology>
+  <terminology>
+    <words><word>排名</word><word>全市排名</word><word>优势学科</word><word>薄弱学科</word><word>在籍</word><word>市报</word><word>往届</word></words>
+    <description>查 tb_score_overview 默认 AND xsxz='在籍生'。市报生/往届不进均分、不进全市班级或学校排名池（否则虚拟市报班会挤占名次）。问句明确要市报/往届/含市报时才放开。班级全市排名：GROUP BY xx,bj 后 RANK()，外层再滤目标班。优势学科/薄弱学科/优势科目/短板学科：按该校（点名班级则该班）各科均分的全市排名相对位置判断，名次/参赛数≤25%为全市前列（优势），≥50%为全市靠后（薄弱），中间为中游；禁止把本校各科里名次较差的直接叫薄弱（第7/37仍属前列）；禁止用本校各科均分互相比较（满分与选考人数不同）</description>
+  </terminology>
+  <terminology>
+    <words><word>均分</word><word>各科</word><word>选考</word><word>选课</word><word>历史</word><word>地理</word><word>政治</word><word>均衡</word><word>标准差</word><word>离散</word></words>
+    <description>凡对单科分数做统计（均分/标准差/方差/均衡性/中位/最高最低/及格率/分数段）必须排除未选考。宽表用 AGG(col) FILTER (WHERE col&gt;0)。未选考/缺考为 0，计入分母会把历史/政治/地理均分拉成个位数、均衡性失真。多科并列只能 FILTER，禁止 WHERE ls&gt;0（会把语数英也滤掉）。该科参考人数 COUNT(*) FILTER (WHERE col&gt;0)。查 tb_score 长表按 subject_name 过滤则一行一科，且须 score&gt;0</description>
   </terminology>
   <terminology>
     <words><word>达线</word><word>预测线</word><word>特控线</word><word>本科线</word><word>南大</word><word>特招线</word></words>

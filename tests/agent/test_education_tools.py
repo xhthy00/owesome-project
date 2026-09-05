@@ -16,7 +16,7 @@ import asyncio
 import pytest
 
 from src.agent.education.config import EducationConfig, load_config
-from src.agent.education.data_adapter import normalize_rows
+from src.agent.education.data_adapter import NormalizedScoreRow, group_by_subject, normalize_rows
 from src.agent.education.report_types import Audience, ReportType
 from src.agent.education.schema_mapping import (
     ScoreSchemaMapping,
@@ -77,6 +77,14 @@ def test_compute_score_stats_basic_rates_and_segments():
     assert stats["max"] == 100
     # 7 人应被分数段完整覆盖
     assert sum(s["count"] for s in stats["segments"]) == 7
+
+
+def test_compute_score_stats_skips_unselected_zero():
+    cfg = EducationConfig()
+    with_zeros = compute_score_stats([90, 0, 80, 0], cfg, full_score=100)
+    only_takers = compute_score_stats([90, 80], cfg, full_score=100)
+    assert with_zeros["count"] == 2
+    assert with_zeros["avg"] == only_takers["avg"] == 85.0
 
 
 def test_compute_score_stats_custom_thresholds_override():
@@ -202,6 +210,16 @@ def test_normalize_rows_normalized_maps_directly():
     assert out[0].student_name == "李四"
     assert out[0].score == 92.0
     assert out[0].subject == "数学"
+
+
+def test_group_by_subject_skips_unselected_zero():
+    rows = [
+        NormalizedScoreRow(student_id="1", subject="历史", score=72),
+        NormalizedScoreRow(student_id="2", subject="历史", score=0),
+        NormalizedScoreRow(student_id="3", subject="历史", score=None),
+    ]
+    grouped = group_by_subject(rows)
+    assert grouped["历史"] == [72.0]
 
 
 # ---- tools: compute_score_stats_tool --------------------------------------

@@ -113,6 +113,8 @@ type FormValues = {
   subject?: string;
   school_name?: string;
   student_name?: string;
+  /** 届次，如 2026届 */
+  jc?: string;
   include_charts: boolean;
 };
 
@@ -124,28 +126,54 @@ function fieldsForType(reportType: string): {
   subject?: boolean;
   school_name?: boolean;
   student_name?: boolean;
+  jc?: boolean;
 } {
+  let flags: {
+    class_name?: boolean;
+    exam_name?: boolean;
+    exam_multi?: boolean;
+    subject?: boolean;
+    school_name?: boolean;
+    student_name?: boolean;
+    jc?: boolean;
+  };
   switch (reportType) {
     case "class_overview":
-      return { class_name: true, exam_name: true, subject: true };
+      flags = { class_name: true, exam_name: true, subject: true };
+      break;
     case "grade_comparison":
-      return { school_name: true, exam_name: true, subject: true };
+      flags = { school_name: true, exam_name: true, subject: true };
+      break;
     case "subject_diagnosis":
-      return { school_name: true, class_name: true, exam_name: true, subject: true };
+      flags = { school_name: true, class_name: true, exam_name: true, subject: true };
+      break;
     case "student_profile":
-      return { student_name: true, exam_name: true, subject: true, class_name: true };
+      flags = { student_name: true, exam_name: true, subject: true, class_name: true };
+      break;
     case "trend_tracking":
-      return { class_name: true, subject: true, school_name: true };
+      flags = { class_name: true, subject: true, school_name: true };
+      break;
     case "tier_alert":
-      return { class_name: true, exam_name: true, subject: true, school_name: true };
+      flags = { class_name: true, exam_name: true, subject: true, school_name: true };
+      break;
     case "group_feature":
-      return { school_name: true, exam_name: true, subject: true };
+      flags = { school_name: true, exam_name: true, subject: true };
+      break;
     case "comprehensive":
-      return { class_name: true, subject: true, school_name: true };
+      flags = {
+        class_name: true,
+        subject: true,
+        school_name: true,
+        exam_name: true,
+        exam_multi: true
+      };
+      break;
     case "diagnostic_report":
-      return { school_name: true, exam_name: true, exam_multi: true, subject: true };
+      flags = { school_name: true, exam_name: true, exam_multi: true, subject: true };
+      break;
     case "line_reach":
-      return { exam_name: true };
+      flags = { exam_name: true };
+      break;
     case "subject_avg":
     case "assign_grade":
     case "rank_bucket":
@@ -153,10 +181,15 @@ function fieldsForType(reportType: string): {
     case "combo_reach":
     case "elite_roster":
     case "score_band":
-      return { exam_name: true };
+      flags = { exam_name: true };
+      break;
     default:
-      return { class_name: true, exam_name: true };
+      flags = { class_name: true, exam_name: true };
   }
+  if (flags.exam_name || flags.school_name) {
+    flags.jc = true;
+  }
+  return flags;
 }
 
 /** 多选考试用 ;; 序列化，与后端 _split_exam_filter 对齐 */
@@ -190,7 +223,8 @@ export default function AnalysisToolPage() {
     schools: [],
     exams: [],
     classes: [],
-    subjects: []
+    subjects: [],
+    cohorts: []
   });
   const reportIframeRef = useRef<HTMLIFrameElement | null>(null);
   const deepLinkApplied = useRef(false);
@@ -201,6 +235,7 @@ export default function AnalysisToolPage() {
   const examName = Form.useWatch("exam_name", form);
   const className = Form.useWatch("class_name", form);
   const subjectName = Form.useWatch("subject", form);
+  const jc = Form.useWatch("jc", form);
 
   useEffect(() => {
     let cancelled = false;
@@ -242,7 +277,7 @@ export default function AnalysisToolPage() {
 
   useEffect(() => {
     if (!datasourceId) {
-      setMeta({ schools: [], exams: [], classes: [], subjects: [] });
+      setMeta({ schools: [], exams: [], classes: [], subjects: [], cohorts: [] });
       return;
     }
     let cancelled = false;
@@ -255,7 +290,8 @@ export default function AnalysisToolPage() {
           ? examName[0] || undefined
           : examName || undefined,
         class_name: className || undefined,
-        subject: subjectName || undefined
+        subject: subjectName || undefined,
+        jc: jc || undefined
       })
       .then((opts) => {
         if (!cancelled) setMeta(opts);
@@ -271,9 +307,24 @@ export default function AnalysisToolPage() {
     return () => {
       cancelled = true;
     };
-  }, [datasourceId, schoolName, examName, className, subjectName]);
+  }, [datasourceId, schoolName, examName, className, subjectName, jc]);
 
   const toSelectOptions = (items: string[]) => items.map((v) => ({ value: v, label: v }));
+
+  const cohortOptions = useMemo(() => {
+    if (meta.cohorts.length) return meta.cohorts;
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const exam of meta.exams) {
+      const matched = String(exam).match(/(\d{4})\s*届/);
+      if (!matched) continue;
+      const label = `${matched[1]}届`;
+      if (seen.has(label)) continue;
+      seen.add(label);
+      out.push(label);
+    }
+    return out.sort((a, b) => b.localeCompare(a));
+  }, [meta.cohorts, meta.exams]);
 
   const fieldFlags = useMemo(
     () => (selected ? fieldsForType(selected.report_type) : {}),
@@ -295,7 +346,8 @@ export default function AnalysisToolPage() {
       exam_name: undefined,
       subject: undefined,
       school_name: undefined,
-      student_name: undefined
+      student_name: undefined,
+      jc: undefined
     });
   };
 
@@ -323,6 +375,7 @@ export default function AnalysisToolPage() {
       if (values.subject?.trim()) filters.subject = values.subject.trim();
       if (values.school_name?.trim()) filters.school_name = values.school_name.trim();
       if (values.student_name?.trim()) filters.student_name = values.student_name.trim();
+      if (values.jc?.trim()) filters.jc = values.jc.trim();
 
       const res = await educationApi.generateReport({
         datasource_id: values.datasource_id,
@@ -358,6 +411,7 @@ export default function AnalysisToolPage() {
     if (values.subject?.trim()) filters.subject = values.subject.trim();
     if (values.school_name?.trim()) filters.school_name = values.school_name.trim();
     if (values.student_name?.trim()) filters.student_name = values.student_name.trim();
+    if (values.jc?.trim()) filters.jc = values.jc.trim();
     return filters;
   };
 
@@ -636,7 +690,8 @@ export default function AnalysisToolPage() {
                         school_name: undefined,
                         class_name: undefined,
                         exam_name: undefined,
-                        subject: undefined
+                        subject: undefined,
+                        jc: undefined
                       });
                     }}
                   />
@@ -653,6 +708,33 @@ export default function AnalysisToolPage() {
                       options={toSelectOptions(meta.schools)}
                       placeholder="选择学校"
                       optionFilterProp="label"
+                    />
+                  </Form.Item>
+                ) : null}
+                {fieldFlags.jc ? (
+                  <Form.Item name="jc" label="届次">
+                    <Select
+                      allowClear
+                      showSearch
+                      loading={metaLoading}
+                      options={toSelectOptions(cohortOptions)}
+                      placeholder="选择届次"
+                      optionFilterProp="label"
+                      onChange={(val) => {
+                        const exam = form.getFieldValue("exam_name") as
+                          | string
+                          | string[]
+                          | undefined;
+                        if (Array.isArray(exam)) {
+                          form.setFieldsValue({
+                            exam_name: val
+                              ? exam.filter((item) => String(item).includes(String(val)))
+                              : exam
+                          });
+                        } else if (exam && val && !String(exam).includes(String(val))) {
+                          form.setFieldsValue({ exam_name: undefined });
+                        }
+                      }}
                     />
                   </Form.Item>
                 ) : null}

@@ -17,6 +17,8 @@ _EDUCATION_KEYWORDS = (
     "年级",
     "科目",
     "学科",
+    "均衡",
+    "标准差",
     "数学",
     "语文",
     "英语",
@@ -77,8 +79,18 @@ def build_education_sql_hint_text(question: str) -> str:
     q = question or ""
     # 压缩：只保留关键规则行 + 示例题干
     rules: list[str] = []
-    from src.agent.education.query_parse import is_school_vs_school_type_avg_query
+    from src.agent.education.query_parse import (
+        is_school_vs_school_type_avg_query,
+        is_subject_strength_query,
+    )
 
+    if is_subject_strength_query(q):
+        rules.append(
+            "优势/薄弱学科：按该校（有班则该班）各科均分的全市排名相对位置判断，"
+            "名次/参赛数≤25%为前列（优势），≥50%为靠后（薄弱），中间为中游；"
+            "禁止把本校各科里名次较差的直接叫薄弱；禁止用本校各科均分互比；"
+            "GROUP BY xx（班级再加 bj）后 RANK()，xsxz='在籍生'，AVG FILTER col>0。"
+        )
     if is_school_vs_school_type_avg_query(q):
         rules.append(
             "学校 vs 引领/支撑/发展校均分或单科：查 tb_score_overview；"
@@ -96,6 +108,13 @@ def build_education_sql_hint_text(question: str) -> str:
         )
     if "zf3m" in term or "zf6m" in term:
         rules.append("三门/六门均分用 tb_score_overview.zf3m/zf6m，禁止对 tb_score 三科 AVG 当三门均分。")
+    rules.append(
+        "凡单科分数统计（均分/标准差/均衡性/中位/最值/分数段）必须排除未选考/缺考 0 分："
+        "AVG/STDDEV_SAMP(col) FILTER (WHERE col > 0)；禁止 AVG(ls/zz/dl) 或 STDDEV(ls) 除以全体人数。"
+    )
+    rules.append(
+        "查 tb_score_overview 默认 AND xsxz='在籍生'：市报生/往届不进均分、不进全市班级或学校排名。"
+    )
     if "hxzh" in term or "十分段" in term or "分以上" in term:
         rules.append(
             "绝对分数段查 tb_score_overview；化学用 hxzh；十分段 ((zf6m-1)/10)*10+1。"

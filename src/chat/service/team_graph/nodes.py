@@ -15,6 +15,7 @@ from src.chat.service.agent_runner import (
     _DataAnalystPhase,
     _first_non_empty,
     _persist_async,
+    _question_for_persist,
     _run_ad_hoc_report_phase,
     _run_charter,
     _run_data_analyst_phase,
@@ -65,7 +66,11 @@ async def node_planner(state: TeamState, config: RunnableConfig) -> dict[str, An
     llm = _llm_from_config(config)
     request = state["request"]
     current_user_id = state["current_user_id"]
-    shared_constraints = _build_shared_constraints(request.question, current_user_id)
+    ctx = state.get("constraints_ctx")
+    if ctx:
+        shared_constraints = _RunConstraints.from_context(ctx)
+    else:
+        shared_constraints = _build_shared_constraints(request.question, current_user_id)
     speak_steps: list[dict[str, Any]] = []
     plan_items = await _run_planner_phase(
         request=request,
@@ -229,10 +234,11 @@ async def node_persist_failure(state: TeamState, config: RunnableConfig) -> dict
     persist = state.get("persist", True)
     record_id = 0
     if persist:
+        persist_constraints = _RunConstraints.from_context(state.get("constraints_ctx"))
         record_id = await _persist_async(
             request=request,
             current_user_id=state["current_user_id"],
-            question=request.question,
+            question=_question_for_persist(request, persist_constraints),
             sql="",
             sql_error=overall_reason,
             exec_result=None,
@@ -298,6 +304,11 @@ async def node_summarizer(state: TeamState, config: RunnableConfig) -> dict[str,
         fact_answer=fact_answer,
     )
     await emit("summary", {"content": summary_text})
+    from src.chat.service.agent_runner import _maybe_attach_yangzhou_jan_demo_report
+
+    await _maybe_attach_yangzhou_jan_demo_report(
+        request.question, emit, last_good_phase.state
+    )
 
     if needs_report:
         await _run_ad_hoc_report_phase(
@@ -333,10 +344,11 @@ async def node_persist_success(state: TeamState, config: RunnableConfig) -> dict
     persist = state.get("persist", True)
     record_id = 0
     if persist:
+        persist_constraints = _RunConstraints.from_context(state.get("constraints_ctx"))
         record_id = await _persist_async(
             request=request,
             current_user_id=state["current_user_id"],
-            question=request.question,
+            question=_question_for_persist(request, persist_constraints),
             sql=last_good_phase.state.last_sql,
             sql_error=None,
             exec_result=last_good_phase.state.last_exec_result,
@@ -363,10 +375,14 @@ def build_initial_team_state(
     current_user_id: int,
     workspace_oid: int,
     persist: bool,
+    constraints_ctx: dict[str, Any] | None = None,
 ) -> TeamState:
-    return {
+    state: TeamState = {
         "request": request,
         "current_user_id": current_user_id,
         "workspace_oid": workspace_oid,
         "persist": persist,
     }
+    if constraints_ctx:
+        state["constraints_ctx"] = constraints_ctx
+    return state

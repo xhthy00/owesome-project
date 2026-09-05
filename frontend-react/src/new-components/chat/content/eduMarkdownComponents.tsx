@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { Components } from "react-markdown";
+import { labelColumn } from "@/utils/columnLabels";
 
 function flattenText(node: ReactNode): string {
   if (node == null || typeof node === "boolean") return "";
@@ -45,8 +46,9 @@ export const eduMarkdownComponents: Components = {
     return <tr className={weak ? "is-weak" : undefined}>{children}</tr>;
   },
   th: ({ children }) => {
-    const num = looksLikeNumericHeader(flattenText(children));
-    return <th className={num ? "num" : undefined}>{children}</th>;
+    const labeled = labelColumn(flattenText(children));
+    const num = looksLikeNumericHeader(labeled);
+    return <th className={num ? "num" : undefined}>{labeled}</th>;
   },
   td: ({ children }) => {
     const text = flattenText(children);

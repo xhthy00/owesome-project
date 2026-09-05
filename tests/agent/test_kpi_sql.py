@@ -64,7 +64,7 @@ def test_build_primary_exam_and_count_sql():
     assert "tb_exam_batch" in p
     c = build_score_count_sql("WHERE sc.class LIKE '%1%'")
     assert "COUNT(*) AS cnt" in c
-    assert "sc.score IS NOT NULL" in c
+    assert "sc.score > 0" in c
 
 
 def test_append_exam_id_predicate():

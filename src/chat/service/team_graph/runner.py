@@ -20,15 +20,18 @@ async def run_team_stream_graph(
     persist: bool = True,
     enable_tool_agent: bool = True,
     workspace_oid: int = 1,
+    constraints: Any = None,
 ) -> int:
     """与 :func:`run_team_stream` 行为对齐，经 LangGraph 调度。"""
     graph = build_team_graph()
     llm = llm_client if llm_client is not None else LangChainLlmClient()
+    constraints_ctx = constraints.to_context() if constraints is not None else None
     initial = build_initial_team_state(
         request=request,
         current_user_id=current_user_id,
         workspace_oid=workspace_oid,
         persist=persist,
+        constraints_ctx=constraints_ctx,
     )
     config = {
         "configurable": {

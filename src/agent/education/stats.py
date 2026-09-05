@@ -60,6 +60,7 @@ def compute_score_stats(
 
     Args:
         scores: 数值列表；None / 非数已在 ``data_adapter`` 层过滤。
+            未选考/缺考的 0 分不计入任何 KPI。
         config: 阈值配置。
         full_score: 满分；为 None 时用 ``config.default_full_score``。
 
@@ -67,7 +68,16 @@ def compute_score_stats(
         dict，所有 rate 字段为百分数（0–100，保留两位小数）。
         空列表返回各字段为 ``None`` 的占位结构，便于模板统一渲染。
     """
-    valid = [float(s) for s in scores if s is not None]
+    valid: list[float] = []
+    for s in scores:
+        if s is None:
+            continue
+        try:
+            v = float(s)
+        except (TypeError, ValueError):
+            continue
+        if v > 0:
+            valid.append(v)
     upper = full_score if full_score is not None else config.default_full_score
     seg_bounds = config.resolved_segments(upper if full_score is not None else None)
 

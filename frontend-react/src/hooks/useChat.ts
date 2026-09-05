@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from "react";
-import { createConversation, getConversationDetail, sendMessageStream, updateReportReview, replaceRecordReports } from "@/api/adapter/chatAdapter";
+import { createConversation, getConversationDetail, sendMessageStream, updateReportReview, replaceRecordReports, type ClarifyPayload } from "@/api/adapter/chatAdapter";
 import { genUUID } from "@/utils/uuid";
 import { replaceRecommendationsHtml } from "@/utils/reportRecommendations";
 import { humanizeStepTitle, humanizeTool } from "@/utils/toolLabels";
@@ -274,6 +274,7 @@ export function useChat() {
   const [activity, setActivity] = useState("");
   const [runMetrics, setRunMetrics] = useState<RunMetrics>(EMPTY_RUN_METRICS);
   const [metricsByRunId, setMetricsByRunId] = useState<Record<string, RunMetrics>>({});
+  const [clarifyByRunId, setClarifyByRunId] = useState<Record<string, ClarifyPayload>>({});
   const [conversationId, setConversationId] = useState<number | undefined>(undefined);
   /** 当前进行中的一轮 runId；供专家条计时按「每一问」清零 */
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
@@ -815,6 +816,16 @@ export function useChat() {
                 setSummaryByRunId((prev) => ({ ...prev, [runId]: safeContent }));
               }
             },
+            onClarify: (payload) => {
+              const prompt = asText(payload.prompt);
+              if (prompt.trim()) {
+                writeAssistant(prompt);
+                setSummary(prompt);
+                setSummaryByRunId((prev) => ({ ...prev, [runId]: prompt }));
+              }
+              setClarifyByRunId((prev) => ({ ...prev, [runId]: payload }));
+              setActivity("请补充分析范围");
+            },
             onUsage: (payload) => {
               const total =
                 typeof payload.total_tokens === "number"
@@ -1159,6 +1170,7 @@ export function useChat() {
     setReports(nextReports);
     setQueryResults(nextQueryResults);
     setChartByRunId(nextChartByRunId);
+    setClarifyByRunId({});
     setLoading(false);
   }, []);
 
@@ -1172,6 +1184,7 @@ export function useChat() {
     setReports([]);
     setQueryResults([]);
     setChartByRunId({});
+    setClarifyByRunId({});
     setLoading(false);
     setActivity("");
     clearMetricsTimer();
@@ -1265,6 +1278,7 @@ export function useChat() {
     activity,
     runMetrics,
     metricsByRunId,
+    clarifyByRunId,
     send,
     stop,
     loadConversation,

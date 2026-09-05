@@ -68,11 +68,8 @@ dev = [
 ]
 
 [build-system]
-requires = ["uv", "uv.build"]
+requires = ["uv_build>=0.11,<0.12"]
 build-backend = "uv_build"
-
-[tool.uv.extra-build-dependencies]
-awesome = ["uv.build"]
 
 [tool.uv]
 # torch 的普通 wheel 在 Linux 上会拉 cuda-toolkit / nvidia-* 等数百 MB 依赖（服务器无 GPU）。
@@ -85,6 +82,7 @@ torch = { index = "pytorch-cpu" }
 [[tool.uv.index]]
 name = "pytorch-cpu"
 url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

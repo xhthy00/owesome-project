@@ -215,8 +215,9 @@ def empty_result_protocol_note(sql: str) -> str:
     return (
         "\n【空结果协议】\n"
         "- 禁止断言「数据未纳入 / 该区无数据 / 查不到」；\n"
-        "- 下一步必须调用 peek_edu_filter_values（或 SELECT DISTINCT 考试/区县），"
-        "对照候选后改写 WHERE（可用 LIKE），再 execute_sql；同题最多改写 2 次；\n"
+        "- 已绑定考试/班级仍为空：调用 peek_edu_filter_values 对照后最多改写 2 次；"
+        "仍空则说明该范围无成绩，并列近场考试让用户选；\n"
+        "- 过滤字面量未经本轮绑定：视为漏网，须追问考试/班级，禁止继续猜；\n"
         f"- {lit_line}；若含「月…区」则多半是把「N月」误拼进区县，应改为真实区县名。\n"
     )
 

@@ -256,12 +256,21 @@ export default function SideBar() {
         </Tooltip>
       </div>
 
-      <Link href="/chat" className="shrink-0">
+      <button
+        type="button"
+        className="w-full shrink-0 border-0 bg-transparent p-0"
+        onClick={() => {
+          window.dispatchEvent(new Event("chat:new-task"));
+          if (pathname !== "/chat" || router.asPath !== "/chat") {
+            void router.push("/chat");
+          }
+        }}
+      >
         <div className="dbgpt-ui-font mb-4 flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-black px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90 dark:bg-white dark:text-black">
           <PlusOutlined className="text-xs" />
           <span>新建任务</span>
         </div>
-      </Link>
+      </button>
 
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain [scrollbar-gutter:stable] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[#9aa8c0]/70 dark:[&::-webkit-scrollbar-thumb]:bg-[#5a6578] [&::-webkit-scrollbar-track]:bg-transparent">
         <div className="flex flex-col gap-1">

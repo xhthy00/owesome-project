@@ -498,7 +498,12 @@ def build_student_archive_from_score_rows(
         if not isinstance(r, dict):
             continue
         sid = str(
-            r.get("student") or r.get("student_id") or r.get("name") or ""
+            r.get("student_name")
+            or r.get("name")
+            or r.get("xm")
+            or r.get("student")
+            or r.get("student_id")
+            or ""
         ).strip()
         if not sid:
             continue

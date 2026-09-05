@@ -187,6 +187,38 @@ def _should_rescue_comprehensive(sub_task: str, ai_message: str) -> bool:
 _THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
 _TOOL_NAME_RE = re.compile(r"""tool\s*:\s*["']?([A-Za-z_][A-Za-z0-9_]*)["']?""", re.IGNORECASE)
 _CLI_ARG_RE = re.compile(r"""--([A-Za-z_][A-Za-z0-9_]*)\s+("([^"]*)"|'([^']*)'|([^\s,}\]]+))""")
+_MINIMAX_INVOKE_RE = re.compile(
+    r"<invoke\b[^>]*\bname\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</invoke>",
+    re.DOTALL | re.IGNORECASE,
+)
+_MINIMAX_PARAM_RE = re.compile(
+    r"<parameter\b[^>]*\bname\s*=\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</parameter>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _looks_like_minimax_tool_xml(text: str) -> bool:
+    blob = str(text or "").lower()
+    return "<invoke" in blob or "minimax:tool_call" in blob
+
+
+def _parse_minimax_tool_call(raw_text: str) -> dict[str, Any] | None:
+    """解析 MiniMax 的 ``<invoke name> / <parameter>`` XML，只取第一项（一轮一工具）。"""
+    if not _looks_like_minimax_tool_xml(raw_text):
+        return None
+    m = _MINIMAX_INVOKE_RE.search(str(raw_text or ""))
+    if not m:
+        return None
+    tool_name = (m.group(1) or "").strip()
+    if not tool_name:
+        return None
+    args: dict[str, Any] = {}
+    for p in _MINIMAX_PARAM_RE.finditer(m.group(2) or ""):
+        key = (p.group(1) or "").strip()
+        if not key:
+            continue
+        args[key] = (p.group(2) or "").strip()
+    return {"tool": tool_name, "args": args}
 
 
 def tool_call_fingerprint(tool_name: str, args: dict[str, Any]) -> str:
@@ -261,6 +293,9 @@ class ToolAction(Action):
             cleaned = _THINK_BLOCK_RE.sub("", str(raw_text or "")).strip()
             if not cleaned:
                 return None
+            # MiniMax 工具 XML 不是给人看的结论。
+            if _looks_like_minimax_tool_xml(cleaned):
+                return None
             # 有 JSON 结构痕迹时不要做 terminate 猜测，交给下一轮严格重试。
             if any(ch in cleaned for ch in "{}[]"):
                 return None
@@ -270,6 +305,9 @@ class ToolAction(Action):
             return cleaned
 
         def _parse_tool_call_fallback(raw_text: str) -> dict[str, Any] | None:
+            minimax = _parse_minimax_tool_call(raw_text)
+            if minimax is not None:
+                return minimax
             text = str(raw_text or "")
             if "[TOOL_CALL]" not in text and "tool:" not in text:
                 return None

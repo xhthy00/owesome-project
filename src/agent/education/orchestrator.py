@@ -48,6 +48,7 @@ from src.agent.education.schema_mapping import (
     EXAM_NAME_SQL,
     ScoreSchemaMapping,
     load_schema_from_config,
+    normalize_jc_label,
 )
 from src.agent.education.stats import compute_item_metrics, compute_rankings, compute_score_stats, identify_at_risk_students
 from src.agent.education.subject_diagnosis import (
@@ -187,12 +188,13 @@ class ReportIntentResolver:
 import re as _re
 
 _CLASS_RE = _re.compile(
-    r"高[一二三]\(\d+\)班|"
+    r"(?:高[一二三]|初[一二三]|[三四五六七八九]年级)\(\d{1,2}\)班|"
     r"(初三|初二|初一|高三|高二|高一|九年级|八年级|七年级|六年级|五年级|四年级|三年级)[\d班]*\d?班"
 )
 _SUBJECT_RE = _re.compile(r"(数学|语文|英语|物理|化学|生物|政治|历史|地理|科学)")
 _TRACK_STRIP_RE = _re.compile(r"物理类|物理方向|历史类|历史方向")
-_EXAM_RE = _re.compile(r"(期中|期末|月考|摸底|模拟|单元测验)")
+# 「1月考试」含子串「月考」，不能当成月考
+_EXAM_RE = _re.compile(r"(期中|期末|(?<!\d)月考|摸底|模拟|单元测验)")
 _EXAM_FULL_RE = _re.compile(
     r"([\u4e00-\u9fff]{2,30}?(?:质量检测|模拟考试|学情检测|单元测验|期末考试|期中考试|检测试卷))"
 )
@@ -227,10 +229,14 @@ def _extract_exam(q: str) -> str | None:
         if cleaned:
             return cleaned
         # 如「班数学期末考试」清洗失败时，回落短词「期末」
+    # 批次名（2026届高三1月）必须先于「月考」短词，避免「1月考试」误抽
+    hint = extract_exam_name_hint(text)
+    if hint:
+        return hint
     m = _EXAM_RE.search(text)
     if m:
         return m.group(1)
-    return extract_exam_name_hint(text)
+    return None
 
 
 # ---- 编排 ----------------------------------------------------------------
@@ -1812,13 +1818,22 @@ class ReportOrchestrator:
         class_expr = f.get("class_name", "sc.class")
         school_expr = f.get("school_name", "sch.name")
         exam_expr = f.get("exam_name", EXAM_NAME_SQL)
-        # tb_student 无姓名列（id 即学号），学生标识统一用 student_id
+        # 分析工具报告用明文：校名 s_name、学生姓名 overview.xm；学号仍保留作兜底。
+        school_display = "COALESCE(NULLIF(TRIM(sch.s_name), ''), sch.name)"
+        student_display = (
+            "COALESCE(NULLIF(TRIM(("
+            "SELECT ov.xm FROM tb_score_overview ov "
+            "WHERE ov.anon_stu_id = sc.student_id "
+            f"AND ov.exam_name = {exam_expr} "
+            "LIMIT 1"
+            ")), ''), CAST(sc.student_id AS TEXT))"
+        )
         sql = (
             f"SELECT {score_expr} AS score, {full_expr} AS exam_score,\n"
-            f"       {class_expr} AS class, {school_expr} AS school_name,\n"
+            f"       {class_expr} AS class, {school_display} AS school_name,\n"
             f"       sch.district AS district, {subject_expr} AS subject,\n"
             f"       sc.student_id AS student_id,\n"
-            f"       sc.student_id AS student_name,\n"
+            f"       {student_display} AS student_name,\n"
             f"       {exam_expr} AS exam_name\n"
             "FROM tb_score sc\n"
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
@@ -2036,7 +2051,10 @@ def _filters_to_where(
 ) -> str:
     parts: list[str] = []
     if filters.get("school_name"):
-        parts.append(f"{school_expr} LIKE '%{_sql_escape(filters['school_name'])}%'")
+        q = _sql_escape(filters["school_name"])
+        parts.append(
+            f"({school_expr} LIKE '%{q}%' OR sch.s_name LIKE '%{q}%' OR sch.name LIKE '%{q}%')"
+        )
     if filters.get("class_name"):
         # 班级名在库内写法不一（高一1班 / 高一(1)班），用模糊匹配降低空结果
         parts.append(f"{class_expr} LIKE '%{_sql_escape(filters['class_name'])}%'")
@@ -2051,6 +2069,10 @@ def _filters_to_where(
             parts.append(f"({ors})")
         elif exam_names:
             parts.append(f"{exam_expr} LIKE '%{_sql_escape(exam_names[0])}%'")
+    if filters.get("jc"):
+        jc_label = normalize_jc_label(filters["jc"])
+        if jc_label:
+            parts.append(f"{exam_expr} LIKE '%{_sql_escape(jc_label)}%'")
     if filters.get("exam_id"):
         parts.append(f"sc.exam_id = '{_sql_escape(str(filters['exam_id']))}'")
     if filters.get("district"):

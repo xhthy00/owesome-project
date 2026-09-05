@@ -22,6 +22,7 @@ from src.agent.education.query_parse import (
     extract_student_target,
     is_citywide_analysis_query,
     is_class_overview_query,
+    is_class_weak_subject_query,
     is_group_feature_query,
     is_individual_student_analysis_query,
     is_line_reach_query,
@@ -30,7 +31,10 @@ from src.agent.education.query_parse import (
     is_school_exam_report_query,
     is_school_vs_city_avg_query,
     is_school_vs_school_type_avg_query,
+    is_subject_strength_query,
     is_tier_alert_query,
+    normalize_fullwidth_parentheses,
+    text_has_exam_kind_token,
 )
 from src.agent.education.report_types import ReportType
 from src.agent.expand.planner import (
@@ -321,6 +325,19 @@ def test_class_overview_plan_not_subject_diagnosis():
     detail_q = "扬州中学高三(9)班数学诊断报告"
     assert is_class_overview_query(detail_q) is False
     assert is_school_exam_report_query(detail_q) is True
+
+
+def test_informal_class_name_becomes_parenthesized():
+    q = "生成高三2班班级总览报告"
+    assert "高三(2)班" in normalize_fullwidth_parentheses(q)
+    assert extract_class_target(q) == "高三(2)班"
+    plans = build_class_overview_plan_items(q)
+    blob = " ".join(p["sub_task"] for p in plans)
+    assert "class_name=高三(2)班" in blob
+    assert extract_class_target("高三（10）班总览") == "高三(10)班"
+    month = "2026届高三1月扬州中学"
+    assert extract_class_target(month) is None
+    assert "高三(1)班" not in normalize_fullwidth_parentheses(month)
 
 
 def test_grade_comparison_filters_omit_class_name():
@@ -920,3 +937,92 @@ def test_gexiao_avg_compare_without_fenxi_is_not_citywide_diagnostic():
     """「各校平均分横向对比」没有「分析」，不抢全市诊断。"""
     q = "扬州各高中高三3月数学考试各校平均分横向对比"
     assert is_citywide_analysis_query(q) is False
+
+
+def test_citywide_subject_avg_after_exam_clarify_is_fact_not_diagnostic():
+    """追问合并考试名含「期末」时，仍回答历史单科均分，禁止全市诊断报告。"""
+    q = "全市历史均分。补充：考试=2026届高三1月期末"
+    assert is_citywide_analysis_query(q) is False
+    route = classify_report_intent_sync(q)
+    assert route.needs_report is False
+    assert route.report_type is None
+    wrong = [
+        {
+            "sub_task": "调 build_diagnostic_report_data_tool(scope_label=全市, render=true)",
+            "sub_task_agent": "ToolExpert",
+        },
+    ]
+    fixed = coerce_plan_items_if_needed(q, wrong)
+    blob = " ".join(p["sub_task"] for p in fixed)
+    assert "build_diagnostic_report_data_tool" not in blob
+    assert "禁止" in blob and "HTML" in blob
+    assert "科目【历史】" in blob or "历史" in blob
+
+
+def test_january_exam_wording_is_not_yuekao():
+    """「2026届高三1月考试」不是月考；与「2026届高三1月」抽到同一批次。"""
+    from src.agent.education.class_weak_subject import pick_exam_batch_name
+    from src.agent.education.orchestrator import _extract_exam
+    from src.agent.expand.planner import _plan_exam_name
+
+    weak_q = "新华中学在2026届高三1月考试中的薄弱学科"
+    strong_q = "2026届高三1月新华中学的优势学科"
+    assert text_has_exam_kind_token(weak_q, "月考") is False
+    assert text_has_exam_kind_token("5月月考", "月考") is True
+    for q in (weak_q, strong_q):
+        assert extract_exam_name_hint(q) == "2026届高三1月"
+        assert _extract_exam(q) == "2026届高三1月"
+        assert _plan_exam_name(q) == "2026届高三1月"
+        assert extract_class_target(q) is None
+    assert is_class_weak_subject_query(weak_q) is False
+
+    rows = [
+        {"exam_name": "2026届高三1月期末", "class_name": "高三(1)班", "score": 80},
+        {"exam_name": "2026届高三11月月考", "class_name": "高三(1)班", "score": 70},
+    ]
+    picked = pick_exam_batch_name(rows, class_name="高三(1)班", question=weak_q)
+    assert picked == "2026届高三1月期末"
+
+
+def test_subject_strength_uses_citywide_rank_not_intra_school():
+    """优势/薄弱学科走事实查询：各科均分全市排名，禁止班际报告、禁止各科互比。"""
+    from src.agent.education.clarification import SLOT_CLASS, candidate_missing_slots
+    from src.agent.education.intent_router import classify_report_intent_sync, coerce_plan_to_route
+    from src.templates.sql_gen_prompt import resolve_edu_sql_intent
+
+    school_q = "新华中学在2026届高三1月考试中的薄弱学科"
+    strong_q = "2026届高三1月新华中学的优势学科"
+    class_q = "扬州中学高三(1)班薄弱学科"
+    for q in (school_q, strong_q, class_q):
+        assert is_subject_strength_query(q) is True
+        assert is_class_weak_subject_query(q) is False
+        route = classify_report_intent_sync(q)
+        assert route.needs_report is False
+        assert route.report_type is None
+        assert resolve_edu_sql_intent(q) == "overview_avg"
+
+    assert is_subject_strength_query("数学薄弱知识点") is False
+
+    items = build_fact_query_plan_items(school_q)
+    blob = " ".join(p["sub_task"] for p in items)
+    assert "全市" in blob and "排名" in blob
+    assert "build_class_weak_subject" not in blob
+    assert "各科均分互相比较" in blob or "各科均分的**全市" in blob
+
+    wrong = [
+        {
+            "sub_task": "调 build_class_weak_subject_report_data_tool(class_name=高三(1)班, render=true)",
+            "sub_task_agent": "ToolExpert",
+        }
+    ]
+    fixed = coerce_plan_to_route(school_q, wrong, classify_report_intent_sync(school_q))
+    fixed_blob = " ".join(p["sub_task"] for p in fixed)
+    assert "build_class_weak_subject_report_data_tool" not in fixed_blob
+
+    cand = candidate_missing_slots(
+        classify_report_intent_sync(school_q),
+        school_q,
+        {"school_name": "新华中学", "exam_name": "2026届高三1月"},
+        {"edu_role": "bureau_admin"},
+    )
+    assert SLOT_CLASS not in cand

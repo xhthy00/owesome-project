@@ -95,3 +95,92 @@ def test_lint_avg_reach_rate_and_month_district():
     assert any("月" in w and "区" in w for w in warns)
     blob = format_lint_warnings(warns)
     assert "SQL lint" in blob
+
+
+def test_lint_subject_avg_requires_exclude_zero():
+    bad = lint_edu_sql(
+        "SELECT ROUND(AVG(yw), 1) AS 语文, ROUND(AVG(ls), 1) AS 历史 "
+        "FROM tb_score_overview WHERE xx LIKE '%扬州中学%'"
+    )
+    assert any("FILTER" in w and "ls" in w for w in bad)
+    good = lint_edu_sql(
+        "SELECT ROUND(AVG(yw) FILTER (WHERE yw > 0), 1) AS 语文, "
+        "ROUND(AVG(ls) FILTER (WHERE ls > 0), 1) AS 历史, "
+        "COUNT(*) FILTER (WHERE ls > 0) AS 历史人数 "
+        "FROM tb_score_overview WHERE xx LIKE '%扬州中学%'"
+    )
+    assert good == []
+    single = lint_edu_sql(
+        "SELECT ROUND(AVG(yw), 2) AS avg_score, COUNT(*) AS n "
+        "FROM tb_score_overview WHERE yw > 0 AND xx LIKE '%扬州中学%'"
+    )
+    assert single == []
+
+
+def test_lint_subject_stdev_requires_exclude_zero():
+    bad = lint_edu_sql(
+        "SELECT STDDEV_SAMP(ls) AS stdev, AVG(ls) AS avg_score "
+        "FROM tb_score_overview"
+    )
+    assert any("ls" in w and "0" in w for w in bad)
+    good = lint_edu_sql(
+        "SELECT STDDEV_SAMP(ls) FILTER (WHERE ls > 0) AS stdev, "
+        "AVG(ls) FILTER (WHERE ls > 0) AS avg_score "
+        "FROM tb_score_overview"
+    )
+    assert good == []
+
+
+def test_lint_citywide_class_rank_requires_enrolled():
+    bad = lint_edu_sql(
+        "SELECT xx, bj, AVG(sx) FILTER (WHERE sx > 0) AS avg_sx, "
+        "RANK() OVER (ORDER BY AVG(sx) FILTER (WHERE sx > 0) DESC) "
+        "FROM tb_score_overview GROUP BY xx, bj"
+    )
+    assert any("市报" in w or "在籍" in w for w in bad)
+    good = lint_edu_sql(
+        "SELECT xx, bj, AVG(sx) FILTER (WHERE sx > 0) AS avg_sx, "
+        "RANK() OVER (ORDER BY AVG(sx) FILTER (WHERE sx > 0) DESC) "
+        "FROM tb_score_overview WHERE xsxz='在籍生' GROUP BY xx, bj"
+    )
+    assert good == []
+
+
+def test_citywide_class_rank_plan_excludes_shibao():
+    from src.agent.expand.planner import build_fact_query_plan_items
+
+    q = "2026届高三1月扬州中学高三(1)班数学成绩全市排名"
+    assert resolve_edu_sql_intent(q) == "overview_avg"
+    blob = build_fact_query_plan_items(q)[0]["sub_task"]
+    assert "在籍" in blob or "市报" in blob
+    hint = build_education_sql_hint_text(q)
+    assert "在籍" in hint or "市报" in hint
+
+
+def test_resolve_edu_sql_intent_balance_uses_overview_avg():
+    q = "全市均衡性最好的学科"
+    assert resolve_edu_sql_intent(q) == "overview_avg"
+    term, training = build_education_prompt_extras(q)
+    assert "FILTER" in term or "未选考" in term
+    assert "STDDEV" in training or "均衡" in training
+    hint = build_education_sql_hint_text(q)
+    assert "FILTER" in hint
+    from src.agent.expand.planner import build_fact_query_plan_items
+
+    blob = build_fact_query_plan_items(q)[0]["sub_task"]
+    assert "FILTER" in blob
+    assert "未选考" in blob
+
+
+def test_resolve_edu_sql_intent_subject_avg_overall():
+    assert resolve_edu_sql_intent("分析一下3月考试的整体情况") == "overview_avg"
+    term, training = build_education_prompt_extras("扬州中学1月期末各科均分")
+    assert "FILTER" in term or "未选考" in term
+    assert "FILTER" in training
+    hint = build_education_sql_hint_text("扬州中学1月期末各科均分")
+    assert "FILTER" in hint
+    from src.agent.expand.planner import build_fact_query_plan_items
+
+    blob = build_fact_query_plan_items("扬州中学1月期末各科均分")[0]["sub_task"]
+    assert "FILTER" in blob
+    assert "未选考" in blob

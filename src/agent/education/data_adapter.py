@@ -95,13 +95,18 @@ def normalize_rows(
     return out
 
 
+def _usable_score(score: float | None) -> bool:
+    """未选考/缺考为 0 或空，不进入均分/标准差等统计。"""
+    return score is not None and score > 0
+
+
 def group_by_subject(rows: list[NormalizedScoreRow]) -> dict[str, list[float]]:
-    """按科目分组，返回 ``{科目: [分数, ...]}``（剔除 None）。"""
+    """按科目分组，返回 ``{科目: [分数, ...]}``（剔除空分与未选考 0 分）。"""
     grouped: dict[str, list[float]] = {}
     for r in rows:
-        if r.score is None:
+        if not _usable_score(r.score):
             continue
-        grouped.setdefault(r.subject or "总分", []).append(r.score)
+        grouped.setdefault(r.subject or "总分", []).append(float(r.score))
     return grouped
 
 
@@ -109,10 +114,10 @@ def group_by_class_subject(rows: list[NormalizedScoreRow]) -> dict[tuple[str, st
     """按 (班级, 科目) 分组。班级为空时用 ``"未知班级"``。"""
     grouped: dict[tuple[str, str], list[float]] = {}
     for r in rows:
-        if r.score is None:
+        if not _usable_score(r.score):
             continue
         key = (r.class_name or "未知班级", r.subject or "总分")
-        grouped.setdefault(key, []).append(r.score)
+        grouped.setdefault(key, []).append(float(r.score))
     return grouped
 
 

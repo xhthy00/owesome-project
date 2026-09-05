@@ -84,6 +84,40 @@ def test_subject_avg_city_and_rank():
     assert out[1]["rank"] == 1
 
 
+def test_subject_avg_excludes_unselected_zero():
+    rows = [
+        {
+            "xx": "A01",
+            "dq": "市直",
+            "bj": "01",
+            "yw": 100,
+            "ls": 0,
+            "wl": 70,
+            "zz": 0,
+            "dl": 0,
+            "zf6m": 500,
+        },
+        {
+            "xx": "A01",
+            "dq": "市直",
+            "bj": "01",
+            "yw": 110,
+            "ls": 90,
+            "wl": 0,
+            "zz": 80,
+            "dl": 70,
+            "zf6m": 480,
+        },
+    ]
+    city = aggregate_subject_avg(rows, "district")[0]
+    assert city["ls"] == 90
+    assert city["ls_n"] == 1
+    assert city["wl"] == 70
+    assert city["zz"] == 80
+    assert city["dl"] == 70
+    assert city["yw"] == 105
+
+
 def test_assign_grade_a_rate():
     rows = normalize_students(
         [

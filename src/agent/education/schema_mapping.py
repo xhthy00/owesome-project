@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,40 @@ EXAM_JOIN = (
     "LEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
 )
 EXAM_NAME_SQL = "COALESCE(eb.batch_name, e.exam_name)"
+_JC_YEAR_RE = re.compile(r"(\d{4})\s*届")
+_JC_YEAR_ONLY_RE = re.compile(r"^(\d{4})(?:\.0+)?$")
+
+
+def normalize_jc_label(raw: str) -> str:
+    """把 ``2026`` / ``2026届`` / ``2026届高三5月模拟`` 收成 ``2026届``。"""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    matched = _JC_YEAR_RE.search(text)
+    if matched:
+        year = int(matched.group(1))
+        if 1990 <= year <= 2099:
+            return f"{year}届"
+    only = _JC_YEAR_ONLY_RE.fullmatch(text)
+    if only:
+        year = int(only.group(1))
+        if 1990 <= year <= 2099:
+            return f"{year}届"
+    return ""
+
+
+def extract_jc_labels(values: list[str]) -> list[str]:
+    """从考试名/届次原值提取去重后的届次标签，新年份在前。"""
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        label = normalize_jc_label(raw)
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        out.append(label)
+    out.sort(reverse=True)
+    return out
 
 
 @dataclass
@@ -286,9 +321,11 @@ __all__ = [
     "EducationSchemaBundle",
     "EducationSchemaMeta",
     "ScoreSchemaMapping",
+    "extract_jc_labels",
     "get_table_comments_from_config",
     "infer_normalized_mapping",
     "infer_wide_mapping",
     "load_schema_from_config",
+    "normalize_jc_label",
     "validate_mapping_against_schema",
 ]

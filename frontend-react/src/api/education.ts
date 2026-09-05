@@ -133,6 +133,7 @@ export interface MetaOptions {
   exams: string[];
   classes: string[];
   subjects: string[];
+  cohorts: string[];
 }
 
 export interface MetaOptionsQuery {
@@ -141,6 +142,7 @@ export interface MetaOptionsQuery {
   exam_name?: string;
   class_name?: string;
   subject?: string;
+  jc?: string;
 }
 
 export interface BatchReportRequest {
@@ -299,6 +301,7 @@ export const educationApi = {
     if (query.exam_name) params.set("exam_name", query.exam_name);
     if (query.class_name) params.set("class_name", query.class_name);
     if (query.subject) params.set("subject", query.subject);
+    if (query.jc) params.set("jc", query.jc);
     const resp = await fetch(`${getApiBaseUrl()}/education/meta/options?${params.toString()}`, {
       headers: await authHeaders()
     });
@@ -317,7 +320,8 @@ export const educationApi = {
       schools: body.data.schools || [],
       exams: body.data.exams || [],
       classes: body.data.classes || [],
-      subjects: body.data.subjects || []
+      subjects: body.data.subjects || [],
+      cohorts: body.data.cohorts || []
     };
   },
 

@@ -361,6 +361,63 @@ def update_conversation_record(
     return record
 
 
+def get_latest_conversation_record(
+    session: Session,
+    conversation_id: int,
+    user_id: int,
+) -> Optional[ConversationRecord]:
+    """最新一条会话记录（含 exec_result），供追问闸门读取 pending。"""
+    statement = (
+        select(ConversationRecord)
+        .where(
+            and_(
+                ConversationRecord.conversation_id == conversation_id,
+                ConversationRecord.user_id == user_id,
+            )
+        )
+        .order_by(desc(ConversationRecord.create_time))
+        .limit(1)
+    )
+    return session.exec(statement).first()
+
+
+def list_conversation_turns_for_context(
+    session: Session,
+    conversation_id: int,
+    user_id: int,
+    limit: int = 8,
+) -> List[ConversationRecord]:
+    """近几轮轻量列（正序），供多轮槽位继承；不含 tool_calls / reports。"""
+    from sqlalchemy.orm import load_only
+
+    statement = (
+        select(ConversationRecord)
+        .where(
+            and_(
+                ConversationRecord.conversation_id == conversation_id,
+                ConversationRecord.user_id == user_id,
+            )
+        )
+        .options(
+            load_only(
+                ConversationRecord.id,
+                ConversationRecord.question,
+                ConversationRecord.summary,
+                ConversationRecord.sql_answer,
+                ConversationRecord.reasoning,
+                ConversationRecord.is_success,
+                ConversationRecord.exec_result,
+                ConversationRecord.create_time,
+            )
+        )
+        .order_by(desc(ConversationRecord.create_time))
+        .limit(limit)
+    )
+    rows = list(session.exec(statement).all())
+    rows.reverse()
+    return rows
+
+
 def get_recent_questions(session: Session, datasource_id: int, user_id: int, limit: int = 10) -> List[str]:
     """Get recent questions for a datasource to suggest follow-up questions."""
     statement = (

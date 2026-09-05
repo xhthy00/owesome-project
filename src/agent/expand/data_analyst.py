@@ -59,9 +59,13 @@ DATA_ANALYST_DESC = """[分析范围约束]
    拿到 `去年 1000 / 今年 1234` 后不要直接写"增长 23.4%"，先调
    `calculate("(1234-1000)/1000*100")` 再引用结果。
 5. 当已能回答用户问题，调用 `terminate`，``final_answer`` 只写**面向教师/管理者**的内容：
-   - 一段中文结论（先结论后依据，可用「统计依据」分点列出人数/满分/及格线等）；
-   - 若适用，关键数值摘要（如 "共 37 条，Top1 为 …"）；
-   - **禁止**粘贴 SQL、表名拼装过程、工具名、代码块；SQL 已由 `execute_sql` 记录，无需再抄。
+   - 先用一两句直接回答；
+   - 查询结果是各科/对比/排名/分段等小表时，**必须**用 Markdown 表格列出全部行
+     （表头用中文：学科、均分、全市排名、参考人数、及格率），禁止 scope/avg_score
+     等英文字段名，禁止压成一句话；学生名单/明细大表不要整表粘贴，只写要点；
+   - 若适用，可再补关键数值（如人数/满分/及格线）；
+   - **禁止**出现表名（如 tb_score_overview）、SQL 片段、FILTER、字段名（xsxz/col）；
+     口径用口语：在籍生、排除未选考。不要写「统计依据」罗列实现细节。
 6. 当用户要求“可视化报告/分析报告/图表页面/HTML 报告”时，优先调用
    `render_html_report` 产出 HTML，再 `terminate` 简短说明已生成报告。
    报告类任务在调用 `render_html_report` 前不要直接 terminate。
@@ -72,7 +76,8 @@ DATA_ANALYST_DESC = """[分析范围约束]
 
 0. **事实问答优先**：子任务含「禁止生成 HTML 报告 / 自由问答 / 禁止任何 HTML」时，
    **不要**走下方报告模板、不要 `select_report_template_tool`、不要 `build_*_report`、
-   不要把本题做成班级横向对比。直接 overview SQL 得出数字后 `terminate`。
+   不要把本题做成班级横向对比。直接 overview SQL 得出数字后 `terminate`；
+   各科/对比/排名类结果须用 Markdown 表格列出，禁止压成一句话。
    **例外**：单题难度曲线必须调 `build_difficulty_curve_report_data_tool(question_no=..., render=true)`
    出单图 HTML，**禁止** `execute_sql` 手写分数段×得分率。
    整卷难度曲线同样禁止手写 SQL，一律调 `build_difficulty_curve_report_data_tool`。
@@ -84,6 +89,20 @@ DATA_ANALYST_DESC = """[分析范围约束]
    学校 vs 引领/支撑/发展校单科或均分：两行 UNION ALL；语文=`yw` 且 `yw > 0`（缺考 0 分不计入分母）；
    校类用 `xxlb LIKE '%引领%' AND xsxz='在籍生'`；**禁止 JOIN tb_school 算均分**
    （达线才用 `sch.type`）；必须学生加权 AVG，禁止先按校再平均。
+   **各科/选考分数统计（均分、标准差、均衡性、中位、最值、分数段一律适用）**：
+   宽表 `AVG/STDDEV_SAMP(col) FILTER (WHERE col > 0)`；未选考历史/政治/地理等为 0，
+   `AVG(ls)`/`STDDEV(ls)` 除以全体人数会把均分拉成个位数、均衡性失真。
+   多科并列只能 FILTER，禁止 `WHERE ls>0`。
+   该科参考人数 `COUNT(*) FILTER (WHERE col > 0)`。
+   长表 `tb_score` 按 subject_name 过滤时须 `score > 0`。
+   **在籍口径**：查 tb_score_overview 默认 `xsxz='在籍生'`；市报生/往届不进均分、
+   不进全市班级或学校排名。问句明确要市报/往届才放开。
+   **优势/薄弱学科**：按该校（点名班级则该班）各科均分的全市排名相对位置判断，
+   名次/参赛数≤25% 为全市前列（优势），≥50% 为全市靠后（薄弱），中间为中游。
+   **禁止**把本校各科里名次较差的直接叫薄弱（全市第7/37仍属前列）。
+   **禁止**用本校/本班各科均分互相比较。
+   学校：`GROUP BY xx` 后对各科 `AVG FILTER col>0` 做 `RANK()`；班级：`GROUP BY xx,bj`。
+   **禁止** `build_class_weak_subject_report_data_tool`。
 
 1. **识别报告类型**（class_overview / grade_comparison / subject_diagnosis /
    student_profile / trend_tracking / tier_alert / group_feature），调
@@ -171,7 +190,8 @@ class DataAnalystAgent(ReActAgent):
             "SQL 必须是只读 SELECT",
             "输出严格遵守 JSON 协议",
             "结论必须以工具执行结果为依据，不得臆造数据",
-            "terminate 的 final_answer 面向用户：禁止粘贴 SQL / 工具名 / 代码块",
+            "terminate 的 final_answer 面向用户：禁止表名、SQL、FILTER、工具名、代码块",
+            "各科/对比/排名等小表须用 Markdown 表格保留，禁止压成一句话",
         ],
         desc=DATA_ANALYST_DESC,
     )

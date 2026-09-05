@@ -169,6 +169,12 @@ PLANNER_DESC = """[你的职责]
   [{"task": "调 build_diagnostic_report_data_tool(scope_label=全市, exam_name=【考试】, render=true) 生成文理达线、十分段、热力图与雷达 HTML；禁止 fetch 小题 / comprehensive / class_name", "sub_task_agent": "ToolExpert"}]
 
 简单问题（如"三班数学平均分"）不生成报告，返回 plans=[原问题] 即可。
+- **优势学科 / 薄弱学科 / 优势科目 / 短板学科**（如「新华中学优势学科」「高三(1)班薄弱学科」）：
+  按该校（有班则该班）**各科均分的全市排名相对位置**判断：
+  名次/参赛数≤25% 为全市前列（优势），≥50% 为全市靠后（薄弱），中间为中游；
+  **禁止**把本校各科里名次较差的直接叫薄弱（全市第7/37仍属前列）；
+  **禁止**用本校/本班各科均分互相比较；**禁止** build_class_weak_subject_report_data_tool；
+  返回 plans=[原问题]。
 **例外**：问题含学号/「学生xxx」且询问「得分情况/成绩/知识点」——**不算简单问题**，
 须走上方「单个学生 + 单次考试」2 步计划（含 build_student_subject_diagnosis_tool），
 禁止只查总分后 terminate。
@@ -404,6 +410,47 @@ def _score_band_fact_hint() -> str:
     )
 
 
+def _subject_strength_fact_hint(class_name: str) -> str:
+    """优势/薄弱学科：各科均分全市排名，禁止本校各科互比。"""
+    if class_name:
+        return (
+            "本题是优势/薄弱学科：按该班各科均分的**全市班级排名相对位置**判断"
+            "（名次/参赛数≤25%=前列/优势，≥50%=靠后/薄弱，中间=中游；"
+            "禁止把本班各科里名次较差的直接叫薄弱）。"
+            "查 tb_score_overview，xsxz='在籍生'，GROUP BY xx,bj 后对各科 AVG FILTER col>0 做 RANK()；"
+            "外层再滤目标校+班。禁止用该班各科均分互相比较，禁止班际报告工具。"
+        )
+    return (
+        "本题是优势/薄弱学科：按该校各科均分的**全市学校排名相对位置**判断"
+        "（名次/参赛数≤25%=前列/优势，≥50%=靠后/薄弱，中间=中游；"
+        "禁止把本校各科里名次较差的直接叫薄弱，例如第7/37仍属前列）。"
+        "查 tb_score_overview，xsxz='在籍生'，GROUP BY xx 后对各科 AVG FILTER col>0 做 RANK()；"
+        "外层再滤目标校。禁止用该校各科均分互相比较，禁止班际报告工具。"
+    )
+
+
+def _enrolled_only_hint() -> str:
+    """默认排除市报生/往届；否则全市班级排名会被虚拟市报班挤掉。"""
+    return (
+        "默认只统计在籍生：tb_score_overview 必须 AND xsxz='在籍生' "
+        "（市报生/往届不进均分、不进全市班级或学校排名池）。"
+        "问句明确要市报/往届/含市报时才放开。"
+    )
+
+
+def _elective_subject_avg_hint() -> str:
+    """宽表选考科目：0 分是未选考，任何分数统计都不能进分母。"""
+    return (
+        "凡对单科分数做统计（均分/标准差/方差/均衡性/中位/最高最低/及格率/分数段）"
+        "必须排除未选考/缺考：宽表用 AVG/STDDEV_SAMP(col) FILTER (WHERE col > 0)；"
+        "历史/政治/地理/化学/生物/物理未选考列为 0，AVG(ls) 或 STDDEV(ls) 除以全体"
+        "会把均分拉成个位数、均衡性失真。"
+        "多科并列只能 FILTER，禁止 WHERE ls>0（会把语数英也滤成选考历史的人）。"
+        "同时给出该科参考人数 COUNT(*) FILTER (WHERE col > 0)。"
+        "查 tb_score 长表按 subject_name 过滤则一行一科，且须 score > 0。"
+    )
+
+
 def _school_vs_city_avg_hint() -> str:
     """点名学校均分 vs 全市：自由 SQL；xx 是校名明文，禁止拿校码去查。"""
     return (
@@ -417,6 +464,7 @@ def _school_vs_city_avg_hint() -> str:
         "「本校/我校」=权限绑定学校，xx LIKE '%绑定校名%'。"
         "全市那一支禁止任何 xx 条件，禁止 GROUP BY xx 当全市，禁止点名他校。"
         "最终结果必须恰好两行：scope（该校/全市）、avg_zf6m、n；用 UNION ALL。"
+        "两支都必须 AND xsxz='在籍生'（市报生/往届不计入）。"
         "terminate 必须写出该校均分、全市均分、人数、分差。"
         "禁止套用班级横向对比 / 科目诊断 / 各区县均分 HTML 报告。"
     )
@@ -462,7 +510,9 @@ def _school_vs_school_type_avg_hint(school: str, school_type: str, subject: str)
 
 def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     """事实查询：仅 DataAnalyst，禁止生成任何 HTML 报告。"""
+    from src.agent.education.clarification import extract_filled_slots
     from src.agent.education.difficulty_curve import extract_question_target
+    from src.agent.education.metric_catalog import format_metric_plan, resolve_metric
     from src.agent.education.orchestrator import _extract_class_name, _extract_subject
     from src.agent.education.query_parse import (
         extract_district_target,
@@ -475,6 +525,7 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
         is_school_vs_city_avg_query,
         is_school_vs_school_type_avg_query,
         is_score_threshold_fact_query,
+        is_subject_strength_query,
     )
 
     q = (question or "").strip()
@@ -498,11 +549,31 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
             }
         ]
 
-    school = extract_school_target(q) or ""
+    filled = extract_filled_slots(q)
+    spec = resolve_metric(q)
+    if (
+        spec
+        and spec.id == "score_kpi"
+        and filled.get("exam_name")
+        and not is_line_reach_query(q)
+        and not is_overview_total_query(q)
+        and not is_subject_strength_query(q)
+        and not is_score_threshold_fact_query(q)
+        and not is_school_vs_city_avg_query(q)
+        and not is_school_vs_school_type_avg_query(q)
+    ):
+        return [
+            {
+                "sub_task": format_metric_plan(spec, filled, q),
+                "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
+            }
+        ]
+
+    school = extract_school_target(q) or filled.get("school_name") or ""
     school_type = extract_school_type_target(q) or ""
-    class_name = _extract_class_name(q) or ""
-    subject = _plan_subject_name(q) or (_extract_subject(q) or "")
-    exam = _plan_exam_name(q)
+    class_name = _extract_class_name(q) or filled.get("class_name") or ""
+    subject = _plan_subject_name(q) or (_extract_subject(q) or "") or filled.get("subject_name") or ""
+    exam = _plan_exam_name(q) or filled.get("exam_name") or ""
     district = extract_district_target(q) or ""
     spec_district = district if district and district not in _GENERIC_DISTRICT_LABELS else ""
     scope_bits = []
@@ -522,7 +593,15 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
         scope_bits.append("选科【历史类】")
     if exam:
         scope_bits.append(f"考试【{exam}】")
-    scope = "、".join(scope_bits) if scope_bits else "问题中的范围"
+    scope = "、".join(scope_bits) if scope_bits else "已确认范围"
+    bound_lock = ""
+    if any((exam, school, class_name, spec_district)):
+        lock_bits = [b for b in (exam, school, class_name, spec_district) if b]
+        bound_lock = (
+            "WHERE 字面量必须等于已绑定："
+            + "、".join(lock_bits)
+            + "；禁止改写、省略或另选默认考试。"
+        )
     line_reach_hint = ""
     if is_line_reach_query(q):
         line_reach_hint = _line_reach_fact_hint(
@@ -537,6 +616,9 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
         score_band_hint = _score_band_fact_hint()
     school_city_hint = ""
     school_type_avg_hint = ""
+    strength_hint = ""
+    if is_subject_strength_query(q):
+        strength_hint = _subject_strength_fact_hint(class_name)
     if not line_reach_hint and not score_band_hint and is_school_vs_school_type_avg_query(q):
         school_type_avg_hint = _school_vs_school_type_avg_hint(school, school_type, subject)
     if (
@@ -564,6 +646,8 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
             "学校用 xx 分组（xx 是学校明文，禁止拿 GZ_ 校码当 xx）；"
             "参考人数=COUNT(*)。"
         )
+    elective_hint = _elective_subject_avg_hint()
+    enrolled_hint = _enrolled_only_hint()
     from src.agent.education.privacy_mode import is_anonymize_display_enabled
 
     if is_anonymize_display_enabled():
@@ -588,19 +672,25 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
                 f"{school_type_avg_hint}"
                 f"{school_city_hint}"
                 f"{overview_hint}"
+                f"{strength_hint}"
+                f"{elective_hint}"
+                f"{enrolled_hint}"
+                f"{bound_lock}"
                 "WHERE 必须按问题中的班级/学校/科目/考试过滤（有则过滤）；"
                 f"{student_hint}"
                 "只回答用户所问（如最高分是谁/多少分）；"
                 + (
                     ""
-                    if overview_hint or school_city_hint or school_type_avg_hint
+                    if overview_hint or school_city_hint or school_type_avg_hint or elective_hint or strength_hint
                     else (
                         "**禁止**写「参考人数/共N人参考/班级人数」——"
                         "Top-N、LIMIT、返回行数都不是全班人数；"
                     )
                 )
                 + "**禁止**套用学情总判/关键指标/教学建议长文。"
-                "用一两段自然语言给出结论即可。"
+                "用一两段自然语言给出结论即可；"
+                "**面向用户禁止**写表名、SQL、FILTER、字段名（xsxz/col），"
+                "口径只说在籍生、排除未选考。"
                 "**禁止**调任何 build_*_report / render_html / 学情报告工具；"
                 "**禁止**生成 HTML 报告；答完即 terminate。"
                 f"原问：{q}"

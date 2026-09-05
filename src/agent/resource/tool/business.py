@@ -1978,6 +1978,7 @@ def execute_sql(
     sql: str,
     user_id: int | None = None,
     workspace_oid: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
 ) -> ToolResult:
     """在当前数据源上执行只读 SQL 并返回结果。
 
@@ -1989,6 +1990,20 @@ def execute_sql(
     from src.agent.education.privacy_mode import apply_result_privacy, apply_sql_privacy
     from src.datasource.service.execute_with_permission import execute_sql_with_permission_by_user_id
     from src.datasource.service.sql_auto_fix import format_auto_fix_note, run_sql_with_auto_fix
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    bound = ctx.get("bound_literals") or []
+    try:
+        from src.agent.education.sql_lint import format_lint_blocks, lint_edu_sql_blocks
+
+        blocks = lint_edu_sql_blocks(sql, bound if isinstance(bound, list) else None)
+        if blocks:
+            return ToolResult(
+                content=format_lint_blocks(blocks),
+                data={"sql": sql, "error": "sql_lint_blocked", "lint_blocks": blocks},
+            )
+    except Exception:
+        pass
 
     db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
     sql, fixes = apply_sql_privacy(sql)

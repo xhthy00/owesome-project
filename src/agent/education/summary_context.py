@@ -132,21 +132,266 @@ def sql_looks_row_capped(sql: str | None) -> bool:
     return bool(_SQL_OFFSET_RE.search(s) or _SQL_LIMIT_RE.search(s))
 
 
+_KEEP_TABLE_MAX_ROWS = 30
+_AGG_TABLE_COL_HINTS = (
+    "subject",
+    "学科",
+    "科目",
+    "均分",
+    "avg",
+    "rank",
+    "排名",
+    "city_rank",
+    "n_school",
+    "n_class",
+    "及格",
+    "优秀",
+    "标准差",
+    "stdev",
+    "scope",
+    "分段",
+    "达线",
+    "区县",
+    "district",
+    "xxlb",
+    "校类",
+)
+_STUDENT_TABLE_COL_HINTS = (
+    "student_id",
+    "学号",
+    "anon_stu",
+    "xm",
+    "姓名",
+    "student_name",
+)
+_SMALL_PREVIEW_LIMIT_RE = re.compile(r"\bLIMIT\s+(\d+)", re.IGNORECASE)
+
+
+def _blob_has_hint(blob: str, hints: tuple[str, ...]) -> bool:
+    low = (blob or "").lower()
+    return any(h.lower() in low for h in hints)
+
+
+def _sql_preview_limit(sql: str | None) -> int | None:
+    m = _SMALL_PREVIEW_LIMIT_RE.search(sql or "")
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def looks_like_keepable_result_table(
+    columns: list[Any],
+    *,
+    row_count: int,
+    sql: str | None = None,
+) -> bool:
+    """对比/排名/各科小表应进最终结论；学生明细预览表不进。"""
+    cols = [str(c).strip() for c in (columns or []) if str(c).strip()]
+    if not cols or row_count <= 0:
+        return False
+    blob = " ".join(cols)
+    n = int(row_count)
+    if _blob_has_hint(blob, _STUDENT_TABLE_COL_HINTS):
+        lim = _sql_preview_limit(sql)
+        if sql_looks_paginated(sql):
+            return False
+        if lim is not None and lim <= 30:
+            return False
+        return n <= 12
+    if _blob_has_hint(blob, _AGG_TABLE_COL_HINTS) and n <= 40:
+        return True
+    return n <= 15 and len(cols) <= 12
+
+
+_RESULT_COL_LABELS = {
+    "scope": "范围",
+    "subject": "学科",
+    "subject_name": "学科",
+    "avg_score": "均分",
+    "avg": "均分",
+    "city_rank": "全市排名",
+    "rank": "排名",
+    "ref_count": "参考人数",
+    "n": "人数",
+    "cnt": "人数",
+    "count": "人数",
+    "n_school": "学校数",
+    "n_class": "班级数",
+    "pass_rate": "及格率",
+    "excellent_rate": "优秀率",
+    "stdev": "标准差",
+    "std": "标准差",
+    "xx": "学校",
+    "school": "学校",
+    "school_name": "学校",
+    "bj": "班级",
+    "class": "班级",
+    "class_name": "班级",
+    "exam_name": "考试",
+    "exam": "考试",
+    "full_score": "满分",
+    "exam_score": "满分",
+    "pass_line": "及格线",
+    "excellent_line": "优秀线",
+    "max": "最高分",
+    "min": "最低分",
+    "district": "区县",
+    "dq": "区县",
+    "student_id": "学号",
+    "score": "分数",
+    "city_avg": "全市均分",
+    "gap": "分差",
+    "xxlb": "校类",
+}
+
+
+def display_column_label(col: str) -> str:
+    """面向用户的表头：英文字段改成中文。"""
+    raw = str(col or "").strip()
+    if not raw:
+        return raw
+    key = re.sub(r"[\s\-]+", "_", raw).lower()
+    mapped = _RESULT_COL_LABELS.get(key)
+    if mapped:
+        return mapped
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", raw) and "_" in raw:
+        # 未登记的 snake_case：拆开后仍尽量中文化
+        parts = [display_column_label(p) for p in key.split("_") if p]
+        if parts and any(re.search(r"[\u4e00-\u9fff]", p) for p in parts):
+            return "".join(parts)
+    return raw
+
+
+def _is_md_table_sep_cells(cells: list[str]) -> bool:
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", c or "") for c in cells)
+
+
+def _relabel_markdown_header_line(line: str) -> str:
+    s = (line or "").strip()
+    if not _is_md_table_line(s):
+        return line
+    cells = [c.strip() for c in s.strip("|").split("|")]
+    if _is_md_table_sep_cells(cells):
+        return line
+    labeled = [display_column_label(c) for c in cells]
+    return "| " + " | ".join(labeled) + " |"
+
+
+def relabel_result_table_headers(text: str) -> str:
+    """只改 Markdown 表头行的英文字段，不改数据行。"""
+    if not text or "|" not in text:
+        return text or ""
+    lines = text.splitlines()
+    out: list[str] = []
+    for i, ln in enumerate(lines):
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        if _is_md_table_line(ln) and _is_md_table_line(nxt):
+            nxt_cells = [c.strip() for c in nxt.strip().strip("|").split("|")]
+            if _is_md_table_sep_cells(nxt_cells):
+                out.append(_relabel_markdown_header_line(ln))
+                continue
+        out.append(ln)
+    return "\n".join(out)
+
+
+def format_result_markdown_table(
+    columns: list[Any],
+    rows: list[Any],
+    *,
+    limit: int = _KEEP_TABLE_MAX_ROWS,
+) -> str:
+    """把查询结果拼成 Markdown 表。"""
+    cols = [str(c) for c in (columns or [])]
+    if not cols or not rows:
+        return ""
+    shown = list(rows)[: max(1, int(limit))]
+    header = "| " + " | ".join(display_column_label(c) for c in cols) + " |"
+    sep = "| " + " | ".join(["---"] * len(cols)) + " |"
+    body: list[str] = []
+    for row in shown:
+        if isinstance(row, dict):
+            cells = [str(row.get(c, "")) for c in cols]
+        elif isinstance(row, (list, tuple)):
+            cells = [str(v) for v in row[: len(cols)]]
+            cells += [""] * (len(cols) - len(cells))
+        else:
+            cells = [str(row)] + [""] * (len(cols) - 1)
+        body.append("| " + " | ".join(cells) + " |")
+    return "\n".join([header, sep, *body])
+
+
+def result_table_already_in_text(columns: list[Any], text: str) -> bool:
+    """结论里是否已有这张表（按表头列名判断）。"""
+    cols = [str(c).strip() for c in (columns or []) if str(c).strip()]
+    if not cols or "|" not in (text or ""):
+        return False
+
+    def _has(names: list[str]) -> bool:
+        probe = names[: min(3, len(names))]
+        return all(re.search(rf"\|\s*{re.escape(n)}\s*\|", text or "") for n in probe)
+
+    labeled = [display_column_label(c) for c in cols]
+    return _has(cols) or _has(labeled)
+
+
+def append_keepable_result_tables(
+    text: str,
+    exec_results: list[dict[str, Any]] | None,
+) -> str:
+    """总结若丢掉了合理小表，把查询结果表补回正文。"""
+    out = (text or "").rstrip()
+    extras: list[str] = []
+    seen: set[str] = set()
+    for er in exec_results or []:
+        if not isinstance(er, dict):
+            continue
+        columns = list(er.get("columns") or [])
+        rows = list(er.get("rows") or [])
+        row_count = int(er.get("row_count") or len(rows) or 0)
+        sql = str(er.get("sql") or "")
+        if not looks_like_keepable_result_table(columns, row_count=row_count, sql=sql):
+            continue
+        if result_table_already_in_text(columns, out):
+            continue
+        table = format_result_markdown_table(columns, rows)
+        if not table or table in seen:
+            continue
+        seen.add(table)
+        extras.append(table)
+    if not extras:
+        return text or ""
+    title = "### 查询结果"
+    if title in out:
+        return out + "\n\n" + "\n\n".join(extras)
+    return out + f"\n\n{title}\n\n" + "\n\n".join(extras)
+
+
+def _is_md_table_line(ln: str) -> bool:
+    s = (ln or "").strip()
+    return s.startswith("|") and s.count("|") >= 2
+
+
 def truncate_keeping_kpi_lines(text: str, *, limit: int = 1200) -> str:
-    """截断结论时优先保留含人数/分数线的行，避免丢掉 52 人 / 45 / 75。"""
+    """截断结论时优先保留含人数/分数线的行与 Markdown 表，避免丢掉依据。"""
     text = (text or "").strip()
     if len(text) <= limit:
         return text
     lines = text.splitlines()
-    kpi_lines = [ln for ln in lines if _KPI_LINE_RE.search(ln)]
+    keep_lines = [
+        ln for ln in lines if _KPI_LINE_RE.search(ln) or _is_md_table_line(ln)
+    ]
     head = text[: max(400, limit - 400)].rstrip()
-    if not kpi_lines:
+    if not keep_lines:
         return head + "\n…（已截断）"
-    kpi_block = "\n".join(kpi_lines[:40])
-    combined = f"{head}\n\n【保留的人数/分数线要点】\n{kpi_block}"
-    if len(combined) <= limit + 200:
+    keep_block = "\n".join(keep_lines[:80])
+    combined = f"{head}\n\n【保留的人数/分数线/表格要点】\n{keep_block}"
+    extra = 800 if any(_is_md_table_line(ln) for ln in keep_lines) else 200
+    if len(combined) <= limit + extra:
         return combined
-    return combined[: limit + 200] + "\n…（已截断）"
+    return combined[: limit + extra] + "\n…（已截断）"
 
 
 _PASS_LINE_IN_TEXT_RE = re.compile(r"(及格线\s*)(\d+(?:\.\d+)?)")
@@ -715,6 +960,58 @@ _FACT_LABELED_REF_COUNT_RE = re.compile(
 )
 
 
+_SQL_FENCE_RE = re.compile(r"```(?:sql)?\s*\n.*?```", re.IGNORECASE | re.DOTALL)
+_DB_TABLE_RE = re.compile(
+    r"\b(?:tb_score_overview|tb_score_indicator|tb_score_detail|tb_score|"
+    r"tb_school|tb_exam_batch|tb_exam_question_knowledge|tb_exam_question|"
+    r"tb_exam|tb_student|tb_fraction_bar|tb_knowledge)\b",
+    re.IGNORECASE,
+)
+_AVG_FILTER_RE = re.compile(
+    r"AVG\s*(?:\(\s*\w+\s*\)\s*)?FILTER\s*(?:\(\s*WHERE[^)]+\)|WHERE\s+col\s*>\s*0)",
+    re.IGNORECASE,
+)
+_SQL_PHRASE_RES = (
+    re.compile(r"FILTER\s*\(\s*WHERE\s+col\s*>\s*0\s*\)", re.IGNORECASE),
+    re.compile(r"\bWHERE\s+col\s*>\s*0\b", re.IGNORECASE),
+    re.compile(r"\bGROUP\s+BY\s+[\w.]+(?:\s*,\s*[\w.]+)*", re.IGNORECASE),
+    re.compile(r"\bRANK\s*\(\s*\)(?:\s*OVER\s*\([^)]*\))?", re.IGNORECASE),
+    re.compile(r"\b(?:xsxz|xxlb)\s*=\s*'[^']*'", re.IGNORECASE),
+    re.compile(r"\bLIKE\s+'[^']*'", re.IGNORECASE),
+    re.compile(r"\bexecute_sql\b", re.IGNORECASE),
+)
+_SQLISH_LINE_RE = re.compile(
+    r"^\s*(?:SELECT|WITH|FROM|JOIN|WHERE|GROUP BY|ORDER BY|HAVING|LIMIT)\b",
+    re.IGNORECASE,
+)
+
+
+def scrub_implementation_details(text: str) -> str:
+    """面向用户的结论里去掉表名、SQL 代码块与实现口径。"""
+    if not text:
+        return text or ""
+    out = _SQL_FENCE_RE.sub("", text)
+    out = _DB_TABLE_RE.sub("", out)
+    out = _AVG_FILTER_RE.sub("已排除未选考", out)
+    for pat in _SQL_PHRASE_RES:
+        out = pat.sub("", out)
+    kept: list[str] = []
+    for ln in out.splitlines():
+        if _SQLISH_LINE_RE.match(ln):
+            continue
+        kept.append(ln)
+    out = "\n".join(kept)
+    out = re.sub(r"`+", "", out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r"[、，,]{2,}", "、", out)
+    out = re.sub(r"[：:]\s*[、，,]", "：", out)
+    out = re.sub(r"[、，,]\s*(?=[。；\n]|$)", "", out)
+    out = re.sub(r"（\s*）|\(\s*\)", "", out)
+    out = re.sub(r"统计依据[：:]\s*(?=\n|$)", "", out)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip()
+
+
 def scrub_fact_answer_headcount_noise(text: str) -> str:
     """事实问答后处理：去掉未询问的「参考人数 / 共N人参考」套话。"""
     if not text:
@@ -742,23 +1039,31 @@ def reconcile_answer_with_artifacts_detailed(
             tool_calls, reports=reports, exec_results=None
         )
         if not stats:
-            return scrub_fact_answer_headcount_noise(
-                scrub_preview_headcount_claims(text)
+            return relabel_result_table_headers(
+                scrub_implementation_details(
+                    scrub_fact_answer_headcount_noise(
+                        scrub_preview_headcount_claims(text)
+                    )
+                )
             ), []
         conflicts = audit_summary_kpi_claims(text, stats)
         out = reconcile_summary_kpis(text, stats)
         out = scrub_residual_conflicting_values(out, conflicts, stats)
-        return scrub_fact_answer_headcount_noise(out), conflicts
+        return relabel_result_table_headers(
+            scrub_implementation_details(scrub_fact_answer_headcount_noise(out))
+        ), conflicts
 
     stats = extract_stats_authority_data(
         tool_calls, reports=reports, exec_results=exec_results
     )
     if not stats:
-        return scrub_preview_headcount_claims(text), []
+        return relabel_result_table_headers(
+            scrub_implementation_details(scrub_preview_headcount_claims(text))
+        ), []
     conflicts = audit_summary_kpi_claims(text, stats)
     out = reconcile_summary_kpis(text, stats)
     out = scrub_residual_conflicting_values(out, conflicts, stats)
-    return out, conflicts
+    return relabel_result_table_headers(scrub_implementation_details(out)), conflicts
 
 
 def reconcile_answer_with_artifacts(
@@ -930,8 +1235,14 @@ def format_education_pipeline_footer(report_data: dict[str, Any] | None) -> str:
 
 __all__ = [
     "KpiClaimConflict",
+    "append_keepable_result_tables",
+    "display_column_label",
+    "relabel_result_table_headers",
     "audit_summary_kpi_claims",
     "collect_education_artifacts",
+    "format_result_markdown_table",
+    "looks_like_keepable_result_table",
+    "result_table_already_in_text",
     "extract_exec_authority_data",
     "extract_stats_authority_block",
     "extract_stats_authority_data",
@@ -943,6 +1254,7 @@ __all__ = [
     "reconcile_answer_with_artifacts_detailed",
     "reconcile_summary_kpis",
     "scrub_fact_answer_headcount_noise",
+    "scrub_implementation_details",
     "scrub_preview_headcount_claims",
     "scrub_residual_conflicting_values",
     "sql_looks_paginated",

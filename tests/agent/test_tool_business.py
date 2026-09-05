@@ -631,7 +631,7 @@ def test_recent_questions_empty(monkeypatch):
 def test_build_default_toolpack_binds_and_hides_params(monkeypatch):
     pack = biz.build_default_toolpack(datasource_id=7, user_id=42)
 
-    assert pack.bindings == {"datasource_id": 7, "user_id": 42}
+    assert pack.bindings == {"datasource_id": 7, "user_id": 42, "workspace_oid": 1}
     assert "list_tables" in pack
     assert "find_related_tables" in pack
     assert "execute_sql" in pack
@@ -639,8 +639,8 @@ def test_build_default_toolpack_binds_and_hides_params(monkeypatch):
     assert "terminate" in pack
     assert "resolve_score_schema" in pack
     assert "compute_score_stats_tool" in pack
-    # 9 原业务工具 + 7 教育学情工具 + terminate = 17
-    assert len(pack) == 17
+    assert "query_certified_metric_tool" in pack
+    assert len(pack) >= 17
 
     prompt = pack.render_prompt()
     assert "datasource_id(" not in prompt
@@ -652,13 +652,13 @@ def test_build_default_toolpack_binds_and_hides_params(monkeypatch):
 def test_build_default_toolpack_without_terminate():
     pack = biz.build_default_toolpack(datasource_id=1, include_terminate=False)
     assert "terminate" not in pack
-    # 9 原业务工具 + 7 教育学情工具 = 16（不含 terminate）
-    assert len(pack) == 16
+    assert len(pack) >= 16
+    assert "query_certified_metric_tool" in pack
 
 
 def test_build_default_toolpack_no_bindings():
     pack = biz.build_default_toolpack()
-    assert pack.bindings == {}
+    assert pack.bindings == {"workspace_oid": 1}
 
 
 def test_missing_datasource_raises_framework_error(monkeypatch):

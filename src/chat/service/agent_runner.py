@@ -243,6 +243,16 @@ class _RunConstraints:
     report_route: dict[str, Any] | None = None
     #: 教育问数短提示（按意图裁剪的 SQL 规则摘要）。
     edu_sql_hint: str | None = None
+    #: 本轮考试专名（问句或会话继承）。
+    target_exam: str | None = None
+    #: 本轮科目（问句或会话继承）。
+    target_subject: str | None = None
+    #: 近几轮问答短摘要，仅供指代，不作数字权威源。
+    conversation_brief: str | None = None
+    #: 落库用的用户原话（芯片合并之后、继承补充之前）。
+    user_utterance: str | None = None
+    #: 本轮已对齐的考试/校/班/区县字面量，供 SQL 护栏。
+    bound_literals: list[str] | None = None
 
     def to_context(self) -> dict[str, Any]:
         ctx: dict[str, Any] = {
@@ -266,6 +276,16 @@ class _RunConstraints:
             ctx["report_route"] = dict(self.report_route)
         if self.edu_sql_hint:
             ctx["edu_sql_hint"] = self.edu_sql_hint
+        if self.target_exam:
+            ctx["target_exam"] = self.target_exam
+        if self.target_subject:
+            ctx["target_subject"] = self.target_subject
+        if self.conversation_brief:
+            ctx["conversation_brief"] = self.conversation_brief
+        if self.user_utterance:
+            ctx["user_utterance"] = self.user_utterance
+        if self.bound_literals:
+            ctx["bound_literals"] = list(self.bound_literals)
         return ctx
 
     @classmethod
@@ -286,6 +306,18 @@ class _RunConstraints:
             edu_scope=dict(data["edu_scope"]) if isinstance(data.get("edu_scope"), dict) else None,
             report_route=dict(rr) if isinstance(rr, dict) else None,
             edu_sql_hint=str(hint).strip() if hint else None,
+            target_exam=str(data["target_exam"]).strip() if data.get("target_exam") else None,
+            target_subject=str(data["target_subject"]).strip() if data.get("target_subject") else None,
+            conversation_brief=str(data["conversation_brief"]).strip()
+            if data.get("conversation_brief")
+            else None,
+            user_utterance=str(data["user_utterance"]).strip() if data.get("user_utterance") else None,
+            bound_literals=[
+                str(x).strip()
+                for x in (data.get("bound_literals") or [])
+                if str(x).strip()
+            ]
+            or None,
         )
 
 
@@ -312,6 +344,24 @@ def _build_shared_constraints(question: str, user_id: int) -> _RunConstraints:
         edu_scope=merged.get("edu_scope"),
         edu_sql_hint=merged.get("edu_sql_hint"),
     )
+
+
+def _bind_effective_question(request: ChatRequest, gate: Any) -> None:
+    """闸门返回后：Agent 用带继承槽的问句；落库仍用 user_utterance。"""
+    eq = str(getattr(gate, "effective_question", "") or "").strip()
+    if eq:
+        request.question = eq
+
+
+def _question_for_persist(
+    request: ChatRequest,
+    constraints: _RunConstraints | None = None,
+) -> str:
+    if constraints is not None:
+        utt = str(constraints.user_utterance or "").strip()
+        if utt:
+            return utt
+    return request.question
 
 
 def _extract_required_keywords(question: str) -> list[str]:
@@ -393,14 +443,31 @@ async def run_agent_stream(
         新建的 record_id；若无 conversation_id 或持久化失败则返回 0。
     """
     from src.agent.adapter.usage_sink import usage_tracking
+    from src.chat.service.clarification_gate import maybe_clarify_turn
 
     async with usage_tracking(emit):
+        if llm_client is None:
+            llm_client = LangChainLlmClient()
+        gate = await maybe_clarify_turn(
+            request=request,
+            current_user_id=current_user_id,
+            emit=emit,
+            llm_client=llm_client,
+            persist=persist,
+            workspace_oid=workspace_oid,
+        )
+        if gate.halted:
+            return gate.record_id
+        _bind_effective_question(request, gate)
+        constraints = gate.constraints or _build_shared_constraints(
+            request.question, current_user_id
+        )
         phase = await _run_data_analyst_phase(
             request=request,
             current_user_id=current_user_id,
             emit=emit,
             llm_client=llm_client,
-            constraints=_build_shared_constraints(request.question, current_user_id),
+            constraints=constraints,
             workspace_oid=workspace_oid,
         )
         if phase.fatal_error:
@@ -413,7 +480,11 @@ async def run_agent_stream(
 
         raw_answer = (phase.reply.content if phase.reply else "") or ""
         # 与 team Summarizer 共用权威对齐：任意提问都纠正预览/LIMIT 人数幻觉
-        reconciled = _reconcile_phase_answer(raw_answer, phase) if raw_answer else ""
+        reconciled = (
+            _reconcile_phase_answer(raw_answer, phase, question=request.question)
+            if raw_answer
+            else ""
+        )
         if reconciled and reconciled != raw_answer:
             await emit("summary", {"content": reconciled})
         elif reconciled and phase.is_success:
@@ -426,7 +497,7 @@ async def run_agent_stream(
         return await _persist_async(
             request=request,
             current_user_id=current_user_id,
-            question=request.question,
+            question=_question_for_persist(request, constraints),
             sql=phase.state.last_sql,
             sql_error=None if phase.is_success else (phase.fail_reason or ""),
             exec_result=phase.state.last_exec_result,
@@ -477,8 +548,22 @@ async def run_team_stream(
     ``langgraph``（默认）或 ``legacy``。
     """
     from src.agent.adapter.usage_sink import usage_tracking
+    from src.chat.service.clarification_gate import maybe_clarify_turn
 
     async with usage_tracking(emit):
+        if llm_client is None:
+            llm_client = LangChainLlmClient()
+        gate = await maybe_clarify_turn(
+            request=request,
+            current_user_id=current_user_id,
+            emit=emit,
+            llm_client=llm_client,
+            persist=persist,
+            workspace_oid=workspace_oid,
+        )
+        if gate.halted:
+            return gate.record_id
+        _bind_effective_question(request, gate)
         if get_settings().team_orchestrator == "langgraph":
             from src.chat.service.team_graph import run_team_stream_graph
 
@@ -490,6 +575,7 @@ async def run_team_stream(
                 persist=persist,
                 enable_tool_agent=enable_tool_agent,
                 workspace_oid=workspace_oid,
+                constraints=gate.constraints,
             )
         return await _run_team_stream_legacy(
             request=request,
@@ -499,6 +585,7 @@ async def run_team_stream(
             persist=persist,
             enable_tool_agent=enable_tool_agent,
             workspace_oid=workspace_oid,
+            constraints=gate.constraints,
         )
 
 
@@ -511,13 +598,16 @@ async def _run_team_stream_legacy(
     persist: bool = True,
     enable_tool_agent: bool = True,
     workspace_oid: int = 1,
+    constraints: _RunConstraints | None = None,
 ) -> int:
     """Team 模式手写协程实现（``team_orchestrator=legacy``）。"""
     if llm_client is None:
         llm_client = LangChainLlmClient()
     team_cfg = build_chat_team(enable_tool_agent=enable_tool_agent)
 
-    shared_constraints = _build_shared_constraints(request.question, current_user_id)
+    shared_constraints = constraints or _build_shared_constraints(
+        request.question, current_user_id
+    )
     all_steps: list[dict[str, Any]] = []
     plan_items = await _run_planner_phase(
         request=request,
@@ -654,7 +744,7 @@ async def _run_team_stream_legacy(
             return await _persist_async(
                 request=request,
                 current_user_id=current_user_id,
-                question=request.question,
+                question=_question_for_persist(request, shared_constraints),
                 sql="",
                 sql_error=overall_reason,
                 exec_result=None,
@@ -699,6 +789,9 @@ async def _run_team_stream_legacy(
         fact_answer=fact_answer,
     )
     await emit("summary", {"content": summary_text})
+    await _maybe_attach_yangzhou_jan_demo_report(
+        request.question, emit, last_good_phase.state
+    )
 
     # needs_report=false：只需自然语言结论，禁止再生成自主报告
     if needs_report:
@@ -720,7 +813,7 @@ async def _run_team_stream_legacy(
     return await _persist_async(
         request=request,
         current_user_id=current_user_id,
-        question=request.question,
+        question=_question_for_persist(request, shared_constraints),
         sql=last_good_phase.state.last_sql,
         sql_error=None,
         exec_result=last_good_phase.state.last_exec_result,
@@ -1050,6 +1143,35 @@ async def _run_tool_expert_phase(
 # --------------------------------------------------------------------------- #
 
 
+def _route_from_constraints(constraints: _RunConstraints | None):
+    """若闸门已写入 report_route，复用而不再分类。"""
+    from src.agent.education.intent_router import ReportRoute, ReportType
+
+    if constraints is None or not isinstance(constraints.report_route, dict):
+        return None
+    data = constraints.report_route
+    if "needs_report" not in data:
+        return None
+    rt = None
+    raw = data.get("report_type")
+    if raw:
+        try:
+            rt = ReportType(str(raw))
+        except ValueError:
+            rt = None
+    try:
+        conf = float(data.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        conf = 0.0
+    return ReportRoute(
+        needs_report=bool(data.get("needs_report")),
+        report_type=rt,
+        confidence=conf,
+        reason=str(data.get("reason") or ""),
+        source=str(data.get("source") or "llm"),
+    )
+
+
 async def _run_planner_phase(
     *,
     request: ChatRequest,
@@ -1069,9 +1191,11 @@ async def _run_planner_phase(
 
     await _emit_agent_speak(emit, agent="Planner", status="start", steps=steps)
 
-    route = await classify_report_intent(request.question, llm_client)
-    if constraints is not None:
-        constraints.report_route = route.to_dict()
+    route = _route_from_constraints(constraints)
+    if route is None:
+        route = await classify_report_intent(request.question, llm_client)
+        if constraints is not None:
+            constraints.report_route = route.to_dict()
 
     if should_use_deterministic_report_plan(request.question, route):
         plan_items = plan_items_for_route(route, request.question)
@@ -1203,12 +1327,22 @@ async def _run_summarizer_multi(
 ) -> str:
     """把 N 个 sub_task 的结果综合成一段中文结论。失败回落 ``fallback``。"""
     sub_tasks_block = _format_sub_tasks_block(
-        sub_phases, report_data=report_data, fact_answer=fact_answer
+        sub_phases,
+        report_data=report_data,
+        fact_answer=fact_answer,
+        question=question,
     )
+    brief = "（无）"
+    for _, phase in sub_phases:
+        c = phase.state.constraints
+        if c and str(c.conversation_brief or "").strip():
+            brief = str(c.conversation_brief).strip()
+            break
     context = {
         "question": question,
         "sub_tasks_block": sub_tasks_block,
         "answer_mode": "fact" if fact_answer else "report",
+        "conversation_brief": brief,
     }
     await _emit_agent_speak(emit, agent="Summarizer", status="start", steps=steps)
     try:
@@ -1227,12 +1361,15 @@ async def _run_summarizer_multi(
             emit, agent="Summarizer", status="error", steps=steps, error=str(e)
         )
         return _reconcile_summary_with_sub_phases(
-            fallback, sub_phases, fact_answer=fact_answer
+            fallback, sub_phases, fact_answer=fact_answer, question=question
         )
 
     content = (reply.content or "").strip()
     reconciled = _reconcile_summary_with_sub_phases(
-        content or fallback, sub_phases, fact_answer=fact_answer
+        content or fallback,
+        sub_phases,
+        fact_answer=fact_answer,
+        question=question,
     )
     preview = reconciled.replace("\n", " ").strip()[:160]
     await _emit_agent_speak(
@@ -1311,7 +1448,9 @@ async def _run_ad_hoc_report_phase(
     if _should_skip_ad_hoc_report(sub_phases, report_route=report_route):
         return []
 
-    sub_block = _format_sub_tasks_block(sub_phases, report_data=report_data)
+    sub_block = _format_sub_tasks_block(
+        sub_phases, report_data=report_data, question=question
+    )
     if len(sub_block) > 8000:
         sub_block = sub_block[:8000] + "\n…（子任务详情已截断）"
     user_prompt = (
@@ -1659,9 +1798,16 @@ def _reconcile_summary_with_sub_phases(
     sub_phases: list[tuple[str, "_DataAnalystPhase"]],
     *,
     fact_answer: bool = False,
+    question: str = "",
 ) -> str:
     """有报告/权威 KPI 时改写结论；无权威时清洗预览规模人数幻觉。"""
-    from src.agent.education.summary_context import reconcile_answer_with_artifacts_detailed
+    from src.agent.education.subject_strength import apply_subject_strength_verdict
+    from src.agent.education.summary_context import (
+        append_keepable_result_tables,
+        reconcile_answer_with_artifacts_detailed,
+        relabel_result_table_headers,
+        scrub_implementation_details,
+    )
 
     tool_calls: list[dict[str, Any]] = []
     reports: list[dict[str, Any]] = []
@@ -1677,6 +1823,7 @@ def _reconcile_summary_with_sub_phases(
                     "sql": getattr(st, "last_sql", None) or er.get("sql"),
                     "row_count": er.get("row_count"),
                     "columns": er.get("columns"),
+                    "rows": er.get("rows") or [],
                     "sql_row_capped": er.get("sql_row_capped"),
                 }
             )
@@ -1694,12 +1841,27 @@ def _reconcile_summary_with_sub_phases(
                 f"{c.field}:{c.claimed}->{c.authority}" for c in conflicts[:20]
             ),
         )
-    return reconciled
+    return apply_subject_strength_verdict(
+        relabel_result_table_headers(
+            scrub_implementation_details(
+                append_keepable_result_tables(reconciled, exec_results)
+            )
+        ),
+        exec_results,
+        question,
+    )
 
 
-def _reconcile_phase_answer(text: str, phase: "_DataAnalystPhase") -> str:
+def _reconcile_phase_answer(
+    text: str,
+    phase: "_DataAnalystPhase",
+    *,
+    question: str = "",
+) -> str:
     """单 Agent / 单 phase 结论后处理（与 team Summarizer 共用同一套权威对齐）。"""
-    return _reconcile_summary_with_sub_phases(text, [("", phase)])
+    return _reconcile_summary_with_sub_phases(
+        text, [("", phase)], question=question
+    )
 
 
 def _build_single_task_context(question: str, state: "_RunState") -> dict[str, Any]:
@@ -1732,6 +1894,7 @@ def _format_sub_tasks_block(
     *,
     report_data: dict[str, Any] | None = None,
     fact_answer: bool = False,
+    question: str = "",
 ) -> str:
     """把 N 个 sub_task 执行详情拼成 Summarizer 的 {{sub_tasks_block}} 变量。
 
@@ -1742,8 +1905,10 @@ def _format_sub_tasks_block(
     from src.agent.education.summary_context import (
         extract_stats_authority_block,
         format_education_pipeline_footer,
+        format_result_markdown_table,
         format_sql_result_authority_notes,
         format_tool_expert_sub_task_block,
+        looks_like_keepable_result_table,
         truncate_keeping_kpi_lines,
     )
 
@@ -1798,12 +1963,12 @@ def _format_sub_tasks_block(
                 final_snip = (
                     "\n查询结论（事实问答：优先照抄其中的 student_id/分数等直接答案；"
                     "忽略其中的参考人数/共N人参考套话）：\n"
-                    + truncate_keeping_kpi_lines(final_ans.strip(), limit=1200)
+                    + truncate_keeping_kpi_lines(final_ans.strip(), limit=2500)
                 )
             else:
                 final_snip = (
                     "\n查询结论（须优先照抄其中的人数/分数线；若与上方权威 KPI 冲突，以权威 KPI 为准）：\n"
-                    + truncate_keeping_kpi_lines(final_ans.strip(), limit=1200)
+                    + truncate_keeping_kpi_lines(final_ans.strip(), limit=2500)
                 )
 
         block = (
@@ -1814,8 +1979,36 @@ def _format_sub_tasks_block(
         )
         if stats_block:
             block += f"{stats_block}\n"
-        # 任意提问：永不向 Summarizer 贴明细样例表，从输入侧消灭「数 20 行人头」
-        if fact_answer:
+        keep_table = looks_like_keepable_result_table(
+            columns, row_count=row_count, sql=sql_text
+        )
+        if keep_table:
+            table = format_result_markdown_table(columns, rows)
+            if table:
+                block += (
+                    "结果表（须原样保留在最终结论中，禁止压成一句话）：\n"
+                    f"{table}\n"
+                )
+                shown = min(len(rows), 30)
+                if row_count > shown:
+                    block += f"（仅展示前 {shown} 行 / 共 {row_count} 行）\n"
+                from src.agent.education.query_parse import is_subject_strength_query
+                from src.agent.education.subject_strength import (
+                    SUBJECT_STRENGTH_RULE,
+                    format_subject_strength_verdict,
+                )
+
+                if is_subject_strength_query(question):
+                    verdict = format_subject_strength_verdict(
+                        rows, columns, question
+                    )
+                    block += f"判定口径：{SUBJECT_STRENGTH_RULE}\n"
+                    if verdict:
+                        block += (
+                            "权威判定（须照抄，禁止把全市前列说成薄弱）：\n"
+                            f"{verdict}\n"
+                        )
+        elif fact_answer:
             block += f"（明细已省略：共 {row_count} 行；勿把行数写成班级人数）\n"
         else:
             block += (
@@ -2057,6 +2250,32 @@ async def _maybe_emit_legacy_sql_result(
         },
     )
     await emit("result", state.last_exec_result)
+
+
+async def _maybe_attach_yangzhou_jan_demo_report(
+    question: str,
+    emit: EmitCallback,
+    state: "_RunState | None",
+) -> None:
+    """分析走完后：点名学校 + 1月全市水平问法挂 HTML 报告（不跳过 Team）。"""
+    from src.agent.education.demo_report import (
+        is_school_city_level_query,
+        load_school_city_level_snapshot,
+        school_city_level_tool_payload,
+    )
+
+    if not is_school_city_level_query(question):
+        return
+    ctx = state.tool_runtime_ctx if state is not None else {}
+    snapshot = load_school_city_level_snapshot(
+        question,
+        datasource_id=ctx.get("datasource_id"),
+        workspace_oid=ctx.get("workspace_oid"),
+        user_id=ctx.get("user_id"),
+    )
+    if not snapshot:
+        return
+    await _maybe_emit_report(school_city_level_tool_payload(snapshot), emit, state)
 
 
 async def _maybe_emit_report(

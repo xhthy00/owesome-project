@@ -873,6 +873,29 @@ async def chat_stream(
         record_id = 0
         uid = current_user_id
         try:
+            from src.agent.adapter.llm_adapter import LangChainLlmClient
+            from src.chat.service.clarification_gate import maybe_clarify_turn
+
+            async def _legacy_emit(event: str, data: dict) -> None:
+                push(event, data)
+
+            gate = asyncio.run(
+                maybe_clarify_turn(
+                    request=chat_request,
+                    current_user_id=uid,
+                    emit=_legacy_emit,
+                    llm_client=LangChainLlmClient(),
+                    persist=True,
+                    workspace_oid=workspace_oid,
+                )
+            )
+            if gate.halted:
+                record_id = gate.record_id
+                return
+            persist_q = gate.persist_question or chat_request.question
+            if gate.effective_question:
+                chat_request.question = gate.effective_question
+
             with get_db_session() as session:
                 generator = SQLGenerator()
 
@@ -922,7 +945,7 @@ async def chat_stream(
                         session=session,
                         current_user_id=current_user_id,
                         chat_request=chat_request,
-                        question=chat_request.question,
+                        question=persist_q,
                         sql=result.get("sql", ""),
                         sql_error=result.get("error", ""),
                         exec_result=None,
@@ -979,7 +1002,7 @@ async def chat_stream(
                         session=session,
                         current_user_id=current_user_id,
                         chat_request=chat_request,
-                        question=chat_request.question,
+                        question=persist_q,
                         sql=sql_exec,
                         sql_error=col_perm_err,
                         exec_result=None,
@@ -1026,7 +1049,7 @@ async def chat_stream(
                     session=session,
                     current_user_id=current_user_id,
                     chat_request=chat_request,
-                    question=chat_request.question,
+                    question=persist_q,
                     sql=sql_exec,
                     sql_error=None if success else message,
                     exec_result=exec_result if success else None,

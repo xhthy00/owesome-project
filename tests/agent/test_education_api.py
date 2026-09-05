@@ -577,6 +577,40 @@ def test_meta_options_school_scope_filters_schools():
     assert any("tb_score" in s for s in calls), "学校下拉必须经 tb_score 才能挂权限"
 
 
+def test_meta_options_extracts_cohorts_and_filters_exams_by_jc():
+    import asyncio
+
+    from src.agent.education.api import _load_meta_options
+    from src.agent.education.orchestrator import ReportOrchestrator
+    from src.agent.education.schema_mapping import ScoreSchemaMapping
+
+    async def fake_execute(sql: str):
+        if "COALESCE(eb.batch_name, e.exam_name) AS v" in sql:
+            return {
+                "columns": ["v"],
+                "rows": [["2026届高三5月模拟"], ["2027届高二期末"], ["2026届一模"]],
+                "row_count": 3,
+            }
+        return {"columns": ["v"], "rows": [], "row_count": 0}
+
+    async def fake_schema():
+        return ScoreSchemaMapping(mode="normalized", source="config_edu", tables={}, fields={})
+
+    orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
+    opts = asyncio.run(
+        _load_meta_options(
+            orch,
+            school_name=None,
+            exam_name=None,
+            class_name=None,
+            subject=None,
+            jc="2026届",
+        )
+    )
+    assert opts["cohorts"] == ["2027届", "2026届"]
+    assert opts["exams"] == ["2026届高三5月模拟", "2026届一模"]
+
+
 # ---- 预测线达线看板 --------------------------------------------------------
 
 

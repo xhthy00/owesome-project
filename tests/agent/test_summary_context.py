@@ -561,3 +561,160 @@ def test_reconcile_detailed_no_stats_scrubs_preview():
     )
     assert conflicts == []
     assert "20人" not in out
+
+
+def test_scrub_implementation_details_drops_table_and_sql():
+    from src.agent.education.summary_context import (
+        append_keepable_result_tables,
+        scrub_implementation_details,
+    )
+
+    raw = (
+        "物理相对全市最好。\n"
+        "统计依据：2026届高三1月期末、tb_score_overview、在籍生、"
+        "AVG FILTER WHERE col>0。\n"
+        "```sql\nSELECT xx FROM tb_score_overview\n```"
+    )
+    out = scrub_implementation_details(raw)
+    assert "tb_score_overview" not in out
+    assert "AVG FILTER" not in out
+    assert "SELECT" not in out
+    assert "物理相对全市最好" in out
+    assert "2026届高三1月期末" in out
+    assert "在籍生" in out
+    assert "已排除未选考" in out
+
+    kept = append_keepable_result_tables(
+        out,
+        [{
+            "columns": ["subject", "avg_score", "city_rank"],
+            "rows": [{"subject": "物理", "avg_score": 82.1, "city_rank": 8}],
+            "row_count": 1,
+            "sql": "SELECT subject FROM tb_score_overview LIMIT 1000",
+        }],
+    )
+    kept = scrub_implementation_details(kept)
+    assert "| 学科 | 均分 | 全市排名 |" in kept
+    assert "tb_score_overview" not in kept
+
+
+def test_keepable_subject_rank_table_stays_in_summary():
+    """各科全市排名小表应进总结；学生 LIMIT 预览表不应进。"""
+    from src.agent.education.summary_context import (
+        append_keepable_result_tables,
+        looks_like_keepable_result_table,
+    )
+
+    cols = ["subject", "avg_score", "city_rank"]
+    rows = [
+        {"subject": "数学", "avg_score": 112.3, "city_rank": 2},
+        {"subject": "语文", "avg_score": 108.1, "city_rank": 7},
+    ]
+    assert looks_like_keepable_result_table(
+        cols, row_count=2, sql="SELECT ... LIMIT 1000"
+    )
+    out = append_keepable_result_tables(
+        "新华中学优势学科是数学。",
+        [{"columns": cols, "rows": rows, "row_count": 2, "sql": "SELECT ... LIMIT 1000"}],
+    )
+    assert "| 学科 | 均分 | 全市排名 |" in out
+    assert "数学" in out and "112.3" in out
+    assert "查询结果" in out
+
+    same = append_keepable_result_tables(out, [
+        {"columns": cols, "rows": rows, "row_count": 2, "sql": "SELECT ... LIMIT 1000"}
+    ])
+    assert same.count("| 数学 |") == 1
+
+    student_cols = ["student_id", "score"]
+    student_sql = "SELECT student_id, score FROM tb_score LIMIT 20"
+    assert looks_like_keepable_result_table(
+        student_cols, row_count=20, sql=student_sql
+    ) is False
+    skipped = append_keepable_result_tables(
+        "该班成绩已查出。",
+        [{
+            "columns": student_cols,
+            "rows": [{"student_id": f"s{i}", "score": 80} for i in range(20)],
+            "row_count": 20,
+            "sql": student_sql,
+        }],
+    )
+    assert "| student_id |" not in skipped
+
+
+def test_format_sub_tasks_block_keeps_subject_rank_table():
+    class _FakeReply:
+        content = "优势学科是数学。"
+
+    class _FakeState:
+        last_sql = (
+            "SELECT subject, avg_score, city_rank FROM school_rank LIMIT 1000"
+        )
+        last_exec_result = {
+            "columns": ["subject", "avg_score", "city_rank"],
+            "rows": [
+                {"subject": "数学", "avg_score": 112.3, "city_rank": 2},
+                {"subject": "语文", "avg_score": 108.1, "city_rank": 7},
+            ],
+            "row_count": 2,
+        }
+        tool_calls = []
+        reports = []
+
+    class _FakePhase:
+        is_success = True
+        fail_reason = ""
+        reply = _FakeReply()
+        state = _FakeState()
+
+    block = _format_sub_tasks_block(
+        [("各科全市排名", _FakePhase())],
+        fact_answer=True,
+    )
+    assert "| 学科 | 均分 | 全市排名 |" in block
+    assert "须原样保留" in block
+    assert "明细已省略" not in block
+
+
+def test_truncate_keeping_kpi_lines_preserves_markdown_table():
+    from src.agent.education.summary_context import truncate_keeping_kpi_lines
+
+    table = (
+        "| subject | city_rank |\n"
+        "| --- | --- |\n"
+        "| 数学 | 2 |\n"
+        "| 语文 | 7 |\n"
+    )
+    long = "前言\n" + ("x" * 1500) + "\n" + table + "参考人数 52 人\n"
+    out = truncate_keeping_kpi_lines(long, limit=800)
+    assert "| 数学 | 2 |" in out
+    assert "参考人数 52" in out
+
+
+def test_relabel_result_table_headers_is_chinese_only_on_header():
+    from src.agent.education.summary_context import (
+        display_column_label,
+        relabel_result_table_headers,
+        result_table_already_in_text,
+    )
+
+    assert display_column_label("scope") == "范围"
+    assert display_column_label("avg_score") == "均分"
+    assert display_column_label("ref_count") == "参考人数"
+    assert display_column_label("pass_rate") == "及格率"
+
+    raw = (
+        "新华中学各科均分如下。\n"
+        "| scope | subject | avg_score | ref_count | pass_rate |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| 新华中学 | 语文 | 96.14 | 839 | 98.2 |\n"
+    )
+    out = relabel_result_table_headers(raw)
+    assert "| 范围 | 学科 | 均分 | 参考人数 | 及格率 |" in out
+    assert "| 新华中学 | 语文 | 96.14 | 839 | 98.2 |" in out
+    assert "avg_score" not in out
+    assert result_table_already_in_text(
+        ["scope", "subject", "avg_score"],
+        out,
+    )

@@ -27,7 +27,7 @@ export default function ChatInputPanel() {
         }`}
       >
         <Input.TextArea
-          placeholder="请输入您的问题，例如：生成高三2班班级总览报告…"
+          placeholder="请输入学校、班级、考试和指标，例如：扬州中学高三(2)班 2026届高三3月期末数学均分"
           className="dbgpt-input-font mt-0.5 h-[62px] w-full resize-none border-0 p-0 !text-[13px] !leading-6 text-[#1f2937] placeholder:!text-[12px] placeholder:!text-[#c0c4cc] focus:shadow-none dark:bg-transparent dark:text-[#e5e7eb]"
           value={userInput}
           onKeyDown={(e) => {

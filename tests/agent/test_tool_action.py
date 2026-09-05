@@ -151,6 +151,56 @@ def test_tool_call_pseudo_syntax_is_parsed_and_invoked(pack):
     assert out.observations == "ds-for:学生成绩分数分布 各班平均分"
 
 
+def test_minimax_invoke_xml_is_parsed_and_invoked(pack):
+    action = ToolAction(tool_pack=pack)
+    ai_msg = (
+        "<minimax:tool_call>"
+        '<invoke name="describe_table">'
+        '<parameter name="table_name">tb_fraction_bar</parameter>'
+        "</invoke>"
+        '<invoke name="describe_table">'
+        '<parameter name="table_name">tb_score_overview</parameter>'
+        "</invoke>"
+        "</minimax:tool_call>"
+    )
+    out = _run(action.run(ai_msg))
+    assert out.is_exe_success is True
+    assert out.action == "describe_table"
+    assert out.observations == "describe:tb_fraction_bar"
+
+
+def test_minimax_multi_invoke_keeps_first_tool():
+    from src.agent.core.action.tool_action import _parse_minimax_tool_call
+
+    raw = (
+        'minimax:tool_call <invoke name="peek_edu_filter_values"> '
+        '<parameter name="exam_hint">2026届高三1月期末</parameter> '
+        '<parameter name="table">tb_score_overview</parameter> </invoke> '
+        '<invoke name="describe_table"> '
+        '<parameter name="table_name">tb_fraction_bar</parameter> </invoke>'
+    )
+    parsed = _parse_minimax_tool_call(raw)
+    assert parsed is not None
+    assert parsed["tool"] == "peek_edu_filter_values"
+    assert parsed["args"]["exam_hint"] == "2026届高三1月期末"
+    assert parsed["args"]["table"] == "tb_score_overview"
+
+
+def test_minimax_tool_xml_is_not_treated_as_final_answer(pack):
+    action = ToolAction(tool_pack=pack)
+    ai_msg = (
+        "<minimax:tool_call>"
+        '<invoke name="unknown_vendor_tool">'
+        '<parameter name="x">1</parameter>'
+        "</invoke>"
+        "</minimax:tool_call>"
+    )
+    out = _run(action.run(ai_msg))
+    assert out.action != "terminate"
+    assert "minimax" not in (out.content or "").lower()
+    assert "<invoke" not in (out.content or "")
+
+
 def test_locked_tables_constraint_kwarg_is_ignored_describe_any_table(pack):
     """已不再根据 constraints.locked_tables 拦截工具调用。"""
     action = ToolAction(tool_pack=pack)

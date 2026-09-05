@@ -48,12 +48,12 @@ def build_score_count_sql(where_sql: str = "") -> str:
             "SELECT COUNT(*) AS cnt\n"
             f"{SCORE_JOIN_FROM}"
             f"{where}\n"
-            "AND sc.score IS NOT NULL"
+            "AND sc.score > 0"
         )
     return (
         "SELECT COUNT(*) AS cnt\n"
         f"{SCORE_JOIN_FROM}\n"
-        "WHERE sc.score IS NOT NULL"
+        "WHERE sc.score > 0"
     )
 
 
@@ -86,7 +86,7 @@ def build_kpi_aggregate_sql(where_sql: str, config: EducationConfig) -> str:
         "),\n"
         "meta AS (\n"
         f"  SELECT COALESCE(MAX(exam_score), {default_fs}) AS fs,\n"
-        "         COUNT(*) FILTER (WHERE score IS NOT NULL) AS cnt\n"
+        "         COUNT(*) FILTER (WHERE score > 0) AS cnt\n"
         "  FROM base\n"
         ")\n"
         "SELECT\n"
@@ -109,7 +109,7 @@ def build_kpi_aggregate_sql(where_sql: str, config: EducationConfig) -> str:
         "/ NULLIF(meta.cnt, 0) * 100, 2) AS fail_rate,\n"
         + ",\n".join(seg_selects)
         + "\nFROM base b\nCROSS JOIN meta\n"
-        "WHERE b.score IS NOT NULL\n"
+        "WHERE b.score > 0\n"
         "GROUP BY meta.cnt, meta.fs"
     )
 

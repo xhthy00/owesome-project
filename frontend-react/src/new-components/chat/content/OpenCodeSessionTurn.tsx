@@ -5,7 +5,7 @@ import {
   LoadingOutlined,
   UserOutlined
 } from "@ant-design/icons";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -56,6 +56,7 @@ export default function OpenCodeSessionTurn({
   runMetrics = null
 }: Props) {
   const [thinkOpen, setThinkOpen] = useState(false);
+  const [storyOpen, setStoryOpen] = useState(() => Boolean(isWorking));
   const statusLine = activity || (isWorking && !assistantMessage ? ASSISTANT_THINKING : "");
   const phasesToShow = storyPhases.filter((p) => p.status !== "idle");
   // 实时轮：有开始时间或进行中；历史轮：只要传入了 metrics（含 token/耗时未知时的 —）
@@ -68,6 +69,10 @@ export default function OpenCodeSessionTurn({
         runMetrics.progressPct >= 100)
   );
   const showProgress = Boolean(runMetrics && (isWorking || runMetrics.runStartedAt != null));
+
+  useEffect(() => {
+    setStoryOpen(Boolean(isWorking));
+  }, [isWorking]);
 
   return (
     <div className="dbgpt-ui-font flex flex-col gap-3 py-2" data-component="session-turn">
@@ -147,14 +152,22 @@ export default function OpenCodeSessionTurn({
           ) : null}
 
           {phasesToShow.length > 0 || storySummary ? (
-            <div className="mb-3 rounded-xl border border-[#e8eef8] bg-gradient-to-b from-[#f8fafc] to-white p-3 dark:border-[#2f3441] dark:from-[#0f141f] dark:to-[#111723]">
-              <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="mb-3 rounded-xl border border-[#e8eef8] bg-gradient-to-b from-[#f8fafc] to-white dark:border-[#2f3441] dark:from-[#0f141f] dark:to-[#111723]">
+              <button
+                type="button"
+                onClick={() => setStoryOpen((v) => !v)}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left"
+              >
+                <DownOutlined
+                  className={`text-[10px] text-[#98a2b3] transition-transform ${storyOpen ? "rotate-0" : "-rotate-90"}`}
+                />
                 <span className="text-xs font-semibold text-[#344054] dark:text-[#cbd5e1]">{STORY_FOLD_TITLE}</span>
                 {storySummary ? (
-                  <span className="truncate text-[11px] text-[#98a2b3]">{storySummary}</span>
+                  <span className="ml-auto truncate text-[11px] text-[#98a2b3]">{storySummary}</span>
                 ) : null}
-              </div>
-              <div className="relative space-y-0">
+              </button>
+              {storyOpen ? (
+              <div className="relative space-y-0 px-3 pb-2">
                 {phasesToShow.map((phase, idx) => {
                   const selected = phase.stepId && selectedStepId === phase.stepId;
                   const isLast = idx === phasesToShow.length - 1;
@@ -216,6 +229,7 @@ export default function OpenCodeSessionTurn({
                   );
                 })}
               </div>
+              ) : null}
             </div>
           ) : null}
 

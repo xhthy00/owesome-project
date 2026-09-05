@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, Request, UploadFile
@@ -28,9 +29,11 @@ from src.agent.education.orchestrator import ReportOrchestrator
 from src.agent.education.schema_mapping import (
     EXAM_NAME_SQL,
     ScoreSchemaMapping,
+    extract_jc_labels,
     infer_normalized_mapping,
     infer_wide_mapping,
     load_schema_from_config,
+    normalize_jc_label,
 )
 from system.api.auth_deps import get_current_user
 from system.schemas import UserResponse
@@ -644,10 +647,11 @@ async def list_meta_options(
     exam_name: Optional[str] = None,
     class_name: Optional[str] = None,
     subject: Optional[str] = None,
+    jc: Optional[str] = None,
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    """分析工具下拉：从数据源拉取学校/考试/班级/科目可选值（带教育权限）。"""
+    """分析工具下拉：从数据源拉取学校/届次/考试/班级/科目可选值（带教育权限）。"""
     from datasource.service.edu_permission import parse_edu_scope
     from src.common.core.database import get_db_session
     from src.system.crud.crud_user import get_user_by_id
@@ -664,6 +668,7 @@ async def list_meta_options(
         exam_name=(exam_name or "").strip() or None,
         class_name=(class_name or "").strip() or None,
         subject=(subject or "").strip() or None,
+        jc=(jc or "").strip() or None,
         edu_scope=edu_scope,
     )
     return success_response(options)
@@ -671,6 +676,36 @@ async def list_meta_options(
 
 def _sql_quote(val: str) -> str:
     return (val or "").replace("'", "''")
+
+
+_SCHOOL_CODE_PREFIX_RE = re.compile(r"^[A-Za-z]\d{2}")
+_SCHOOL_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+def _school_option_label(raw: str) -> str:
+    """芯片/下拉用明文校名；``GZ_…`` 脱敏码不展示；``A01扬州中学`` 去掉校码前缀。"""
+    t = str(raw or "").strip()
+    if not t:
+        return ""
+    if _SCHOOL_CODE_PREFIX_RE.match(t) and re.search(r"[\u4e00-\u9fff]", t):
+        t = t[3:].strip()
+    if not t:
+        return ""
+    if _SCHOOL_TOKEN_RE.fullmatch(t) and not re.search(r"[\u4e00-\u9fff]", t):
+        return ""
+    return t
+
+
+def _plain_school_options(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in values:
+        label = _school_option_label(raw)
+        if not label or label in seen:
+            continue
+        seen.add(label)
+        out.append(label)
+    return out
 
 
 async def _distinct_col(execute_sql, sql: str) -> list[str]:
@@ -699,6 +734,7 @@ async def _load_meta_options(
     exam_name: str | None,
     class_name: str | None,
     subject: str | None,
+    jc: str | None = None,
     edu_scope: Any = None,
 ) -> dict[str, list[str]]:
     """按 edu schema 查 DISTINCT；SQL 经权限执行，并按 edu_scope 再收敛选项。"""
@@ -706,22 +742,26 @@ async def _load_meta_options(
 
     execute = orch._execute_sql
     mapping = await orch._resolve_schema()
-    empty = {"schools": [], "exams": [], "classes": [], "subjects": []}
+    empty = {"schools": [], "exams": [], "classes": [], "subjects": [], "cohorts": []}
     if getattr(mapping, "source", None) != "config_edu":
         return empty
 
     scope = edu_scope if isinstance(edu_scope, EduScope) else EduScope()
+    jc_label = normalize_jc_label(jc or "")
 
     def _filters(*, exclude: set[str]) -> list[str]:
         parts: list[str] = []
         if school_name and "school" not in exclude:
-            parts.append(f"sch.name LIKE '%{_sql_quote(school_name)}%'")
+            q = _sql_quote(school_name)
+            parts.append(f"(sch.s_name LIKE '%{q}%' OR sch.name LIKE '%{q}%')")
         if exam_name and "exam" not in exclude:
             parts.append(f"{EXAM_NAME_SQL} LIKE '%{_sql_quote(exam_name)}%'")
         if class_name and "class" not in exclude:
             parts.append(f"sc.class LIKE '%{_sql_quote(class_name)}%'")
         if subject and "subject" not in exclude:
             parts.append(f"sc.subject_name LIKE '%{_sql_quote(subject)}%'")
+        if jc_label and "jc" not in exclude:
+            parts.append(f"{EXAM_NAME_SQL} LIKE '%{_sql_quote(jc_label)}%'")
         return parts
 
     def _where(parts: list[str], extra: str) -> str:
@@ -738,24 +778,30 @@ async def _load_meta_options(
 
     schools = await _distinct_col(
         execute,
-        "SELECT DISTINCT sch.name AS v "
+        "SELECT DISTINCT COALESCE(NULLIF(TRIM(sch.s_name), ''), sch.name) AS v "
         f"{score_from}"
         + _where(
             _filters(exclude={"school"}),
-            "sch.name IS NOT NULL AND CAST(sch.name AS TEXT) <> ''",
+            "("
+            "(sch.s_name IS NOT NULL AND CAST(sch.s_name AS TEXT) <> '')"
+            " OR (sch.name IS NOT NULL AND CAST(sch.name AS TEXT) <> '')"
+            ")",
         )
         + " ORDER BY v LIMIT 500",
     )
-    exams = await _distinct_col(
+    schools = _plain_school_options(schools)
+    exams_all = await _distinct_col(
         execute,
         "SELECT DISTINCT " + EXAM_NAME_SQL + " AS v "
         f"{score_from}"
         + _where(
-            _filters(exclude={"exam"}),
+            _filters(exclude={"exam", "jc"}),
             f"{EXAM_NAME_SQL} IS NOT NULL AND CAST({EXAM_NAME_SQL} AS TEXT) <> ''",
         )
         + " ORDER BY v LIMIT 500",
     )
+    cohorts = extract_jc_labels(exams_all)
+    exams = [e for e in exams_all if not jc_label or jc_label in e]
     classes = await _distinct_col(
         execute,
         "SELECT DISTINCT sc.class AS v "
@@ -795,6 +841,7 @@ async def _load_meta_options(
         "exams": exams,
         "classes": classes,
         "subjects": subjects,
+        "cohorts": cohorts,
     }
 
 

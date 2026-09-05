@@ -67,6 +67,22 @@ def test_format_scope_constraints_school_id_only_distinguishes_from_sch_name():
     assert "s_name" in text
 
 
+def test_format_scope_constraints_includes_session_confirm_and_brief():
+    text = format_scope_constraints(
+        {
+            "target_school": "扬州中学",
+            "target_classes": ["高三(2)班"],
+            "target_exam": "2026届高三1月期末",
+            "conversation_brief": "用户：均分呢\n助手：612",
+        }
+    )
+    assert "本会话已确认：" in text
+    assert "考试=2026届高三1月期末" in text
+    assert "禁止另选默认考试" in text
+    assert "近几轮摘要：" in text
+    assert "均分呢" in text
+
+
 def test_build_edu_aware_constraints_falls_back_to_school_id():
     edu = {
         "edu_role": "teacher",

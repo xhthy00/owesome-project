@@ -23,6 +23,7 @@ export default function ChatPage() {
     activity,
     runMetrics,
     metricsByRunId,
+    clarifyByRunId,
     send,
     stop,
     loadConversation,
@@ -44,6 +45,29 @@ export default function ChatPage() {
   const loadedConversationIdRef = useRef<number | null>(null);
   /** 探索广场 ?q= 只消费一次，避免 send/router 引用变化把同一问发成多条会话 */
   const consumedExploreQueryRef = useRef<string | null>(null);
+  /** 新建任务清屏时先挡住当前 ?q=，避免 replace 完成前同一问再发一遍 */
+  const ignoreExploreQueryRef = useRef(false);
+
+  useEffect(() => {
+    const onNewTask = () => {
+      ignoreExploreQueryRef.current = true;
+      stop();
+      clearConversation();
+      prevConversationQuery.current = null;
+      loadedConversationIdRef.current = null;
+      const finish = () => {
+        consumedExploreQueryRef.current = null;
+        ignoreExploreQueryRef.current = false;
+      };
+      if (router.asPath !== "/chat") {
+        void router.replace("/chat", undefined, { shallow: true }).then(finish);
+        return;
+      }
+      finish();
+    };
+    window.addEventListener("chat:new-task", onNewTask);
+    return () => window.removeEventListener("chat:new-task", onNewTask);
+  }, [stop, clearConversation, router]);
 
   useEffect(() => {
     if (!executionSteps.length) {
@@ -68,6 +92,7 @@ export default function ChatPage() {
     const q = router.query.q;
     const ds = router.query.ds;
     if (!q) return;
+    if (ignoreExploreQueryRef.current) return;
     const text = (Array.isArray(q) ? q[0] : q).trim();
     const dsValue = Array.isArray(ds) ? ds[0] : ds;
     const dsId = dsValue ? Number(dsValue) : undefined;
@@ -190,6 +215,7 @@ export default function ChatPage() {
                       metricsByRunId={metricsByRunId}
                       selectedStepId={selectedStepId}
                       onSelectStep={setSelectedStepId}
+                      clarifyByRunId={clarifyByRunId}
                     />
                   </div>
                   <div className="shrink-0 px-5">

@@ -154,11 +154,24 @@ def normalize_student_key(name: str) -> str:
     return re.sub(r"\s+", "", str(name or "")).lower()
 
 
+_INFORMAL_CLASS_RE = re.compile(
+    r"(初[一二三]|高[一二三]|[三四五六七八九]年级)\s*(\d{1,2})\s*班"
+)
+
+
 def normalize_fullwidth_parentheses(text: str) -> str:
-    """将全角括号（）统一为半角 ()，使「高三（10）班」与库内「高三(10)班」一致。"""
+    """班级名与库内一致：全角括号→半角，「高三2班」→「高三(2)班」。
+
+    不改写「高三1月」：必须是年级+数字+「班」。
+    """
     if not text:
         return text
-    return text.replace("（", "(").replace("）", ")")
+    out = text.replace("（", "(").replace("）", ")")
+
+    def _paren(m: re.Match[str]) -> str:
+        return f"{m.group(1)}({int(m.group(2))})班"
+
+    return _INFORMAL_CLASS_RE.sub(_paren, out)
 
 
 def extract_student_id_target(question: str) -> str | None:
@@ -224,6 +237,17 @@ def is_top_student_lookup_query(question: str) -> bool:
     return False
 
 
+def text_has_exam_kind_token(text: str, token: str) -> bool:
+    """短考试类型是否真出现在问句里。
+
+    「1月考试」含子串「月考」，但用户说的是某月那场考试，不是月考。
+    """
+    q = text or ""
+    if token == "月考":
+        return bool(re.search(r"(?<!\d)月考", q))
+    return token in q
+
+
 def extract_exam_name_hint(question: str) -> str | None:
     """从问题中抽取考试名线索（如「XX联考」「区域名+考试」等任意简称）。"""
     q = normalize_fullwidth_parentheses((question or "").strip())
@@ -246,7 +270,7 @@ def extract_exam_name_hint(question: str) -> str | None:
         if cleaned:
             return cleaned
     for token in ("期中", "期末", "月考", "摸底", "模拟", "单元测验"):
-        if token in q:
+        if text_has_exam_kind_token(q, token):
             return token
     for pat in (
         re.compile(r"在([\u4e00-\u9fffA-Za-z0-9]{2,40}?)(?:考试|测试|检测|调研)"),
@@ -335,13 +359,46 @@ def is_vague_exam_name(name: str) -> bool:
         "几次考试",
         "这几次考试",
         "这几次成绩",
+        "换一场",
+        "另一场",
+        "换个考试",
+        "别的考试",
+        "换考试",
     }:
         return True
     if re.fullmatch(r"(?:这|最近|近)?几[次场](?:考试|成绩|的)?", n):
         return True
     if re.fullmatch(r"(?:历次|多次|各次|各场|所有|全部)(?:考试)?", n):
         return True
+    # 「扬州中学本次」这类：学校名 + 指代，不是考试专名
+    if re.search(r"(?:本次|该次|此次|这次)$", n):
+        return True
     return False
+
+
+_UNSPECIFIED_EXAM_HINTS = (
+    "本次考试",
+    "这场考试",
+    "这次考试",
+    "该次考试",
+    "此次考试",
+    "这次",
+    "这场",
+    "本次",
+    "那次",
+    "那场",
+)
+
+
+def refers_to_unspecified_exam(question: str) -> bool:
+    """问句用「本次/这场/这次」指代，但没有可过滤的考试专名。"""
+    q = (question or "").strip()
+    if not q:
+        return False
+    if not any(h in q for h in _UNSPECIFIED_EXAM_HINTS):
+        return False
+    hint = extract_exam_name_hint(q)
+    return not hint or is_vague_exam_name(hint)
 
 
 def is_individual_student_analysis_query(question: str) -> bool:
@@ -450,8 +507,6 @@ _CITYWIDE_ANALYSIS_HINTS = (
     "成绩分析",
     "详细报告",
     "详细分析",
-    "质量检测",
-    "期末",
     "分析报告",
     "形成报告",
 )
@@ -479,11 +534,60 @@ def is_line_reach_query(question: str) -> bool:
     return any(h in q for h in _LINE_REACH_HINTS)
 
 
+_SCORE_STAT_HINTS = (
+    "均分",
+    "平均分",
+    "及格率",
+    "优秀率",
+    "最高分",
+    "最低分",
+    "标准差",
+    "均衡",
+    "中位",
+)
+_SCORE_STAT_ORAL = ("怎么样", "如何", "考得", "查一下", "看看", "好不好", "发挥")
+_SCORE_STAT_ORAL_WEAK = ("情况", "成绩")
+_SCORE_STAT_REPORTISH = ("报告", "总览", "诊断", "预警", "画像", "横向", "综合分析", "成绩分析")
+_SCORE_STAT_MULTI_EXAM = ("历次", "趋势", "走势", "多场", "这几次", "近几次", "所有考试", "全部考试")
+
+
+def is_score_stat_query(question: str) -> bool:
+    """单场分数统计（均分/口语「怎么样」等）；历次趋势不按一场考试追问。"""
+    q = (question or "").strip()
+    if not q:
+        return False
+    if any(h in q for h in _SCORE_STAT_MULTI_EXAM):
+        return False
+    if "分析" in q and not any(h in q for h in _SCORE_STAT_HINTS):
+        return False
+    if any(h in q for h in _SCORE_STAT_HINTS):
+        return True
+    if any(h in q for h in _SCORE_STAT_REPORTISH):
+        return False
+    if any(h in q for h in _SCORE_STAT_ORAL):
+        return True
+    return False
+
+
+def is_oral_score_inquiry(question: str) -> bool:
+    """闸门用：口语分数问（含「成绩/情况」），不含报告/多场。"""
+    q = (question or "").strip()
+    if not q or is_score_stat_query(q):
+        return bool(q) and is_score_stat_query(q)
+    if any(h in q for h in _SCORE_STAT_MULTI_EXAM) or any(h in q for h in _SCORE_STAT_REPORTISH):
+        return False
+    if "分析" in q:
+        return False
+    if any(h in q for h in _SCORE_STAT_ORAL_WEAK):
+        return True
+    return False
+
+
 _LINE_REACH_CITY_SCOPE = ("全市", "全域", "市域", "各区", "各县", "各区县", "全区县")
 _LINE_REACH_REPORT_STRONG = ("分析", "报告", "情况", "对比", "环比")
 _LINE_REACH_NARROW = ("人数", "达线率", "上线率", "上线人数")
 _CLASS_TARGET_RE = re.compile(
-    r"高[一二三]\(\d+\)班|"
+    r"(?:高[一二三]|初[一二三]|[三四五六七八九]年级)\(\d{1,2}\)班|"
     r"(初三|初二|初一|高三|高二|高一|九年级|八年级|七年级|六年级|五年级|四年级|三年级)"
     r"[\d班]*\d?班"
 )
@@ -506,6 +610,46 @@ def extract_class_target(question: str) -> str | None:
     """从问题中抽取班级名（如「高三(18)班」）。"""
     found = extract_class_targets(question)
     return found[0] if found else None
+
+
+_CLASS_ALIAS_HINTS = ("我们班", "本班", "我班", "隔壁班", "邻班")
+_CN_CLASS_NUM = {
+    "一": "1",
+    "二": "2",
+    "三": "3",
+    "四": "4",
+    "五": "5",
+    "六": "6",
+    "七": "7",
+    "八": "8",
+    "九": "9",
+    "十": "10",
+}
+_BARE_CLASS_RE = re.compile(r"(?<![高初年级])([一二三四五六七八九十]|[1-9]\d?)班")
+
+
+def has_class_alias(question: str) -> bool:
+    """口语班级（我们班/三班）——有班的意思但不是库内专名。"""
+    q = normalize_fullwidth_parentheses(question or "")
+    if not q:
+        return False
+    if extract_class_target(q):
+        return False
+    if any(h in q for h in _CLASS_ALIAS_HINTS):
+        return True
+    return bool(_BARE_CLASS_RE.search(q))
+
+
+def extract_bare_class_number(question: str) -> str | None:
+    """「三班」「10班」里的班号，供和权限班级对齐。"""
+    q = normalize_fullwidth_parentheses(question or "")
+    if not q or extract_class_target(q):
+        return None
+    m = _BARE_CLASS_RE.search(q)
+    if not m:
+        return None
+    raw = m.group(1)
+    return _CN_CLASS_NUM.get(raw, raw)
 
 
 def is_line_reach_citywide_scope(question: str) -> bool:
@@ -1047,6 +1191,38 @@ def is_knowledge_cohort_gap_query(question: str) -> bool:
     return has_bottom and has_median and has_kn
 
 
+_SUBJECT_STRENGTH_HINTS = (
+    "优势学科",
+    "优势科目",
+    "强势学科",
+    "强势科目",
+    "强项学科",
+    "强项科目",
+    "薄弱学科",
+    "薄弱科目",
+    "弱势学科",
+    "弱势科目",
+    "弱项学科",
+    "弱项科目",
+    "短板学科",
+    "短板科目",
+    "学科优势",
+    "学科薄弱",
+    "科目优势",
+    "科目薄弱",
+)
+
+
+def is_subject_strength_query(question: str) -> bool:
+    """学校/班级优势或薄弱学科：按各科均分全市排名，不是本校各科互比。"""
+    q = (question or "").strip()
+    if not q:
+        return False
+    if any(h in q for h in ("知识点", "小题")):
+        return False
+    return any(h in q for h in _SUBJECT_STRENGTH_HINTS)
+
+
 _CLASS_WEAK_SUBJECT_HINTS = (
     "薄弱学科",
     "薄弱科目",
@@ -1063,6 +1239,9 @@ def is_class_weak_subject_query(question: str) -> bool:
     """指定班级的薄弱学科（同校同科班际对比），不是各科互比、不是薄弱知识点。"""
     q = (question or "").strip()
     if not q:
+        return False
+    # 自由提问的优势/薄弱学科改走各科均分全市排名，不再用班际工具
+    if is_subject_strength_query(q):
         return False
     if not any(h in q for h in _CLASS_WEAK_SUBJECT_HINTS):
         return False
@@ -1180,7 +1359,7 @@ def is_class_overview_query(question: str) -> bool:
         return True
     # 「…总览」且点名班级（高三(10)班 / 初三1班）
     if "总览" in q and re.search(
-        r"高[一二三]\(\d+\)班|"
+        r"(?:高[一二三]|初[一二三]|[三四五六七八九]年级)\(\d{1,2}\)班|"
         r"(?:初三|初二|初一|高三|高二|高一|九年级|八年级|七年级)[\d班]*\d?班",
         q,
     ):
@@ -1439,6 +1618,26 @@ def format_scope_constraints(constraints: dict[str, Any] | None) -> str:
         parts.append(f"学校/机构={raw['target_school']}")
     if raw.get("target_student"):
         parts.append(f"学生={raw['target_student']}")
+    confirmed: list[str] = []
+    if raw.get("target_school"):
+        confirmed.append(f"学校={raw['target_school']}")
+    classes = raw.get("target_classes")
+    if isinstance(classes, list) and classes:
+        confirmed.append("班级=" + "、".join(str(c) for c in classes[:8] if str(c).strip()))
+    if raw.get("target_exam"):
+        confirmed.append(f"考试={raw['target_exam']}")
+    if raw.get("target_subject"):
+        confirmed.append(f"科目={raw['target_subject']}")
+    if raw.get("target_student"):
+        confirmed.append(f"学生={raw['target_student']}")
+    if confirmed:
+        parts.append("本会话已确认：" + " ".join(confirmed))
+        parts.append(
+            "指代「这场/刚才/该班」时必须用已确认范围，禁止另选默认考试或默查全市。"
+        )
+    brief = str(raw.get("conversation_brief") or "").strip()
+    if brief:
+        parts.append("近几轮摘要：\n" + brief)
     keywords = raw.get("required_keywords") or []
     if keywords:
         kw = "、".join(str(k) for k in keywords[:12])
@@ -2323,6 +2522,7 @@ __all__ = [
     "is_top_student_lookup_query",
     "is_multi_exam_student_analysis_query",
     "is_vague_exam_name",
+    "refers_to_unspecified_exam",
     "extract_student_target",
     "format_scope_constraints",
     "is_citywide_analysis_query",
@@ -2331,6 +2531,10 @@ __all__ = [
     "extract_class_targets",
     "is_line_reach_citywide_scope",
     "is_line_reach_query",
+    "is_score_stat_query",
+    "is_oral_score_inquiry",
+    "has_class_alias",
+    "extract_bare_class_number",
     "is_line_reach_report_query",
     "is_subject_avg_report_query",
     "is_assign_grade_report_query",
@@ -2358,11 +2562,13 @@ __all__ = [
     "is_tier_alert_query",
     "is_knowledge_cohort_gap_query",
     "is_class_weak_subject_query",
+    "is_subject_strength_query",
     "is_group_feature_query",
     "is_class_overview_query",
     "infer_group_feature_dimension",
     "resolve_group_feature_score_rows",
     "normalize_fullwidth_parentheses",
+    "text_has_exam_kind_token",
     "normalize_student_key",
     "extract_upstream_participant_count",
     "extract_best_exec_result_from_report_data",
