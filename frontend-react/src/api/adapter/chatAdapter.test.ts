@@ -19,13 +19,33 @@ vi.mock("@/utils/sse", () => ({
 import {
   rejectQuestion,
   replyQuestion,
-  sendMessageStream
+  sendMessageStream,
+  syncWorkspaceOid
 } from "@/api/adapter/chatAdapter";
 
 describe("chatAdapter HITL question", () => {
   beforeEach(() => {
     mocks.apiRequest.mockReset();
     mocks.streamSSE.mockReset();
+    window.localStorage.clear();
+  });
+
+  it("syncWorkspaceOid 仅在 oid 变化时写入并广播", () => {
+    const seen: number[] = [];
+    const onWs = (event: Event) => {
+      seen.push(Number((event as CustomEvent<{ oid?: number }>).detail?.oid));
+    };
+    window.addEventListener("workspace:changed", onWs);
+    try {
+      window.localStorage.setItem("frontend_react_workspace_oid", "1");
+      syncWorkspaceOid(1);
+      syncWorkspaceOid(2);
+      syncWorkspaceOid(2);
+      expect(window.localStorage.getItem("frontend_react_workspace_oid")).toBe("2");
+      expect(seen).toEqual([2]);
+    } finally {
+      window.removeEventListener("workspace:changed", onWs);
+    }
   });
 
   it("分发 question.asked 与 question.rejected SSE 事件", async () => {

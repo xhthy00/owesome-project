@@ -47,15 +47,18 @@ def create_conversation(
 def get_conversation_by_id(
     session: Session, conversation_id: int, user_id: int, oid: int | None = None
 ) -> Optional[Conversation]:
-    """Get a conversation owned by the current user and workspace."""
-    filters = [
-        Conversation.id == conversation_id,
-        Conversation.user_id == user_id,
-        Conversation.is_deleted == False,  # noqa: E712
-    ]
-    if oid is not None:
-        filters.append(Conversation.oid == oid)
-    statement = select(Conversation).where(and_(*filters))
+    """Get a conversation owned by the current user.
+
+    ``oid`` 暂忽略，与 ``list_conversations`` 一致：任务按账号全局可见。
+    """
+    _ = oid
+    statement = select(Conversation).where(
+        and_(
+            Conversation.id == conversation_id,
+            Conversation.user_id == user_id,
+            Conversation.is_deleted == False,  # noqa: E712
+        )
+    )
     return session.exec(statement).first()
 
 

@@ -5,6 +5,16 @@ import { streamSSE } from "@/utils/sse";
 /** 与 `pages/_app.tsx` / `api/client.ts` 中工作空间键一致 */
 const WORKSPACE_OID_STORAGE_KEY = "frontend_react_workspace_oid";
 
+/** 打开跨工作空间的历史任务时，把当前空间切到该会话所属 oid，后续请求才带对 Header。 */
+export function syncWorkspaceOid(oid?: number | null) {
+  if (typeof window === "undefined" || oid == null || !Number.isFinite(Number(oid))) return;
+  const next = String(Number(oid));
+  const current = window.localStorage.getItem(WORKSPACE_OID_STORAGE_KEY);
+  if (current === next) return;
+  window.localStorage.setItem(WORKSPACE_OID_STORAGE_KEY, next);
+  window.dispatchEvent(new CustomEvent("workspace:changed", { detail: { oid: Number(oid) } }));
+}
+
 function chatStreamHeaders(): Record<string, string> {
   const token = getAccessToken();
   const wsOid =
@@ -35,6 +45,7 @@ export type Conversation = {
   id: number;
   title: string;
   datasource_id?: number | null;
+  oid?: number;
   create_time?: string;
   update_time?: string;
 };

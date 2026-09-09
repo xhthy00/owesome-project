@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Flex, Layout } from "antd";
+import { Flex, Layout, message } from "antd";
 import { useRouter } from "next/router";
 import ChatContentContainer from "@/components/chat/ChatContentContainer";
 import ChatExecutionPanel from "@/components/chat/ChatExecutionPanel";
@@ -136,7 +136,13 @@ export default function ChatPage() {
     if (loading) return;
     if (loadedConversationIdRef.current === id) return;
     loadedConversationIdRef.current = id;
-    void loadConversation(id);
+    void loadConversation(id).catch((err) => {
+      if (loadedConversationIdRef.current === id) {
+        loadedConversationIdRef.current = null;
+      }
+      const text = err instanceof Error ? err.message : "加载会话失败";
+      void message.error(text);
+    });
   }, [router.isReady, router.query.conversation_id, loadConversation, clearConversation, loading]);
 
   const appInfo = useMemo(

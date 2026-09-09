@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import {
   createConversation,
   getConversationDetail,
+  syncWorkspaceOid,
   rejectQuestion as rejectQuestionRequest,
   replyQuestion as replyQuestionRequest,
   sendMessageStream,
@@ -1111,6 +1112,7 @@ export function useChat() {
   const loadConversation = useCallback(async (targetConversationId: number) => {
     stop();
     const detail = await getConversationDetail(targetConversationId);
+    syncWorkspaceOid(detail.oid);
     setConversationId(detail.id);
     if (detail.datasource_id) {
       setDatasourceIdState(detail.datasource_id);

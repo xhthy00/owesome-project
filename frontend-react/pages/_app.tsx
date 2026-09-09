@@ -102,6 +102,16 @@ function LayoutWrapper({
     };
   }, [isBypassLayout]);
 
+  useEffect(() => {
+    const onWs = (event: Event) => {
+      const oid = Number((event as CustomEvent<{ oid?: number }>).detail?.oid);
+      if (!Number.isFinite(oid)) return;
+      setWorkspaceOid((prev) => (prev === oid ? prev : oid));
+    };
+    window.addEventListener("workspace:changed", onWs);
+    return () => window.removeEventListener("workspace:changed", onWs);
+  }, []);
+
   const watermarkText = useMemo(
     () => userWatermarkText(loginAccount, loginName),
     [loginAccount, loginName]
