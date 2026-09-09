@@ -357,10 +357,22 @@ _EXAM_ANAPHORA_RE = re.compile(_EXAM_ANAPHORA_PATTERN)
 _EXAM_ANAPHORA_VALUE_RE = re.compile(rf"^{_EXAM_ANAPHORA_PATTERN}$")
 
 
+_RECENT_N_EXAM_WINDOW_RE = re.compile(
+    r"(?:最近|近)\s*(?:[0-9一二三四五六七八九十两俩]+|几)\s*[次场]"
+)
+
+
+def is_recent_n_exam_window(question: str) -> bool:
+    """问句是否已给出近 N 次/几次考试窗口，不必再追问单场专名。"""
+    return bool(_RECENT_N_EXAM_WINDOW_RE.search(question or ""))
+
+
 def is_vague_exam_name(name: str) -> bool:
     """是否为不可用于 SQL 过滤的模糊考试表述（这几次/本次考试等）。"""
     n = str(name or "").strip()
     if not n:
+        return True
+    if is_recent_n_exam_window(n):
         return True
     if n in {
         "本次",
@@ -2853,6 +2865,7 @@ __all__ = [
     "is_top_student_lookup_query",
     "is_multi_exam_student_analysis_query",
     "is_vague_exam_name",
+    "is_recent_n_exam_window",
     "refers_to_unspecified_exam",
     "extract_student_target",
     "format_scope_constraints",

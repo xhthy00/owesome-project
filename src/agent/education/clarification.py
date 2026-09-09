@@ -565,6 +565,7 @@ def candidate_missing_slots(
         is_citywide_analysis_query,
         is_citywide_nth_class_lookup_query,
         is_named_district_scope,
+        is_recent_n_exam_window,
         is_school_class_comparison_query,
         is_which_class_lookup_query,
     )
@@ -645,6 +646,8 @@ def candidate_missing_slots(
         for slot in REQUIRED_SLOTS_BY_FACT.get(kind, ()):
             if slot == SLOT_EXAM:
                 if _exam_missing(q, filled_map):
+                    if kind == FactQueryKind.LINE_REACH and is_recent_n_exam_window(q):
+                        continue
                     add(SLOT_EXAM)
             elif slot == SLOT_CLASS:
                 # 老师只绑 1 班：静默继承，不追问；学生只看自己
