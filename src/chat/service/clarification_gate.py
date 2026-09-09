@@ -475,6 +475,7 @@ async def maybe_clarify_turn(
         filled=filled,
         route=route,
         persist_question=persist_question,
+        effective_question=effective_question,
         intent=intent,
     )
     halted.effective_question = effective_question
@@ -529,7 +530,6 @@ async def _emit_and_persist_clarify(
         constraints=constraints,
         filled=filled,
         route=route,
-        effective_question=effective_question,
         persist_question=persist_question,
         effective_question=effective_question,
         pending_payload=payload,
