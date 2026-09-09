@@ -1079,3 +1079,21 @@ def test_named_district_line_reach_skips_class_school():
         bureau,
     )
     assert SLOT_CLASS in miss_rank or SLOT_SCHOOL in miss_rank
+
+
+def test_track_sql_hint_forbids_xkqk():
+    """特招线跨考试人数：选科用 xkkm，禁止 xkqk 数字码。"""
+    from src.agent.education.prompt_context import build_education_sql_hint_text
+    from src.templates.sql_gen_prompt import education_terminologies_block_for_intent
+
+    q = "新华中学1月特招线线上15分在3月考试中有多少未达到特招线"
+    hint = build_education_sql_hint_text(q)
+    assert "xkkm" in hint
+    assert "禁止" in hint and "xkqk" in hint
+    assert "线上N分" in hint and "511" in hint
+    blob = build_fact_query_plan_items(q)[0]["sub_task"]
+    assert "禁止" in blob and "xkqk" in blob
+    assert "线上N分" in blob
+    terms = education_terminologies_block_for_intent("line_reach")
+    assert "xkqk" in terms
+    assert "线上N分" in terms

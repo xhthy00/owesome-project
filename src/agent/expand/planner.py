@@ -351,6 +351,7 @@ def _line_reach_fact_hint(
             "**禁止**用 zf4m/zf3m 对照分数线（四门/三门分远低于六门线，会导致全员不达线）；"
             "物理类对照 wl_score_*，历史类对照 ls_score_*，按学生 xkkm 分轨："
             "xkkm LIKE '物%'→物理类，LIKE '史%' OR LIKE '历%'→历史类；"
+            "禁止 xkqk IN ('134','135','136')（xkqk 常为空会少人）；"
             "班内只有一个选科方向时**只报该方向**，禁止文理混报或套用另一方向分数线；"
             "WHERE 必须按问题中的学校(xx)、班级(bj)过滤，人数/率只统计该班；"
             "未点名考试则对照 tb_exam_batch 取最近一场；"
@@ -530,6 +531,17 @@ def _enrolled_only_hint() -> str:
         "默认只统计在籍生：tb_score_overview 必须 AND xsxz='在籍生' "
         "（市报生/往届不进均分、不进全市班级或学校排名池）。"
         "问句明确要市报/往届/含市报时才放开。"
+    )
+
+
+def _track_xkkm_not_xkqk_hint() -> str:
+    """选科方向用明文 xkkm；xkqk 数字码常有空值，IN 会少人。"""
+    return (
+        "选科方向只用 xkkm：物理类 LIKE '物%'，历史类 LIKE '史%' OR LIKE '历%'；"
+        "禁止 xkqk IN ('134','135','136') 分轨（xkqk 常为空，IN 会少人）；"
+        "跨考试 JOIN 用 anon_stu_id，有 zf6m 即算参考，不要要求两侧 xkqk 都有值。"
+        "「线上N分」= zf6m ≥ 分数线 + N（特控496则线上15分 ≥511），"
+        "禁止写成 [线, 线+N]（那是压线/临界）。"
     )
 
 
@@ -845,6 +857,7 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
         )
     elective_hint = _elective_subject_avg_hint()
     enrolled_hint = _enrolled_only_hint()
+    track_hint = _track_xkkm_not_xkqk_hint()
     from src.agent.education.privacy_mode import is_anonymize_display_enabled
 
     if is_anonymize_display_enabled():
@@ -873,6 +886,7 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
                 f"{class_rank_hint}"
                 f"{elective_hint}"
                 f"{enrolled_hint}"
+                f"{track_hint}"
                 f"{bound_lock}"
                 "WHERE 必须按问题中的班级/学校/科目/考试过滤（有则过滤）；"
                 f"{student_hint}"
