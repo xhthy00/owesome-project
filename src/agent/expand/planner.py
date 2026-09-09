@@ -537,7 +537,8 @@ def _enrolled_only_hint() -> str:
 def _track_xkkm_not_xkqk_hint() -> str:
     """选科方向用明文 xkkm；xkqk 数字码常有空值，IN 会少人。"""
     return (
-        "选科方向只用 xkkm：物理类 LIKE '物%'，历史类 LIKE '史%' OR LIKE '历%'；"
+        "选科方向只用 xkkm：物理类 LIKE '物%'，历史类必须 (LIKE '史%' OR LIKE '历%')；"
+        "禁止只写 xkkm LIKE '历%'（库内是史政地，历史会变成 0 人）；"
         "禁止 xkqk IN ('134','135','136') 分轨（xkqk 常为空，IN 会少人）；"
         "跨考试 JOIN 用 anon_stu_id，有 zf6m 即算参考，不要要求两侧 xkqk 都有值。"
         "「线上N分」= zf6m ≥ 分数线 + N（特控496则线上15分 ≥511），"

@@ -1091,9 +1091,12 @@ def test_track_sql_hint_forbids_xkqk():
     assert "xkkm" in hint
     assert "禁止" in hint and "xkqk" in hint
     assert "线上N分" in hint and "511" in hint
+    assert "禁止只写" in hint and "历%" in hint
     blob = build_fact_query_plan_items(q)[0]["sub_task"]
     assert "禁止" in blob and "xkqk" in blob
     assert "线上N分" in blob
+    assert "史政地" in blob or "禁止只写" in blob
     terms = education_terminologies_block_for_intent("line_reach")
     assert "xkqk" in terms
     assert "线上N分" in terms
+    assert "史政地" in terms or "禁止只写" in terms
