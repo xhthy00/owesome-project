@@ -14,12 +14,17 @@ settings = get_settings()
 # Base class for SQLModel - used by Alembic for migrations
 Base = SQLModel
 
+_connect_args: dict = {}
+if settings.database_url.startswith("postgresql"):
+    _connect_args["application_name"] = "awesome-data-app"
+
 engine = create_engine(
     settings.database_url,
     echo=settings.debug,
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
+    connect_args=_connect_args,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine, class_=Session)

@@ -33,16 +33,17 @@ function flattenText(node: ReactNode): string {
 
 function looksLikeNumericHeader(text: string): boolean {
   const t = text.replace(/\s/g, "");
-  return /均分|分差|名次|得分率|及格率|优秀率|差值|数值|对照|人数|满分|排名|率差|学校数|班级数|占比|百分位/.test(
+  return /均分|分差|名次|得分率|及格率|优秀率|差值|数值|对照|人数|满分|排名|率差|学校数|班级数|参赛校数|参赛班数|校数|班数|段位|占比|百分/.test(
     t
   );
 }
 
 function looksLikeNumericValue(text: string): boolean {
-  const t = text.trim().replace(/,/g, "");
+  const t = text.trim().replace(/,/g, "").replace(/\s/g, "");
   if (!t || t === "—" || t === "-" || t === "–") return false;
   if (/^第\d+名?$/.test(t)) return true;
-  return /^-?\d+(\.\d+)?%?$/.test(t) || /^\d+\s*\/\s*\d+$/.test(t);
+  if (/^[前后]\d+(\.\d+)?%$/.test(t)) return true;
+  return /^-?\d+(\.\d+)?%?$/.test(t) || /^\d+\/\d+$/.test(t);
 }
 
 function looksWeakLabel(text: string): boolean {

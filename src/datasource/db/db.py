@@ -9,6 +9,20 @@ import base64
 logger = logging.getLogger(__name__)
 
 
+def _close_quietly(cursor: Any = None, conn: Any = None) -> None:
+    """Close cursor then connection; never raise (error path must not leak)."""
+    if cursor is not None:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def test_db_connection(db_type: str, config: Dict[str, Any]) -> Tuple[bool, str, Optional[str]]:
     """
     Test database connection.
@@ -26,6 +40,8 @@ def test_db_connection(db_type: str, config: Dict[str, Any]) -> Tuple[bool, str,
 
 def test_postgresql_connection(config: Dict[str, Any]) -> Tuple[bool, str, Optional[str]]:
     """Test PostgreSQL connection."""
+    conn = None
+    cursor = None
     try:
         import psycopg2
 
@@ -36,24 +52,26 @@ def test_postgresql_connection(config: Dict[str, Any]) -> Tuple[bool, str, Optio
             password=config.get("password", ""),
             database=config.get("database", "postgres"),
             connect_timeout=config.get("timeout", 30),
+            application_name="awesome-data-test",
         )
 
         cursor = conn.cursor()
         cursor.execute("SELECT version()")
         version = cursor.fetchone()[0]
 
-        cursor.close()
-        conn.close()
-
         return True, "Connection successful", version
     except ImportError:
         return False, "psycopg2 not installed", None
     except Exception as e:
         return False, f"Connection failed: {str(e)}", None
+    finally:
+        _close_quietly(cursor, conn)
 
 
 def test_mysql_connection(config: Dict[str, Any]) -> Tuple[bool, str, Optional[str]]:
     """Test MySQL connection."""
+    conn = None
+    cursor = None
     try:
         import pymysql
 
@@ -70,14 +88,13 @@ def test_mysql_connection(config: Dict[str, Any]) -> Tuple[bool, str, Optional[s
         cursor.execute("SELECT VERSION()")
         version = cursor.fetchone()[0]
 
-        cursor.close()
-        conn.close()
-
         return True, "Connection successful", version
     except ImportError:
         return False, "pymysql not installed", None
     except Exception as e:
         return False, f"Connection failed: {str(e)}", None
+    finally:
+        _close_quietly(cursor, conn)
 
 
 class WriteDbSession:
@@ -102,6 +119,7 @@ class WriteDbSession:
                 password=self.config.get("password", ""),
                 database=self.config.get("database", "postgres"),
                 connect_timeout=self.config.get("timeout", 30),
+                application_name="awesome-data-write",
             )
         elif self.db_type == "mysql":
             import pymysql
@@ -344,6 +362,8 @@ def check_sql_read(sql: str, db_type: str) -> bool:
 
 def execute_postgresql_sql(config: Dict[str, Any], sql: str) -> Tuple[bool, str, Any]:
     """Execute SQL on PostgreSQL with proper result formatting."""
+    conn = None
+    cursor = None
     try:
         import psycopg2
 
@@ -354,6 +374,7 @@ def execute_postgresql_sql(config: Dict[str, Any], sql: str) -> Tuple[bool, str,
             password=config.get("password", ""),
             database=config.get("database", "postgres"),
             connect_timeout=config.get("timeout", 30),
+            application_name="awesome-data-sql",
         )
 
         cursor = conn.cursor()
@@ -379,16 +400,17 @@ def execute_postgresql_sql(config: Dict[str, Any], sql: str) -> Tuple[bool, str,
             conn.commit()
             result = {"row_count": cursor.rowcount}
 
-        cursor.close()
-        conn.close()
-
         return True, "Success", result
     except Exception as e:
         return False, f"SQL execution failed: {str(e)}", None
+    finally:
+        _close_quietly(cursor, conn)
 
 
 def execute_mysql_sql(config: Dict[str, Any], sql: str) -> Tuple[bool, str, Any]:
     """Execute SQL on MySQL with proper result formatting."""
+    conn = None
+    cursor = None
     try:
         import pymysql
 
@@ -424,12 +446,11 @@ def execute_mysql_sql(config: Dict[str, Any], sql: str) -> Tuple[bool, str, Any]
             conn.commit()
             result = {"row_count": cursor.rowcount}
 
-        cursor.close()
-        conn.close()
-
         return True, "Success", result
     except Exception as e:
         return False, f"SQL execution failed: {str(e)}", None
+    finally:
+        _close_quietly(cursor, conn)
 
 
 def convert_value(value: Any, datetime_format: str = 'space') -> Any:
@@ -522,6 +543,8 @@ def get_schema_info(db_type: str, config: Dict[str, Any]) -> list:
 
 def get_postgresql_schema(config: Dict[str, Any]) -> list:
     """Get PostgreSQL schema."""
+    conn = None
+    cursor = None
     try:
         import psycopg2
 
@@ -532,6 +555,7 @@ def get_postgresql_schema(config: Dict[str, Any]) -> list:
             password=config.get("password", ""),
             database=config.get("database", "postgres"),
             connect_timeout=config.get("timeout", 30),
+            application_name="awesome-data-schema",
         )
 
         cursor = conn.cursor()
@@ -584,17 +608,19 @@ def get_postgresql_schema(config: Dict[str, Any]) -> list:
 
             tables.append(table_info)
 
-        cursor.close()
-        conn.close()
         return tables
 
     except Exception as e:
         logger.error(f"Failed to get PostgreSQL schema: {e}")
         return []
+    finally:
+        _close_quietly(cursor, conn)
 
 
 def get_mysql_schema(config: Dict[str, Any]) -> list:
     """Get MySQL schema."""
+    conn = None
+    cursor = None
     try:
         import pymysql
 
@@ -638,10 +664,10 @@ def get_mysql_schema(config: Dict[str, Any]) -> list:
 
             tables.append(table_info)
 
-        cursor.close()
-        conn.close()
         return tables
 
     except Exception as e:
         logger.error(f"Failed to get MySQL schema: {e}")
         return []
+    finally:
+        _close_quietly(cursor, conn)

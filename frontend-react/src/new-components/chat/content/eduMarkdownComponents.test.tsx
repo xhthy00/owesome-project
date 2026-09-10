@@ -72,6 +72,41 @@ describe("eduMarkdownComponents table align", () => {
     }
   });
 
+  it("参赛校数与排名段位按数字列对齐，含空格的第N和前N%", () => {
+    const md = `
+| 学科 | 均分 | 全市排名 | 参赛校数 | 排名段位 |
+| --- | --- | --- | --- | --- |
+| 语文 | 113.24 | 第 3 | 38 | 前 7.9% |
+| 化学 | 77.95 | 第3 | 36 | 前8.3% |
+`;
+    const { container } = renderMd(md);
+    const table = container.querySelector("table");
+    const headers = Array.from(table!.querySelectorAll("thead th"));
+    expect(headers.map((el) => el.classList.contains("num"))).toEqual([
+      false,
+      true,
+      true,
+      true,
+      true
+    ]);
+    const firstRow = table!.querySelectorAll("tbody tr")[0].querySelectorAll("td");
+    expect(Array.from(firstRow).map((el) => el.classList.contains("num"))).toEqual([
+      false,
+      true,
+      true,
+      true,
+      true
+    ]);
+    const secondRow = table!.querySelectorAll("tbody tr")[1].querySelectorAll("td");
+    expect(Array.from(secondRow).map((el) => el.classList.contains("num"))).toEqual([
+      false,
+      true,
+      true,
+      true,
+      true
+    ]);
+  });
+
   it("单科排名表头把 yy/rk/total_classes 译成中文", () => {
     const md = `
 | 学校 | 班级 | 均分yy | 人数yy | rk | total_classes |

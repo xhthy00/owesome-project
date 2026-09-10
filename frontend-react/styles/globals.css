@@ -239,13 +239,14 @@ body {
   white-space: nowrap;
   color: rgba(0, 0, 0, 0.88);
 }
-.edu-md-table-wrap thead th {
+.edu-md-table-wrap table thead th {
   background: linear-gradient(180deg, #f3f8ff 0%, #e6f4ff 100%);
   color: #3b6fb8;
-  font-weight: 650;
+  font-weight: 600;
   white-space: nowrap;
   font-size: 12.5px;
-  letter-spacing: 0.02em;
+  letter-spacing: normal;
+  text-align: left;
 }
 .edu-md-table-wrap tbody tr:nth-child(even) td {
   background: #fafcfe;
@@ -256,10 +257,11 @@ body {
 .edu-md-table-wrap tbody tr:last-child td {
   border-bottom: none;
 }
-.edu-md-table-wrap th.num,
-.edu-md-table-wrap td.num {
+.edu-md-table-wrap table thead th.num,
+.edu-md-table-wrap table tbody td.num {
   text-align: right;
   font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
   white-space: nowrap;
 }
 .edu-md-table-wrap tbody tr.is-weak td {
