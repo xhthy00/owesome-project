@@ -6,6 +6,12 @@ from collections import defaultdict
 from typing import Any
 
 from src.agent.education.aggregation import aggregate_by, prepare_score_rows_for_kpi
+from src.agent.education.class_track import (
+    TRACK_ORDER,
+    both_tracks_present,
+    class_track_map,
+    filter_rows_by_track,
+)
 from src.agent.education.config import EducationConfig
 from src.agent.education.cross_analysis import compare_groups
 from src.agent.education.knowledge_tier import ABILITY_LABELS, build_ability_tier_summary
@@ -35,8 +41,9 @@ def identify_weak_classes(
     *,
     config: EducationConfig | None = None,
     min_students: int = 3,
+    baseline_label: str = "校级",
 ) -> list[dict[str, Any]]:
-    """识别相对校级基准需重点干预的班级。"""
+    """识别相对基准需重点干预的班级。``baseline_label`` 默认「校级」，分轨对比时用「该方向」。"""
     if not score_rows:
         return []
     if config is None:
@@ -70,14 +77,16 @@ def identify_weak_classes(
         cls_pass = _num(agg.get("pass_rate"))
         reasons: list[str] = []
         if avg_delta is not None and avg_delta < -5:
-            reasons.append(f"均分低于校级 {abs(avg_delta):.1f} 分")
+            reasons.append(f"均分低于{baseline_label} {abs(avg_delta):.1f} 分")
         elif comp.get("notable") and avg_delta is not None and avg_delta < 0:
-            reasons.append(f"均分低于校级 {abs(avg_delta):.1f} 分")
+            reasons.append(f"均分低于{baseline_label} {abs(avg_delta):.1f} 分")
         if pass_delta is not None and pass_delta < -8:
-            reasons.append(f"及格率低于校级 {abs(pass_delta):.1f}%")
+            reasons.append(f"及格率低于{baseline_label} {abs(pass_delta):.1f}%")
         if cls_pass is not None and school_pass is not None and cls_pass < school_pass - 5:
-            if f"及格率低于校级" not in "".join(reasons):
-                reasons.append(f"及格率 {cls_pass:.1f}%（校级 {school_pass:.1f}%）")
+            if f"及格率低于{baseline_label}" not in "".join(reasons):
+                reasons.append(
+                    f"及格率 {cls_pass:.1f}%（{baseline_label} {school_pass:.1f}%）"
+                )
         if cls_pass is not None and cls_pass < 60:
             reasons.append(f"及格率仅 {cls_pass:.1f}%，未达 60%")
         if not reasons:
@@ -220,15 +229,48 @@ def build_school_intervention_insights(
         if scores:
             st = compute_score_stats(scores, config, fs)
 
-    weak_classes = identify_weak_classes(rows, st, config=config)
+    class_tracks = class_track_map(rows)
+    split_tracks = both_tracks_present(class_tracks)
+    weak_classes: list[dict[str, Any]] = []
+    class_agg = aggregate_by("class", rows, config) if rows else []
+    class_compare_html = ""
+
+    if split_tracks:
+        parts: list[str] = []
+        split_agg: list[dict[str, Any]] = []
+        for track in TRACK_ORDER:
+            subset = filter_rows_by_track(rows, class_tracks, track)
+            if not subset:
+                continue
+            track_stats = _stats_from_rows(subset, config, st)
+            track_weak = identify_weak_classes(
+                subset, track_stats, config=config, baseline_label="该方向"
+            )
+            for w in track_weak:
+                w["track"] = track
+            weak_classes.extend(track_weak)
+            track_agg = aggregate_by("class", subset, config)
+            split_agg.extend(track_agg)
+            parts.append(f"<h3>{track}</h3>")
+            parts.append(
+                build_class_compare_table_html(
+                    track_agg,
+                    track_weak,
+                    school_stats=track_stats,
+                    baseline_label="该方向基准",
+                )
+            )
+        class_agg = split_agg or class_agg
+        class_compare_html = "".join(parts)
+    else:
+        weak_classes = identify_weak_classes(rows, st, config=config)
+
     concern_segments = identify_concern_segments(st.get("segments"), st, config=config)
     weak_knowledge = identify_weak_knowledge(knowledge, weak_threshold=weak_threshold)
     weak_items = identify_weak_items(items, weak_threshold=weak_threshold)
     tier = build_ability_tier_summary(knowledge, weak_threshold=weak_threshold)
     weak_levels = list(tier.get("weak_levels") or [])
     weak_qtypes = identify_weak_question_types(items, weak_threshold=weak_threshold)
-
-    class_agg = aggregate_by("class", rows, config) if rows else []
 
     return {
         "weak_classes": weak_classes,
@@ -238,6 +280,8 @@ def build_school_intervention_insights(
         "weak_ability_levels": weak_levels,
         "weak_question_types": weak_qtypes,
         "class_compare": class_agg,
+        "class_compare_html": class_compare_html,
+        "class_tracks": class_tracks,
         "stats": st,
         "has_intervention": bool(
             weak_classes or concern_segments or weak_knowledge
@@ -246,11 +290,30 @@ def build_school_intervention_insights(
     }
 
 
+def _stats_from_rows(
+    rows: list[dict[str, Any]],
+    config: EducationConfig,
+    fallback: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    scores: list[float] = []
+    fs: float | None = None
+    for r in rows:
+        v = _num(r.get("score"))
+        if v is not None:
+            scores.append(v)
+        if fs is None:
+            fs = _num(r.get("exam_score") or r.get("full_score"))
+    if scores:
+        return compute_score_stats(scores, config, fs)
+    return dict(fallback or {})
+
+
 def build_class_compare_table_html(
     class_agg: list[dict[str, Any]],
     weak_classes: list[dict[str, Any]] | None = None,
     *,
     school_stats: dict[str, Any] | None = None,
+    baseline_label: str = "校级基准",
 ) -> str:
     """班级 KPI 对比表，薄弱班级高亮。"""
     if not class_agg:
@@ -275,7 +338,7 @@ def build_class_compare_table_html(
     if school_avg is not None or school_pass is not None:
         school_row = (
             "<tr style='background:#e6f4ff;font-weight:600'>"
-            "<td>校级基准</td><td class='num'>-</td>"
+            f"<td>{baseline_label}</td><td class='num'>-</td>"
             f"<td class='num'>{_fmt(school_avg)}</td>"
             f"<td class='num'>{_fmt(school_pass)}%</td>"
             "<td class='num'>-</td></tr>"

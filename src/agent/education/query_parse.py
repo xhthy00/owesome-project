@@ -592,6 +592,19 @@ _GENERIC_SCHOOL_LABELS = frozenset(
         "某高中",
     }
 )
+#: 「哪几所学校」是要找的答案，不是校名。用包含判断，才能丢掉「扬州市哪几所学校」。
+_INTERROGATIVE_SCHOOL_LABELS = (
+    "哪几所学校",
+    "哪些学校",
+    "哪所学校",
+    "几所学校",
+    "多少所学校",
+    "哪几所中学",
+    "哪些中学",
+    "哪所中学",
+    "几所中学",
+    "多少所中学",
+)
 _CITYWIDE_ANALYSIS_HINTS = (
     "成绩分析",
     "详细报告",
@@ -728,6 +741,35 @@ def is_which_class_lookup_query(question: str) -> bool:
     if extract_class_target(q) or has_class_alias(q):
         return False
     return bool(_WHICH_CLASS_LOOKUP_RE.search(q))
+
+
+def is_interrogative_school_name(name: str) -> bool:
+    """抽到的「校名」其实是哪几所/哪些学校这类问句。"""
+    n = re.sub(r"\s+", "", str(name or ""))
+    return bool(n) and any(tok in n for tok in _INTERROGATIVE_SCHOOL_LABELS)
+
+
+def _peel_interrogative_school_tail(name: str) -> str:
+    """「扬州中学哪几所学校」→「扬州中学」；纯问句剥空。"""
+    n = re.sub(r"\s+", "", str(name or ""))
+    cut = len(n)
+    for tok in _INTERROGATIVE_SCHOOL_LABELS:
+        idx = n.find(tok)
+        if idx != -1:
+            cut = min(cut, idx)
+    return n[:cut]
+
+
+def is_which_school_lookup_query(question: str) -> bool:
+    """学校是要找的答案（哪几所在涨），不是已知筛选范围。"""
+    q = (question or "").strip()
+    if not q:
+        return False
+    if not any(tok in q for tok in _INTERROGATIVE_SCHOOL_LABELS):
+        return False
+    if extract_class_target(q) or has_class_alias(q):
+        return False
+    return extract_school_target(q) is None
 
 
 _ASKED_RANK_NUM = {
@@ -1820,12 +1862,15 @@ def extract_school_targets(question: str) -> list[str]:
                     name = name[1:]
                 name = peel_rhetorical_school_suffix(name)
                 name = _strip_exam_tokens_from_school_name(name)
+                if is_interrogative_school_name(name):
+                    name = _peel_interrogative_school_tail(name)
                 if (
                     not name
                     or not _school_name_stem(name)
                     or _is_request_speech_school_name(name)
                     or _is_regional_exam_label(name)
                     or name in _GENERIC_SCHOOL_LABELS
+                    or is_interrogative_school_name(name)
                 ):
                     continue
                 seen = [s for s in seen if not (name.endswith(s) and s != name)]
@@ -2871,6 +2916,8 @@ __all__ = [
     "format_scope_constraints",
     "is_citywide_analysis_query",
     "is_all_schools_scope_query",
+    "is_interrogative_school_name",
+    "is_which_school_lookup_query",
     "extract_class_target",
     "extract_class_targets",
     "is_line_reach_citywide_scope",

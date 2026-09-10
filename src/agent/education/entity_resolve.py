@@ -13,10 +13,23 @@ from src.agent.education.clarification import (
 )
 from src.agent.education.query_parse import (
     extract_district_target,
+    is_interrogative_school_name,
     normalize_fullwidth_parentheses,
 )
 
 _SCHOOL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_SCHOOL_CODE_PREFIX_RE = re.compile(r"^[A-Za-z]\d{2}")
+_SCHOOL_LINK_TAILS = (
+    "高级中学",
+    "实验中学",
+    "附属中学",
+    "中学",
+    "学校",
+    "学院",
+    "大学",
+    "附中",
+    "分校",
+)
 _SCHOOL_BOUND_ROLES = frozenset({"teacher", "school_admin", "student"})
 
 
@@ -82,6 +95,27 @@ def link_values(hint: str, candidates: list[str]) -> list[str]:
     return []
 
 
+def _school_link_stem(name: str) -> str:
+    """宝楠中学 / B05宝楠学校 → 宝楠。只剥校码和校名后缀，不按城市名模糊。"""
+    n = re.sub(r"\s+", "", str(name or ""))
+    n = _SCHOOL_CODE_PREFIX_RE.sub("", n)
+    for tail in _SCHOOL_LINK_TAILS:
+        if n.endswith(tail) and len(n) > len(tail):
+            return n[: -len(tail)]
+    return n
+
+
+def link_school_values(hint: str, candidates: list[str]) -> list[str]:
+    """校名对齐：先走通用链接，再按「中学/学校」等同词干补一次。"""
+    hits = link_values(hint, candidates)
+    if hits:
+        return hits
+    want = _school_link_stem(hint)
+    if len(want) < 2:
+        return []
+    return [c for c in candidates if str(c).strip() and _school_link_stem(c) == want]
+
+
 def resolve_entities(
     filled: Mapping[str, str],
     peek: Mapping[str, Any] | None,
@@ -124,10 +158,13 @@ def resolve_entities(
             )
 
     school_hint = bound.get(SLOT_SCHOOL) or ""
+    if school_hint and is_interrogative_school_name(school_hint):
+        bound.pop(SLOT_SCHOOL, None)
+        school_hint = ""
     # 教师/校管账号只有脱敏 school_id 时，filled 会带 GZ_…；peek 目录是中文 s_name，
     # 对不上不等于「用户没说哪所学校」。权限已唯一绑校，不再追问。
     if school_hint and not _is_permission_school_id(school_hint, edu) and school_cands:
-        hits = link_values(school_hint, school_cands)
+        hits = link_school_values(school_hint, school_cands)
         if len(hits) == 1:
             bound[SLOT_SCHOOL] = hits[0]
         elif len(hits) > 1:
@@ -193,6 +230,7 @@ def bound_literals(bound: Mapping[str, str]) -> list[str]:
 __all__ = [
     "EntityResolveResult",
     "bound_literals",
+    "link_school_values",
     "link_values",
     "normalize_class_name",
     "resolve_entities",

@@ -163,8 +163,11 @@ def _prompt_for_slot(
     filled_map = dict(filled or {})
     if slot == SLOT_SCHOOL:
         cls = str(filled_map.get(SLOT_CLASS) or "").strip()
+        named = str(filled_map.get(SLOT_SCHOOL) or "").strip()
         if cls:
             return f"请确认是哪所学校的{cls}？同名班级可能出现在多所学校。"
+        if named:
+            return f"目录里没有与「{named}」对应的学校，请从下面选择，或改用库中校名。"
     if slot == SLOT_EXAM:
         q = question or ""
         from src.agent.education.query_parse import is_citywide_analysis_query, is_rank_query
@@ -517,10 +520,15 @@ def sanitize_llm_slots(slots: Mapping[str, Any] | None) -> dict[str, str]:
             from src.agent.education.query_parse import (
                 _is_request_speech_school_name,
                 _strip_school_ask_fillers,
+                is_interrogative_school_name,
             )
 
             value = _strip_school_ask_fillers(peel_rhetorical_school_suffix(value))
-            if not value or _is_request_speech_school_name(value):
+            if (
+                not value
+                or _is_request_speech_school_name(value)
+                or is_interrogative_school_name(value)
+            ):
                 continue
         out[slot] = value
     return out
@@ -568,6 +576,7 @@ def candidate_missing_slots(
         is_recent_n_exam_window,
         is_school_class_comparison_query,
         is_which_class_lookup_query,
+        is_which_school_lookup_query,
     )
 
     q = question or ""
@@ -655,6 +664,9 @@ def candidate_missing_slots(
                     continue
                 if is_which_class_lookup_query(q):
                     continue
+                # 哪几所学校是答案：不再追问班级
+                if is_which_school_lookup_query(q):
+                    continue
                 if not (role == "teacher" and len(bound_classes) == 1):
                     add(SLOT_CLASS)
             elif slot == SLOT_SCHOOL:
@@ -662,6 +674,8 @@ def candidate_missing_slots(
                     continue
                 # 全市第N是哪个班：学校是答案，不是筛选范围
                 if is_citywide_nth_class_lookup_query(q):
+                    continue
+                if is_which_school_lookup_query(q):
                     continue
                 bound = _bound_school(edu)
                 if not bound or role not in ("teacher", "school_admin", "student"):

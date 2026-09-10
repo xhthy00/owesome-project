@@ -24,3 +24,6 @@ tests/chat/*
 !tests/agent/
 tests/agent/*
 !tests/agent/test_history_isolation.py
+!tests/agent/test_which_school_lookup.py
+!tests/agent/test_line_offset_hint.py
+!tests/agent/test_class_compare_track.py

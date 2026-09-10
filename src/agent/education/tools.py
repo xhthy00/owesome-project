@@ -1018,12 +1018,9 @@ def build_subject_diagnosis_sections_tool(
         if intervention_insights.get("stats"):
             stats = intervention_insights["stats"]
         intervention_html = build_intervention_section_html(intervention_insights)
-        if intervention_insights.get("class_compare"):
-            class_compare_html = build_class_compare_table_html(
-                intervention_insights["class_compare"],
-                intervention_insights.get("weak_classes"),
-                school_stats=stats,
-            )
+        class_compare_html = _class_compare_table_from_insights(
+            intervention_insights, stats
+        )
 
     summary_html = build_diagnosis_summary(
         school_name=school_name,
@@ -1069,6 +1066,10 @@ def build_subject_diagnosis_sections_tool(
         item_class_rows=item_class_rows,
         knowledge_class_rows=knowledge_class_rows,
         is_grade_compare=is_grade_compare,
+        class_tracks=(
+            (intervention_insights or {}).get("class_tracks")
+            or (fetch_data.get("class_tracks") if isinstance(fetch_data, dict) else None)
+        ),
     )
     tier = build_ability_tier_summary(knowledge, weak_threshold=weak_threshold)
     tier_table = _build_ability_tier_table_html(knowledge)
@@ -1342,12 +1343,9 @@ def build_subject_diagnosis_report_tool(
         if intervention_insights.get("stats"):
             stats = intervention_insights["stats"]
         intervention_html = build_intervention_section_html(intervention_insights)
-        if intervention_insights.get("class_compare"):
-            class_compare_html = build_class_compare_table_html(
-                intervention_insights["class_compare"],
-                intervention_insights.get("weak_classes"),
-                school_stats=stats,
-            )
+        class_compare_html = _class_compare_table_from_insights(
+            intervention_insights, stats
+        )
 
     summary_html = build_diagnosis_summary(
         school_name=school_name,
@@ -1398,6 +1396,10 @@ def build_subject_diagnosis_report_tool(
         item_class_rows=list(bundle.get("item_class_rows") or []),
         knowledge_class_rows=list(bundle.get("knowledge_class_rows") or []),
         is_grade_compare=is_grade_compare,
+        class_tracks=(
+            (intervention_insights or {}).get("class_tracks")
+            or bundle.get("class_tracks")
+        ),
     )
 
     segments = _normalize_segments(
@@ -1922,7 +1924,7 @@ def _overview_class_score_sql(
     exam_pred = f" AND exam_name LIKE '%{exam}%'" if exam else ""
     return (
         f"SELECT bj AS class, bj AS class_name, xx AS school_name, exam_name,\n"
-        f"       anon_stu_id AS student_id, dq AS district,\n"
+        f"       anon_stu_id AS student_id, dq AS district, xkkm,\n"
         f"       {col} AS score, {fs:g} AS exam_score\n"
         f"FROM tb_score_overview\n"
         f"WHERE xx LIKE '%{school}%'\n"
@@ -2007,6 +2009,43 @@ def _fetch_overview_class_scores(
         "full_score": fs,
         "sql_logs": sql_logs,
     }
+
+
+def _fetch_overview_class_tracks(
+    *,
+    datasource_id: int,
+    workspace_oid: int | None,
+    user_id: int | None,
+    school_name: str,
+    exam_name: str = "",
+) -> dict[str, str]:
+    """tb_score 无 xkkm 时，用 overview 给班级贴选科方向。"""
+    from src.agent.education.class_track import class_track_map
+
+    school = _esc((school_name or "").strip())
+    if not school:
+        return {}
+    exam = _esc((exam_name or "").strip())
+    exam_pred = f" AND exam_name LIKE '%{exam}%'" if exam else ""
+    sql = (
+        "SELECT bj AS class_name, xkkm\n"
+        "FROM tb_score_overview\n"
+        f"WHERE xx LIKE '%{school}%'\n"
+        "  AND xsxz = '在籍生'\n"
+        "  AND bj IS NOT NULL AND CAST(bj AS TEXT) <> ''\n"
+        "  AND (xkkm LIKE '物%' OR xkkm LIKE '史%' OR xkkm LIKE '历%')\n"
+        f"{exam_pred}\n"
+        "LIMIT 50000"
+    )
+    success, _msg, result, _sql_run = _run_edu_sql(
+        sql,
+        datasource_id=datasource_id,
+        workspace_oid=workspace_oid,
+        user_id=user_id,
+    )
+    if not success or not isinstance(result, dict):
+        return {}
+    return class_track_map(_rows_to_dicts(result))
 
 
 def _fetch_subject_diagnosis_rows(
@@ -2352,6 +2391,26 @@ def _fetch_subject_diagnosis_rows(
             except (TypeError, ValueError, IndexError):
                 pass
 
+    class_tracks: dict[str, str] = {}
+    if want_class_compare and score_rows:
+        from src.agent.education.class_track import class_track_map
+
+        class_tracks = class_track_map(score_rows)
+        if not class_tracks:
+            class_tracks = _fetch_overview_class_tracks(
+                datasource_id=datasource_id,
+                workspace_oid=workspace_oid,
+                user_id=user_id,
+                school_name=school_name,
+                exam_name=exam_name,
+            )
+        if class_tracks:
+            for r in score_rows:
+                if isinstance(r, dict) and not r.get("track"):
+                    cls = str(r.get("class_name") or r.get("class") or "").strip()
+                    if cls and class_tracks.get(cls):
+                        r["track"] = class_tracks[cls]
+
     return {
         "item_rows": item_rows,
         "knowledge_rows": knowledge_rows,
@@ -2359,6 +2418,7 @@ def _fetch_subject_diagnosis_rows(
         "knowledge_class_rows": knowledge_class_rows,
         "score_values": score_values,
         "score_rows": score_rows,
+        "class_tracks": class_tracks,
         "full_score": full_score,
         "kpi_stats": kpi_stats,
         "score_rows_incomplete": score_rows_incomplete,
@@ -2672,6 +2732,22 @@ def _resolve_subject_diagnosis_report_type(*, school_name: str = "", class_name:
     return ReportType.SUBJECT_DIAGNOSIS
 
 
+def _class_compare_table_from_insights(
+    insights: dict[str, Any],
+    stats: dict[str, Any] | None,
+) -> str:
+    html = str(insights.get("class_compare_html") or "").strip()
+    if html:
+        return html
+    if insights.get("class_compare"):
+        return build_class_compare_table_html(
+            insights["class_compare"],
+            insights.get("weak_classes"),
+            school_stats=stats,
+        )
+    return ""
+
+
 def _apply_grade_compare_section_tables(
     data: dict[str, Any],
     *,
@@ -2680,20 +2756,65 @@ def _apply_grade_compare_section_tables(
     item_class_rows: list[dict[str, Any]] | None = None,
     knowledge_class_rows: list[dict[str, Any]] | None = None,
     is_grade_compare: bool = False,
+    class_tracks: dict[str, str] | None = None,
 ) -> None:
     """班级横向对比：小题/知识点/题型改为各班对比表与分组柱图。"""
     item_cmp = list(item_class_rows or [])
     know_cmp = list(knowledge_class_rows or [])
+    tracks = dict(class_tracks or {})
+    from src.agent.education.class_track import (
+        TRACK_ORDER,
+        both_tracks_present,
+        class_name_of,
+        filter_rows_by_track,
+    )
+
+    split = is_grade_compare and both_tracks_present(tracks)
+    item_groups: list[tuple[str, list[dict[str, Any]]]] = []
+    know_groups: list[tuple[str, list[dict[str, Any]]]] = []
+    if split:
+        for track in TRACK_ORDER:
+            ir = filter_rows_by_track(item_cmp, tracks, track, class_of=class_name_of)
+            kr = filter_rows_by_track(know_cmp, tracks, track, class_of=class_name_of)
+            if collect_class_names(ir):
+                item_groups.append((track, ir))
+            if collect_class_names(kr):
+                know_groups.append((track, kr))
+        if len(item_groups) < 2:
+            item_groups = []
+        if len(know_groups) < 2:
+            know_groups = []
+
     use_item_cmp = is_grade_compare and len(collect_class_names(item_cmp)) >= 2
     # 知识点对比只信加权 SQL（know_c_sql）；不可由小题行反推（无法还原 weight）
     use_know_cmp = is_grade_compare and len(collect_class_names(know_cmp)) >= 2
 
-    if use_item_cmp:
+    if item_groups:
+        data["ITEM_TABLE"] = "".join(
+            f"<h3>{label}</h3>{build_item_table_html(rows)}" for label, rows in item_groups
+        )
+    elif use_item_cmp:
         data["ITEM_TABLE"] = build_item_table_html(item_cmp)
     else:
         data["ITEM_TABLE"] = build_item_table_html(items)
 
-    if use_know_cmp:
+    if know_groups:
+        tables: list[str] = []
+        charts: list[str] = []
+        for label, rows in know_groups:
+            tables.append(f"<h3>{label}</h3>{build_knowledge_table_html(rows)}")
+            chart_payload = build_knowledge_compare_chart_payload(rows)
+            if chart_payload:
+                charts.append(
+                    _build_chart_option(
+                        "group_compare_bar",
+                        chart_payload,
+                        title=f"{label}知识点得分率对比",
+                    )
+                )
+        data["KNOWLEDGE_TABLE"] = "".join(tables)
+        data["KNOWLEDGE_CHART"] = "".join(charts)
+    elif use_know_cmp:
         data["KNOWLEDGE_TABLE"] = build_knowledge_table_html(know_cmp)
         chart_payload = build_knowledge_compare_chart_payload(know_cmp)
         if chart_payload:
@@ -2717,6 +2838,28 @@ def _apply_grade_compare_section_tables(
             )
         else:
             data["KNOWLEDGE_CHART"] = ""
+
+    if item_groups:
+        q_parts: list[str] = []
+        q_charts: list[str] = []
+        for label, rows in item_groups:
+            qtbl = _build_question_type_table_html(rows)
+            if qtbl:
+                q_parts.append(f"<h3>{label}</h3>{qtbl}")
+            qchart = _build_question_type_compare_chart_payload(rows)
+            if qchart:
+                q_charts.append(
+                    _build_chart_option(
+                        "group_compare_bar",
+                        qchart,
+                        title=f"{label}题型得分率对比",
+                    )
+                )
+        if q_parts:
+            data["QUESTION_TYPE_TABLE"] = "".join(q_parts)
+        if q_charts:
+            data["QUESTION_TYPE_CHART"] = "".join(q_charts)
+        return
 
     qtype_source = item_cmp if use_item_cmp else _compute_item_metrics(items)
     qtype_table = _build_question_type_table_html(qtype_source)

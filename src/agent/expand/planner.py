@@ -541,8 +541,6 @@ def _track_xkkm_not_xkqk_hint() -> str:
         "禁止只写 xkkm LIKE '历%'（库内是史政地，历史会变成 0 人）；"
         "禁止 xkqk IN ('134','135','136') 分轨（xkqk 常为空，IN 会少人）；"
         "跨考试 JOIN 用 anon_stu_id，有 zf6m 即算参考，不要要求两侧 xkqk 都有值。"
-        "「线上N分」= zf6m ≥ 分数线 + N（特控496则线上15分 ≥511），"
-        "禁止写成 [线, 线+N]（那是压线/临界）。"
     )
 
 
@@ -859,6 +857,9 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     elective_hint = _elective_subject_avg_hint()
     enrolled_hint = _enrolled_only_hint()
     track_hint = _track_xkkm_not_xkqk_hint()
+    from src.agent.education.line_offset import line_offset_hint
+
+    offset_hint = line_offset_hint(q)
     from src.agent.education.privacy_mode import is_anonymize_display_enabled
 
     if is_anonymize_display_enabled():
@@ -888,6 +889,7 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
                 f"{elective_hint}"
                 f"{enrolled_hint}"
                 f"{track_hint}"
+                f"{offset_hint}"
                 f"{bound_lock}"
                 "WHERE 必须按问题中的班级/学校/科目/考试过滤（有则过滤）；"
                 f"{student_hint}"

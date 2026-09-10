@@ -79,6 +79,7 @@ def build_education_sql_hint_text(question: str) -> str:
     q = question or ""
     # 压缩：只保留关键规则行 + 示例题干
     rules: list[str] = []
+    from src.agent.education.line_offset import line_offset_hint
     from src.agent.education.query_parse import (
         extract_school_type_target,
         is_citywide_nth_class_lookup_query,
@@ -171,11 +172,9 @@ def build_education_sql_hint_text(question: str) -> str:
         "禁止 xkqk IN ('134','135','136') 分轨（xkqk 常为空，IN 会少人）；"
         "跨考试 JOIN 用 anon_stu_id，有 zf6m 即算参考，不要要求两侧 xkqk 都有值。"
     )
-    if any(h in q for h in ("线上", "特招", "特控", "达线")):
-        rules.append(
-            "「线上N分」= zf6m ≥ 该方向分数线 + N（特控496则线上15分是 ≥511）；"
-            "禁止写成 [线, 线+N] 闭区间（那是压线/临界，不是线上N分）。"
-        )
+    offset = line_offset_hint(q)
+    if offset:
+        rules.append(offset)
     if "hxzh" in term or "十分段" in term or "分以上" in term:
         rules.append(
             "绝对分数段查 tb_score_overview；化学用 hxzh；十分段 ((zf6m-1)/10)*10+1。"
