@@ -1140,7 +1140,10 @@ export default function ChatExecutionPanel({
                             <TableOutlined />
                           </button>
                           <button
-                            onClick={() => setChartType("line")}
+                            onClick={() => {
+                              setChartType("line");
+                              setShowChartLabel(true);
+                            }}
                             className={`rounded p-1 ${chartType === "line" ? "bg-[#dbeafe] text-[#1d4ed8]" : "text-[#667085]"}`}
                           >
                             <LineChartOutlined />

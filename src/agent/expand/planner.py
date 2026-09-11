@@ -860,21 +860,9 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     from src.agent.education.line_offset import line_offset_hint
 
     offset_hint = line_offset_hint(q)
-    from src.agent.education.privacy_mode import is_anonymize_display_enabled
+    from src.agent.education.privacy_mode import privacy_student_hint
 
-    if is_anonymize_display_enabled():
-        student_hint = (
-            "涉及学生时 SELECT **仅用 student_id**（或 sc.student_id / st.id 学号），"
-            "以及 score、exam_score、class 等；"
-            "**禁止** SELECT/展示姓名明文（xm、name、student_name、真实姓名）；"
-            "结论里点名学生时**一律写 student_id**，禁止写中文姓名。"
-        )
-    else:
-        student_hint = (
-            "当前已关闭匿名脱敏：涉及学生时可 SELECT xm（姓名）、xh/student_id（学号）、"
-            "sch.s_name（学校全称）；结论里可用姓名/学号/校名。"
-            "仍禁止 SELECT sfzh/ksh。"
-        )
+    student_hint = privacy_student_hint()
     return [
         {
             "sub_task": (

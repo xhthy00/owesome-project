@@ -199,10 +199,7 @@ DATA_ANALYST_DESC = """[分析范围约束]
 9. **人数口径**：班级概览须查该班该场该科**全部**学生得分（含 exam_score），
    **禁止**用 `OFFSET` 翻页拼全班；**禁止**随意 `LIMIT` 截断全班明细
    （Top-N 排行除外，且 Top-N 结论不得写成「参考人数=N」）。
-10. **隐私（强制）**：对外结论与 SQL **禁止**输出学生姓名明文
-   （`xm` / `name` / `student_name` / 真实中文名）。学生标识**一律用 student_id**
-   （`sc.student_id` 或 `tb_student.id`）；SELECT 不要带姓名列；final_answer /
-   总结里点名学生时只写 student_id。
+10. **隐私（强制）**：{{privacy_student_rule}}
    人数以无 OFFSET/LIMIT 的 SQL 结果行数 / `compute_score_stats_tool` 的
    count / 报告 KPI 为准。execute_sql 返回的 PREVIEW_ROWS（默认 20）**绝不是**参考人数。
 10. **terminate 必带 KPI**：教育学情结论中须明确写出「参考人数」「卷面满分」
@@ -232,6 +229,9 @@ class DataAnalystAgent(ReActAgent):
         raw = dict(reply.context or {}).get("constraints")
         constraints = raw if isinstance(raw, dict) else {}
         base["scope_constraints"] = format_scope_constraints(constraints)
+        from src.agent.education.privacy_mode import privacy_student_hint
+
+        base["privacy_student_rule"] = privacy_student_hint()
         try:
             from src.agent.education.config_store import get_config
 

@@ -65,7 +65,7 @@ _FACT_WRITING_BRIEF = """[输出要求：事实问答 — 本题不是学情报�
   **禁止**照抄 scope/avg_score/ref_count；不要另造数字，不要压成一句话；
 - **禁止**主动写「参考人数 / 共 N 人参考 / 班级人数 / 权威统计口径」——
   本题未问全班人数；查询返回行数、Top-N、LIMIT 行数都**不是**班级人数；
-- 若问「最好/最高/谁」：写出 student_id 与分数（及并列情况）即可，可附满分作对照；
+- 若问「最好/最高/谁」：写出 {{who_ref}} 与分数（及并列情况）即可，可附满分作对照；
 - 若问「均分/多少人/排名」：只回答所问指标；有结果表则附表，勿扩写学情解读与教学建议；
 - 若问「全市第N是哪个班」：只根据结果表中排名=N的那一行写学校、班级、均分、名次/总数；
   问倒数第K时，名次应接近参赛班数（如 388/389），禁止把正数第K（高分班）写成倒数；
@@ -108,9 +108,7 @@ SUMMARIZER_DESC = """[角色]
 
 {{writing_brief}}
 
-[隐私强制]
-- 点名学生时**一律写 student_id**（学号），**禁止**输出中文姓名明文；
-  若输入中同时出现姓名与 student_id，只保留 student_id。"""
+{{privacy_brief}}"""
 
 
 class SummarizerAgent(ConversableAgent):
@@ -128,7 +126,7 @@ class SummarizerAgent(ConversableAgent):
             "人数/均分/及格率/优秀率须照抄报告权威 KPI（若有），禁止按样例或 LIMIT 行数当作全班人数",
             "事实问答禁止主动写参考人数/共N人参考",
             "及格线/优秀线必须采用子任务已给出的数字，禁止用惯例 60%/85% 自行换算",
-            "点名学生只用 student_id，禁止输出姓名明文",
+            "{{privacy_constraint}}",
         ],
         desc=SUMMARIZER_DESC,
     )
@@ -141,9 +139,18 @@ class SummarizerAgent(ConversableAgent):
         if mode not in {"fact", "report"}:
             mode = "report"
         base["answer_mode"] = mode
-        base["writing_brief"] = (
-            _FACT_WRITING_BRIEF if mode == "fact" else _REPORT_WRITING_BRIEF
+        from src.agent.education.privacy_mode import (
+            privacy_conclusion_brief,
+            privacy_conclusion_constraint,
+            privacy_who_ref,
         )
+
+        who_ref = privacy_who_ref()
+        brief = _FACT_WRITING_BRIEF if mode == "fact" else _REPORT_WRITING_BRIEF
+        base["who_ref"] = who_ref
+        base["writing_brief"] = brief.replace("{{who_ref}}", who_ref)
+        base["privacy_brief"] = privacy_conclusion_brief()
+        base["privacy_constraint"] = privacy_conclusion_constraint()
         try:
             from src.agent.education.config_store import get_config
 
