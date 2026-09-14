@@ -85,6 +85,53 @@ def privacy_sql_instruction() -> str:
     )
 
 
+def privacy_student_hint() -> str:
+    """Planner / DataAnalyst：SELECT 与结论如何点名学生。"""
+    if is_anonymize_display_enabled():
+        return (
+            "涉及学生时 SELECT **仅用 student_id**（或 sc.student_id / st.id 学号），"
+            "以及 score、exam_score、class 等；"
+            "**禁止** SELECT/展示姓名明文（xm、name、student_name、真实姓名）；"
+            "结论里点名学生时**一律写 student_id**，禁止写中文姓名。"
+        )
+    return (
+        "当前已关闭匿名脱敏：涉及学生时可 SELECT xm（姓名）、xh/student_id（学号）、"
+        "sch.s_name（学校全称）；结论里可用姓名/学号/校名。"
+        "用户要求「给出姓名」时必须输出姓名，禁止改成只写 student_id。"
+        "仍禁止 SELECT sfzh/ksh。"
+    )
+
+
+def privacy_conclusion_brief() -> str:
+    """Summarizer [隐私] 段。"""
+    if is_anonymize_display_enabled():
+        return (
+            "[隐私强制]\n"
+            "- 点名学生时**一律写 student_id**（学号），**禁止**输出中文姓名明文；\n"
+            "  若输入中同时出现姓名与 student_id，只保留 student_id。"
+        )
+    return (
+        "[隐私]\n"
+        "- 当前已关闭匿名脱敏：点名学生时**优先写姓名**（xm），可同时写学号；\n"
+        "  用户要求「给出姓名」时必须输出姓名，禁止改成只写 student_id。\n"
+        "  仍禁止输出身份证号、考生号。"
+    )
+
+
+def privacy_conclusion_constraint() -> str:
+    """Summarizer 硬约束一行。"""
+    if is_anonymize_display_enabled():
+        return "点名学生只用 student_id，禁止输出姓名明文"
+    return "当前已关闭匿名脱敏：点名学生可用姓名或学号；仍禁止输出身份证/考生号"
+
+
+def privacy_who_ref() -> str:
+    """事实问答里「最好/最高/谁」的点名口径。"""
+    if is_anonymize_display_enabled():
+        return "student_id"
+    return "姓名（可附学号）"
+
+
 def filter_display_fields(
     fields: list[dict[str, Any]],
     table_name: str = "",
@@ -212,6 +259,10 @@ __all__ = [
     "is_anonymize_display_enabled",
     "overlay_schema_fields",
     "overlay_table_comments",
+    "privacy_conclusion_brief",
+    "privacy_conclusion_constraint",
     "privacy_sql_instruction",
+    "privacy_student_hint",
+    "privacy_who_ref",
     "set_anonymize_display_cached",
 ]

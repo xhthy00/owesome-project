@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { Chart } from "@antv/g2";
 import { labelColumn } from "@/utils/columnLabels";
+import { formatNumericDisplay } from "@/utils/formatNumericDisplay";
 
 export type G2ChartType = "column" | "bar" | "line" | "pie";
 
@@ -183,7 +184,9 @@ export default function G2Chart({
             paddingBottom: 8,
             insetTop: showLabel ? 24 : 4
           }
-        : {})
+        : type === "line" && showLabel
+          ? { paddingTop: 28, insetTop: 8 }
+          : {})
     });
     chartRef.current = chart;
     chart.theme({
@@ -247,12 +250,38 @@ export default function G2Chart({
           mark.legend("color", { title: false });
         }
       }
-      if (showLabel) {
+      const formatMarkValue = (d: Record<string, unknown>) => {
+        const n = toNumber(d[yField]);
+        return n == null ? "" : `${formatNumericDisplay(n)}${valueSuffix}`;
+      };
+      if (type === "line") {
+        const point = chart
+          .point()
+          .data(chartData)
+          .encode("x", xField)
+          .encode("y", yField)
+          .style("fill", "#3b82f6")
+          .style("stroke", "#ffffff")
+          .style("lineWidth", 1)
+          .style("r", 4);
+        point.tooltip(false);
+        if (showLabel) {
+          point.label({
+            text: formatMarkValue,
+            dy: -12,
+            style: {
+              fill: "#111827",
+              fontSize: 11,
+              fontWeight: 600,
+              stroke: "#ffffff",
+              lineWidth: 3,
+              paintOrder: "stroke"
+            }
+          });
+        }
+      } else if (showLabel) {
         mark.label({
-          text: (d: Record<string, unknown>) => {
-            const n = toNumber(d[yField]);
-            return n == null ? "" : `${n}${valueSuffix}`;
-          },
+          text: formatMarkValue,
           dy: dashboard ? -12 : 0,
           style: dashboard
             ? {
