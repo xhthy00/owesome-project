@@ -1,0 +1,1401 @@
+...................................F.................................... [  5%]
+....F................................................................... [ 11%]
+...........F............................................F...........F... [ 17%]
+..........................FF......F..................................... [ 23%]
+..........................................................F............. [ 29%]
+.....F........................................F.F....................... [ 34%]
+................................................FF...................... [ 40%]
+........................................................................ [ 46%]
+........................................................................ [ 52%]
+..................F..................................................... [ 58%]
+.......................F.......F............FFFF........................ [ 63%]
+........................................................................ [ 69%]
+........................................................................ [ 75%]
+......................FFFF.F.FF..F..FFF................................. [ 81%]
+........................................................................ [ 87%]
+........................................................................ [ 92%]
+........................................................................ [ 98%]
+...............                                                          [100%]
+================================== FAILURES ===================================
+_________________ test_render_html_report_emits_report_event __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001E4EDC999A0>
+
+    def test_render_html_report_emits_report_event(monkeypatch):
+        _patch_db(
+            monkeypatch,
+            lambda *a, **kw: (True, "ok", {"columns": [], "rows": []}),
+        )
+        llm = _ScriptedLlm(
+            [
+                '{"tool":"render_html_report","args":{"title":"R","html":"<html><body><h1>x</h1></body></html>"}}',
+                '{"tool":"terminate","args":{"final_answer":"done"}}',
+            ]
+        )
+        events, emit = _collect_events()
+        req = ChatRequest(question="生成报告", datasource_id=1)
+        _run(
+            run_agent_stream(
+                request=req,
+                current_user_id=1,
+                emit=emit,
+                llm_client=llm,
+                persist=False,
+            )
+        )
+    
+        report = next((p for e, p in events if e == "report"), None)
+>       assert report is not None
+E       assert None is not None
+
+tests\agent\test_agent_runner.py:379: AssertionError
+__________________________ test_elite_roster_no_pii ___________________________
+
+    def test_elite_roster_no_pii():
+        rows = normalize_students(
+            [
+                _stu(anon_stu_id="a", zf6m=680, yw=120),
+                _stu(anon_stu_id="b", zf6m=670, yw=110),
+            ]
+        )
+        roster = build_elite_roster(rows, track="物理类", top_n=100)
+        blob = str(roster)
+>       assert "xm" not in blob.lower()
+E       assert 'xm' not in "[{'rank': 1...ank': none}]"
+E         
+E         'xm' is contained here:
+E         ?           ^^^^^^
+E           : 680.0, 'xm': '', 'xh': 'a', 'yw': 120.0, 'yw_rank': 1, 'sx': 100.0, 'sx_rank': 1, 'yy': 100.0, 'yy_rank': 1, 'wl': 70.0, 'wl_rank': 1, 'ls': none, 'ls_rank': none, 'hx': 80.0, 'hx_rank': 1, 'sw': 70.0, 'sw_rank': 1, 'zz': none, 'zz_rank': none, 'dl': none, 'dl_rank': none}, {'rank': 2, 'anon_stu_id': 'b', 'xx': 'a01', 'zf6m': 670.0, 'xm': '', 'xh': 'b', 'yw': 110.0, 'yw_rank': 2, 'sx': 100.0, 'sx_rank': 2, 'yy': 100.0, 'yy_rank': 2, 'wl': 70.0, 'wl_rank': 2, 'ls': none, 'ls_rank': none, 'hx': 80.0, 'hx_rank': 2, 'sw': 70.0, 'sw_rank': 2, 'zz': none, 'zz_rank': none, 'dl': none, 'dl_rank': none}]
+E         ?           ^^^^^^^^
+
+tests\agent\test_bureau_analysis.py:192: AssertionError
+________ test_data_analyst_injects_scope_constraints_in_system_prompt _________
+
+    def test_data_analyst_injects_scope_constraints_in_system_prompt():
+        llm = _ScriptedLlm(['{"tool": "terminate", "args": {"final_answer": "ok"}}'])
+        agent = build_data_analyst(llm_client=llm, datasource_id=1)
+    
+        _run(
+            agent.generate_reply(
+                received_message=AgentMessage(
+                    content="查询小题得分率",
+                    role="user",
+                    context={
+                        "constraints": {
+                            "target_school": "南京市第一中学",
+                            "target_student": None,
+                            "required_keywords": ["数学", "期末"],
+                            "locked_tables": [],
+                        }
+                    },
+                ),
+                sender=UserProxyAgent(),
+            )
+        )
+    
+        system_msg = llm.calls[0][0]["content"]
+        assert "南京市第一中学" in system_msg
+        assert "数学" in system_msg
+>       assert "范围必须与用户指定范围一致" in system_msg
+E       AssertionError: assert '范围必须与用户指定范围一致' in '你是 DataAnalyst（角色：资深数据分析师）。\n\n目标：基于提供的工具，把用户自然语言问题转化为可执行 SQL 并给出最终结论。\n\n约束：\n- SQL 必须是只读 SELECT\n- 输出严格遵守 JSON 协议\n...，便于下游照抄。\n    若只看到预览表、SQL 含 LIMIT≤20，**禁止**把 20 写成参考人数——须先去掉 LIMIT\n    重查，或调 `compute_score_stats_tool` / `COUNT(*)`。'
+
+tests\agent\test_data_analyst.py:197: AssertionError
+______ test_format_scope_constraints_includes_session_confirm_and_brief _______
+
+    def test_format_scope_constraints_includes_session_confirm_and_brief():
+        text = format_scope_constraints(
+            {
+                "target_school": "扬州中学",
+                "target_classes": ["高三(2)班"],
+                "target_exam": "2026届高三1月期末",
+                "conversation_brief": "用户：均分呢\n助手：612",
+            }
+        )
+        assert "本会话已确认：" in text
+        assert "考试=2026届高三1月期末" in text
+        assert "禁止另选默认考试" in text
+>       assert "近几轮摘要：" in text
+E       AssertionError: assert '近几轮摘要：' in '报告/SQL 范围必须与用户数据权限及子任务描述一致；查成绩明细（tb_score / tb_score_detail）时 WHERE 须含学校/班级/学生等过滤，禁止默认查全量学生、全校或多校合并数据。探查维表（tb_exam / ...禁止 SELECT sfzh/ksh（身份证/考生号）。范围：学校/机构=扬州中学；本会话已确认：学校=扬州中学 班级=高三(2)班 考试=2026届高三1月期末；指代「这场/刚才/该班」时必须用已确认范围，禁止另选默认考试或默查全市。'
+
+tests\agent\test_edu_scope_context.py:82: AssertionError
+_____________________ test_generate_report_class_overview _____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001E4E9C4A820>
+
+    def test_generate_report_class_overview(monkeypatch):
+        client = _auth_client(monkeypatch)
+        r = client.post(
+            "/api/v1/education/generate-report",
+            json={
+                "datasource_id": 1,
+                "report_type": "class_overview",
+                "audience": "head_teacher",
+                "filters": {"class_name": "初三1班", "exam_name": "期中"},
+                "include_charts": True,
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()["data"]
+>       assert data["error"] is None
+E       AssertionError: assert '未查到成绩数据（筛选：class_name=初三1班、exam_name=期中）。请核对班级/学校/考试/科目名称是否与库内一致；也可先在聊天里用自然语言查出准确名称后再填到分析工具。' is None
+
+tests\agent\test_education_api.py:220: AssertionError
+___________________ test_data_analyst_education_report_flow ___________________
+
+    def test_data_analyst_education_report_flow():
+        # 第 1 步：选定 class_overview 模板
+        # 第 2 步：统计分数
+        # 第 3 步：生成分数段柱图 option
+        # 第 4 步：用模板渲染 HTML 报告
+        # 第 5 步：terminate
+        stats_payload = {
+            "count": 4, "avg": 72.5, "median": 75.0, "stdev": 17.5,
+            "min": 50, "max": 95, "pass_rate": 75.0, "excellent_rate": 25.0,
+            "fail_rate": 25.0, "full_score": 100,
+            "segments": [
+                {"label": "0-60", "count": 1, "ratio": 25.0},
+                {"label": "60-70", "count": 0, "ratio": 0.0},
+                {"label": "70-80", "count": 1, "ratio": 25.0},
+                {"label": "80-90", "count": 1, "ratio": 25.0},
+                {"label": "90-100", "count": 1, "ratio": 25.0},
+            ],
+        }
+        chart_option = json.dumps({
+            "xAxis": {"type": "category", "data": [s["label"] for s in stats_payload["segments"]]},
+            "yAxis": {"type": "value"},
+            "series": [{"type": "bar", "data": [s["count"] for s in stats_payload["segments"]]}],
+        }, ensure_ascii=False)
+    
+        report_data = {
+            "REPORT_TITLE": "初三1班期中成绩分析报告",
+            "REPORT_SUBTITLE": "班级学情总览",
+            "REPORT_TIME": "2026-07-01",
+            "CLASS_NAME": "初三1班", "EXAM_NAME": "期中考试",
+            "TOTAL_COUNT": str(stats_payload["count"]),
+            "AVG_SCORE": str(stats_payload["avg"]),
+            "PASS_RATE": str(stats_payload["pass_rate"]),
+            "EXCELLENT_RATE": str(stats_payload["excellent_rate"]),
+            "STDEV": str(stats_payload["stdev"]),
+            "SCORE_DIST_CHART": chart_option,
+            "SUBJECT_RADAR_CHART": "{}",
+            "SUBJECT_BREAKDOWN": "<p>分科明细占位</p>",
+            "RANK_INFO": "<p>年级第 3 / 8</p>",
+            "SUMMARY": "<p>整体稳健，数学薄弱。</p>",
+            "RECOMMENDATIONS": "<ul><li>加强数学基础题</li></ul>",
+        }
+    
+        llm = _ScriptedLlm(
+            [
+                '{"thoughts":"选模板","tool":"select_report_template_tool","args":{"report_type":"class_overview"}}',
+                '{"thoughts":"算统计","tool":"compute_score_stats_tool","args":{"scores":[95,80,65,50]}}',
+                '{"thoughts":"画分数段","tool":"build_chart_option_tool","args":{"chart_type":"score_distribution","data":{"segments":[{"label":"0-60","count":1},{"label":"60-70","count":0},{"label":"70-80","count":1},{"label":"80-90","count":1},{"label":"90-100","count":1}],"pass_rate":75.0},"title":"分数段"}}',
+                '{"thoughts":"出报告","tool":"render_html_report","args":{"template_name":"education/class_overview.html","data":' + json.dumps(report_data, ensure_ascii=False) + ',"title":"班级总览"}}',
+                '{"thoughts":"完成","tool":"terminate","args":{"final_answer":"已生成初三1班期中成绩分析报告（含分数段柱图与分科表现）。"}}',
+            ]
+        )
+    
+        agent = build_data_analyst(llm_client=llm, datasource_id=1, user_id=7)
+    
+        reply = _run(
+            agent.generate_reply(
+                received_message=AgentMessage(
+                    content="生成初三1班期中成绩分析报告", role="user"
+                ),
+                sender=UserProxyAgent(),
+            )
+        )
+    
+        assert reply.action_report.terminate is True
+        assert "初三1班" in reply.content
+        assert reply.rounds == 5
+    
+        # terminate 轮（最后一轮 LLM 调用）应能看到 render_html_report 的 observation
+        last_tool_round = llm.calls[-1]
+>       assert any("已生成" in m["content"] and "mode=template" in m["content"]
+                   for m in last_tool_round), \
+            "render_html_report observation 未回灌到 terminate 轮"
+E       AssertionError: render_html_report observation 未回灌到 terminate 轮
+E       assert False
+E        +  where False = any(<generator object test_data_analyst_education_report_flow.<locals>.<genexpr> at 0x000001E4EE857680>)
+
+tests\agent\test_education_integration.py:105: AssertionError
+___________ test_intent_resolver_class_overview_with_audience_hint ____________
+
+    def test_intent_resolver_class_overview_with_audience_hint():
+        ir = ReportIntentResolver()
+        spec = ir.resolve("生成初三1班期中成绩分析报告", audience_hint="head_teacher")
+        assert spec.report_type == ReportType.CLASS_OVERVIEW
+        assert spec.audience == Audience.HEAD_TEACHER
+>       assert spec.filters["class_name"] == "初三1班"
+E       AssertionError: assert '初三(1)班' == '初三1班'
+E         
+E         - 初三1班
+E         + 初三(1)班
+E         ?   + +
+
+tests\agent\test_education_orchestrator.py:33: AssertionError
+_______________ test_orchestrator_class_overview_full_pipeline ________________
+
+    def test_orchestrator_class_overview_full_pipeline():
+        async def fake_execute(sql):
+            assert "SELECT" in sql and "LIMIT 1000" in sql
+            return {"columns": ["score"], "rows": [[85], [72], [60], [55], [100], [40], [78]], "row_count": 7}
+    
+        async def fake_schema():
+            return _wide_mapping()
+    
+        orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
+        res = _run(orch.run("生成初三1班期中成绩分析报告"))
+    
+        assert res.error is None
+        assert res.template_name == "education/class_overview.html"
+>       assert "初三1班" in res.html
+E       assert '初三1班' in '<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n  <meta charset="UTF-8" />\n  <meta name="viewport" content="width=devi...      block.innerHTML = \'\';\n        block.appendChild(card);\n      });\n    })();\n  </script>\n</body>\n</html>\n'
+E        +  where '<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n  <meta charset="UTF-8" />\n  <meta name="viewport" content="width=devi...      block.innerHTML = \'\';\n        block.appendChild(card);\n      });\n    })();\n  </script>\n</body>\n</html>\n' = ReportResult(html='<!DOCTYPE html>\n<html lang="zh-CN">\n<head>\n  <meta charset="UTF-8" />\n  <meta name="viewport" c...": "#3b82f6"}, "label": {"show": true, "position": "top"}, "markLine": {"data": [{"xAxis": "60-70"}]}}]}'}, error=None).html
+
+tests\agent\test_education_orchestrator.py:109: AssertionError
+____________ test_class_overview_template_renders_with_chart_json _____________
+
+    def test_class_overview_template_renders_with_chart_json():
+        data = {
+            "REPORT_TITLE": "初三1班期中成绩分析报告",
+            "REPORT_SUBTITLE": "班级学情总览",
+            "REPORT_TIME": "2026-07-01",
+            "CLASS_NAME": "初三1班", "EXAM_NAME": "期中考试",
+            "TOTAL_COUNT": "45", "AVG_SCORE": "78.5", "PASS_RATE": "82.2",
+            "EXCELLENT_RATE": "24.4", "STDEV": "12.3",
+            "SCORE_DIST_CHART": '{"xAxis":{"type":"category","data":["0-60"]},"yAxis":{"type":"value"},"series":[{"type":"bar","data":[3]}]}',
+            "SUBJECT_RADAR_CHART": '{"radar":{"indicator":[{"name":"数学","max":100}]},"series":[{"type":"radar","data":[{"value":[78]}]}]}',
+            "SUBJECT_BREAKDOWN": "<table class=\"edu-table\"><tr><th>科目</th></tr></table>",
+            "RANK_INFO": "<p>年级第 3 / 8</p>",
+            "SUMMARY": "<p>稳健</p>",
+            "RECOMMENDATIONS": "<ul><li>加强数学</li></ul>",
+        }
+        result = _run(
+            render_html_report.execute(
+                datasource_id=1,
+                template_name="education/class_overview.html",
+                data=data,
+                title="班级总览",
+            )
+        )
+>       assert result.data["mode"] == "template"
+               ^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'mode'
+
+tests\agent\test_education_tools.py:540: KeyError
+_____________________ test_group_feature_template_renders _____________________
+
+    def test_group_feature_template_renders():
+        data = {
+            "REPORT_TITLE": "男女生数学对比报告", "REPORT_SUBTITLE": "群体特征",
+            "REPORT_TIME": "2026-07-01", "SCOPE": "初三1班", "EXAM_NAME": "期中考试",
+            "GROUP_DIMENSION": "性别",
+            "GROUP_COMPARE_CHART": '{"xAxis":{"type":"category","data":["男","女"]},"yAxis":{"type":"value"},"series":[{"type":"bar","data":[78,82]}]}',
+            "GROUP_TABLE": "<table class=\"edu-table\"><tr><th>组</th><th>均分</th></tr><tr><td>男</td><td>78</td></tr></table>",
+            "DIFF_INFO": "<p>女生均分高 4 分</p>",
+            "SUMMARY": "<p>性别差异在可接受范围</p>",
+            "RECOMMENDATIONS": "<p>关注男生薄弱项</p>",
+        }
+        result = _run(
+            render_html_report.execute(
+                datasource_id=1, template_name="education/group_feature.html", data=data, title="群体特征"
+            )
+        )
+>       assert "男女生数学对比" in result.data["html"]
+                            ^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'html'
+
+tests\agent\test_education_tools.py:920: KeyError
+___________ test_build_subject_diagnosis_sections_tool_renders_html ___________
+
+    def test_build_subject_diagnosis_sections_tool_renders_html():
+        """sections 工具默认 render=True，应直接返回 HTML 载荷。"""
+        from src.agent.education import tools as edu_tools
+    
+        result = _run(
+            edu_tools.build_subject_diagnosis_sections_tool.execute(
+                item_rows=[
+                    {
+                        "student_id": "S01",
+                        "question_no": 1,
+                        "knowledge_name": "集合",
+                        "score_rate": 30.0,
+                        "exam_name": "期末质量检测",
+                    },
+                    {
+                        "student_id": "S01",
+                        "question_no": 2,
+                        "knowledge_name": "函数",
+                        "score_rate": 90.0,
+                        "exam_name": "期末质量检测",
+                    },
+                    {
+                        "student_id": "S02",
+                        "question_no": 1,
+                        "knowledge_name": "集合",
+                        "score_rate": 80.0,
+                        "exam_name": "期末质量检测",
+                    },
+                ],
+                knowledge_rows=[
+                    {"knowledge_name": "集合", "score_rate": 55.0, "question_count": 1},
+                ],
+                stats={
+                    "avg": 86,
+                    "pass_rate": 90,
+                    "excellent_rate": 20,
+                    "stdev": 8,
+                    "full_score": 150,
+                    "count": 2,
+                    "segments": [{"label": "90-100", "count": 5, "ratio": 50}],
+                },
+                score_result={
+                    "columns": ["student_id", "subject_name", "score", "exam_score"],
+                    "rows": [
+                        ["S01", "数学", 120, 150],
+                        ["S02", "数学", 95, 150],
+                    ],
+                },
+                school_name="南京市第一中学",
+                exam_name="期末质量检测",
+                subject_name="数学",
+                class_name="高一(2)班",
+            )
+        )
+        assert result.data["output_type"] == "html"
+        assert result.is_final is True
+        html = result.data["html"]
+        assert "集合" in html
+        assert "数学" in html
+        assert "每位学生详细档案与个性化建议" in html
+        assert "archive-card" in html
+        assert "S01" in html
+        assert "S02" in html
+        # 单科诊断：不展示跨科优势/待提升/偏科度
+>       assert "偏科度" not in html
+E       assert '偏科度' not in '<!DOCTYPE h...dy>\n</html>'
+E         
+E         '偏科度' is contained here:
+E           示跨科优势、待提升与偏科度），便于任课教师与班主任跟进。</p>
+E         ?           +++
+E                 <div id="studentArchiveBody"><p class="archive-note">个性化建议已结合<strong>本场考试</strong>该科小题得分率与知识点掌握情况；得分率偏低的知识点与题目列入补漏清单。</p><div class="archive-grid"><article class="archive-card"><header class="archive-head"><div class="archive-name"><strong>S01</strong><span class="level-pill" style="background:#2980b9">B (良好)</span></div><div class="archive-meta"><span>得分 <b>120.0</b></span><span>稳定 → (0.0)</span></div></header><div class="score-row"><span class="score-chip"><em>期末</em><b>120.0</b></span></div><div class="archive...
+E         
+E         ...Full output truncated (16 lines hidden), use '-vv' to show
+
+tests\agent\test_education_tools.py:1684: AssertionError
+___________ test_subject_diagnosis_archive_hides_cross_subject_meta ___________
+
+    def test_subject_diagnosis_archive_hides_cross_subject_meta():
+        from src.agent.education.tools import _subject_diagnosis_student_archive
+    
+        html = _subject_diagnosis_student_archive(
+            score_rows=[
+                {"student_id": "A1", "subject_name": "数学", "score": 88, "exam_score": 150},
+                {"student_id": "A2", "subject_name": "数学", "score": 110, "exam_score": 150},
+            ],
+            item_rows=[
+                {
+                    "student_id": "A1",
+                    "question_no": 3,
+                    "knowledge_name": "立体几何",
+                    "score_rate": 25.0,
+                    "exam_name": "一模",
+                },
+                {
+                    "student_id": "A1",
+                    "question_no": 5,
+                    "knowledge_name": "概率统计",
+                    "score_rate": 40.0,
+                    "exam_name": "一模",
+                },
+                {
+                    "student_id": "A2",
+                    "question_no": 3,
+                    "knowledge_name": "立体几何",
+                    "score_rate": 95.0,
+                    "exam_name": "一模",
+                },
+            ],
+            exam_name="一模",
+            subject_name="数学",
+            weak_threshold=60.0,
+        )
+        assert "偏科度" not in html
+>       assert "待提升" not in html
+E       assert '待提升' not in '<p class="a...ticle></div>'
+E         
+E         '待提升' is contained here:
+E           74c3c">D (待提升)</span></div><div class="archive-meta"><span>得分 <b>88.0</b></span><span>稳定 → (0.0)</span></div></header><div class="score-row"><span class="score-chip"><em>一模</em><b>88.0</b></span></div><div class="archive-tags"><span class="tags-label">薄弱知识点</span><span class="weak-tag">立体几何 25%</span><span class="weak-tag">概率统计 40%</span></div><div class="archive-tags"><span class="tags-label">薄弱小题</span><span class="weak-tag">一模·第3题·立体几何</span><span class="weak-tag">一模·第5题·概率统计</span></div><div class="archive-advice"><ul class="advice-list"><li>【小题补漏·一模】重点攻克：第3题（立体几...
+E         
+E         ...Full output truncated (2 lines hidden), use '-vv' to show
+
+tests\agent\test_education_tools.py:1742: AssertionError
+_______________ test_route_forces_compare_knowledge_cohort_tool _______________
+
+    def test_route_forces_compare_knowledge_cohort_tool():
+        route = classify_report_intent_sync(DEMO_Q)
+>       assert route.needs_report is True
+E       AssertionError: assert False is True
+E        +  where False = ReportRoute(needs_report=False, report_type=None, confidence=0.95, reason='单场均分/均衡等走 overview 事实查询', source='hard').needs_report
+
+tests\agent\test_knowledge_cohort.py:151: AssertionError
+_________________ test_exam_extract_not_class_subject_garbage _________________
+
+    def test_exam_extract_not_class_subject_garbage():
+        """「高二(6)班数学期末考试…」不得抽成「班数学期末考试」。"""
+        from src.agent.education.orchestrator import _extract_exam
+        from src.agent.education.query_parse import (
+            _clean_exam_name_candidate,
+            extract_exam_name_hint,
+        )
+        from src.agent.education.tools import exam_name_like_candidates
+        from src.agent.expand.planner import _plan_exam_name, build_knowledge_cohort_plan_items
+    
+        q = "高二(6)班数学期末考试最后十名与中位数在知识点掌握方面的差距"
+>       assert _clean_exam_name_candidate("班数学期末考试") == "期末考试"
+E       AssertionError: assert None == '期末考试'
+E        +  where None = <function _clean_exam_name_candidate at 0x000001E4BE7F7690>('班数学期末考试')
+
+tests\agent\test_knowledge_cohort.py:171: AssertionError
+_______________ test_react_skips_duplicate_tool_with_same_args ________________
+
+    def test_react_skips_duplicate_tool_with_same_args():
+        """相同 (tool, args) 第二次起不重新执行，直接返回缓存并提示换下一步。"""
+        _call_counter["n"] = 0
+        llm = FakeLlmClient(
+            [
+                '{"tool": "counted_ping", "args": {"key": "a"}}',
+                '{"tool": "counted_ping", "args": {"key": "a"}}',
+                '{"tool": "terminate", "args": {"final_answer": "ok"}}',
+            ]
+        )
+        agent = _TrivialReActAgent(llm_client=llm, tool_pack=_pack_with(counted_ping))
+    
+        captured_tool_calls: list[dict] = []
+    
+        async def capture(event: str, payload: dict) -> None:
+            if event == "tool_call":
+                captured_tool_calls.append(payload)
+    
+        agent.stream_callback = capture
+    
+        reply = _run(
+            agent.generate_reply(
+                received_message=AgentMessage(content="q", role="user"),
+                sender=UserProxyAgent(),
+            )
+        )
+    
+        assert reply.content == "ok"
+        assert _call_counter["n"] == 1
+        assert len(captured_tool_calls) == 1, "去重轮次不应再发 tool_call SSE"
+        round2_input = llm.calls[1]
+>       assert any("重复调用已跳过" in m.get("content", "") for m in round2_input)
+E       assert False
+E        +  where False = any(<generator object test_react_skips_duplicate_tool_with_same_args.<locals>.<genexpr> at 0x000001E4EE6EF5B0>)
+
+tests\agent\test_react_agent.py:186: AssertionError
+____________ test_school_vs_leading_subject_avg_is_fact_uses_xxlb _____________
+
+    def test_school_vs_leading_subject_avg_is_fact_uses_xxlb():
+        """学校对比引领校单科均分：学生加权 AVG(yw)+xxlb，禁止 JOIN tb_school。"""
+        q = "2026届高三3月扬州中学对比引领校语文单科"
+        assert extract_school_target(q) == "扬州中学"
+        assert extract_school_type_target(q) == "引领"
+        assert is_school_vs_school_type_avg_query(q) is True
+        assert is_school_vs_city_avg_query(q) is False
+        assert is_line_reach_query(q) is False
+        route = classify_report_intent_sync(q)
+        assert route.needs_report is False
+        assert _route(q) == "fact"
+        blob = build_fact_query_plan_items(q)[0]["sub_task"]
+        assert "yw" in blob
+        assert "xxlb" in blob
+        assert "在籍生" in blob
+        assert "JOIN tb_school" in blob and "禁止" in blob
+        assert "GROUP BY xx" in blob
+        assert "yw > 0" in blob
+        assert "缺考" in blob
+        assert "build_line_reach_report_data_tool" not in blob
+        from src.agent.education.prompt_context import build_education_sql_hint_text
+        from src.templates.sql_gen_prompt import education_sql_training_block_for_intent
+    
+        hint = build_education_sql_hint_text(q)
+        assert "xxlb" in hint
+        assert "JOIN tb_school" in hint
+        assert "达线" not in hint
+        assert "yw > 0" in hint
+        shot = education_sql_training_block_for_intent("overview_avg")
+>       assert "yw > 0" in shot
+E       assert 'yw > 0' in "<sql-examples>\n<example>\n    <question>扬州中学高三(1)班在全市班级中的排名</question>\n    <suggestion-answer>WITH base AS (\n  SEL...)。必须 xsxz='在籍生'，单科 FILTER col&gt;0；化学/生物/政治/地理用 hxzh/swzh/zzzh/dlzh</suggestion-answer>\n  </example>\n</sql-examples>"
+
+tests\agent\test_report_intent_routing.py:882: AssertionError
+_____________________ test_standard_report_types_defined ______________________
+
+    def test_standard_report_types_defined():
+>       assert len(ReportType) == 18
+E       assert 19 == 18
+E        +  where 19 = len(ReportType)
+
+tests\agent\test_report_type_display.py:16: AssertionError
+___________ test_install_default_resources_registers_expected_tools ___________
+
+fresh_manager = <src.agent.resource.manager.ResourceManager object at 0x000001E4EDBC5010>
+
+    def test_install_default_resources_registers_expected_tools(fresh_manager: ResourceManager):
+        install_default_resources()
+        pack = fresh_manager.get_pack(DEFAULT_PACK_NAME)
+        expected = {
+            "list_tables",
+            "find_related_tables",
+            "describe_table",
+            "sample_rows",
+            "execute_sql",
+            "find_related_datasources",
+            "recent_questions",
+            "calculate",
+            "render_html_report",
+            "terminate",
+        }
+>       assert set(pack.names()) == expected
+E       AssertionError: assert {'aggregate_d...ta_tool', ...} == {'calculate',..._tables', ...}
+E         
+E         Extra items in the left set:
+E         'build_class_overview_report_data_tool'
+E         'resolve_score_schema'
+E         'build_group_feature_report_data_tool'
+E         'build_student_exam_report_data_tool'
+E         'query_certified_metric_tool'...
+E         
+E         ...Full output truncated (32 lines hidden), use '-vv' to show
+
+tests\agent\test_resource_manager.py:97: AssertionError
+_______________ test_install_default_resources_pack_is_unbound ________________
+
+fresh_manager = <src.agent.resource.manager.ResourceManager object at 0x000001E4EDBC5010>
+
+    def test_install_default_resources_pack_is_unbound(fresh_manager: ResourceManager):
+        """模板 pack 必须是**未绑定**的——运行时 .bind 生成新 pack，保持模板只读共享。"""
+        install_default_resources()
+        pack = fresh_manager.get_pack(DEFAULT_PACK_NAME)
+>       assert pack.bindings == {}, f"default 模板 pack 不应带 bindings，实际：{pack.bindings}"
+E       AssertionError: default 模板 pack 不应带 bindings，实际：{'workspace_oid': 1}
+E       assert {'workspace_oid': 1} == {}
+E         
+E         Left contains 1 more item:
+E         {'workspace_oid': 1}
+E         Use -v to get more diff
+
+tests\agent\test_resource_manager.py:104: AssertionError
+________________ test_build_data_analyst_uses_resource_manager ________________
+
+fresh_manager = <src.agent.resource.manager.ResourceManager object at 0x000001E4EDBC5010>
+
+    def test_build_data_analyst_uses_resource_manager(fresh_manager: ResourceManager):
+        """build_data_analyst 应从 ResourceManager 拿模板，再 bind datasource_id。"""
+        from src.agent.expand.data_analyst import build_data_analyst
+    
+        class _NoopLlm:
+            async def chat(self, messages):  # pragma: no cover - 不会被调用
+                return ""
+    
+        agent = build_data_analyst(
+            llm_client=_NoopLlm(),
+            datasource_id=42,
+            user_id=7,
+        )
+    
+        # 新产生的 pack 应带正确 bindings
+>       assert agent.tool_pack.bindings == {"datasource_id": 42, "user_id": 7}
+E       AssertionError: assert {'workspace_o... 'user_id': 7} == {'datasource_... 'user_id': 7}
+E         
+E         Omitting 2 identical items, use -vv to show
+E         Left contains 1 more item:
+E         {'workspace_oid': 1}
+E         Use -v to get more diff
+
+tests\agent\test_resource_manager.py:122: AssertionError
+_______ test_build_data_analyst_falls_back_when_manager_has_no_default ________
+
+fresh_manager = <src.agent.resource.manager.ResourceManager object at 0x000001E4EDBC5010>
+
+    def test_build_data_analyst_falls_back_when_manager_has_no_default(fresh_manager: ResourceManager):
+        """兜底路径：manager 里没有 default pack 时，build_data_analyst 会自动 install 一次。"""
+        from src.agent.expand.data_analyst import build_data_analyst
+    
+        class _NoopLlm:
+            async def chat(self, messages):  # pragma: no cover
+                return ""
+    
+        assert not fresh_manager.has_pack(DEFAULT_PACK_NAME)
+    
+        agent = build_data_analyst(llm_client=_NoopLlm(), datasource_id=1)
+    
+        assert fresh_manager.has_pack(DEFAULT_PACK_NAME), "应静默 install 默认 pack"
+>       assert agent.tool_pack.bindings == {"datasource_id": 1}
+E       AssertionError: assert {'workspace_o...source_id': 1} == {'datasource_id': 1}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Left contains 1 more item:
+E         {'workspace_oid': 1}
+E         Use -v to get more diff
+
+tests\agent\test_resource_manager.py:143: AssertionError
+__________________ test_langgraph_single_sub_task_happy_path __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001E4EF41D160>
+
+    def test_langgraph_single_sub_task_happy_path(monkeypatch):
+        """与 test_team_single_sub_task_happy_path 对齐（默认已为 LangGraph）。"""
+        _patch_db(
+            monkeypatch,
+            lambda *_a, **_kw: (True, "ok", {"columns": ["n"], "rows": [[5]]}),
+        )
+        llm = _ScriptedLlm(
+            [
+                '{"plans":["有多少用户"]}',
+                '{"tool":"execute_sql","args":{"sql":"SELECT COUNT(*) AS n FROM users"}}',
+                '{"tool":"terminate","args":{"final_answer":"5 人"}}',
+                '{"chart_type":"table"}',
+                "共有 5 位用户。",
+                '{"generate":false,"reason":"单点事实问答"}',
+            ]
+        )
+        events, emit = _collect_events()
+        req = ChatRequest(question="有多少用户", datasource_id=1)
+        record_id = _run(
+            run_team_stream(
+                request=req,
+                current_user_id=1,
+                emit=emit,
+                llm_client=llm,
+                persist=False,
+            )
+        )
+        assert record_id == 0
+        names = [e for e, _ in events]
+        plan_payload = next(p for e, p in events if e == "plan")
+>       assert plan_payload["plans"] == ["有多少用户"]
+E       assert ['用 SQL 直接回答用...ate。原问：有多少用户'] == ['有多少用户']
+E         
+E         At index 0 diff: "用 SQL 直接回答用户问题（范围：已确认范围）。凡对单科分数做统计（均分/标准差/方差/均衡性/中位/最高最低/及格率/分数段）必须排除未选考/缺考：宽表用 AVG/STDDEV_SAMP(col) FILTER (WHERE col > 0)；历史/政治/地理/化学/生物/物理未选考列为 0，AVG(ls) 或 STDDEV(ls) 除以全体会把均分拉成个位数、均衡性失真。多科并列只能 FILTER，禁止 WHERE ls>0（会把语数英也滤成选考历史的人）。同时给出该科参考人数 COUNT(*) FILTER (WHERE col > 0)。查 tb_score 长表按 subject_name 过滤则一行一科，且须 score > 0。默认只统计在籍生：tb_score_overview 必须 AND xsxz='在籍生' （市报生/往届不进均分、不进全市班级或学校排名池）。问句明确要市报/往届/含市报时才放开。选科方向只用 xkkm：物理类 LIKE '物%'，历史类必须 (LIKE '史%' OR LIKE '历%')；禁止只写 xkkm LIKE '历%'（库内是史政地，历史会变成 0 人）；禁止 xkqk IN ('134','135','136') 分轨（xkqk 常为空，IN 会少人）；跨考试 JOIN 用 anon_s...
+E         
+E         ...Full output truncated (2 lines hidden), use '-vv' to show
+
+tests\agent\test_team_graph.py:108: AssertionError
+____________________ test_team_single_sub_task_happy_path _____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001E4EF41DA90>
+
+    def test_team_single_sub_task_happy_path(monkeypatch):
+        _patch_db(
+            monkeypatch,
+            lambda *_a, **_kw: (True, "ok", {"columns": ["n"], "rows": [[5]]}),
+        )
+        llm = _ScriptedLlm(
+            [
+                # Planner
+                '{"plans":["有多少用户"]}',
+                # DataAnalyst
+                '{"tool":"execute_sql","args":{"sql":"SELECT COUNT(*) AS n FROM users"}}',
+                '{"tool":"terminate","args":{"final_answer":"5 人"}}',
+                # Charter
+                '{"chart_type":"table"}',
+                # Summarizer
+                "共有 5 位用户。",
+                # AdHoc：单点问答不出报告
+                '{"generate":false,"reason":"单点事实问答"}',
+            ]
+        )
+        events, emit = _collect_events()
+    
+        req = ChatRequest(question="有多少用户", datasource_id=1)
+        record_id = _run(
+            run_team_stream(
+                request=req,
+                current_user_id=1,
+                emit=emit,
+                llm_client=llm,
+                persist=False,
+            )
+        )
+    
+        assert record_id == 0
+        names = [e for e, _ in events]
+    
+        plan_payload = next(p for e, p in events if e == "plan")
+>       assert plan_payload["plans"] == ["有多少用户"]
+E       assert ['用 SQL 直接回答用...ate。原问：有多少用户'] == ['有多少用户']
+E         
+E         At index 0 diff: "用 SQL 直接回答用户问题（范围：已确认范围）。凡对单科分数做统计（均分/标准差/方差/均衡性/中位/最高最低/及格率/分数段）必须排除未选考/缺考：宽表用 AVG/STDDEV_SAMP(col) FILTER (WHERE col > 0)；历史/政治/地理/化学/生物/物理未选考列为 0，AVG(ls) 或 STDDEV(ls) 除以全体会把均分拉成个位数、均衡性失真。多科并列只能 FILTER，禁止 WHERE ls>0（会把语数英也滤成选考历史的人）。同时给出该科参考人数 COUNT(*) FILTER (WHERE col > 0)。查 tb_score 长表按 subject_name 过滤则一行一科，且须 score > 0。默认只统计在籍生：tb_score_overview 必须 AND xsxz='在籍生' （市报生/往届不进均分、不进全市班级或学校排名池）。问句明确要市报/往届/含市报时才放开。选科方向只用 xkkm：物理类 LIKE '物%'，历史类必须 (LIKE '史%' OR LIKE '历%')；禁止只写 xkkm LIKE '历%'（库内是史政地，历史会变成 0 人）；禁止 xkqk IN ('134','135','136') 分轨（xkqk 常为空，IN 会少人）；跨考试 JOIN 用 anon_s...
+E         
+E         ...Full output truncated (2 lines hidden), use '-vv' to show
+
+tests\agent\test_team_runner.py:119: AssertionError
+____________________ test_team_multi_sub_tasks_all_succeed ____________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001E4E8396C10>
+
+    def test_team_multi_sub_tasks_all_succeed(monkeypatch):
+        _patch_db(
+            monkeypatch,
+            lambda *_a, **_kw: (True, "ok", {"columns": ["amount"], "rows": [[100]]}),
+        )
+        llm = _ScriptedLlm(
+            [
+                # Planner 拆 3 个
+                '{"plans":["Q2 销售额","Q3 销售额","对比原因"]}',
+                # DataAnalyst × 3（每个 2 轮）
+                '{"tool":"execute_sql","args":{"sql":"SELECT amount FROM sales WHERE q=2"}}',
+                '{"tool":"terminate","args":{"final_answer":"Q2=100"}}',
+                '{"tool":"execute_sql","args":{"sql":"SELECT amount FROM sales WHERE q=3"}}',
+                '{"tool":"terminate","args":{"final_answer":"Q3=100"}}',
+                '{"tool":"execute_sql","args":{"sql":"SELECT amount FROM sales WHERE change=true"}}',
+                '{"tool":"terminate","args":{"final_answer":"持平"}}',
+                # Charter
+                '{"chart_type":"bar","chart_config":{"x":"q","y":["amount"]}}',
+                # Summarizer
+                "Q2 与 Q3 销售持平，均为 100。",
+                '{"generate":false,"reason":"测试跳过自主报告"}',
+            ]
+        )
+        events, emit = _collect_events()
+    
+        req = ChatRequest(question="对比 Q2/Q3 销售并分析原因", datasource_id=1)
+        _run(
+            run_team_stream(
+                request=req,
+                current_user_id=1,
+                emit=emit,
+                llm_client=llm,
+                persist=False,
+            )
+        )
+    
+        plan_payload = next(p for e, p in events if e == "plan")
+>       assert len(plan_payload["plans"]) == 3
+E       AssertionError: assert 1 == 3
+E        +  where 1 = len(['用 SQL 直接回答用户问题（范围：已确认范围）。凡对单科分数做统计（均分/标准差/方差/均衡性/中位/最高最低/及格率/分数段）必须排除未选考/缺考：宽表用 AVG/STDDEV_SAMP(col) FILTER (WHERE c...col），口径只说在籍生、排除未选考。**禁止**调任何 build_*_report / render_html / 学情报告工具；**禁止**生成 HTML 报告；答完即 terminate。原问：对比 Q2/Q3 销售并分析原因'])
+
+tests\agent\test_team_runner.py:176: AssertionError
+__________________ test_team_multi_sub_tasks_partial_failure __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001E4EF41CBB0>
+
+    def test_team_multi_sub_tasks_partial_failure(monkeypatch):
+        """第 2 个 sub_task 的 DataAnalyst 不 terminate → 该 sub_task 失败，但
+        其他 sub_task 成功，Chart/Summary 仍应基于成功的最后一个跑起来。"""
+        _patch_db(
+            monkeypatch,
+            lambda *_a, **_kw: (True, "ok", {"columns": ["n"], "rows": [[7]]}),
+        )
+    
+        # list_tables 成功且两轮触顶时会触发 react_agent 的「自动收敛」视为成功；
+        # ToolPack 持有 FunctionTool 实例，需替换 ``list_tables._fn`` 而非模块名。
+        _lt_tool = biz.list_tables
+        _orig_lt_fn = _lt_tool._fn
+        _list_tables_count: list[int] = [0]
+    
+        def _list_tables_fail_twice(*args: object, **kwargs: object):
+            _list_tables_count[0] += 1
+            if _list_tables_count[0] <= 2:
+                raise RuntimeError("forced list_tables failure for sub2")
+            return _orig_lt_fn(*args, **kwargs)
+    
+        monkeypatch.setattr(_lt_tool, "_fn", _list_tables_fail_twice)
+    
+        import src.agent.expand.data_analyst as da_mod
+        import src.chat.service.agent_runner as runner_mod
+    
+        orig = da_mod.build_data_analyst
+    
+        def capped(*args, **kwargs):
+            # max=2 让"只调 list_tables 不 terminate"的 sub_task 快速触顶
+            kwargs["max_react_rounds"] = 2
+            return orig(*args, **kwargs)
+    
+        monkeypatch.setattr(da_mod, "build_data_analyst", capped)
+        monkeypatch.setattr(runner_mod, "build_data_analyst", capped)
+    
+        llm = _ScriptedLlm(
+            [
+                # Planner
+                '{"plans":["sub1","sub2","sub3"]}',
+                # sub1: 成功
+                '{"tool":"execute_sql","args":{"sql":"SELECT 1 AS n"}}',
+                '{"tool":"terminate","args":{"final_answer":"ok1"}}',
+                # sub2: 只调 list_tables 不 terminate，两轮触顶
+                '{"tool":"list_tables","args":{}}',
+                '{"tool":"list_tables","args":{}}',
+                # sub3: 成功
+                '{"tool":"execute_sql","args":{"sql":"SELECT 3 AS n"}}',
+                '{"tool":"terminate","args":{"final_answer":"ok3"}}',
+                # Charter（基于 sub3）
+                '{"chart_type":"table"}',
+                # Summarizer
+                "部分查询完成",
+                '{"generate":false,"reason":"测试跳过自主报告"}',
+            ]
+        )
+        events, emit = _collect_events()
+        req = ChatRequest(question="q", datasource_id=1)
+        _run(
+            run_team_stream(
+                request=req,
+                current_user_id=1,
+                emit=emit,
+                llm_client=llm,
+                persist=False,
+            )
+        )
+    
+        updates = [p for e, p in events if e == "plan_update"]
+        states_by_idx = {}
+        for u in updates:
+            if u["state"] != "running":
+                states_by_idx[u["index"]] = u["state"]
+>       assert states_by_idx == {0: "ok", 1: "error", 2: "ok"}
+E       AssertionError: assert {0: 'ok'} == {0: 'ok', 1: 'error', 2: 'ok'}
+E         
+E         Omitting 1 identical items, use -vv to show
+E         Right contains 2 more items:
+E         {1: 'error', 2: 'ok'}
+E         Use -v to get more diff
+
+tests\agent\test_team_runner.py:276: AssertionError
+_____________ test_team_planner_garbage_falls_back_to_single_plan _____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001E4EBBAEBA0>
+
+    def test_team_planner_garbage_falls_back_to_single_plan(monkeypatch):
+        _patch_db(
+            monkeypatch,
+            lambda *_a, **_kw: (True, "ok", {"columns": ["n"], "rows": [[1]]}),
+        )
+        llm = _ScriptedLlm(
+            [
+                # Planner 给乱码 → 回落为 [原问题]
+                "this is not json",
+                # DataAnalyst
+                '{"tool":"execute_sql","args":{"sql":"SELECT 1 AS n"}}',
+                '{"tool":"terminate","args":{"final_answer":"1 条"}}',
+                # Charter
+                '{"chart_type":"table"}',
+                # Summarizer
+                "查到 1 条数据。",
+                '{"generate":false,"reason":"测试跳过自主报告"}',
+            ]
+        )
+        events, emit = _collect_events()
+        req = ChatRequest(question="原始问题", datasource_id=1)
+        _run(
+            run_team_stream(
+                request=req,
+                current_user_id=1,
+                emit=emit,
+                llm_client=llm,
+                persist=False,
+            )
+        )
+    
+        plan_payload = next(p for e, p in events if e == "plan")
+>       assert plan_payload["plans"] == ["原始问题"]
+E       assert ['用 SQL 直接回答用...nate。原问：原始问题'] == ['原始问题']
+E         
+E         At index 0 diff: "用 SQL 直接回答用户问题（范围：已确认范围）。凡对单科分数做统计（均分/标准差/方差/均衡性/中位/最高最低/及格率/分数段）必须排除未选考/缺考：宽表用 AVG/STDDEV_SAMP(col) FILTER (WHERE col > 0)；历史/政治/地理/化学/生物/物理未选考列为 0，AVG(ls) 或 STDDEV(ls) 除以全体会把均分拉成个位数、均衡性失真。多科并列只能 FILTER，禁止 WHERE ls>0（会把语数英也滤成选考历史的人）。同时给出该科参考人数 COUNT(*) FILTER (WHERE col > 0)。查 tb_score 长表按 subject_name 过滤则一行一科，且须 score > 0。默认只统计在籍生：tb_score_overview 必须 AND xsxz='在籍生' （市报生/往届不进均分、不进全市班级或学校排名池）。问句明确要市报/往届/含市报时才放开。选科方向只用 xkkm：物理类 LIKE '物%'，历史类必须 (LIKE '史%' OR LIKE '历%')；禁止只写 xkkm LIKE '历%'（库内是史政地，历史会变成 0 人）；禁止 xkqk IN ('134','135','136') 分轨（xkqk 常为空，IN 会少人）；跨考试 JOIN 用 anon_st...
+E         
+E         ...Full output truncated (2 lines hidden), use '-vv' to show
+
+tests\agent\test_team_runner.py:377: AssertionError
+------------------------------ Captured log call ------------------------------
+WARNING  src.agent.education.intent_router:intent_router.py:1157 intent LLM classify failed: Cannot parse JSON from diagnostic preview (raw_length=16): 'this is not json'
+________ test_team_summarizer_failure_falls_back_to_data_analyst_reply ________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001E4E83957F0>
+
+    def test_team_summarizer_failure_falls_back_to_data_analyst_reply(monkeypatch):
+        _patch_db(
+            monkeypatch,
+            lambda *_a, **_kw: (True, "ok", {"columns": ["c"], "rows": [[1]]}),
+        )
+    
+        class _Flaky:
+            def __init__(self, good: list[str]) -> None:
+                self._q = list(good)
+    
+            async def chat(self, messages):
+                if self._q:
+                    return self._q.pop(0)
+                raise RuntimeError("summarizer exploded")
+    
+        llm = _Flaky(
+            [
+                '{"plans":["q"]}',
+                '{"tool":"execute_sql","args":{"sql":"SELECT 1 AS c"}}',
+                '{"tool":"terminate","args":{"final_answer":"DA 原始结论"}}',
+                '{"chart_type":"table"}',
+            ]
+        )
+        events, emit = _collect_events()
+        req = ChatRequest(question="q", datasource_id=1)
+        _run(
+            run_team_stream(
+                request=req,
+                current_user_id=1,
+                emit=emit,
+                llm_client=llm,
+                persist=False,
+            )
+        )
+    
+        summary = next(p for e, p in events if e == "summary")
+>       assert summary["content"] == "DA 原始结论"
+E       AssertionError: assert 'DA 原始结论\n\n#... --- |\n| 1 |' == 'DA 原始结论'
+E         
+E         - DA 原始结论
+E         + DA 原始结论
+E         ?        +
+E         + 
+E         + ### 查询结果
+E         + ...
+E         
+E         ...Full output truncated (3 lines hidden), use '-vv' to show
+
+tests\agent\test_team_runner.py:454: AssertionError
+------------------------------ Captured log call ------------------------------
+WARNING  src.chat.service.agent_runner:agent_runner.py:1833 summarizer failed: summarizer exploded
+_________________ test_team_tool_events_carry_sub_task_index __________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001E4EE365400>
+
+    def test_team_tool_events_carry_sub_task_index(monkeypatch):
+        """多 sub_task 场景下，每个 sub_task 内部产生的 tool_call / tool_result 事件
+        payload 必须带 sub_task_index，且和该 sub_task 的 plan 索引一致——这是前端按
+        子任务折叠展示的契约。单 Agent 模式 (run_agent_stream) 下不应有这个字段。"""
+        _patch_db(
+            monkeypatch,
+            lambda *_a, **_kw: (True, "ok", {"columns": ["n"], "rows": [[1]]}),
+        )
+        llm = _ScriptedLlm(
+            [
+                '{"plans":["sub-A","sub-B"]}',
+                # sub 0
+                '{"tool":"execute_sql","args":{"sql":"SELECT 1 AS n"}}',
+                '{"tool":"terminate","args":{"final_answer":"A"}}',
+                # sub 1
+                '{"tool":"execute_sql","args":{"sql":"SELECT 2 AS n"}}',
+                '{"tool":"terminate","args":{"final_answer":"B"}}',
+                '{"chart_type":"table"}',
+                "综合结论",
+                '{"generate":false,"reason":"测试跳过自主报告"}',
+            ]
+        )
+        events, emit = _collect_events()
+        req = ChatRequest(question="q", datasource_id=1)
+        _run(
+            run_team_stream(
+                request=req,
+                current_user_id=1,
+                emit=emit,
+                llm_client=llm,
+                persist=False,
+            )
+        )
+    
+        tool_calls = [p for e, p in events if e == "tool_call"]
+        tool_results = [p for e, p in events if e == "tool_result"]
+        # terminate 只发 tool_result，不发 tool_call（是终止信号，不是真"调用"）
+        # 每 sub_task：1 条 tool_call（execute_sql） + 2 条 tool_result（execute_sql + terminate）
+>       assert len(tool_calls) == 2 and len(tool_results) == 4
+E       AssertionError: assert (1 == 2)
+E        +  where 1 = len([{'round': 1, 'agent': 'DataAnalyst', 'tool': 'execute_sql', 'args': {'sql': 'SELECT 1 AS n'}, ...}])
+
+tests\agent\test_team_runner.py:504: AssertionError
+__________________ test_team_routes_sub_task_to_tool_expert ___________________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001E4EBBAF2A0>
+
+    def test_team_routes_sub_task_to_tool_expert(monkeypatch):
+        """Planner 指定 sub_task_agent=ToolExpert 时，应路由到 ToolAgent。"""
+        llm = _ScriptedLlm(
+            [
+                '{"plans":['
+                '{"task":"计算 (15*12)+30","sub_task_agent":"ToolExpert"},'
+                '{"task":"给出一句结论","sub_task_agent":"DataAnalyst"}'
+                "]}",
+                '{"tool":"calculate","args":{"expression":"(15*12)+30"}}',
+                '{"tool":"terminate","args":{"final_answer":"210"}}',
+                '{"tool":"terminate","args":{"final_answer":"已计算完成"}}',
+                '{"chart_type":"table"}',
+                "最终结果为 210。",
+                '{"generate":false,"reason":"测试跳过自主报告"}',
+            ]
+        )
+        events, emit = _collect_events()
+        req = ChatRequest(question="先计算再总结", datasource_id=1)
+    
+        _run(
+            run_team_stream(
+                request=req,
+                current_user_id=1,
+                emit=emit,
+                llm_client=llm,
+                persist=False,
+            )
+        )
+    
+        plan_payload = next(p for e, p in events if e == "plan")
+>       assert plan_payload["sub_task_agents"] == ["ToolExpert", "DataAnalyst"]
+E       AssertionError: assert ['DataAnalyst'] == ['ToolExpert', 'DataAnalyst']
+E         
+E         At index 0 diff: 'DataAnalyst' != 'ToolExpert'
+E         Right contains one more item: 'DataAnalyst'
+E         Use -v to get more diff
+
+tests\agent\test_team_runner.py:629: AssertionError
+___________ test_team_ad_hoc_report_generate_false_emits_no_report ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001E4EBBAFD20>
+
+    def test_team_ad_hoc_report_generate_false_emits_no_report(monkeypatch):
+        """简单问数 + AdHoc generate=false → 无 report 事件。"""
+        _patch_db(
+            monkeypatch,
+            lambda *_a, **_kw: (True, "ok", {"columns": ["n"], "rows": [[5]]}),
+        )
+        llm = _ScriptedLlm(
+            [
+                '{"plans":["有多少用户"]}',
+                '{"tool":"execute_sql","args":{"sql":"SELECT COUNT(*) AS n FROM users"}}',
+                '{"tool":"terminate","args":{"final_answer":"5 人"}}',
+                '{"chart_type":"table"}',
+                "共有 5 位用户。",
+                '{"generate":false,"reason":"单点事实问答"}',
+            ]
+        )
+        events, emit = _collect_events()
+        req = ChatRequest(question="有多少用户", datasource_id=1)
+        _run(
+            run_team_stream(
+                request=req,
+                current_user_id=1,
+                emit=emit,
+                llm_client=llm,
+                persist=False,
+            )
+        )
+        assert not any(e == "report" for e, _ in events)
+>       assert not llm._q
+E       assert not ['{"generate":false,"reason":"单点事实问答"}']
+E        +  where ['{"generate":false,"reason":"单点事实问答"}'] = <agent.test_team_runner._ScriptedLlm object at 0x000001E4EDE34D70>._q
+
+tests\agent\test_team_runner.py:757: AssertionError
+_____________ test_team_ad_hoc_report_generate_true_emits_report ______________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001E4EBBAF460>
+
+    def test_team_ad_hoc_report_generate_true_emits_report(monkeypatch):
+        """无预设报告 + generate=true + charts 字段 → 服务端注入 ECharts。"""
+        import json
+    
+        _patch_db(
+            monkeypatch,
+            lambda *_a, **_kw: (True, "ok", {"columns": ["q", "amount"], "rows": [[2, 100], [3, 100]]}),
+        )
+        html_body = (
+            "<h2>结论摘要</h2><p>Q2 与 Q3 销售均为 100。</p>"
+            "<h2>建议</h2><ul><li>保持节奏</li></ul>"
+        )
+        llm = _ScriptedLlm(
+            [
+                '{"plans":["对比 Q2/Q3"]}',
+                '{"tool":"execute_sql","args":{"sql":"SELECT q, amount FROM sales"}}',
+                '{"tool":"terminate","args":{"final_answer":"Q2=100,Q3=100"}}',
+                '{"chart_type":"bar"}',
+                "Q2 与 Q3 销售持平，均为 100。",
+                json.dumps(
+                    {
+                        "generate": True,
+                        "reason": "多维对比",
+                        "title": "销售对比报告",
+                        "html": html_body,
+                        "charts": [
+                            {
+                                "id": "chartRadar",
+                                "title": "季度雷达",
+                                "option": {
+                                    "tooltip": {},
+                                    "radar": {
+                                        "indicator": [
+                                            {"name": "Q2", "max": 200},
+                                            {"name": "Q3", "max": 200},
+                                        ]
+                                    },
+                                    "series": [
+                                        {
+                                            "type": "radar",
+                                            "data": [{"value": [100, 100], "name": "销售额"}],
+                                            "areaStyle": {"opacity": 0.25},
+                                        }
+                                    ],
+                                },
+                            },
+                            {
+                                "id": "chartScatter",
+                                "title": "散点",
+                                "option": {
+                                    "xAxis": {"type": "value"},
+                                    "yAxis": {"type": "value"},
+                                    "series": [
+                                        {
+                                            "type": "scatter",
+                                            "symbolSize": 12,
+                                            "data": [[2, 100], [3, 100]],
+                                        }
+                                    ],
+                                },
+                            },
+                        ],
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        events, emit = _collect_events()
+        req = ChatRequest(question="对比 Q2/Q3 销售", datasource_id=1)
+        _run(
+            run_team_stream(
+                request=req,
+                current_user_id=1,
+                emit=emit,
+                llm_client=llm,
+                persist=False,
+            )
+        )
+        reports = [p for e, p in events if e == "report"]
+>       assert len(reports) == 1
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+tests\agent\test_team_runner.py:839: AssertionError
+___________ test_team_ad_hoc_fallback_charts_when_llm_omits_charts ____________
+
+monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x000001E4EBBAFB60>
+
+    def test_team_ad_hoc_fallback_charts_when_llm_omits_charts(monkeypatch):
+        """LLM 只给文字 html、无 charts 时，从结论分数兜底注入柱状+雷达。"""
+        import json
+    
+        _patch_db(
+            monkeypatch,
+            lambda *_a, **_kw: (True, "ok", {"columns": ["n"], "rows": [[45]]}),
+        )
+        prose = (
+            "<div class='header'>学情报告</div>"
+            "<p>前十均分达到 138.8 分，后十均分为 108.4 分，"
+            "优秀线为 127.5 分，两者平均分之差达 30.4 分。</p>"
+        )
+        llm = _ScriptedLlm(
+            [
+                '{"plans":["分析差距"]}',
+                '{"tool":"execute_sql","args":{"sql":"SELECT 1"}}',
+                '{"tool":"terminate","args":{"final_answer":"前十138.8后十108.4"}}',
+                '{"chart_type":"table"}',
+                "前十均分达到 138.8 分，后十均分为 108.4 分，优秀线为 127.5 分。",
+                json.dumps(
+                    {
+                        "generate": True,
+                        "reason": "两极分化",
+                        "title": "差距学情分析",
+                        "html": prose,
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        events, emit = _collect_events()
+        req = ChatRequest(question="前十与后十差距", datasource_id=1)
+        _run(
+            run_team_stream(
+                request=req,
+                current_user_id=1,
+                emit=emit,
+                llm_client=llm,
+                persist=False,
+            )
+        )
+        reports = [p for e, p in events if e == "report"]
+>       assert len(reports) == 1
+E       assert 0 == 1
+E        +  where 0 = len([])
+
+tests\agent\test_team_runner.py:896: AssertionError
+============================== warnings summary ===============================
+src\chat\schemas.py:22
+src\chat\schemas.py:22
+  D:\develop\git-repo\owner\awesome-data\src\chat\schemas.py:22: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class ConversationResponse(BaseModel):
+
+src\chat\schemas.py:78
+src\chat\schemas.py:78
+  D:\develop\git-repo\owner\awesome-data\src\chat\schemas.py:78: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class ConversationRecordResponse(BaseModel):
+
+src\common\schemas\response.py:15
+  D:\develop\git-repo\owner\awesome-data\src\common\schemas\response.py:15: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class ResponseModel(ResponseBase, Generic[T]):
+
+src\system\schemas.py:26
+  D:\develop\git-repo\owner\awesome-data\src\system\schemas.py:26: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class UserResponse(BaseModel):
+
+.venv\Lib\site-packages\fastapi\routing.py:233: 111 warnings
+tests/agent/test_chat_stream_keepalive.py: 39 warnings
+tests/agent/test_chat_stream_routing.py: 130 warnings
+tests/agent/test_education_api.py: 2304 warnings
+tests/agent/test_raw_import.py: 2016 warnings
+tests/agent/test_score_import.py: 192 warnings
+tests/audit/test_api_query.py: 9 warnings
+tests/audit/test_decorators.py: 20 warnings
+tests/audit/test_login_log.py: 15 warnings
+tests/chat/test_question_api.py: 9 warnings
+tests/system/test_edu_permission_api.py: 384 warnings
+tests/system/test_edu_privacy_api.py: 288 warnings
+  D:\develop\git-repo\owner\awesome-data\.venv\Lib\site-packages\fastapi\routing.py:233: DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead
+    is_coroutine = asyncio.iscoroutinefunction(dependant.call)
+
+src\datasource\schemas.py:39
+  D:\develop\git-repo\owner\awesome-data\src\datasource\schemas.py:39: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class DatasourceResponse(BaseModel):
+
+.venv\Lib\site-packages\langgraph\checkpoint\base\__init__.py:18
+  D:\develop\git-repo\owner\awesome-data\.venv\Lib\site-packages\langgraph\checkpoint\base\__init__.py:18: LangChainPendingDeprecationWarning: The default value of `allowed_objects` will change in a future version. Pass an explicit value (e.g., allowed_objects='messages' or allowed_objects='core') to suppress this warning.
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+tests/agent/test_agent_runner.py: 19 warnings
+tests/agent/test_chat_stream_keepalive.py: 3 warnings
+tests/agent/test_chat_stream_routing.py: 7 warnings
+tests/agent/test_data_analyst.py: 2 warnings
+tests/agent/test_education_api.py: 2 warnings
+tests/agent/test_team_graph.py: 2 warnings
+tests/agent/test_team_runner.py: 35 warnings
+tests/audit/test_login_log.py: 1 warning
+tests/chat/test_semantic_clarification_gate.py: 2 warnings
+  D:\\develop\\git-repo\\owner\\awesome-data\\src\\system\\crud\\crud_user.py:20: DeprecationWarning: \n          \U0001f6a8 You probably want to use `session.exec()` instead of `session.query()`.\n  \n          `session.exec()` is SQLModel's own short version with increased type\n          annotations.\n  \n          Or otherwise you might want to use `session.execute()` instead of\n          `session.query()`.\n          \n    return session.query(SysUser).filter(SysUser.id == user_id).first()
+
+tests/agent/test_agent_runner.py: 1 warning
+tests/agent/test_bureau_analysis.py: 1 warning
+tests/agent/test_diagnostic_dynamic.py: 1 warning
+tests/agent/test_education_api.py: 1 warning
+tests/agent/test_education_orchestrator.py: 1 warning
+tests/agent/test_education_regression.py: 1 warning
+tests/agent/test_query_frame.py: 1 warning
+tests/agent/test_raw_import.py: 1 warning
+tests/agent/test_student_exam_report.py: 1 warning
+tests/agent/test_team_graph.py: 1 warning
+tests/agent/test_team_runner.py: 1 warning
+  D:\\develop\\git-repo\\owner\\awesome-data\\src\\system\\crud\\crud_edu_privacy.py:14: DeprecationWarning: \n          \U0001f6a8 You probably want to use `session.exec()` instead of `session.query()`.\n  \n          `session.exec()` is SQLModel's own short version with increased type\n          annotations.\n  \n          Or otherwise you might want to use `session.execute()` instead of\n          `session.query()`.\n          \n    row = session.query(SysEduPrivacy).order_by(SysEduPrivacy.id.asc()).first()
+
+tests/agent/test_agent_runner.py::test_happy_path_emits_full_event_sequence
+tests/agent/test_agent_runner.py::test_happy_path_emits_full_event_sequence
+tests/agent/test_agent_runner.py::test_happy_path_emits_full_event_sequence
+tests/agent/test_data_analyst.py::test_data_analyst_full_happy_path
+tests/agent/test_data_analyst.py::test_data_analyst_full_happy_path
+tests/agent/test_data_analyst.py::test_data_analyst_full_happy_path
+  D:\\develop\\git-repo\\owner\\awesome-data\\src\\system\\authz.py:21: DeprecationWarning: \n          \U0001f6a8 You probably want to use `session.exec()` instead of `session.query()`.\n  \n          `session.exec()` is SQLModel's own short version with increased type\n          annotations.\n  \n          Or otherwise you might want to use `session.execute()` instead of\n          `session.query()`.\n          \n    session.query(SysUserWorkspace)
+
+tests/agent/test_agent_runner.py: 5 warnings
+tests/agent/test_data_analyst.py: 5 warnings
+tests/agent/test_education_regression.py: 6 warnings
+tests/agent/test_student_exam_report.py: 1 warning
+  D:\\develop\\git-repo\\owner\\awesome-data\\src\\datasource\\crud\\crud_datasource.py:15: DeprecationWarning: \n          \U0001f6a8 You probably want to use `session.exec()` instead of `session.query()`.\n  \n          `session.exec()` is SQLModel's own short version with increased type\n          annotations.\n  \n          Or otherwise you might want to use `session.execute()` instead of\n          `session.query()`.\n          \n    return session.query(CoreDatasource).filter(CoreDatasource.id == datasource_id).first()
+
+tests/agent/test_agent_runner.py: 5 warnings
+tests/agent/test_data_analyst.py: 5 warnings
+  D:\\develop\\git-repo\\owner\\awesome-data\\src\\datasource\\service\\query_permission.py:84: DeprecationWarning: \n          \U0001f6a8 You probably want to use `session.exec()` instead of `session.query()`.\n  \n          `session.exec()` is SQLModel's own short version with increased type\n          annotations.\n  \n          Or otherwise you might want to use `session.execute()` instead of\n          `session.query()`.\n          \n    for rule in session.query(DsRule).all():
+
+tests/agent/test_anomaly_alerts.py::test_upsert_report_keeps_confirmed_status
+tests/agent/test_anomaly_alerts.py::test_upsert_report_keeps_confirmed_status
+tests/agent/test_anomaly_alerts.py::test_upsert_from_at_risk_is_one_report
+tests/agent/test_anomaly_alerts.py::test_legacy_student_rows_consolidated_on_list
+  D:\develop\git-repo\owner\awesome-data\src\agent\education\alert_service.py:298: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/agent/test_anomaly_alerts.py::test_upsert_report_keeps_confirmed_status
+  D:\develop\git-repo\owner\awesome-data\src\agent\education\alert_service.py:281: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    row.confirmed_at = datetime.utcnow()
+
+tests/agent/test_anomaly_alerts.py::test_upsert_report_keeps_confirmed_status
+  D:\develop\git-repo\owner\awesome-data\src\agent\education\alert_service.py:283: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    row.update_time = datetime.utcnow()
+
+tests/agent/test_anomaly_alerts.py::test_teacher_list_filters_by_class
+  D:\develop\git-repo\owner\awesome-data\tests\agent\test_anomaly_alerts.py:137: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/agent/test_anomaly_alerts.py::test_legacy_student_rows_consolidated_on_list
+  D:\develop\git-repo\owner\awesome-data\tests\agent\test_anomaly_alerts.py:186: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    now = datetime.utcnow()
+
+tests/agent/test_education_api.py: 10 warnings
+  D:\develop\git-repo\owner\awesome-data\src\agent\education\anomaly_persistence.py:97: DeprecationWarning: datetime.datetime.utcnow() is deprecated and scheduled for removal in a future version. Use timezone-aware objects to represent datetimes in UTC: datetime.datetime.now(datetime.UTC).
+    row.update_time = datetime.utcnow()
+
+tests/agent/test_team_graph.py: 14 warnings
+tests/agent/test_team_runner.py: 112 warnings
+  D:\develop\git-repo\owner\awesome-data\.venv\Lib\site-packages\langgraph\utils\runnable.py:451: DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead
+    asyncio.iscoroutinefunction(func)
+
+tests/agent/test_team_graph.py: 2 warnings
+tests/agent/test_team_runner.py: 16 warnings
+  D:\develop\git-repo\owner\awesome-data\.venv\Lib\site-packages\langgraph\utils\runnable.py:453: DeprecationWarning: 'asyncio.iscoroutinefunction' is deprecated and slated for removal in Python 3.16; use inspect.iscoroutinefunction() instead
+    and asyncio.iscoroutinefunction(func.__call__)
+
+tests/audit/test_login_log.py::test_login_success_logs
+tests/audit/test_login_log.py::test_login_success_logs
+tests/audit/test_login_log.py::test_login_wrong_password_logs_failure
+tests/audit/test_login_log.py::test_login_wrong_password_logs_failure
+tests/audit/test_login_log.py::test_login_account_not_found_logs_failure
+tests/audit/test_login_log.py::test_login_disabled_account_logs_failure
+  D:\\develop\\git-repo\\owner\\awesome-data\\src\\system\\crud\\crud_user.py:15: DeprecationWarning: \n          \U0001f6a8 You probably want to use `session.exec()` instead of `session.query()`.\n  \n          `session.exec()` is SQLModel's own short version with increased type\n          annotations.\n  \n          Or otherwise you might want to use `session.execute()` instead of\n          `session.query()`.\n          \n    return session.query(SysUser).filter(SysUser.account == account).first()
+
+tests/audit/test_login_log.py::test_login_success_logs
+tests/audit/test_login_log.py::test_login_wrong_password_logs_failure
+  D:\\develop\\git-repo\\owner\\awesome-data\\src\\system\\crud\\crud_user.py:40: DeprecationWarning: \n          \U0001f6a8 You probably want to use `session.exec()` instead of `session.query()`.\n  \n          `session.exec()` is SQLModel's own short version with increased type\n          annotations.\n  \n          Or otherwise you might want to use `session.execute()` instead of\n          `session.query()`.\n          \n    session.query(SysUserWorkspace)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/agent/test_agent_runner.py::test_render_html_report_emits_report_event
+FAILED tests/agent/test_bureau_analysis.py::test_elite_roster_no_pii - assert...
+FAILED tests/agent/test_data_analyst.py::test_data_analyst_injects_scope_constraints_in_system_prompt
+FAILED tests/agent/test_edu_scope_context.py::test_format_scope_constraints_includes_session_confirm_and_brief
+FAILED tests/agent/test_education_api.py::test_generate_report_class_overview
+FAILED tests/agent/test_education_integration.py::test_data_analyst_education_report_flow
+FAILED tests/agent/test_education_orchestrator.py::test_intent_resolver_class_overview_with_audience_hint
+FAILED tests/agent/test_education_orchestrator.py::test_orchestrator_class_overview_full_pipeline
+FAILED tests/agent/test_education_tools.py::test_class_overview_template_renders_with_chart_json
+FAILED tests/agent/test_education_tools.py::test_group_feature_template_renders
+FAILED tests/agent/test_education_tools.py::test_build_subject_diagnosis_sections_tool_renders_html
+FAILED tests/agent/test_education_tools.py::test_subject_diagnosis_archive_hides_cross_subject_meta
+FAILED tests/agent/test_knowledge_cohort.py::test_route_forces_compare_knowledge_cohort_tool
+FAILED tests/agent/test_knowledge_cohort.py::test_exam_extract_not_class_subject_garbage
+FAILED tests/agent/test_react_agent.py::test_react_skips_duplicate_tool_with_same_args
+FAILED tests/agent/test_report_intent_routing.py::test_school_vs_leading_subject_avg_is_fact_uses_xxlb
+FAILED tests/agent/test_report_type_display.py::test_standard_report_types_defined
+FAILED tests/agent/test_resource_manager.py::test_install_default_resources_registers_expected_tools
+FAILED tests/agent/test_resource_manager.py::test_install_default_resources_pack_is_unbound
+FAILED tests/agent/test_resource_manager.py::test_build_data_analyst_uses_resource_manager
+FAILED tests/agent/test_resource_manager.py::test_build_data_analyst_falls_back_when_manager_has_no_default
+FAILED tests/agent/test_team_graph.py::test_langgraph_single_sub_task_happy_path
+FAILED tests/agent/test_team_runner.py::test_team_single_sub_task_happy_path
+FAILED tests/agent/test_team_runner.py::test_team_multi_sub_tasks_all_succeed
+FAILED tests/agent/test_team_runner.py::test_team_multi_sub_tasks_partial_failure
+FAILED tests/agent/test_team_runner.py::test_team_planner_garbage_falls_back_to_single_plan
+FAILED tests/agent/test_team_runner.py::test_team_summarizer_failure_falls_back_to_data_analyst_reply
+FAILED tests/agent/test_team_runner.py::test_team_tool_events_carry_sub_task_index
+FAILED tests/agent/test_team_runner.py::test_team_routes_sub_task_to_tool_expert
+FAILED tests/agent/test_team_runner.py::test_team_ad_hoc_report_generate_false_emits_no_report
+FAILED tests/agent/test_team_runner.py::test_team_ad_hoc_report_generate_true_emits_report
+FAILED tests/agent/test_team_runner.py::test_team_ad_hoc_fallback_charts_when_llm_omits_charts
+32 failed, 1207 passed, 5812 warnings in 225.44s (0:03:45)

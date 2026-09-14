@@ -189,8 +189,30 @@ PLANNER_DESC = """[你的职责]
 def _plan_exam_name(question: str) -> str:
     """从问句抽取考试名；抽不到返回空串——禁止回落「本次考试」占位。"""
     from src.agent.education.orchestrator import _extract_exam
+    from src.agent.education.query_frame import (
+        constraint_filter_value,
+        constraint_has_exam_window,
+    )
 
+    named = constraint_filter_value("exam")
+    if named:
+        return named
+    if constraint_has_exam_window():
+        return ""
     return (_extract_exam(question) or "").strip()
+
+
+def _plan_school_name(question: str) -> str:
+    """优先用闸门 grounding 的校名；lookup 维度不再二次抽校。"""
+    from src.agent.education.query_frame import constraint_filter_value, constraint_looks_up
+    from src.agent.education.query_parse import extract_school_target
+
+    named = constraint_filter_value("school")
+    if named:
+        return named
+    if constraint_looks_up("school"):
+        return ""
+    return extract_school_target(question) or ""
 
 
 def _plan_subject_name(question: str) -> str:
@@ -231,11 +253,10 @@ def build_school_subject_report_plan_items(question: str) -> list[dict[str, str]
     """
     from src.agent.education.orchestrator import _extract_class_name
     from src.agent.education.query_parse import (
-        extract_school_target,
         is_school_class_comparison_query,
     )
 
-    school = extract_school_target(question) or "该校"
+    school = _plan_school_name(question) or "该校"
     exam = _plan_exam_name(question)
     subject = _plan_subject_name(question)
     exam_l = _plan_label(exam, missing="问题中的考试")
@@ -288,9 +309,7 @@ def build_school_subject_report_plan_items(question: str) -> list[dict[str, str]
 
 def build_school_class_comparison_plan_items(question: str) -> list[dict[str, str]]:
     """学校各班横向对比：强制全校取数，严禁 class_name。"""
-    from src.agent.education.query_parse import extract_school_target
-
-    school = extract_school_target(question) or "该校"
+    school = _plan_school_name(question) or "该校"
     exam = _plan_exam_name(question)
     subject = _plan_subject_name(question)
     exam_l = _plan_label(exam, missing="问题中的考试")
@@ -712,7 +731,6 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     from src.agent.education.orchestrator import _extract_class_name, _extract_subject
     from src.agent.education.query_parse import (
         extract_district_target,
-        extract_school_target,
         extract_school_type_target,
         is_citywide_nth_class_lookup_query,
         is_class_city_rank_query,
@@ -768,7 +786,7 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
             }
         ]
 
-    school = extract_school_target(q) or filled.get("school_name") or ""
+    school = _plan_school_name(q) or filled.get("school_name") or ""
     school_type = extract_school_type_target(q) or ""
     class_name = _extract_class_name(q) or filled.get("class_name") or ""
     subject = _plan_subject_name(q) or (_extract_subject(q) or "") or filled.get("subject_name") or ""
@@ -1084,9 +1102,8 @@ def build_comprehensive_class_plan_items(question: str) -> list[dict[str, str]]:
 def build_tier_alert_plan_items(question: str) -> list[dict[str, str]]:
     """临界生/分层预警：查学生分数 + 一键渲染 tier_alert 报告。"""
     from src.agent.education.orchestrator import _extract_class_name, _extract_subject
-    from src.agent.education.query_parse import extract_school_target
 
-    school = extract_school_target(question) or ""
+    school = _plan_school_name(question)
     class_name = _extract_class_name(question) or ""
     subject = _plan_subject_name(question) or (_extract_subject(question) or "")
     exam = _plan_exam_name(question)
@@ -1129,9 +1146,8 @@ def build_tier_alert_plan_items(question: str) -> list[dict[str, str]]:
 def build_knowledge_cohort_plan_items(question: str) -> list[dict[str, str]]:
     """班内后十 vs 中位组：知识点掌握差距（专用工具一键查数+渲染）。"""
     from src.agent.education.orchestrator import _extract_class_name, _extract_subject
-    from src.agent.education.query_parse import extract_school_target
 
-    school = extract_school_target(question) or ""
+    school = _plan_school_name(question)
     class_name = _extract_class_name(question) or ""
     subject = _plan_subject_name(question) or (_extract_subject(question) or "")
     exam = _plan_exam_name(question)
@@ -1168,9 +1184,8 @@ def build_knowledge_cohort_plan_items(question: str) -> list[dict[str, str]]:
 def build_class_weak_subject_plan_items(question: str) -> list[dict[str, str]]:
     """指定班级薄弱学科：同校同科班际对比，一键工具。"""
     from src.agent.education.orchestrator import _extract_class_name
-    from src.agent.education.query_parse import extract_school_target
 
-    school = extract_school_target(question) or ""
+    school = _plan_school_name(question)
     class_name = _extract_class_name(question) or ""
     exam = _plan_exam_name(question)
     scope_args: list[str] = []
@@ -1199,17 +1214,50 @@ def build_class_weak_subject_plan_items(question: str) -> list[dict[str, str]]:
     ]
 
 
+def build_fact_metric_question_plan_items(question: str) -> list[dict[str, str]]:
+    """自由问答指标不明：先 question 确认口径，再按选择用 SQL 回答。"""
+    _ = question
+    return [
+        {
+            "sub_task": (
+                "范围约束含待确认口径。先调用 question，questions 参数必须原样使用"
+                "约束中给出的 JSON，不得改写或增删选项，禁止询问学校/班级/考试/学生。"
+                "用户选择后再用 execute_sql 按该口径自由问答直接回答；"
+                "选择前禁止 execute_sql，禁止任何 HTML 报告。完成后 terminate。"
+            ),
+            "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
+        }
+    ]
+
+
+def build_report_type_question_plan_items(question: str) -> list[dict[str, str]]:
+    """报告类型不明：先 question 确认口径，再按选择调用对应报告工具。"""
+    _ = question
+    return [
+        {
+            "sub_task": (
+                "范围约束含待确认口径。先调用 question，questions 参数必须原样使用"
+                "约束中给出的 JSON，不得改写或增删选项，禁止询问学校/班级/考试/学生。"
+                "用户选择后再调用对应 build_*_report_data_tool(render=true)；"
+                "选择前禁止调用任何 build_* 报告工具。完成后 terminate。"
+            ),
+            "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
+        }
+    ]
+
+
 def build_group_feature_plan_items(question: str) -> list[dict[str, str]]:
     """群体特征：按维度聚合全校/范围成绩并渲染 group_feature 报告。"""
+    from src.agent.education.direction_choice import da_question_mode, dimension_explicit
     from src.agent.education.orchestrator import _extract_subject
     from src.agent.education.query_parse import (
-        extract_school_target,
         infer_group_feature_dimension,
     )
 
-    school = extract_school_target(question) or ""
+    school = _plan_school_name(question)
     subject = _plan_subject_name(question) or (_extract_subject(question) or "")
     exam = _plan_exam_name(question)
+    defer = da_question_mode() != "off" and not dimension_explicit(question)
     dimension = infer_group_feature_dimension(question)
     dim_label = {
         "class": "班级",
@@ -1221,30 +1269,48 @@ def build_group_feature_plan_items(question: str) -> list[dict[str, str]]:
     school_l = school or "该校"
     subject_l = f"【{subject}】" if subject else ""
     exam_l = _plan_label(exam, missing="问题中的考试")
-    scope_args = [f"dimension={dimension}"]
+    scope_args: list[str] = []
+    if not defer:
+        scope_args.append(f"dimension={dimension}")
     if school:
         scope_args.append(f"school_name={school}")
     if subject:
         scope_args.append(f"subject_name={subject}")
     if exam:
         scope_args.append(f"exam_name={exam}")
-    tool_args = ", ".join(scope_args) + ", "
+    tool_args = ", ".join(scope_args)
+    if tool_args:
+        tool_args = tool_args + ", "
+    render_task = (
+        (
+            "范围约束含待确认口径时，先调用 question（questions 必须原样使用约束中的 JSON），"
+            "禁止默认 dimension=class；用户选择前不得调用 "
+            "build_group_feature_report_data_tool。"
+            f"选择后再调 build_group_feature_report_data_tool({tool_args}"
+            "dimension=用户选择的维度, render=true) 生成群体特征 HTML；完成后 terminate。"
+        )
+        if defer
+        else (
+            f"调 build_group_feature_report_data_tool({tool_args}render=true) "
+            f"生成按{dim_label}的群体特征 HTML（含均分/及格率对比、特征画像、干预建议）；"
+            "完成后 terminate。"
+        )
+    )
+    group_hint = "按用户确认的维度可分组" if defer else f"按{dim_label}可分组"
     return [
         {
             "sub_task": (
                 f"查询【{school_l}】在【{exam_l}】{subject_l}每位学生得分"
                 f"（最终 SQL 必须是学生明细：含 student_id、class、score、exam_score；"
-                f"按{dim_label}可分组；**禁止**最终只输出校级/班级 KPI 聚合行、"
+                f"{group_hint}；**禁止**最终只输出校级/班级 KPI 聚合行、"
                 "**禁止**按单班过滤）"
             ),
             "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
         },
         {
             "sub_task": (
-                f"调 build_group_feature_report_data_tool({tool_args}render=true) "
-                f"生成按{dim_label}的群体特征 HTML（含均分/及格率对比、特征画像、干预建议）；"
-                "完成后 terminate。"
-                "**禁止** build_subject_diagnosis_sections_tool / build_tier_alert_report_data_tool"
+                render_task
+                + "**禁止** build_subject_diagnosis_sections_tool / build_tier_alert_report_data_tool"
             ),
             "sub_task_agent": _TOOL_EXPERT_AGENT,
         },
@@ -1254,9 +1320,8 @@ def build_group_feature_plan_items(question: str) -> list[dict[str, str]]:
 def build_trend_tracking_plan_items(question: str) -> list[dict[str, str]]:
     """班级成绩趋势：查历次明细 + build_trend_tracking_report_data_tool。"""
     from src.agent.education.orchestrator import _extract_class_name, _extract_subject
-    from src.agent.education.query_parse import extract_school_target
 
-    school = extract_school_target(question) or ""
+    school = _plan_school_name(question)
     class_name = _extract_class_name(question) or ""
     subject = _plan_subject_name(question) or (_extract_subject(question) or "")
     school_l = school or "该校"
@@ -1310,9 +1375,8 @@ def should_replace_with_trend_tracking_plan(
 def build_class_overview_plan_items(question: str) -> list[dict[str, str]]:
     """班级成绩总览：查该班学生分数 + 渲染 class_overview。"""
     from src.agent.education.orchestrator import _extract_class_name, _extract_subject
-    from src.agent.education.query_parse import extract_school_target
 
-    school = extract_school_target(question) or ""
+    school = _plan_school_name(question)
     class_name = _extract_class_name(question) or ""
     subject = _plan_subject_name(question) or (_extract_subject(question) or "")
     exam = _plan_exam_name(question)

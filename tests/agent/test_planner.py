@@ -376,3 +376,106 @@ def test_planner_infers_tool_expert_for_visual_analysis_report_task():
     )
     assert reply.action_report.extra["plans"] == ["帮我生成学生成绩可视化分析报告"]
     assert reply.action_report.extra["plan_agents"] == ["ToolExpert"]
+
+
+def test_plan_exam_and_school_prefer_query_frame() -> None:
+    from src.agent.education.query_frame import (
+        parse_structural_frame,
+        push_constraints,
+        reset_constraints,
+    )
+    from src.agent.expand.planner import (
+        _plan_exam_name,
+        _plan_school_name,
+        build_fact_query_plan_items,
+    )
+
+    question = "全市近4次考试哪几所学校本科达线人数一直在增长"
+    frame = parse_structural_frame(question)
+    token = push_constraints({"query_frame": frame.to_dict()})
+    try:
+        assert _plan_exam_name(question) == ""
+        assert _plan_school_name(question) == ""
+        blob = " ".join(item["sub_task"] for item in build_fact_query_plan_items(question))
+        assert "学校【次考试】" not in blob
+        assert "学校【哪几所" not in blob
+        assert "考试【次考试】" not in blob
+    finally:
+        reset_constraints(token)
+
+
+def test_plan_school_uses_grounded_target() -> None:
+    from src.agent.education.query_frame import push_constraints, reset_constraints
+    from src.agent.expand.planner import _plan_school_name
+
+    token = push_constraints({"target_school": "B05宝楠学校"})
+    try:
+        assert _plan_school_name("宝楠中学均分") == "B05宝楠学校"
+    finally:
+        reset_constraints(token)
+
+
+def test_group_feature_plan_defers_unnamed_dimension(monkeypatch) -> None:
+    from src.agent.expand.planner import build_group_feature_plan_items
+
+    monkeypatch.setattr(
+        "src.agent.education.direction_choice.da_question_mode",
+        lambda: "shadow",
+    )
+
+    blob = " ".join(item["sub_task"] for item in build_group_feature_plan_items("扬州中学群体特征分析"))
+    assert "禁止默认 dimension=class" in blob
+    assert "dimension=class," not in blob
+    assert "question" in blob
+
+
+def test_group_feature_plan_keeps_explicit_dimension() -> None:
+    from src.agent.expand.planner import build_group_feature_plan_items
+
+    blob = " ".join(
+        item["sub_task"] for item in build_group_feature_plan_items("扬州中学按学科群体特征")
+    )
+    assert "dimension=subject" in blob
+
+
+def test_unresolved_report_type_plan_asks_question(monkeypatch) -> None:
+    from src.agent.education.intent_router import ReportRoute, plan_items_for_route
+    from src.agent.education.report_types import ReportType
+
+    monkeypatch.setattr(
+        "src.agent.education.direction_choice.da_question_mode",
+        lambda: "on",
+    )
+
+    route = ReportRoute(
+        needs_report=True,
+        report_type=ReportType.CLASS_OVERVIEW,
+        confidence=0.45,
+        reason="有报告意图但类型不明",
+        source="fallback",
+    )
+    blob = " ".join(
+        item["sub_task"] for item in plan_items_for_route(route, "帮我出一份分析报告")
+    )
+    assert "question" in blob
+    assert "build_class_overview_report_data_tool" not in blob
+
+
+def test_vague_fact_query_plan_asks_question(monkeypatch) -> None:
+    from src.agent.education.intent_router import ReportRoute, plan_items_for_route
+
+    monkeypatch.setattr(
+        "src.agent.education.direction_choice.da_question_mode",
+        lambda: "on",
+    )
+    route = ReportRoute(needs_report=False, report_type=None, confidence=0.7, source="fallback")
+    blob = " ".join(
+        item["sub_task"]
+        for item in plan_items_for_route(
+            route, "扬州中学高三(10)班2026届高三1月期末，帮我看看成绩"
+        )
+    )
+    assert "question" in blob
+    assert "execute_sql" in blob
+    assert "禁止任何 HTML" in blob or "禁止任何 HTML 报告" in blob
+

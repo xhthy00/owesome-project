@@ -263,6 +263,12 @@ class _RunConstraints:
     user_utterance: str | None = None
     #: 本轮已对齐的考试/校/班/区县字面量，供 SQL 护栏。
     bound_literals: list[str] | None = None
+    #: 教育问句语义帧（filter / lookup / exam_window），供 Planner 与工具读取。
+    query_frame: dict[str, Any] | None = None
+    #: 闸门声明的口径分叉（聚合维度 / 报告类型）。
+    pending_choices: list[dict[str, Any]] | None = None
+    #: 用户（或 fallback）已确认的口径。
+    user_choices: dict[str, str] | None = None
     #: 跨请求 Intent WAITING 恢复标记。
     is_retry_chat: bool = False
     last_speaker: str | None = None
@@ -304,6 +310,12 @@ class _RunConstraints:
             ctx["user_utterance"] = self.user_utterance
         if self.bound_literals:
             ctx["bound_literals"] = list(self.bound_literals)
+        if self.query_frame:
+            ctx["query_frame"] = dict(self.query_frame)
+        if self.pending_choices:
+            ctx["pending_choices"] = [dict(item) for item in self.pending_choices]
+        if self.user_choices:
+            ctx["user_choices"] = dict(self.user_choices)
         if self.is_retry_chat:
             ctx["is_retry_chat"] = True
         if self.last_speaker:
@@ -346,6 +358,23 @@ class _RunConstraints:
                 if str(x).strip()
             ]
             or None,
+            query_frame=(
+                dict(data["query_frame"]) if isinstance(data.get("query_frame"), dict) else None
+            ),
+            pending_choices=(
+                [dict(item) for item in data["pending_choices"] if isinstance(item, dict)]
+                if isinstance(data.get("pending_choices"), list)
+                else None
+            ),
+            user_choices=(
+                {
+                    str(key): str(value)
+                    for key, value in data["user_choices"].items()
+                    if str(key).strip() and str(value).strip()
+                }
+                if isinstance(data.get("user_choices"), dict)
+                else None
+            ),
             is_retry_chat=bool(data.get("is_retry_chat")),
             last_speaker=(
                 str(data["last_speaker"]).strip() if data.get("last_speaker") else None
@@ -358,6 +387,40 @@ def _load_edu_scope_summary(user_id: int) -> dict[str, Any]:
     from datasource.service.edu_permission import edu_scope_dict_for_user_id
 
     return edu_scope_dict_for_user_id(user_id)
+
+
+def _inject_direction_ctx(ctx: dict[str, Any], constraints: _RunConstraints | None) -> None:
+    if constraints is None:
+        return
+    ctx["pending_choices"] = [dict(item) for item in (constraints.pending_choices or [])]
+    ctx["user_choices"] = dict(constraints.user_choices or {})
+    if constraints.report_route:
+        ctx["report_route"] = dict(constraints.report_route)
+
+
+def _sync_direction_choices(constraints: _RunConstraints | None, ctx: dict[str, Any] | None) -> None:
+    """把 question 工具写回的口径同步到会话级约束，供后续子任务读取。"""
+    if constraints is None or not isinstance(ctx, dict):
+        return
+    pending = ctx.get("pending_choices")
+    if isinstance(pending, list):
+        constraints.pending_choices = [
+            dict(item) for item in pending if isinstance(item, dict)
+        ] or None
+    choices = ctx.get("user_choices")
+    if isinstance(choices, dict):
+        cleaned = {
+            str(key): str(value)
+            for key, value in choices.items()
+            if str(key).strip() and str(value).strip()
+        }
+        constraints.user_choices = cleaned or None
+        report_type = str(cleaned.get("report_type") or "").strip()
+        if report_type:
+            route = dict(constraints.report_route or {})
+            route["report_type"] = report_type
+            route["reason"] = "user_choice"
+            constraints.report_route = route
 
 
 def _build_shared_constraints(question: str, user_id: int) -> _RunConstraints:
@@ -1322,6 +1385,7 @@ async def _run_data_analyst_phase(
     state.tool_runtime_ctx["user_id"] = current_user_id
     if constraints is not None and constraints.report_route:
         state.tool_runtime_ctx["report_route"] = dict(constraints.report_route)
+    _inject_direction_ctx(state.tool_runtime_ctx, constraints)
 
     if llm_client is None:
         llm_client = LangChainLlmClient()
@@ -1380,6 +1444,7 @@ async def _run_data_analyst_phase(
             sub_task_index=sub_task_index,
         )
         await emit("error", {"error": f"agent run failed: {e}"})
+        _sync_direction_choices(constraints, state.tool_runtime_ctx)
         return _DataAnalystPhase(
             reply=None,
             state=state,
@@ -1420,6 +1485,7 @@ async def _run_data_analyst_phase(
             sub_task_index=sub_task_index,
         )
 
+    _sync_direction_choices(constraints, state.tool_runtime_ctx)
     return _DataAnalystPhase(
         reply=reply,
         state=state,
@@ -1479,6 +1545,7 @@ async def _run_tool_expert_phase(
     state.tool_runtime_ctx["user_id"] = current_user_id
     if constraints is not None and constraints.report_route:
         state.tool_runtime_ctx["report_route"] = dict(constraints.report_route)
+    _inject_direction_ctx(state.tool_runtime_ctx, constraints)
     # ToolExpert 本阶段通常不再 execute_sql；把上游 DataAnalyst 的完整明细
     # 写入 tool_runtime_ctx，供综合/学生报告工具空参读取（禁止 LLM 手抄 200+ 行）。
     if constraints and isinstance(constraints.report_data, dict):
@@ -1557,6 +1624,7 @@ async def _run_tool_expert_phase(
             sub_task_index=sub_task_index,
         )
         await emit("error", {"error": f"tool expert run failed: {e}"})
+        _sync_direction_choices(constraints, state.tool_runtime_ctx)
         return _DataAnalystPhase(
             reply=None,
             state=state,
@@ -1593,6 +1661,7 @@ async def _run_tool_expert_phase(
             sub_task_index=sub_task_index,
         )
 
+    _sync_direction_choices(constraints, state.tool_runtime_ctx)
     return _DataAnalystPhase(
         reply=reply,
         state=state,
@@ -1663,7 +1732,13 @@ async def _run_planner_phase(
             constraints.report_route = route.to_dict()
 
     if should_use_deterministic_report_plan(request.question, route):
-        plan_items = plan_items_for_route(route, request.question)
+        from src.agent.education.query_frame import push_constraints, reset_constraints
+
+        token = push_constraints(constraints.to_context() if constraints else {})
+        try:
+            plan_items = plan_items_for_route(route, request.question)
+        finally:
+            reset_constraints(token)
         await _emit_agent_speak(
             emit,
             agent="Planner",
@@ -1677,6 +1752,9 @@ async def _run_planner_phase(
         )
         return plan_items
 
+    from src.agent.education.query_frame import push_constraints, reset_constraints
+
+    token = push_constraints(constraints.to_context() if constraints else {})
     try:
         planner = PlannerAgent(llm_client=llm_client)
         reply = await planner.generate_reply(
@@ -1690,6 +1768,22 @@ async def _run_planner_phase(
             ),
             sender=UserProxyAgent(),
         )
+        ar = reply.action_report
+        extra = dict(ar.extra) if ar and ar.extra else {}
+        plans = extra.get("plans") or []
+        plan_agents = extra.get("plan_agents") or []
+        if not isinstance(plans, list) or not plans:
+            plans = [request.question]
+        plans = [str(p) for p in plans if p]
+        if not isinstance(plan_agents, list):
+            plan_agents = []
+        plan_items = []
+        for idx, p in enumerate(plans):
+            raw_agent = str(plan_agents[idx]) if idx < len(plan_agents) else "DataAnalyst"
+            sub_task_agent = "ToolExpert" if raw_agent == "ToolExpert" else "DataAnalyst"
+            plan_items.append({"sub_task": p, "sub_task_agent": sub_task_agent})
+        plan_items = coerce_plan_items_if_needed(request.question, plan_items, route=route)
+        plan_items = coerce_plan_to_route(request.question, plan_items, route)
     except Exception as e:  # noqa: BLE001 - Planner 失败不能拖垮 team
         logger.warning("planner failed: %s", e)
         await _emit_agent_speak(emit, agent="Planner", status="error", steps=steps, error=str(e))
@@ -1698,24 +1792,8 @@ async def _run_planner_phase(
             request.question, plan_items, route=route
         )
         return plan_items
-
-    ar = reply.action_report
-    extra = dict(ar.extra) if ar and ar.extra else {}
-    plans = extra.get("plans") or []
-    plan_agents = extra.get("plan_agents") or []
-    if not isinstance(plans, list) or not plans:
-        plans = [request.question]
-    plans = [str(p) for p in plans if p]
-    if not isinstance(plan_agents, list):
-        plan_agents = []
-    plan_items: list[dict[str, str]] = []
-    for idx, p in enumerate(plans):
-        raw_agent = str(plan_agents[idx]) if idx < len(plan_agents) else "DataAnalyst"
-        sub_task_agent = "ToolExpert" if raw_agent == "ToolExpert" else "DataAnalyst"
-        plan_items.append({"sub_task": p, "sub_task_agent": sub_task_agent})
-
-    plan_items = coerce_plan_items_if_needed(request.question, plan_items, route=route)
-    plan_items = coerce_plan_to_route(request.question, plan_items, route)
+    finally:
+        reset_constraints(token)
 
     await _emit_agent_speak(
         emit,

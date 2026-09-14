@@ -1297,10 +1297,24 @@ def plan_items_for_route(route: ReportRoute, question: str) -> list[dict[str, st
         return build_class_weak_subject_plan_items(question)
     if is_knowledge_cohort_gap_query(question or ""):
         return build_knowledge_cohort_plan_items(question)
+    from src.agent.education.direction_choice import (
+        da_question_mode,
+        is_fact_metric_unresolved,
+        is_report_type_unresolved,
+    )
+
     if not route.needs_report:
+        if da_question_mode() != "off" and is_fact_metric_unresolved(question or "", route):
+            from src.agent.expand.planner import build_fact_metric_question_plan_items
+
+            return build_fact_metric_question_plan_items(question)
         from src.agent.expand.planner import build_fact_query_plan_items
 
         return build_fact_query_plan_items(question)
+    if da_question_mode() != "off" and is_report_type_unresolved(question or "", route):
+        from src.agent.expand.planner import build_report_type_question_plan_items
+
+        return build_report_type_question_plan_items(question)
     rt = route.report_type or ReportType.CLASS_OVERVIEW
     return plan_items_for_report_type(rt, question)
 
@@ -1489,9 +1503,26 @@ def coerce_plan_to_route(
                 return plan_items
             logger.info("intent coerce: item difficulty curve → fact tool plan")
             return plan_items_for_route(route, question)
+        from src.agent.education.direction_choice import da_question_mode, is_fact_metric_unresolved
+
+        if da_question_mode() != "off" and is_fact_metric_unresolved(q, route):
+            blob = " ".join(str(it.get("sub_task") or "") for it in (plan_items or []))
+            if "question" in blob and "待确认口径" in blob:
+                return plan_items
+            logger.info("intent coerce: unresolved fact metric → question plan")
+            return plan_items_for_route(route, question)
         if plan_is_fact_query(plan_items):
             return plan_items
         logger.info("intent coerce: needs_report=false → fact query plan")
+        return plan_items_for_route(route, question)
+
+    from src.agent.education.direction_choice import da_question_mode, is_report_type_unresolved
+
+    if da_question_mode() != "off" and is_report_type_unresolved(q, route):
+        blob = " ".join(str(it.get("sub_task") or "") for it in (plan_items or []))
+        if "question" in blob and "待确认口径" in blob:
+            return plan_items
+        logger.info("intent coerce: unresolved report type → question plan")
         return plan_items_for_route(route, question)
 
     if route.report_type and plan_matches_report_type(plan_items, route.report_type):

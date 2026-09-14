@@ -518,6 +518,7 @@ def sanitize_llm_slots(slots: Mapping[str, Any] | None) -> dict[str, str]:
                 continue
         if slot == SLOT_SCHOOL:
             from src.agent.education.query_parse import (
+                _is_exam_window_fragment,
                 _is_request_speech_school_name,
                 _strip_school_ask_fillers,
                 is_interrogative_school_name,
@@ -528,6 +529,7 @@ def sanitize_llm_slots(slots: Mapping[str, Any] | None) -> dict[str, str]:
                 not value
                 or _is_request_speech_school_name(value)
                 or is_interrogative_school_name(value)
+                or _is_exam_window_fragment(value)
             ):
                 continue
         out[slot] = value
@@ -555,7 +557,7 @@ def _scope_from_text(text: str) -> str:
     return ""
 
 
-def candidate_missing_slots(
+def _candidate_missing_slots_legacy(
     route: Any,
     question: str,
     filled: Mapping[str, str],
@@ -698,6 +700,74 @@ def candidate_missing_slots(
         add(SLOT_STUDENT)
 
     return out
+
+
+class RequiredSlotResolver:
+    """在旧必填矩阵上统一应用 lookup/window 语义策略。"""
+
+    _SINGLE_EXAM_FACTS = frozenset(
+        {
+            FactQueryKind.ITEM_DIAGNOSIS,
+            FactQueryKind.SUBJECT_RESEARCH,
+        }
+    )
+    _SINGLE_EXAM_REPORTS = frozenset(
+        {
+            ReportType.SUBJECT_DIAGNOSIS,
+            ReportType.DIFFICULTY_CURVE,
+            ReportType.SUBJECT_RESEARCH,
+        }
+    )
+
+    @classmethod
+    def resolve(
+        cls,
+        route: Any,
+        question: str,
+        filled: Mapping[str, str],
+        edu_scope: Mapping[str, Any] | None = None,
+        *,
+        frame: Any = None,
+    ) -> list[str]:
+        missing = _candidate_missing_slots_legacy(route, question, filled, edu_scope)
+        if frame is None:
+            return missing
+
+        if frame.lookup("school"):
+            missing = [slot for slot in missing if slot not in {SLOT_SCHOOL, SLOT_CLASS}]
+        if frame.lookup("class"):
+            missing = [slot for slot in missing if slot != SLOT_CLASS]
+        if frame.lookup("student"):
+            missing = [slot for slot in missing if slot != SLOT_STUDENT]
+        if frame.lookup("subject"):
+            missing = [slot for slot in missing if slot != SLOT_SUBJECT]
+        if frame.lookup("exam"):
+            missing = [slot for slot in missing if slot != SLOT_EXAM]
+
+        rt = _route_type(route)
+        kind = fact_query_kind(question)
+        single_exam = kind in cls._SINGLE_EXAM_FACTS or rt in cls._SINGLE_EXAM_REPORTS
+        if frame.exam_window and not single_exam:
+            missing = [slot for slot in missing if slot != SLOT_EXAM]
+        return missing
+
+
+def candidate_missing_slots(
+    route: Any,
+    question: str,
+    filled: Mapping[str, str],
+    edu_scope: Mapping[str, Any] | None = None,
+    *,
+    frame: Any = None,
+) -> list[str]:
+    """返回真正阻断执行的缺槽；语义帧存在时识别答案维度和考试窗口。"""
+    return RequiredSlotResolver.resolve(
+        route,
+        question,
+        filled,
+        edu_scope,
+        frame=frame,
+    )
 
 
 def fallback_clarification(
@@ -899,6 +969,7 @@ __all__ = [
     "FactQueryKind",
     "REQUIRED_SLOTS_BY_FACT",
     "REQUIRED_SLOTS_BY_REPORT",
+    "RequiredSlotResolver",
     "SLOT_CLASS",
     "SLOT_EXAM",
     "SLOT_SCHOOL",

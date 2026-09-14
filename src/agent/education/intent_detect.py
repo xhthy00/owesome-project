@@ -113,6 +113,38 @@ INTENT_SCHEMA: dict[str, Any] = {
             "type": "object",
             "properties": {key: {"type": "string"} for key in SLOT_KEYS},
         },
+        "mentions": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["kind", "value", "role", "evidence"],
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["exam", "class", "school", "subject", "student"],
+                    },
+                    "value": {"type": "string"},
+                    "role": {"type": "string", "enum": ["filter", "lookup"]},
+                    "evidence": {"type": "string"},
+                    "confidence": {"type": "number"},
+                },
+            },
+        },
+        "answer_dimensions": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "enum": ["exam", "class", "school", "subject", "student"],
+            },
+        },
+        "exam_window": {
+            "type": "object",
+            "properties": {
+                "mode": {"type": "string", "enum": ["recent", "all", "named"]},
+                "count": {"type": ["integer", "null"]},
+                "evidence": {"type": "string"},
+            },
+        },
         "ask_user": {"type": "string"},
         "user_input": {"type": "string"},
     },
@@ -125,6 +157,9 @@ class EduIntent:
     """一次意图识别结果。字段对齐 DB-GPT ``IntentDetectionResponse``。"""
 
     slots: dict[str, str] = field(default_factory=dict)
+    mentions: list[dict[str, Any]] = field(default_factory=list)
+    answer_dimensions: list[str] = field(default_factory=list)
+    exam_window: dict[str, Any] | None = None
     needs_report: bool = False
     report_type: str | None = None
     confidence: float = 0.0
@@ -144,6 +179,9 @@ class EduIntent:
             "needs_report": self.needs_report,
             "report_type": self.report_type or "",
             "slots": {key: self.slots.get(key, "") for key in SLOT_KEYS},
+            "mentions": [dict(item) for item in self.mentions],
+            "answer_dimensions": list(self.answer_dimensions),
+            "exam_window": dict(self.exam_window) if self.exam_window else None,
             "ask_user": self.ask_user,
             "user_input": self.user_input,
         }
@@ -218,7 +256,21 @@ def build_intent_messages(
         '"confidence":0.0到1.0,"reason":"一句话",'
         '"slots":{"exam_name":"","class_name":"","school_name":"",'
         '"subject_name":"","student_id":"","scope":""},'
+        '"mentions":[{"kind":"school","value":"扬州中学","role":"filter",'
+        '"evidence":"扬州中学","confidence":0.95}],'
+        '"answer_dimensions":[],"exam_window":null,'
         '"ask_user":"","user_input":""}\n\n'
+        "语义抽取规则：\n"
+        "- mentions 只放问句中有原文 evidence 的实体；role=filter 表示查询条件，"
+        "role=lookup 表示用户要查询出的答案维度。\n"
+        "- 「哪几所学校/哪个班/哪些学生」是 lookup，不得写入对应 slots。\n"
+        "- 「近4次考试/最近几场/历次考试」写入 exam_window，"
+        "不是 exam_name；近4次应为 {\"mode\":\"recent\",\"count\":4,"
+        "\"evidence\":\"近4次考试\"}。\n"
+        "- slots 仅保留 filter 实体的兼容值；lookup 和 window 不得写入 slots。\n"
+        "- 示例：「扬州中学近4次考试」=school filter+recent window；"
+        "「近4次考试哪几所学校增长」=school lookup+recent window、无 school filter；"
+        "「扬州中学哪几个班增长」=school filter+class lookup。\n\n"
         f"槽位定义：\n{_render_slot_defs()}\n\n"
         f"意图（报告类型）候选：\n{catalog}\n\n"
         f"意图判定规则：\n{rules}"
@@ -279,6 +331,53 @@ def parse_intent_payload(payload: Any) -> EduIntent:
             if value:
                 slots[key] = value
 
+    mentions: list[dict[str, Any]] = []
+    for raw in data.get("mentions") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        kind = str(raw.get("kind") or "").strip()
+        role = str(raw.get("role") or "").strip()
+        value = str(raw.get("value") or "").strip()
+        evidence = str(raw.get("evidence") or "").strip()
+        if kind not in {"exam", "class", "school", "subject", "student"}:
+            continue
+        if role not in {"filter", "lookup"}:
+            continue
+        try:
+            mention_confidence = float(raw.get("confidence") or 0.7)
+        except (TypeError, ValueError):
+            mention_confidence = 0.7
+        mentions.append(
+            {
+                "kind": kind,
+                "value": value,
+                "role": role,
+                "evidence": evidence,
+                "confidence": max(0.0, min(1.0, mention_confidence)),
+            }
+        )
+
+    answer_dimensions = [
+        str(item).strip()
+        for item in (data.get("answer_dimensions") or [])
+        if str(item).strip() in {"exam", "class", "school", "subject", "student"}
+    ]
+    raw_window = data.get("exam_window")
+    exam_window: dict[str, Any] | None = None
+    if isinstance(raw_window, Mapping):
+        mode = str(raw_window.get("mode") or "").strip()
+        if mode in {"recent", "all", "named"}:
+            count_raw = raw_window.get("count")
+            try:
+                count = int(count_raw) if count_raw not in (None, "") else None
+            except (TypeError, ValueError):
+                count = None
+            exam_window = {
+                "mode": mode,
+                "count": count if count and count > 0 else None,
+                "evidence": str(raw_window.get("evidence") or "").strip(),
+            }
+
     try:
         confidence = float(data.get("confidence") or 0.7)
     except (TypeError, ValueError):
@@ -286,6 +385,9 @@ def parse_intent_payload(payload: Any) -> EduIntent:
 
     return EduIntent(
         slots=slots,
+        mentions=mentions,
+        answer_dimensions=answer_dimensions,
+        exam_window=exam_window,
         needs_report=_coerce_bool(data.get("needs_report")),
         report_type=_coerce_report_type(data.get("report_type")),
         confidence=max(0.0, min(1.0, confidence)),

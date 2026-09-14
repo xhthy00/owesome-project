@@ -51,6 +51,12 @@ class Settings(BaseSettings):
 
     # 教育澄清：用 LLM 抽取意图槽位（对标 DB-GPT IntentDetection）。关掉则只走规则抽槽。
     edu_llm_slot_extraction: bool = True
+    # 教育槽位流水线：legacy=旧字典合并；shadow=新旧并跑、旧结果执行；
+    # semantic=语义帧驱动执行。灰度期间可随时回切 legacy。
+    edu_slot_mode: Literal["legacy", "shadow", "semantic"] = "semantic"
+    # DataAnalyst 口径分叉 HITL：off=不声明；shadow=声明并打日志、不弹窗；
+    # on=ReAct 中用 question 工具让用户选择。
+    edu_da_question_mode: Literal["off", "shadow", "on"] = "shadow"
 
 
 

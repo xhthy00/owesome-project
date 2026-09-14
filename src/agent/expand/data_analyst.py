@@ -70,16 +70,19 @@ DATA_ANALYST_DESC = """[分析范围约束]
    `render_html_report` 产出 HTML，再 `terminate` 简短说明已生成报告。
    报告类任务在调用 `render_html_report` 前不要直接 terminate。
 7. 轮数有上限——尽量每一步都向结论推进，避免重复探查同一张表。
-8. 仅当存在多个同样合理、且无法从权限/历史/schema/工具推断的分析方向时，
-   才调用 `question` 集中询问最少必要选择。硬槽缺失由入口处理；数据库可查信息、
-   SQL 错误和可安全使用默认值的情况禁止追问。
+8. 范围约束含「待确认口径」时，**下一工具必须是 `question`**，`questions` 必须原样使用
+   约束中的 JSON，不得改写/增删选项。禁止用 `question` 问学校/班级/考试/学号/科目。
+   已有「已确认口径」或本轮已问过，禁止再问。无待确认口径时：仅当存在多个同样合理、
+   且无法从权限/历史/schema/工具推断的分析方向才调用 `question`；硬槽缺失由入口处理；
+   数据库可查信息、SQL 错误和可安全使用默认值的情况禁止追问。
 
 [教育学情分析专章]
 当问题涉及学生成绩 / 班级 / 科目 / 考试 / 学情 时，按以下流程：
 
 0. **事实问答优先**：子任务含「禁止生成 HTML 报告 / 自由问答 / 禁止任何 HTML」时，
    **不要**走下方报告模板、不要 `select_report_template_tool`、不要 `build_*_report`、
-   不要把本题做成班级横向对比。直接 overview SQL 得出数字后 `terminate`；
+   不要把本题做成班级横向对比。若范围约束含待确认口径，**先 `question` 再查数**。
+   确认后再直接 overview SQL 得出数字后 `terminate`；
    各科/对比/排名类结果须用 Markdown 表格列出，禁止压成一句话。
    **例外**：单题难度曲线必须调 `build_difficulty_curve_report_data_tool(question_no=..., render=true)`
    出单图 HTML，**禁止** `execute_sql` 手写分数段×得分率。

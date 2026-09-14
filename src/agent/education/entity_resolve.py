@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from difflib import SequenceMatcher
 from typing import Any, Mapping
 
 from src.agent.education.clarification import (
@@ -11,7 +12,9 @@ from src.agent.education.clarification import (
     SLOT_EXAM,
     SLOT_SCHOOL,
 )
+from src.agent.education.query_frame import EntitySource, EntityStatus, QueryFrame
 from src.agent.education.query_parse import (
+    _is_exam_window_fragment,
     extract_district_target,
     is_interrogative_school_name,
     normalize_fullwidth_parentheses,
@@ -59,6 +62,7 @@ class EntityResolveResult:
     clarify_slot: str | None = None
     options: list[str] = field(default_factory=list)
     reason: str = ""
+    frame: QueryFrame | None = None
 
 
 def normalize_class_name(name: str) -> str:
@@ -116,6 +120,21 @@ def link_school_values(hint: str, candidates: list[str]) -> list[str]:
     return [c for c in candidates if str(c).strip() and _school_link_stem(c) == want]
 
 
+def _similar_candidates(hint: str, candidates: list[str], *, limit: int = 12) -> list[str]:
+    """零命中时只给相近候选，避免把全量目录误当成用户选择题。"""
+    want = re.sub(r"\s+", "", str(hint or ""))
+    scored: list[tuple[float, str]] = []
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if not value:
+            continue
+        score = SequenceMatcher(None, want, re.sub(r"\s+", "", value)).ratio()
+        if score >= 0.35:
+            scored.append((score, value))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [value for _, value in scored[:limit]]
+
+
 def resolve_entities(
     filled: Mapping[str, str],
     peek: Mapping[str, Any] | None,
@@ -158,7 +177,9 @@ def resolve_entities(
             )
 
     school_hint = bound.get(SLOT_SCHOOL) or ""
-    if school_hint and is_interrogative_school_name(school_hint):
+    if school_hint and (
+        is_interrogative_school_name(school_hint) or _is_exam_window_fragment(school_hint)
+    ):
         bound.pop(SLOT_SCHOOL, None)
         school_hint = ""
     # 教师/校管账号只有脱敏 school_id 时，filled 会带 GZ_…；peek 目录是中文 s_name，
@@ -217,6 +238,66 @@ def resolve_entities(
     return EntityResolveResult(bound=bound)
 
 
+def resolve_query_frame(
+    frame: QueryFrame,
+    peek: Mapping[str, Any] | None,
+    *,
+    edu_scope: Mapping[str, Any] | None = None,
+) -> EntityResolveResult:
+    """按实体来源对语义帧做目录落地，低可信残片零命中时静默丢弃。"""
+    filled = frame.to_filled(grounded_only=False)
+    result = resolve_entities(filled, peek, edu_scope=edu_scope)
+    if result.clarify_slot:
+        kind_by_slot = {
+            SLOT_EXAM: "exam",
+            SLOT_SCHOOL: "school",
+            SLOT_CLASS: "class",
+        }
+        kind = kind_by_slot.get(result.clarify_slot)
+        mention = frame.selected_filter(kind) if kind else None
+        if mention and not mention.has_evidence and mention.source is EntitySource.RULE:
+            mention.status = EntityStatus.REJECTED
+            mention.reason = result.reason or "低可信规则候选未命中目录"
+            frame.diagnostics.append(f"{kind}:catalog_miss_rejected")
+            rerun = resolve_entities(
+                frame.to_filled(grounded_only=False),
+                peek,
+                edu_scope=edu_scope,
+            )
+            rerun.frame = frame
+            return rerun
+        if mention:
+            mention.status = EntityStatus.AMBIGUOUS
+            result.options = _similar_candidates(mention.value, result.options)
+            mention.candidates = list(result.options)
+            mention.reason = result.reason
+        result.frame = frame
+        return result
+
+    catalogs = dict(peek or {})
+    catalog_by_kind = {
+        "exam": list(catalogs.get("exam_names") or catalogs.get("exams") or []),
+        "school": list(catalogs.get("schools") or catalogs.get("school_names") or []),
+        "class": list(catalogs.get("classes") or catalogs.get("class_names") or []),
+    }
+    slot_by_kind = {"exam": SLOT_EXAM, "school": SLOT_SCHOOL, "class": SLOT_CLASS}
+    for kind, candidates in catalog_by_kind.items():
+        mention = frame.selected_filter(kind)
+        if mention is None or not candidates:
+            continue
+        bound_value = str(result.bound.get(slot_by_kind[kind]) or "").strip()
+        if bound_value:
+            mention.value = bound_value
+            mention.status = EntityStatus.GROUNDED
+            mention.reason = "目录唯一命中"
+        elif not mention.has_evidence and mention.source is EntitySource.RULE:
+            mention.status = EntityStatus.REJECTED
+            mention.reason = "低可信规则候选未进入目录绑定"
+    result.bound = frame.to_filled(grounded_only=True)
+    result.frame = frame
+    return result
+
+
 def bound_literals(bound: Mapping[str, str]) -> list[str]:
     """供 SQL 护栏比对的已绑定字面量。"""
     out: list[str] = []
@@ -234,4 +315,5 @@ __all__ = [
     "link_values",
     "normalize_class_name",
     "resolve_entities",
+    "resolve_query_frame",
 ]

@@ -94,7 +94,9 @@ def _guard_report_when_fact_query(
     """needs_report=false 时拒绝报告工具，提示改用 SQL 回答。"""
     needs = _ctx_needs_report(tool_runtime_ctx)
     if needs is not False:
-        return None
+        return _guard_unresolved_direction(
+            tool_runtime_ctx, kind="report_type", tool_name=tool_name
+        )
     return ToolResult(
         content=(
             f"本题不需要生成 HTML 报告（needs_report=false）。"
@@ -102,6 +104,39 @@ def _guard_report_when_fact_query(
             f"勿再调 `{tool_name}`。"
         ),
         data={"error": "needs_report_false_use_sql_answer"},
+    )
+
+
+def _guard_unresolved_direction(
+    tool_runtime_ctx: dict[str, Any] | None,
+    *,
+    kind: str,
+    tool_name: str,
+) -> ToolResult | None:
+    """on 模式下口径未确认时拒绝报告工具。"""
+    from src.agent.education.direction_choice import (
+        KIND_GROUP_DIMENSION,
+        da_question_mode,
+        first_unresolved_choice,
+        question_payload_json,
+    )
+
+    if da_question_mode() != "on":
+        return None
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    pending = ctx.get("pending_choices")
+    choices = ctx.get("user_choices") if isinstance(ctx.get("user_choices"), dict) else {}
+    unresolved = first_unresolved_choice(pending, choices)
+    if unresolved is None or unresolved.kind != kind:
+        return None
+    payload = question_payload_json(unresolved)
+    label = "聚合维度" if kind == KIND_GROUP_DIMENSION else "报告类型"
+    return ToolResult(
+        content=(
+            f"尚未确认{label}，禁止调用 `{tool_name}`。"
+            f"请先调用 question，questions={payload}。"
+        ),
+        data={"error": "pending_direction_unresolved", "kind": kind},
     )
 
 
@@ -3697,6 +3732,16 @@ def build_group_feature_report_data_tool(
     )
     if blocked is not None:
         return blocked
+    blocked = _guard_unresolved_direction(
+        ctx, kind="group_dimension", tool_name="build_group_feature_report_data_tool"
+    )
+    if blocked is not None:
+        return blocked
+    from src.agent.education.direction_choice import resolved_dimension
+
+    chosen = resolved_dimension(ctx.get("user_choices"), ctx.get("pending_choices"))
+    if chosen:
+        dimension = chosen
     # 用户原问是「班级横向对比」时，禁止被误调成群体特征报告
     user_q = str(
         ctx.get("user_question")
@@ -5659,6 +5704,7 @@ def build_student_subject_diagnosis_tool(
     workspace_oid: int | None = None,
     user_id: int | None = None,
     report_data: dict[str, Any] | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
     weak_threshold: float = 60.0,
     render: bool = True,
 ) -> ToolResult:
@@ -5676,8 +5722,9 @@ def build_student_subject_diagnosis_tool(
             content="build_student_subject_diagnosis_tool 失败：student_id 为空。",
             data={"error": "missing student_id"},
         )
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
     blocked = _guard_report_when_fact_query(
-        tool_runtime_ctx, tool_name="build_student_subject_diagnosis_tool"
+        ctx, tool_name="build_student_subject_diagnosis_tool"
     )
     if blocked is not None:
         return blocked

@@ -195,7 +195,14 @@ Auth helpers in `system/authz.py` — `is_platform_admin()`, `is_workspace_admin
 - **`get_session()`** FastAPI dependency: use `from common.core.database import get_session` for request-scoped DB sessions. Use `get_db_session()` context manager for non-request code (background tasks, scripts).
 
 ## Windows notes (from global rules)
-- PowerShell: set UTF-8 first — `chcp 65001; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)`.
+- PowerShell: set UTF-8 first — `chcp 65001; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)`. Keep this prefix on its own; never feed it into a pipeline.
+- **Never pipe or redirect a native program's stdio** (`.exe` / `.com` — `python`, `uv`, `git`, `pytest`, `ruff`, `alembic`, `chcp`, …). Under DSH's Windows `workspace-write` sandbox (ACL restricted token) the child cannot start: you get `Program 'x.exe' failed to run: Access is denied`, and short-lived console helpers such as `chcp.com` die during DLL init with `0xC0000142`, which pops the modal “应用程序无法正常启动” dialog on the desktop. Measured in this workspace (Windows PowerShell 5.1, no pwsh 7 installed): bare `& python.exe --version` succeeded 25/25; `... 2>&1 | Out-String` and `... | Out-Null` failed 20/20.
+  - ❌ `python -m pytest -q 2>&1 | Select-Object -Last 15`, `git ls-files tests | Measure-Object`, `ruff check . | Out-File log.txt`, `chcp 65001 | Out-Null`
+  - ✅ Run the native command bare and let its output reach the console — the harness already truncates long output to its tail.
+  - ✅ Need the output in a file? Let `cmd` do the redirection, then read the file: `cmd /c "python -m pytest -q > artifacts\out.txt 2>&1"` followed by the `read` tool on `artifacts\out.txt` (or `Get-Content artifacts\out.txt -Tail 40`).
+  - ✅ Pipelines whose *input* is a cmdlet (`Get-ChildItem`, `Select-String`, `Get-Content`) are fine — only a native program's stdio must not become a PowerShell pipe.
+  - ❌ `Start-Process` on a native command (~50% `Access is denied` here); use a bare invocation instead.
+  - An `Access is denied` from a native launch is this defect — **not** a sandbox write denial and **not** evidence that a tool is blocked. Re-run the same command without a pipeline before concluding anything; `uv`, `python` and `.venv\Scripts\python.exe` all work here.
 - Don't assume source-file corruption from terminal mojibake; validate bytes with strict UTF-8 decoding before rewriting files containing non-ASCII (much of this repo is Chinese-language).
 
 ## References

@@ -1993,6 +1993,28 @@ def execute_sql(
     from src.datasource.service.sql_auto_fix import format_auto_fix_note, run_sql_with_auto_fix
 
     ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    try:
+        from src.agent.education.direction_choice import (
+            KIND_FACT_METRIC,
+            da_question_mode,
+            first_unresolved_choice,
+            question_payload_json,
+        )
+
+        if da_question_mode() == "on":
+            choices = ctx.get("user_choices") if isinstance(ctx.get("user_choices"), dict) else {}
+            unresolved = first_unresolved_choice(ctx.get("pending_choices"), choices)
+            if unresolved is not None and unresolved.kind == KIND_FACT_METRIC:
+                payload = question_payload_json(unresolved)
+                return ToolResult(
+                    content=(
+                        "尚未确认问答口径，禁止调用 `execute_sql`。"
+                        f"请先调用 question，questions={payload}。"
+                    ),
+                    data={"error": "pending_direction_unresolved", "kind": KIND_FACT_METRIC},
+                )
+    except Exception:  # noqa: BLE001
+        pass
     bound = ctx.get("bound_literals") or []
     q = str(
         ctx.get("user_question")

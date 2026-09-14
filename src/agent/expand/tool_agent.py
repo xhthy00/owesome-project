@@ -38,7 +38,9 @@ TOOL_AGENT_DESC = """[分析范围约束]
 - 如果子任务只需要算术/比例/换算，优先用 `calculate`；
 - 如果子任务需要取数，使用 list/describe/sample/execute_sql；
 - 如果用户要求可视化报告/分析报告/图表页面/HTML 报告，使用 `render_html_report` 返回最终 HTML；
-- 仅当多个执行方向都合理且无法从权限、历史、schema 或工具推断时调用 `question`；
+- 范围约束含「待确认口径」时，下一工具必须是 `question`，questions 必须原样使用约束 JSON；
+  禁止询问学校/班级/考试/学生；已确认口径后禁止再问。
+- 无待确认口径时，仅当多个执行方向都合理且无法从权限、历史、schema 或工具推断时调用 `question`；
   不要用它询问硬槽、数据库可查信息或 SQL 错误。
 
 [教育学情普通模板报告组装 — 严格流程]

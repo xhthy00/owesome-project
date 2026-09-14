@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections import OrderedDict
 from dataclasses import dataclass, field
+from time import monotonic
 from typing import Any
 
 from src.agent.education.clarification import (
@@ -24,6 +26,7 @@ from src.agent.education.clarification import (
 )
 from src.agent.education.intent_detect import EduIntent
 from src.agent.education.intent_router import ReportRoute, classify_and_extract
+from src.agent.education.query_frame import QueryFrame
 from src.chat.schemas import ChatRequest
 from src.chat.service.agent_runner import (
     EmitCallback,
@@ -31,8 +34,16 @@ from src.chat.service.agent_runner import (
     _persist_async,
     _RunConstraints,
 )
+from src.common.core.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+_CATALOG_CACHE_TTL_SECONDS = 60.0
+_CATALOG_CACHE_MAX_SIZE = 256
+_CATALOG_CACHE: OrderedDict[
+    tuple[int, int, int, tuple[tuple[str, str], ...]],
+    tuple[float, dict[str, list[str]]],
+] = OrderedDict()
 
 _NEW_QUESTION_PREFIXES = (
     "换个问题",
@@ -88,6 +99,32 @@ def _load_pending(
     except Exception as exc:  # noqa: BLE001
         logger.warning("load pending clarify failed: %s", exc)
         return None
+
+
+def _attach_direction_choices(
+    constraints: _RunConstraints,
+    question: str,
+    route: ReportRoute,
+) -> None:
+    from src.agent.education.direction_choice import (
+        compute_pending_choices,
+        da_question_mode,
+        log_shadow_choices,
+    )
+
+    if da_question_mode() == "off":
+        return
+    pending = compute_pending_choices(
+        question,
+        route,
+        constraints.edu_scope,
+        query_frame=constraints.query_frame,
+    )
+    if not pending:
+        return
+    constraints.pending_choices = [item.to_dict() for item in pending]
+    if da_question_mode() == "shadow":
+        log_shadow_choices(question, pending)
 
 
 def _apply_filled(constraints: _RunConstraints, filled: dict[str, str]) -> None:
@@ -215,20 +252,41 @@ async def _load_entity_catalog(
     user_id: int,
     filled: dict[str, str],
 ) -> dict[str, list[str]]:
+    normalized = _canonicalize_filled_slots(filled)
+    cache_key = (
+        int(datasource_id),
+        int(workspace_oid),
+        int(user_id),
+        tuple(sorted((str(key), str(value)) for key, value in normalized.items() if value)),
+    )
+    cached = _CATALOG_CACHE.get(cache_key)
+    now = monotonic()
+    if cached and now - cached[0] < _CATALOG_CACHE_TTL_SECONDS:
+        _CATALOG_CACHE.move_to_end(cache_key)
+        return {key: list(values) for key, values in cached[1].items()}
+    if cached:
+        _CATALOG_CACHE.pop(cache_key, None)
     try:
         from datasource.service.edu_permission import EduScope, edu_scope_dict_for_user_id
         from src.agent.education.api import _build_orchestrator, _load_meta_options
 
         orch = _build_orchestrator(datasource_id, workspace_oid, user_id=user_id)
         edu = edu_scope_dict_for_user_id(user_id)
-        return await _load_meta_options(
+        result = await _load_meta_options(
             orch,
-            school_name=filled.get(SLOT_SCHOOL) or None,
-            exam_name=filled.get(SLOT_EXAM) or None,
-            class_name=filled.get(SLOT_CLASS) or None,
-            subject=filled.get(SLOT_SUBJECT) or None,
+            school_name=normalized.get(SLOT_SCHOOL) or None,
+            exam_name=normalized.get(SLOT_EXAM) or None,
+            class_name=normalized.get(SLOT_CLASS) or None,
+            subject=normalized.get(SLOT_SUBJECT) or None,
             edu_scope=EduScope.from_dict(edu),
         )
+        if result:
+            copied = {key: list(values) for key, values in result.items()}
+            _CATALOG_CACHE[cache_key] = (now, copied)
+            _CATALOG_CACHE.move_to_end(cache_key)
+            while len(_CATALOG_CACHE) > _CATALOG_CACHE_MAX_SIZE:
+                _CATALOG_CACHE.popitem(last=False)
+        return result
     except Exception as exc:  # noqa: BLE001
         logger.warning("load entity catalog failed: %s", exc)
         return {}
@@ -247,6 +305,7 @@ async def _link_or_clarify(
     persist_question: str,
     effective_question: str,
     intent: EduIntent | None = None,
+    query_frame: QueryFrame | None = None,
 ) -> ClarifyTurnResult | None:
     """值链接：唯一命中写入规范名；0/N 转追问。目录失败则放行。"""
     from src.chat.service.conversation_context import (
@@ -262,9 +321,22 @@ async def _link_or_clarify(
     )
     if not catalog:
         return None
-    from src.agent.education.entity_resolve import resolve_entities
+    from src.agent.education.entity_resolve import resolve_entities, resolve_query_frame
 
-    result = resolve_entities(filled, catalog, edu_scope=constraints.edu_scope)
+    result = (
+        resolve_query_frame(query_frame, catalog, edu_scope=constraints.edu_scope)
+        if query_frame is not None
+        else resolve_entities(filled, catalog, edu_scope=constraints.edu_scope)
+    )
+    logger.info(
+        "edu_entity_resolve outcome=%s slot=%s option_count=%d diagnostics=%s",
+        "clarify" if result.clarify_slot else "bound",
+        result.clarify_slot or "",
+        len(result.options),
+        list(result.frame.diagnostics) if result.frame is not None else [],
+    )
+    if result.frame is not None:
+        constraints.query_frame = result.frame.to_dict()
     if result.clarify_slot:
         need = fallback_clarification(
             persist_question,
@@ -294,6 +366,8 @@ async def _link_or_clarify(
         for k, v in result.bound.items()
         if v and str(filled.get(k) or "").strip() != v
     }
+    if query_frame is not None:
+        filled.clear()
     filled.update(result.bound)
     _apply_filled(constraints, filled)
     extra = extra_inherited_slots({}, changed)
@@ -377,30 +451,78 @@ async def maybe_clarify_turn(
     )
     constraints.report_route = route.to_dict()
 
-    # LLM 抽槽优先，规则抽槽兜底并集：规则还负责权限派生的槽（绑定学校 / 唯一班级 /
-    # 学生本人学号），那些 LLM 看不到；问句里明说的值以 LLM 为准。
-    current_filled = extract_filled_slots(request.question, edu)
-    current_filled.update(sanitize_llm_slots(intent.slots))
+    rule_filled = extract_filled_slots(request.question, edu)
+    llm_filled = sanitize_llm_slots(intent.slots)
+    legacy_current = {**rule_filled, **llm_filled}
+    turn_ctx = (
+        load_turn_context(request.conversation_id, current_user_id, edu)
+        if should_inherit
+        else None
+    )
     if should_inherit:
-        turn_ctx = load_turn_context(request.conversation_id, current_user_id, edu)
-        filled = merge_inherited_slots(
-            current_filled, turn_ctx.inherited, request.question
+        legacy_filled = merge_inherited_slots(
+            legacy_current, turn_ctx.inherited if turn_ctx else {}, request.question
         )
     else:
-        filled = dict(current_filled)
+        legacy_filled = dict(legacy_current)
+
+    from src.agent.education.slot_merge import merge_turn_slots
+
+    current_semantic = merge_turn_slots(
+        request.question,
+        rule_slots=rule_filled,
+        llm_slots=llm_filled,
+        llm_mentions=intent.mentions,
+        llm_answer_dimensions=intent.answer_dimensions,
+        llm_exam_window=intent.exam_window,
+        edu_scope=edu,
+    )
+    semantic = merge_turn_slots(
+        request.question,
+        rule_slots=rule_filled,
+        llm_slots=llm_filled,
+        llm_mentions=intent.mentions,
+        llm_answer_dimensions=intent.answer_dimensions,
+        llm_exam_window=intent.exam_window,
+        inherited=turn_ctx.inherited if turn_ctx else None,
+        edu_scope=edu,
+    )
+    slot_mode = get_settings().edu_slot_mode
+    if slot_mode == "semantic":
+        current_filled = current_semantic.filled
+        filled = semantic.filled
+    else:
+        current_filled = legacy_current
+        filled = legacy_filled
+        if slot_mode == "shadow" and filled != semantic.filled:
+            logger.info(
+                "edu_slot_shadow_diff legacy=%s semantic=%s diagnostics=%s",
+                sorted(filled),
+                sorted(semantic.filled),
+                semantic.frame.diagnostics,
+            )
+    constraints.query_frame = semantic.frame.to_dict()
     filled = _canonicalize_filled_slots(filled)
     extra = extra_inherited_slots(current_filled, filled)
     # user_input 是 LLM 补全后的完整指令；「补充：标签=值」标记必须保留——
     # 下游 sub_task 与工具会对 user_question 做正则抽取，纯改写会打断这条链路。
     # 有确定性继承槽时保留用户原问，避免 LLM user_input 中的模糊/缩写值覆盖真值。
     base_question = request.question
-    if not extra and intent.ok and intent.user_input:
+    if slot_mode != "semantic" and not extra and intent.ok and intent.user_input:
         base_question = intent.user_input
     effective_question = apply_inherited_supplements(base_question, extra)
     _apply_filled(constraints, filled)
-    candidates = candidate_missing_slots(route, request.question, filled, edu)
+    candidates = candidate_missing_slots(
+        route,
+        request.question,
+        filled,
+        edu,
+        frame=semantic.frame if slot_mode == "semantic" else None,
+    )
 
     def _pass(*, halted: bool, record_id: int = 0) -> ClarifyTurnResult:
+        if not halted:
+            _attach_direction_choices(constraints, persist_question, route)
         return ClarifyTurnResult(
             halted=halted,
             record_id=record_id,
@@ -424,8 +546,13 @@ async def maybe_clarify_turn(
             persist_question=persist_question,
             effective_question=effective_question,
             intent=intent,
+            query_frame=semantic.frame if slot_mode == "semantic" else None,
         )
         if linked is not None:
+            if not linked.halted and linked.constraints is not None:
+                _attach_direction_choices(
+                    linked.constraints, persist_question, route
+                )
             return linked
         return _pass(halted=False)
 
@@ -450,8 +577,13 @@ async def maybe_clarify_turn(
             persist_question=persist_question,
             effective_question=effective_question,
             intent=intent,
+            query_frame=semantic.frame if slot_mode == "semantic" else None,
         )
         if linked is not None:
+            if not linked.halted and linked.constraints is not None:
+                _attach_direction_choices(
+                    linked.constraints, persist_question, route
+                )
             return linked
         return _pass(halted=False)
 
@@ -499,6 +631,8 @@ async def _emit_and_persist_clarify(
     intent: EduIntent | None = None,
 ) -> ClarifyTurnResult:
     payload = need.to_payload()
+    if constraints.query_frame:
+        payload["query_frame"] = dict(constraints.query_frame)
     if intent is not None and intent.ok:
         # 下一轮读回来当 prev_intent，走 DB-GPT 的"增量合并"而不是重新识别。
         payload["intent"] = intent.to_dict()

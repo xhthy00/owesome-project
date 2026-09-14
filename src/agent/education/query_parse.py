@@ -1805,6 +1805,21 @@ _SCHOOL_NAME_EXAM_PREFIXES = (
     "模拟",
     "考试",
 )
+_EXAM_WINDOW_PREFIX_RE = re.compile(
+    r"^(?:最近|近)?(?:[0-9一二三四五六七八九十两俩几]+)?[次场](?:考试|测试|检测)"
+)
+
+
+def _strip_exam_window_prefix(name: str) -> str:
+    """「次考试扬州中学」→「扬州中学」。数字后的「次考试」常被拼进校名。"""
+    n = str(name or "").strip()
+    m = _EXAM_WINDOW_PREFIX_RE.match(n)
+    if not m:
+        return n
+    rest = n[m.end() :]
+    if _school_name_stem(rest) or is_interrogative_school_name(rest):
+        return rest
+    return n
 
 
 def _strip_exam_tokens_from_school_name(name: str) -> str:
@@ -1822,7 +1837,7 @@ def _strip_exam_tokens_from_school_name(name: str) -> str:
                 n = rest
                 changed = True
                 break
-    return n
+    return _strip_exam_window_prefix(n)
 
 
 def _is_request_speech_school_name(name: str) -> bool:
@@ -1840,6 +1855,18 @@ def _is_request_speech_school_name(name: str) -> bool:
                 changed = True
                 break
     return not stem
+
+
+def _is_exam_window_fragment(name: str) -> bool:
+    """「近4次考试哪几所」剥问句后会剩「次考试」，不是校名。"""
+    n = re.sub(r"\s+", "", str(name or ""))
+    if not n:
+        return False
+    if re.search(_SCHOOL_SUFFIX + r"$", n):
+        return False
+    if is_vague_exam_name(n) or is_recent_n_exam_window(n):
+        return True
+    return bool(re.search(r"(?:[次场](?:考试|测试|检测)?|考试|测试|检测)$", n))
 
 
 def extract_school_targets(question: str) -> list[str]:
@@ -1869,6 +1896,7 @@ def extract_school_targets(question: str) -> list[str]:
                     or not _school_name_stem(name)
                     or _is_request_speech_school_name(name)
                     or _is_regional_exam_label(name)
+                    or _is_exam_window_fragment(name)
                     or name in _GENERIC_SCHOOL_LABELS
                     or is_interrogative_school_name(name)
                 ):
@@ -2028,6 +2056,67 @@ def format_scope_constraints(constraints: dict[str, Any] | None) -> str:
         parts.append(
             "指代「这场/刚才/该班」时必须用已确认范围，禁止另选默认考试或默查全市。"
         )
+    frame = raw.get("query_frame")
+    if isinstance(frame, dict):
+        dimensions = [
+            str(item).strip()
+            for item in (frame.get("answer_dimensions") or [])
+            if str(item).strip()
+        ]
+        if dimensions:
+            labels = {
+                "school": "学校",
+                "class": "班级",
+                "student": "学生",
+                "exam": "考试",
+                "subject": "科目",
+            }
+            parts.append(
+                "答案维度="
+                + "、".join(labels.get(item, item) for item in dimensions)
+                + "（这些是待查询结果，不得作为 WHERE 已知值）"
+            )
+        window = frame.get("exam_window")
+        if isinstance(window, dict) and window.get("mode"):
+            mode = str(window["mode"])
+            count = window.get("count")
+            if mode == "recent":
+                label = f"最近{count}次考试" if count else "最近若干次考试"
+            elif mode == "all":
+                label = "全部历次考试"
+            else:
+                label = str(window.get("evidence") or "指定考试窗口")
+            parts.append(f"考试窗口={label}（不是考试专名，不得等值过滤 exam_name）")
+    pending = raw.get("pending_choices")
+    user_choices = raw.get("user_choices") if isinstance(raw.get("user_choices"), dict) else {}
+    if isinstance(pending, list) and pending and not (
+        user_choices.get("dimension")
+        or user_choices.get("report_type")
+        or user_choices.get("fact_metric")
+    ):
+        from src.agent.education.direction_choice import (
+            first_unresolved_choice,
+            question_payload_json,
+        )
+
+        choice = first_unresolved_choice(pending, user_choices)
+        if choice is not None:
+            parts.append(
+                "待确认口径="
+                + question_payload_json(choice)
+                + "（下一工具必须是 question，questions 参数必须原样使用该 JSON，"
+                "不得改写/增删选项，禁止询问学校/班级/考试/学生）"
+            )
+    elif user_choices:
+        confirmed = []
+        if user_choices.get("dimension"):
+            confirmed.append(f"聚合维度={user_choices['dimension']}")
+        if user_choices.get("report_type"):
+            confirmed.append(f"报告类型={user_choices['report_type']}")
+        if user_choices.get("fact_metric"):
+            confirmed.append(f"问答口径={user_choices['fact_metric']}")
+        if confirmed:
+            parts.append("已确认口径=" + " ".join(confirmed) + "（禁止再次调用 question）")
     keywords = raw.get("required_keywords") or []
     if keywords:
         kw = "、".join(str(k) for k in keywords[:12])
