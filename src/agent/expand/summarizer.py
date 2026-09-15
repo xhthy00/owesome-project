@@ -133,6 +133,12 @@ class SummarizerAgent(ConversableAgent):
     actions: list[Action] = []  # 无 Action：基类 act() 会直接把 thinking 文本回填为 ActionOutput
     max_retry_count: int = 1  # 结论生成失败也不重试，调用方自行回落 DataAnalyst 原文
 
+    async def thinking(self, messages: list[dict[str, str]], sender: Any) -> str:
+        raw = await super().thinking(messages, sender)
+        from src.agent.util.tool_call_parser import strip_think_blocks
+
+        return strip_think_blocks(raw)
+
     def _build_prompt_variables(self, reply: AgentMessage) -> dict[str, Any]:
         base = super()._build_prompt_variables(reply)
         mode = str(base.get("answer_mode") or "report").strip().lower()

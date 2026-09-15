@@ -74,11 +74,11 @@ _NEXT_TOOL_HINTS: dict[str, str] = {
 }
 
 _SQL_FACT_TASK_MARKERS = (
-    "用 SQL 直接回答",
-    "自由 SQL",
     "本题是优势/薄弱学科",
     "全市第N名是哪个班",
 )
+_BOUND_FACT_SCOPE_RE = re.compile(r"范围：(?:学校|班级|考试)【[^】]+】")
+_SCHEMA_EXPLORATION_HINTS = ("有哪些表", "表结构", "哪些字段", "有哪些字段", "字段有哪些")
 
 _TERMINATE_WITHOUT_SQL_MSG = (
     "本子任务必须先成功调用 execute_sql 拿到真实结果行，再 terminate。"
@@ -89,8 +89,18 @@ _TERMINATE_WITHOUT_SQL_MSG = (
 
 
 def _sql_fact_task_requires_execute(sub_task: str) -> bool:
+    """成绩事实问必须先查到行；元数据探查（有哪些表/字段）不能被计划套话误伤。
+
+    Planner 会给几乎所有事实问套上「用 SQL 直接回答」+ 教育学情口径长文，
+    所以不能单凭这句套话拦截 terminate（否则 describe_table 也会被拦住）。
+    会话 944 的计划带「范围：学校【…】」，这才是绑定范围后的查数任务。
+    """
     t = sub_task or ""
+    if any(h in t for h in _SCHEMA_EXPLORATION_HINTS):
+        return False
     if any(m in t for m in _SQL_FACT_TASK_MARKERS):
+        return True
+    if ("用 SQL 直接回答" in t or "自由 SQL" in t) and _BOUND_FACT_SCOPE_RE.search(t):
         return True
     return False
 

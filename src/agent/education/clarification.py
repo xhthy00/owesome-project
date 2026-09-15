@@ -135,14 +135,14 @@ class FactQueryKind(str, Enum):
 #: 用户已给宽范围（全市/各校）或权限已唯一绑定时，由 ``candidate_missing_slots``
 #: 的豁免层减掉，不在本表里开口子。
 REQUIRED_SLOTS_BY_FACT: dict[FactQueryKind, tuple[str, ...]] = {
-    FactQueryKind.ITEM_DIAGNOSIS: (SLOT_EXAM, SLOT_SUBJECT, SLOT_CLASS, SLOT_SCHOOL),
+    FactQueryKind.ITEM_DIAGNOSIS: (SLOT_EXAM, SLOT_SUBJECT, SLOT_SCHOOL, SLOT_CLASS),
     FactQueryKind.SUBJECT_RESEARCH: (SLOT_EXAM, SLOT_SUBJECT, SLOT_SCHOOL),
-    FactQueryKind.CLASS_WEAK_SUBJECT: (SLOT_EXAM, SLOT_CLASS, SLOT_SCHOOL),
-    FactQueryKind.SUBJECT_STRENGTH: (SLOT_EXAM, SLOT_CLASS, SLOT_SCHOOL),
-    FactQueryKind.LINE_REACH: (SLOT_EXAM, SLOT_CLASS, SLOT_SCHOOL),
-    FactQueryKind.SCORE_STAT: (SLOT_EXAM, SLOT_CLASS, SLOT_SCHOOL),
-    FactQueryKind.RANK: (SLOT_EXAM, SLOT_CLASS, SLOT_SCHOOL),
-    FactQueryKind.VAGUE_OVERALL: (SLOT_EXAM, SLOT_CLASS, SLOT_SCHOOL),
+    FactQueryKind.CLASS_WEAK_SUBJECT: (SLOT_EXAM, SLOT_SCHOOL, SLOT_CLASS),
+    FactQueryKind.SUBJECT_STRENGTH: (SLOT_EXAM, SLOT_SCHOOL, SLOT_CLASS),
+    FactQueryKind.LINE_REACH: (SLOT_EXAM, SLOT_SCHOOL, SLOT_CLASS),
+    FactQueryKind.SCORE_STAT: (SLOT_EXAM, SLOT_SCHOOL, SLOT_CLASS),
+    FactQueryKind.RANK: (SLOT_EXAM, SLOT_SCHOOL, SLOT_CLASS),
+    FactQueryKind.VAGUE_OVERALL: (SLOT_EXAM, SLOT_SCHOOL, SLOT_CLASS),
     FactQueryKind.UNSPECIFIED_EXAM: (SLOT_EXAM,),
 }
 _PROMPT_BY_SLOT = {
@@ -356,11 +356,12 @@ def fact_query_kind(question: str) -> FactQueryKind | None:
 
 def _first_hard_slot(candidates: list[str]) -> str | None:
     """按优先级取硬槽；候选非空时规则必追问，LLM 不能否决。"""
+    # 班级从属于学校：两边都缺时先问学校，班级选项才能按校过滤。
     priority = (
         SLOT_EXAM,
         SLOT_SCOPE,
-        SLOT_CLASS,
         SLOT_SCHOOL,
+        SLOT_CLASS,
         SLOT_SUBJECT,
         SLOT_STUDENT,
     )
@@ -699,6 +700,12 @@ def _candidate_missing_slots_legacy(
     if rt == ReportType.STUDENT_PROFILE and not filled_map.get(SLOT_STUDENT):
         add(SLOT_STUDENT)
 
+    # 要问班、又没绑校时，学校必须进候选，由 _first_hard_slot 优先追问。
+    if SLOT_CLASS in out and not filled_map.get(SLOT_SCHOOL):
+        bound = _bound_school(edu)
+        if not bound or role not in ("teacher", "school_admin", "student"):
+            add(SLOT_SCHOOL)
+
     return out
 
 
@@ -781,7 +788,7 @@ def fallback_clarification(
     """LLM 失败时取候选第一个槽。"""
     if not candidates:
         return None
-    slot = candidates[0]
+    slot = _first_hard_slot(candidates) or candidates[0]
     opts = list(options or [])
     if slot == SLOT_SCOPE and not opts:
         opts = list(_SCOPE_OPTIONS)
@@ -848,6 +855,28 @@ def build_judge_messages(
     ]
 
 
+_SLOT_ASK_HINTS = {
+    SLOT_SCOPE: ("范围", "全市", "全校"),
+    SLOT_EXAM: ("考试", "哪场", "哪次"),
+    SLOT_CLASS: ("班级", "哪个班", "哪班"),
+    SLOT_STUDENT: ("学生", "学号"),
+    SLOT_SUBJECT: ("科目", "学科", "哪门"),
+    SLOT_SCHOOL: ("学校", "哪所", "哪校"),
+}
+
+
+def _ask_matches_slot(ask: str, slot: str) -> bool:
+    """LLM 追问文案必须在问当前槽，否则丢弃，避免芯片和气泡各问一件事。"""
+    text = (ask or "").strip()
+    if not text:
+        return False
+    hints = _SLOT_ASK_HINTS.get(slot)
+    if not hints:
+        label = _SLOT_LABEL.get(slot, "")
+        return bool(label) and label in text
+    return any(h in text for h in hints)
+
+
 async def judge_clarification(
     question: str,
     *,
@@ -858,7 +887,7 @@ async def judge_clarification(
     llm_ask_user: str | None = None,
     options_by_slot: Mapping[str, list[str]] | None = None,
 ) -> ClarificationNeed | None:
-    """规则决定是否追问；追问文案优先用 LLM 意图识别产出的 ``ask_user``。
+    """规则决定是否追问；追问文案仅在问同一槽时才采用 LLM 的 ``ask_user``。
 
     候选非空时必返回 ClarificationNeed（硬槽优先）——LLM 不能取消追问，
     这一点与 DB-GPT ``IntentRecognitionAction`` 的空槽循环同构。
@@ -882,7 +911,7 @@ async def judge_clarification(
         opts = list(_SCOPE_OPTIONS)
     prompt = _prompt_for_slot(slot, filled_map, question)
     ask = (llm_ask_user or "").strip().strip('"').strip("'")
-    if ask and len(ask) <= 120:
+    if ask and len(ask) <= 120 and _ask_matches_slot(ask, slot):
         prompt = ask
 
     return ClarificationNeed(

@@ -1430,6 +1430,7 @@ async def _run_data_analyst_phase(
                 context=message_context,
             ),
             sender=UserProxyAgent(),
+            sub_task=question,
             sub_task_index=sub_task_index,
             constraints=constraints.to_context() if constraints else {},
         )
@@ -1609,6 +1610,7 @@ async def _run_tool_expert_phase(
                 context={"constraints": constraints.to_context() if constraints else {}},
             ),
             sender=UserProxyAgent(),
+            sub_task=question,
             sub_task_index=sub_task_index,
             constraints=constraints.to_context() if constraints else {},
             preselected_tool_call=preselected_tool_call,
@@ -1900,7 +1902,9 @@ async def _run_summarizer_multi(
             fallback, sub_phases, fact_answer=fact_answer, question=question
         )
 
-    content = (reply.content or "").strip()
+    from src.agent.util.tool_call_parser import strip_think_blocks
+
+    content = strip_think_blocks(reply.content or "").strip()
     reconciled = _reconcile_summary_with_sub_phases(
         content or fallback,
         sub_phases,
@@ -2468,12 +2472,21 @@ def _format_sub_tasks_block(
             blocks.append(f"{header}\n{tool_block}")
             continue
 
-        exec_result = phase.state.last_exec_result or {}
+        sql_text = phase.state.last_sql or ""
+        last_exec = phase.state.last_exec_result
+        if fact_answer and last_exec is None and not sql_text:
+            blocks.append(
+                f"{header}\n"
+                "查询结论：本轮没有执行 SQL，查询未完成，不是库中无数据。"
+                "禁止声称未查到/没有排名数据，禁止沿用上一问班级/均分，禁止编造名次。\n"
+            )
+            continue
+
+        exec_result = last_exec or {}
         columns = list(exec_result.get("columns") or [])
         rows = list(exec_result.get("rows") or [])
         row_count = int(exec_result.get("row_count") or len(rows))
         sample_shown = min(_SAMPLE_ROWS_LIMIT, row_count) if row_count else 0
-        sql_text = phase.state.last_sql or ""
         stats_block = ""
         if not fact_answer:
             stats_block = extract_stats_authority_block(
@@ -2991,8 +3004,10 @@ def _report_html_is_sparse(html: str) -> bool:
 
 
 def _compact_context_summary(text: str | None, limit: int = 400) -> str | None:
-    """生成下一轮可用的短结论，排除 HTML 与多余空白。"""
-    value = str(text or "").strip()
+    """生成下一轮可用的短结论，排除思考块、HTML 与多余空白。"""
+    from src.agent.util.tool_call_parser import strip_think_blocks
+
+    value = strip_think_blocks(text)
     if not value:
         return None
     value = re.sub(r"<[^>]+>", " ", value)
