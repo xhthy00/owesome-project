@@ -2070,6 +2070,22 @@ def execute_sql(
 
     if isinstance(result, dict):
         result = apply_result_privacy(result) or result
+        try:
+            from datasource.service.edu_permission import edu_scope_dict_for_user_id
+            from src.agent.education.scope_guard import filter_rank_rows_to_bound_school
+
+            edu = edu_scope_dict_for_user_id(int(user_id)) if user_id is not None else {}
+            result = filter_rank_rows_to_bound_school(
+                result,
+                sql_run or sql,
+                edu,
+                datasource_id=datasource_id,
+                workspace_oid=workspace_oid,
+            ) or result
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).warning(
+                "peer rank row clip failed: %s", exc, exc_info=True
+            )
 
     if not isinstance(result, dict) or "rows" not in result:
         return ToolResult(

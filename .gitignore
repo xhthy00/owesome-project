@@ -32,3 +32,4 @@ tests/agent/*
 !tests/agent/test_assign_score.py
 !tests/agent/test_class_name_normalize.py
 !tests/agent/test_sql_preview_notes.py
+!tests/agent/test_peer_rank_pool.py

@@ -80,6 +80,7 @@ def build_education_sql_hint_text(question: str) -> str:
     # 压缩：只保留关键规则行 + 示例题干
     rules: list[str] = []
     from src.agent.education.line_offset import line_offset_hint
+    from src.agent.education.query_frame import active_constraints
     from src.agent.education.query_parse import (
         extract_school_type_target,
         is_citywide_nth_class_lookup_query,
@@ -89,14 +90,19 @@ def build_education_sql_hint_text(question: str) -> str:
         is_school_class_comparison_query,
         is_school_vs_school_type_avg_query,
         is_subject_strength_query,
+        rank_pool_sql_hint,
     )
 
-    st = extract_school_type_target(q)
-    type_pool = (
-        f"问句点名{st}校时对照池必须 xxlb LIKE '%{st}%'，禁止全市普通高中混排。"
-        if st
-        else ""
-    )
+    edu = (active_constraints() or {}).get("edu_scope")
+    edu = edu if isinstance(edu, dict) else None
+    type_pool = rank_pool_sql_hint(q, edu)
+    if not type_pool:
+        st = extract_school_type_target(q)
+        type_pool = (
+            f"问句点名{st}校时对照池必须 xxlb LIKE '%{st}%'，禁止全市普通高中混排。"
+            if st
+            else ""
+        )
     if is_class_city_rank_query(q):
         if is_class_rank_school_scope(q):
             rules.append(
@@ -148,14 +154,17 @@ def build_education_sql_hint_text(question: str) -> str:
 
     if is_subject_strength_query(q):
         rules.append(
-            "优势/薄弱学科：按该校（有班则该班）各科均分的全市排名相对位置判断，"
+            "优势/薄弱学科：按该校（有班则该班）各科均分的对照池排名相对位置判断，"
             "名次/参赛数≤25%为前列（优势），≥50%为靠后（薄弱），中间为中游；"
             "禁止把本校各科里名次较差的直接叫薄弱；禁止用本校各科均分互比；"
+            f"{type_pool}"
             "GROUP BY xx（班级再加 bj）后 RANK() OVER (ORDER BY 均分 DESC NULLS LAST) "
             "与 COUNT(*) OVER()，各科须先 WHERE 均分 IS NOT NULL（或 >0）；"
             "禁止 PARTITION BY bj，禁止 COUNT(DISTINCT bj)，禁止空均分校进参赛池，"
             "xsxz='在籍生'，AVG FILTER col>0；化学/生物/政治/地理用 hxzh/swzh/zzzh/dlzh；"
-            "最终结果一科一行（学科/均分/全市排名/参赛数），禁止语文均分+语文排名并排宽表。"
+            "最终结果一科一行（学科/均分/对照池排名/参赛数），禁止语文均分+语文排名并排宽表。"
+            "结论写「该类第几/共几」，禁止写成全市第几（除非问句不限校类）。"
+            "校长/教师只返回本校各科一行，禁止带上其他学校的名次或分数。"
         )
     if is_school_class_comparison_query(q):
         rules.append(

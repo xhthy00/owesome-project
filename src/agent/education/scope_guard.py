@@ -3,6 +3,7 @@
 不改 SQL 行权限。抽不出班名/校名时放行（交给后续 WHERE 注入）。
 「全校 / 全市」等对比口径不当成外班/外校。
 账号只有 school_id、没有中文校名时，用 tb_school.s_name 对齐后再判。
+校长/教师点名其他校类（引领/支撑/发展）时拒绝跨层次比较。
 """
 
 from __future__ import annotations
@@ -11,12 +12,16 @@ import re
 from typing import Any
 
 from src.agent.education.query_parse import (
+    bound_school_type_from_edu,
+    canon_school_type,
     extract_class_targets,
     extract_school_targets,
+    extract_school_type_target,
     normalize_fullwidth_parentheses,
 )
 
 OUT_OF_SCOPE_MESSAGE = "当前数据无权限访问"
+CROSS_TIER_MESSAGE = "不能跨层次比较其他校类的学校或班级"
 
 _SCHOOL_SCOPED_ROLES = frozenset({"teacher", "school_admin"})
 _SCHOOL_CODE_RE = re.compile(r"^[A-Za-z]\d{2}")
@@ -97,6 +102,19 @@ def out_of_scope_question(
         return OUT_OF_SCOPE_MESSAGE
     if _school_out_of_scope(edu, q, extra_labels=labels, asked_schools=asked_schools):
         return OUT_OF_SCOPE_MESSAGE
+    named_type = extract_school_type_target(q)
+    if named_type:
+        bound_type = bound_school_type_from_edu(edu)
+        if not bound_type:
+            bound_type = lookup_bound_school_type(
+                bound_id,
+                school_name=bound_name,
+                extra_labels=labels,
+                datasource_id=datasource_id,
+                workspace_oid=workspace_oid,
+            )
+        if bound_type and named_type != bound_type:
+            return CROSS_TIER_MESSAGE
     return None
 
 
@@ -116,6 +134,79 @@ def out_of_scope_named(
         datasource_id=datasource_id,
         workspace_oid=workspace_oid,
     )
+
+
+def lookup_bound_school_type(
+    school_id: str,
+    *,
+    school_name: str = "",
+    extra_labels: list[str] | None = None,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+) -> str | None:
+    """用 tb_school.type / overview.xxlb 还原绑定校层次。失败返回空。"""
+    if not datasource_id:
+        return None
+    tokens: list[str] = []
+    for raw in (school_id, school_name, *(extra_labels or [])):
+        tok = str(raw or "").strip()
+        if tok and tok not in tokens:
+            tokens.append(tok)
+    if not tokens:
+        return None
+    try:
+        from src.agent.resource.tool.business import _load_datasource
+        from src.datasource.db.db import execute_sql
+
+        db_type, config, _name = _load_datasource(int(datasource_id), workspace_oid)
+        for tok in tokens:
+            lit = tok.replace("'", "''")
+            ok, _msg, result = execute_sql(
+                db_type,
+                config,
+                "SELECT type FROM tb_school "
+                f"WHERE id = '{lit}' OR name = '{lit}' OR s_name = '{lit}' "
+                f"OR s_name LIKE '%{lit}%' OR name LIKE '%{lit}%' LIMIT 8",
+            )
+            hit = _first_school_type(result if ok else None)
+            if hit:
+                return hit
+        names = [
+            t
+            for t in tokens
+            if not _looks_like_school_id(t) and re.search(r"[\u4e00-\u9fff]", t)
+        ]
+        for tok in names:
+            lit = tok.replace("'", "''")
+            ok, _msg, result = execute_sql(
+                db_type,
+                config,
+                "SELECT DISTINCT xxlb FROM tb_score_overview "
+                f"WHERE xx LIKE '%{lit}%' AND xxlb IS NOT NULL LIMIT 8",
+            )
+            hit = _first_school_type(result if ok else None)
+            if hit:
+                return hit
+        return None
+    except Exception:
+        return None
+
+
+def _first_school_type(result: Any) -> str | None:
+    if not isinstance(result, dict):
+        return None
+    for row in result.get("rows") or []:
+        if isinstance(row, dict):
+            vals = list(row.values())
+        elif isinstance(row, (list, tuple)):
+            vals = list(row)
+        else:
+            vals = [row]
+        for raw in vals:
+            hit = canon_school_type(str(raw or ""))
+            if hit:
+                return hit
+    return None
 
 
 def lookup_bound_school_labels(
@@ -187,10 +278,22 @@ def _class_out_of_scope(edu: dict[str, Any], question: str) -> bool:
 
 def _asked_school_names(question: str) -> list[str]:
     """问句里点名的学校：中学/学校后缀 + 「扬州市一中」这类一中简称。"""
+    from src.agent.education.query_parse import (
+        is_interrogative_school_name,
+        is_which_school_lookup_query,
+    )
+
+    if is_which_school_lookup_query(question):
+        return []
     seen: list[str] = []
     for tok in extract_school_targets(question):
         for part in _expand_compound_school(tok):
-            if part and part not in seen and part not in _SCOPE_LABELS:
+            if (
+                part
+                and part not in seen
+                and part not in _SCOPE_LABELS
+                and not is_interrogative_school_name(part)
+            ):
                 seen.append(part)
     blob = re.sub(r"\s+", "", question or "")
     for m in _YIZHONG_RE.finditer(blob):
@@ -304,9 +407,111 @@ def _school_aliases(name: str) -> set[str]:
     return {x for x in out if x}
 
 
+_SCHOOL_RESULT_COLS = frozenset(
+    {
+        "xx",
+        "学校",
+        "school",
+        "school_name",
+        "s_name",
+        "校名",
+        "schoolname",
+        "school_code",
+    }
+)
+
+
+def filter_rank_rows_to_bound_school(
+    result: dict[str, Any] | None,
+    sql: str,
+    edu_scope: dict[str, Any] | None,
+    *,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+) -> dict[str, Any] | None:
+    """校长/教师的跨校 RANK 结果只留本校行，不把外校名次和分数送给模型。"""
+    if not isinstance(result, dict):
+        return result
+    edu = edu_scope if isinstance(edu_scope, dict) else {}
+    if str(edu.get("edu_role") or "").strip() not in _SCHOOL_SCOPED_ROLES:
+        return result
+    s = sql or ""
+    if not re.search(r"\b(?:RANK|DENSE_RANK|ROW_NUMBER)\s*\(", s, re.I):
+        return result
+    if "tb_score_overview" not in s.lower() and not re.search(r"\btb_score\b", s, re.I):
+        return result
+    school_name = str(edu.get("school_name") or "").strip()
+    school_id = str(edu.get("school_id") or "").strip()
+    extra_labels: list[str] = []
+    raw_labels = edu.get("school_labels")
+    if isinstance(raw_labels, list):
+        extra_labels.extend(str(x).strip() for x in raw_labels if str(x).strip())
+    if school_id and (not school_name or _looks_like_school_id(school_name)) and not extra_labels:
+        extra_labels = lookup_bound_school_labels(
+            school_id, datasource_id=datasource_id, workspace_oid=workspace_oid
+        )
+    bound_aliases: set[str] = set()
+    for raw in (school_name, school_id, *extra_labels):
+        tok = str(raw or "").strip()
+        if tok:
+            bound_aliases |= _school_aliases(tok)
+    bound_aliases.discard("")
+    if not bound_aliases:
+        return result
+    columns = [str(c or "").strip() for c in (result.get("columns") or [])]
+    idx = next(
+        (i for i, c in enumerate(columns) if c.lower() in _SCHOOL_RESULT_COLS),
+        None,
+    )
+    if idx is None:
+        return result
+    rows = list(result.get("rows") or [])
+    if not rows:
+        return result
+    if not any(
+        (not _looks_like_school_id(a)) or _SCHOOL_CODE_RE.match(a) for a in bound_aliases
+    ):
+        # 只有 GZ_… 权限 ID、对不上 overview.xx：单行（SQL 已限本校）放行，多行宁缺勿漏外校。
+        if len(rows) <= 1:
+            return result
+        out = dict(result)
+        out["rows"] = []
+        out["row_count"] = 0
+        out["peer_rank_clipped"] = True
+        return out
+    kept: list[Any] = []
+    for row in rows:
+        cell = _row_cell(row, columns, idx)
+        if cell and _school_matches_bound(str(cell), bound_aliases):
+            kept.append(row)
+    if len(kept) == len(rows):
+        return result
+    out = dict(result)
+    out["rows"] = kept
+    out["row_count"] = len(kept)
+    out["peer_rank_clipped"] = True
+    return out
+
+
+def _row_cell(row: Any, columns: list[str], idx: int) -> Any:
+    if isinstance(row, dict):
+        if idx < len(columns) and columns[idx] in row:
+            return row.get(columns[idx])
+        for key, val in row.items():
+            if str(key or "").strip().lower() in _SCHOOL_RESULT_COLS:
+                return val
+        return None
+    if isinstance(row, (list, tuple)) and idx < len(row):
+        return row[idx]
+    return None
+
+
 __all__ = [
+    "CROSS_TIER_MESSAGE",
     "OUT_OF_SCOPE_MESSAGE",
+    "filter_rank_rows_to_bound_school",
     "lookup_bound_school_labels",
+    "lookup_bound_school_type",
     "out_of_scope_named",
     "out_of_scope_question",
 ]

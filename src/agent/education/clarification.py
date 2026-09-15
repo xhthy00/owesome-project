@@ -571,6 +571,7 @@ def _candidate_missing_slots_legacy(
     两条路径同构：查表得必填槽，再由豁免层（宽范围 / 点名学校 / 权限唯一绑定）减掉。
     """
     from src.agent.education.query_parse import (
+        extract_class_target,
         extract_school_targets,
         has_class_alias,
         is_bureau_report_query,
@@ -641,14 +642,19 @@ def _candidate_missing_slots_legacy(
             add(SLOT_EXAM)
 
         bound_classes = _unique_bound_classes(edu)
-        # 问句点名学校 = 用户已给出完整的校级范围。优势学科 / 均分 / 达线这些事实
-        # 口径本来就支持校级（planner 按有无班级分别下发「全市学校排名」或「全市
-        # 班级排名」），此时再追问班级是漏判——「本校的优势学科」不追问，
-        # 「扬大附中的优势学科」却追问，本身也不自洽。
-        # 只看问句：教师/校管的 school_name 可能来自绑定权限而非用户表达，不能当作
-        # 用户主动限定了范围。问句带口语班级线索（我们班/三班）时仍需澄清。
+        # 校级事实问（优势薄弱/均分/达线）有班才下班级排名，没班走学校排名。
+        # 「学校的/我校/本校」或校长已绑校，都是校级范围，不要再逼问班级。
         named_schools = extract_school_targets(q)
-        school_scoped = bool(named_schools) and not has_class_alias(q)
+        school_level_wording = any(h in q for h in ("本校", "我校", "全校", "学校的"))
+        school_scoped = (not has_class_alias(q)) and (
+            bool(named_schools)
+            or school_level_wording
+            or (
+                role == "school_admin"
+                and bool(_bound_school(edu))
+                and not extract_class_target(q)
+            )
+        )
         kind = fact_query_kind(q)
         # 达线已点名邗江区/宝应地区：范围是区县，不再追问班/校。不并入
         # _has_wide_scope，以免排名/均分等其它口径被放开。

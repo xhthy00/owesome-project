@@ -172,10 +172,11 @@ PLANNER_DESC = """[你的职责]
 
 简单问题（如"三班数学平均分"）不生成报告，返回 plans=[原问题] 即可。
 - **优势学科 / 薄弱学科 / 优势科目 / 短板学科**（如「新华中学优势学科」「高三(1)班薄弱学科」）：
-  按该校（有班则该班）**各科均分的全市排名相对位置**判断：
-  名次/参赛数≤25% 为全市前列（优势），≥50% 为全市靠后（薄弱），中间为中游；
-  **禁止**把本校各科里名次较差的直接叫薄弱（全市第7/37仍属前列）；
+  按该校（有班则该班）**各科均分的对照池排名相对位置**判断：
+  名次/参赛数≤25% 为对照池前列（优势），≥50% 为对照池靠后（薄弱），中间为中游；
+  **禁止**把本校各科里名次较差的直接叫薄弱（对照池第7/37仍属前列）；
   **禁止**用本校/本班各科均分互相比较；**禁止** build_class_weak_subject_report_data_tool；
+  校长/教师默认同层次校对照（问句写全市仍是同层次）；问句写不限校类才全市普高；
   班级全市排名禁止 PARTITION BY bj、禁止 COUNT(DISTINCT bj)；
   返回 plans=[原问题]。
 **例外**：问题含学号/「学生xxx」且询问「得分情况/成绩/知识点」——**不算简单问题**，
@@ -438,12 +439,19 @@ def _score_band_fact_hint() -> str:
     )
 
 
+def _rank_pool_type_hint(question: str) -> str:
+    """校长/老师默认同层次；点名其他校类不改池；不限校类才全市普高。"""
+    from src.agent.education.query_frame import active_constraints
+    from src.agent.education.query_parse import rank_pool_sql_hint
+
+    edu = (active_constraints() or {}).get("edu_scope")
+    edu = edu if isinstance(edu, dict) else None
+    return rank_pool_sql_hint(question, edu)
+
+
 def _class_rank_pool_hint(question: str, *, mini: bool = False) -> str:
-    """洗净其他校/小班；问句点名校类时对照池必须落在该类。"""
-    from src.agent.education.query_parse import (
-        extract_school_type_target,
-        is_class_rank_school_scope,
-    )
+    """洗净其他校/小班；同层次或问句点名校类时对照池必须落在该类。"""
+    from src.agent.education.query_parse import is_class_rank_school_scope
 
     if is_class_rank_school_scope(question):
         return (
@@ -460,32 +468,38 @@ def _class_rank_pool_hint(question: str, *, mini: bool = False) -> str:
             "排名池必须先洗：排除其他校（xxlb NOT LIKE '%其他%'，含中专/职校），"
             "排除整班参考人数不足 10 人的小班（先按 xx,bj 计整班人数 HAVING COUNT(*)>=10，再分轨）。"
         )
-    st = extract_school_type_target(question)
-    if not st:
-        return wash
-    return (
-        wash
-        + f"对照池必须是全市{st}校班级：xxlb LIKE '%{st}%'；"
-        "禁止用全市所有普通高中（只排除其他校）当对照池。"
-    )
+    extra = _rank_pool_type_hint(question)
+    return wash + extra if extra else wash
 
 
 def _class_city_rank_fact_hint(question: str) -> str:
     """班级全市/全校六门排名：默认只出区分文理（物理类/历史类）的一个名次。"""
+    from src.agent.education.query_frame import active_constraints
     from src.agent.education.query_parse import (
         class_city_rank_answer_mode,
         is_class_rank_school_scope,
+        rank_pool_label,
     )
 
     mode = class_city_rank_answer_mode(question)
-    scope = "全校" if is_class_rank_school_scope(question) else "全市"
+    edu = (active_constraints() or {}).get("edu_scope")
+    edu = edu if isinstance(edu, dict) else None
+    scope = "全校" if is_class_rank_school_scope(question) else rank_pool_label(question, edu)
     locate = "定位目标班必须同时用学校 xx 与班级 bj，禁止只写班级（同名班会串校）。"
-    near = (
-        "查询结果须带对照班：第1名 + 目标班名次前后各3名（含本班），"
-        f"列含学校、班级、{scope}排名、均分，本班加标记；"
-        "用目标校+班算窗口，禁止外层 WHERE 只留下目标班一行。"
-        "对话结论只写目标班的名次/总数/均分，不要把附近班整表贴进结论。"
-    )
+    role = str((edu or {}).get("edu_role") or "").strip()
+    if role in {"school_admin", "teacher"}:
+        near = (
+            "查询结果只返回本校目标班一行：本校均分、对照池名次、对照池总数；"
+            "RANK 在对照池 CTE 里算，外层 WHERE xx LIKE '%本校%' AND bj=目标班；"
+            "禁止列出其他学校的名称、名次、分数。"
+        )
+    else:
+        near = (
+            "查询结果须带对照班：第1名 + 目标班名次前后各3名（含本班），"
+            f"列含学校、班级、{scope}排名、均分，本班加标记；"
+            "用目标校+班算窗口，禁止外层 WHERE 只留下目标班一行。"
+            "对话结论只写目标班的名次/总数/均分，不要把附近班整表贴进结论。"
+        )
     wash = _class_rank_pool_hint(question)
     if mode == "physics":
         return (
@@ -522,26 +536,30 @@ def _class_city_rank_fact_hint(question: str) -> str:
     )
 
 
-def _subject_strength_fact_hint(class_name: str) -> str:
-    """优势/薄弱学科：各科均分全市排名，禁止本校各科互比。"""
+def _subject_strength_fact_hint(class_name: str, question: str = "") -> str:
+    """优势/薄弱学科：各科均分对照池排名，禁止本校各科互比。"""
+    pool = _rank_pool_type_hint(question)
+    pool_txt = pool or "对照池=洗净后的全市普通高中。"
     if class_name:
         return (
-            "本题是优势/薄弱学科：按该班各科均分的**全市班级排名相对位置**判断"
+            "本题是优势/薄弱学科：按该班各科均分的**对照池班级排名相对位置**判断"
             "（名次/参赛数≤25%=前列/优势，≥50%=靠后/薄弱，中间=中游；"
             "禁止把本班各科里名次较差的直接叫薄弱）。"
+            f"{pool_txt}"
             "查 tb_score_overview，xsxz='在籍生'，GROUP BY xx,bj 后对各科 AVG FILTER col>0 "
             "做 RANK() OVER (ORDER BY 均分 DESC) 与 COUNT(*) OVER()；"
-            "禁止 PARTITION BY bj（那是同名班跨校互比）；禁止 COUNT(DISTINCT bj)（班名重复，不是全市班级数）；"
+            "禁止 PARTITION BY bj（那是同名班跨校互比）；禁止 COUNT(DISTINCT bj)（班名重复，不是班级数）；"
             "化学/生物/政治/地理用 hxzh/swzh/zzzh/dlzh，禁止 hx/sw/zz/dl。"
             "目标校+班只在排名完成后再 WHERE 过滤。"
-            "**最终结果必须一科一行**：列=学科、均分、全市排名、参赛班数（可用 UNION ALL）；"
+            "**最终结果必须一科一行**：列=学科、均分、对照池排名、参赛班数（可用 UNION ALL）；"
             "**禁止**一行宽表（禁止 语文均分/语文排名… 并排多列）。"
             "禁止用该班各科均分互相比较，禁止班际报告工具。"
         )
     return (
-        "本题是优势/薄弱学科：按该校各科均分的**全市学校排名相对位置**判断"
+        "本题是优势/薄弱学科：按该校各科均分的**对照池学校排名相对位置**判断"
         "（名次/参赛数≤25%=前列/优势，≥50%=靠后/薄弱，中间=中游；"
         "禁止把本校各科里名次较差的直接叫薄弱，例如第7/37仍属前列）。"
+        f"{pool_txt}"
         "查 tb_score_overview，xsxz='在籍生'，GROUP BY xx 后对各科 AVG FILTER col>0 做 RANK()；"
         "各科须先 WHERE 该科均分 IS NOT NULL（或 >0）再 RANK()/COUNT(*) OVER()，"
         "ORDER BY 均分 DESC NULLS LAST；禁止空均分校进参赛池。"
@@ -550,7 +568,7 @@ def _subject_strength_fact_hint(class_name: str) -> str:
         "参赛校数会变成 8/9（科目数），均分也会变成全市均分而非该校均分。"
         "排名 CTE 必须保留 xx/school_code；外层用 WHERE xx LIKE 滤目标校；"
         "**禁止**只用 EXISTS(目标校) 却不滤排名行（会漏出全市榜，摘要易误当成该校全第1）。"
-        "**最终结果必须一科一行**：列=学科、均分、全市排名、参赛校数（可用 UNION ALL）；"
+        "**最终结果必须一科一行**：列=学科、均分、对照池排名、参赛校数（可用 UNION ALL）；"
         "**禁止**一行宽表（禁止 语文均分/语文排名/数学均分… 并排多列）。"
         "若先 UNION 成「一校一科一行」，必须在每个分支内 RANK，或 RANK() OVER (PARTITION BY 学科 ...)；"
         "**禁止**对多科混合行做无 PARTITION 的整体 RANK（参赛校数会变成 200+）。"
@@ -631,6 +649,7 @@ _COMPULSORY_SUBJECTS = frozenset({"语文", "数学", "英语"})
 def _class_subject_city_rank_fact_hint(question: str) -> str:
     """班级单科全市排名：洗净池 + 默认文理分轨 + NULLS LAST。"""
     from src.agent.education.orchestrator import _extract_subject
+    from src.agent.education.query_frame import active_constraints
     from src.agent.education.query_parse import (
         class_city_rank_answer_mode,
         is_class_rank_school_scope,
@@ -653,6 +672,20 @@ def _class_subject_city_rank_fact_hint(question: str) -> str:
         if subject in _COMPULSORY_SUBJECTS
         else "面向用户只说在籍生、排除未选考/缺考。"
     )
+    edu = (active_constraints() or {}).get("edu_scope")
+    role = str((edu or {}).get("edu_role") or "").strip() if isinstance(edu, dict) else ""
+    if role in {"school_admin", "teacher"}:
+        window = (
+            "用目标校+班只取本校目标班一行（均分、名次、对照池总数）；"
+            "禁止列出其他学校的名称、名次、分数。"
+        )
+    else:
+        window = (
+            "用目标校+班定位窗口：第1名 + 目标班名次前后各3名（含本班并加标记），"
+            "xx LIKE '%校名%'（常带 A01 前缀，禁止 xx='扬州中学' 精确等于）且同时用 bj；"
+            "禁止外层 WHERE 只留下目标班一行。"
+            "对话结论不要罗列附近班。"
+        )
     mode = class_city_rank_answer_mode(question)
     if mode == "physics":
         track_txt = (
@@ -689,11 +722,8 @@ def _class_subject_city_rank_fact_hint(question: str) -> str:
         + _class_rank_pool_hint(question, mini=True)
         + "RANK() OVER (ORDER BY 均分 DESC NULLS LAST)，禁止把无分班排第1。"
         + "GROUP BY xx,bj 后 COUNT(*) OVER() 为洗净后班级数；"
-        + "用目标校+班定位窗口：第1名 + 目标班名次前后各3名（含本班并加标记），"
-        + "xx LIKE '%校名%'（常带 A01 前缀，禁止 xx='扬州中学' 精确等于）且同时用 bj；"
-        + "禁止外层 WHERE 只留下目标班一行。"
+        + window
         + "terminate 只写目标班均分、第几/共几班；名次/总数≤25% 称前列，禁止称中上段。"
-        + "对话结论不要罗列附近班。"
         + oral
         + "面向用户禁止字段名 yy/rk/avg_yy、禁止校码 A01。"
     )
@@ -735,16 +765,18 @@ def _nth_class_lookup_fact_hint(question: str) -> str:
         if elective
         else "RANK() 与 COUNT(*) OVER() 写在进池之后的同一 SELECT。"
     )
+    type_hint = _rank_pool_type_hint(question)
     return (
-        "本题是「全市第N名是哪个班」，没有目标班："
+        "本题是「对照池第N名是哪个班」，没有目标班："
         "禁止套用「第1名+目标班前后各3名」窗口，禁止外层 WHERE xx+bj 去碰已知班。"
         f"{col_txt}。"
         "排名池先洗：xxlb NOT LIKE '%其他%'，整班 HAVING COUNT(*)>=10；"
+        f"{type_hint}"
         f"{denom}"
         "GROUP BY xx,bj；RANK() OVER (ORDER BY 均分 DESC NULLS LAST)；禁止 PARTITION BY bj。"
         f"{rank_txt}。"
         "禁止用 ORDER BY 均分 ASC / LIMIT OFFSET 计算倒数。"
-        "结果只返回该名次行，列：学校、班级、均分、全市排名、参赛班数。"
+        "结果只返回该名次行，列：学校、班级、均分、对照池排名、参赛班数。"
         "execute_sql 被 lint 拦截或报错时禁止 terminate；必须改写到查出该名次行再照抄。"
         "面向用户禁止字段名与 A01/B07 等校码。"
     )
@@ -889,7 +921,7 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     strength_hint = ""
     class_rank_hint = ""
     if is_subject_strength_query(q):
-        strength_hint = _subject_strength_fact_hint(class_name)
+        strength_hint = _subject_strength_fact_hint(class_name, q)
     elif is_citywide_nth_class_lookup_query(q):
         class_rank_hint = _nth_class_lookup_fact_hint(q)
     elif is_class_city_rank_query(q):

@@ -604,11 +604,13 @@ _INTERROGATIVE_SCHOOL_LABELS = (
     "哪几所学校",
     "哪些学校",
     "哪所学校",
+    "哪个学校",
     "几所学校",
     "多少所学校",
     "哪几所中学",
     "哪些中学",
     "哪所中学",
+    "哪个中学",
     "几所中学",
     "多少所中学",
 )
@@ -1015,6 +1017,168 @@ def extract_school_type_target(question: str) -> str | None:
         if hint in q:
             return code
     return None
+
+
+_PEER_RANK_ROLES = frozenset({"school_admin", "teacher"})
+_UNRESTRICTED_SCHOOL_TYPE_HINTS = (
+    "不限校类",
+    "不分校类",
+    "全市普通高中",
+    "所有学校一起排",
+    "不分层级",
+)
+
+
+def wants_unrestricted_school_type_rank(question: str) -> bool:
+    """问句明确要全市普高混排，而不是同层次。"""
+    q = question or ""
+    return any(h in q for h in _UNRESTRICTED_SCHOOL_TYPE_HINTS)
+
+
+def canon_school_type(value: str | None) -> str | None:
+    """xxlb / type 文案收到 引领/支撑/发展；其他校或空为 None。"""
+    t = str(value or "")
+    if "其他" in t:
+        return None
+    if "引领" in t:
+        return "引领"
+    if "支撑" in t:
+        return "支撑"
+    if "发展" in t:
+        return "发展"
+    return None
+
+
+def bound_school_type_from_edu(edu_scope: dict[str, Any] | None) -> str | None:
+    if not isinstance(edu_scope, dict):
+        return None
+    return canon_school_type(
+        edu_scope.get("school_type")
+        or edu_scope.get("xxlb")
+        or edu_scope.get("school_xxlb")
+    )
+
+
+def is_school_city_rank_query(question: str) -> bool:
+    """跨校的学校排名（不是班排、个人排、达线、学生名单）。"""
+    q = (question or "").strip()
+    if not q or not is_rank_query(q):
+        return False
+    if is_class_city_rank_query(q) or is_class_subject_city_rank_query(q):
+        return False
+    if is_subject_strength_query(q) or is_citywide_nth_class_lookup_query(q):
+        return False
+    if is_which_class_lookup_query(q) or is_which_school_lookup_query(q):
+        return False
+    if is_line_reach_query(q):
+        return False
+    if extract_student_target(q) or extract_student_id_target(q):
+        return False
+    if is_top_student_lookup_query(q):
+        return False
+    if "班" in q:
+        return False
+    if any(h in q for h in ("前10", "前十", "名单", "学生", "学号", "总分前", "个人排名")):
+        return False
+    if "学校排名" in q or "各校排名" in q or "校排名" in q:
+        return True
+    if extract_school_target(q) or "本校" in q or "我校" in q:
+        return True
+    return False
+
+
+def is_peer_rank_query(question: str) -> bool:
+    """校长/老师默认同层次的跨校排名问。"""
+    q = question or ""
+    return (
+        is_class_city_rank_query(q)
+        or is_class_subject_city_rank_query(q)
+        or is_subject_strength_query(q)
+        or is_citywide_nth_class_lookup_query(q)
+        or is_school_city_rank_query(q)
+    )
+
+
+def rank_pool_school_type(
+    question: str,
+    edu_scope: dict[str, Any] | None = None,
+) -> str | None:
+    """对照池校类。None=全市普高（只排除其他校）。
+
+    校长/老师只用绑定学校校类，问句点名其他层次不能改池。
+    局端/管理员才按问句点名的引领/支撑/发展切片。
+    「全市排名」仍走同层次。全校班排、不限校类则 None。
+    """
+    if wants_unrestricted_school_type_rank(question):
+        return None
+    if is_class_rank_school_scope(question):
+        return None
+    named = extract_school_type_target(question)
+    role = str((edu_scope or {}).get("edu_role") or "").strip()
+    if role in _PEER_RANK_ROLES:
+        return bound_school_type_from_edu(edu_scope)
+    return named
+
+
+def peer_rank_type_required(
+    question: str,
+    edu_scope: dict[str, Any] | None = None,
+) -> bool:
+    """校长/老师的跨校排名必须带正向 xxlb LIKE（引领/支撑/发展）。"""
+    if wants_unrestricted_school_type_rank(question):
+        return False
+    if is_class_rank_school_scope(question):
+        return False
+    role = str((edu_scope or {}).get("edu_role") or "").strip()
+    if role not in _PEER_RANK_ROLES:
+        return False
+    return is_peer_rank_query(question)
+
+
+def rank_pool_label(
+    question: str,
+    edu_scope: dict[str, Any] | None = None,
+) -> str:
+    """结论里的对照池称呼：引领校 / 同层次校 / 全市 / 全校。"""
+    if is_class_rank_school_scope(question):
+        return "全校"
+    st = rank_pool_school_type(question, edu_scope)
+    if st:
+        return f"{st}校"
+    if wants_unrestricted_school_type_rank(question):
+        return "全市"
+    role = str((edu_scope or {}).get("edu_role") or "").strip()
+    if role in _PEER_RANK_ROLES and (
+        not (question or "").strip() or is_peer_rank_query(question)
+    ):
+        return "同层次校"
+    return "全市"
+
+
+def rank_pool_sql_hint(
+    question: str,
+    edu_scope: dict[str, Any] | None = None,
+) -> str:
+    """Planner / DataAnalyst：同层次对照池 SQL 提示。"""
+    if wants_unrestricted_school_type_rank(question):
+        return "问句要求不限校类：对照池全市普通高中（xxlb NOT LIKE '%其他%'即可）。"
+    if is_class_rank_school_scope(question):
+        return ""
+    st = rank_pool_school_type(question, edu_scope)
+    if st:
+        return (
+            f"对照池必须是全市{st}校：xxlb LIKE '%{st}%'；"
+            "禁止用全市所有普通高中（只排除其他校）当对照池。"
+            f"结论写「{st}校第几/共几」，问句含全市也是同层次不是所有普高。"
+        )
+    if peer_rank_type_required(question, edu_scope):
+        return (
+            "校长/老师跨校排名默认同层次：先查绑定学校 xxlb，"
+            "对照池 xxlb LIKE '%该类%'（引领/支撑/发展），"
+            "禁止全市普通高中混排。结论写「该类第几/共几」。"
+            "问句写全市仍是同层次；不限校类/全市普通高中才放开。"
+        )
+    return ""
 
 
 def is_line_reach_report_query(question: str) -> bool:
@@ -1948,6 +2112,9 @@ def extract_school_targets(question: str) -> list[str]:
                 name = _strip_exam_tokens_from_school_name(name)
                 if is_interrogative_school_name(name):
                     name = _peel_interrogative_school_tail(name)
+                    # 「我是哪个学校」剥问句后剩「我是」，不是校名。
+                    if name and not re.search(_SCHOOL_SUFFIX + r"$", name):
+                        name = ""
                 if (
                     not name
                     or not _school_name_stem(name)
@@ -2106,6 +2273,25 @@ def format_scope_constraints(constraints: dict[str, Any] | None) -> str:
             )
         if edu.get("student_id"):
             parts.append(f"权限绑定学号={edu['student_id']}")
+        role_code = str(edu.get("edu_role") or "").strip()
+        if role_code in _PEER_RANK_ROLES:
+            st = bound_school_type_from_edu(edu)
+            like = f"xxlb LIKE '%{st}%'" if st else "xxlb LIKE '%绑定学校校类%'"
+            bound = f"绑定学校为{st}校；" if st else ""
+            parts.append(
+                f"{bound}跨校学校/班级排名与优势薄弱学科默认同层次对照"
+                "（引领对引领、支撑对支撑、发展对发展）："
+                f"排名池 {like}（问句写全市仍是同层次，不是全市所有普高）；"
+                "结论写「该类第几/共几」。"
+                "禁止点名其他校类去比其他层次的学校或班级。"
+                "问句写不限校类/全市普通高中才放开。"
+                "全校/校内班排只限本校，不套校类。"
+                "学生个人全市排名、达线人数、校均vs市均不套校类。"
+                "查询结果只返回本校：本校均分、对照池名次、对照池总数；"
+                "禁止列出其他学校的名称、名次、分数。"
+                "RANK 在对照池 CTE 里算，外层 WHERE xx LIKE '%本校%'。"
+                "校类未知时先 SELECT DISTINCT xxlb WHERE xx LIKE '%绑定校名%'。"
+            )
     elif raw.get("target_school"):
         parts.append(f"学校/机构={raw['target_school']}")
     if raw.get("target_student"):
@@ -3089,6 +3275,15 @@ __all__ = [
     "is_class_city_rank_query",
     "is_class_subject_city_rank_query",
     "is_class_rank_school_scope",
+    "is_school_city_rank_query",
+    "is_peer_rank_query",
+    "wants_unrestricted_school_type_rank",
+    "canon_school_type",
+    "bound_school_type_from_edu",
+    "rank_pool_school_type",
+    "peer_rank_type_required",
+    "rank_pool_label",
+    "rank_pool_sql_hint",
     "class_city_rank_answer_mode",
     "is_oral_score_inquiry",
     "has_class_alias",

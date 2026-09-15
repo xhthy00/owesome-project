@@ -1,22 +1,23 @@
-"""优势/薄弱学科：按各科均分全市排名的相对位置判定。"""
+"""优势/薄弱学科：按各科均分对照池排名的相对位置判定。"""
 
 from __future__ import annotations
 
 import re
 from typing import Any
 
-from src.agent.education.query_parse import is_subject_strength_query
+from src.agent.education.query_parse import is_subject_strength_query, rank_pool_label
 
 # 名次/参赛数：越小越好。前 25% 为前列，后 50% 才算薄弱。
 ADVANTAGE_MAX_RATIO = 0.25
 WEAK_MIN_RATIO = 0.50
 
 SUBJECT_STRENGTH_RULE = (
-    "按各科均分的全市排名相对位置判定，禁止本校各科均分互比，"
+    "按各科均分的对照池排名相对位置判定，禁止本校各科均分互比，"
     "也禁止把本校各科里名次较差的直接叫薄弱："
-    f"名次/参赛数≤{int(ADVANTAGE_MAX_RATIO * 100)}% 为全市前列（优势），"
-    f"≥{int(WEAK_MIN_RATIO * 100)}% 为全市靠后（薄弱），中间为中游。"
-    "例如全市第7/37（约前19%）仍属前列，不得判薄弱。"
+    f"名次/参赛数≤{int(ADVANTAGE_MAX_RATIO * 100)}% 为对照池前列（优势），"
+    f"≥{int(WEAK_MIN_RATIO * 100)}% 为对照池靠后（薄弱），中间为中游。"
+    "例如对照池第7/37（约前19%）仍属前列，不得判薄弱。"
+    "校长/教师默认同层次校（问句写全市仍是该类）；问句写不限校类才全市普高。"
 )
 
 _RANK_KEYS = ("city_rank", "rank", "全市排名", "排名")
@@ -121,6 +122,15 @@ def label_subject_strength_rows(
     return out
 
 
+def _pool_label(question: str) -> str:
+    try:
+        from src.agent.education.query_frame import active_constraints
+    except Exception:
+        return rank_pool_label(question, None)
+    edu = (active_constraints() or {}).get("edu_scope")
+    return rank_pool_label(question, edu if isinstance(edu, dict) else None)
+
+
 def _asks_weak(question: str) -> bool:
     return any(h in (question or "") for h in _WEAK_ASK_HINTS)
 
@@ -158,16 +168,18 @@ def format_subject_strength_verdict(
         ask_weak = True
         ask_adv = True
 
+    pool = _pool_label(question)
     lines: list[str] = []
     if ask_weak:
         if weak:
-            lines.append(f"按全市排名，薄弱学科为{_names(weak)}（全市后50%）。")
+            lines.append(f"按{pool}排名，薄弱学科为{_names(weak)}（{pool}后50%）。")
         else:
-            lines.append("按全市排名，各科均未落入后50%，没有薄弱学科。")
+            lines.append(f"按{pool}排名，各科均未落入后50%，没有薄弱学科。")
             rel = [x for x in worst if x["band"] != "weak"][:2]
             if rel:
                 lines.append(
-                    "相对本校其他科稍靠后但仍属全市"
+                    "相对本校其他科稍靠后但仍属"
+                    + pool
                     + ("前列" if rel[0]["band"] == "advantage" else "中游")
                     + "的是"
                     + "、".join(_cite(x) for x in rel)
@@ -175,9 +187,9 @@ def format_subject_strength_verdict(
                 )
     if ask_adv:
         if adv:
-            lines.append(f"按全市排名，优势学科为{_names(adv)}（全市前25%）。")
+            lines.append(f"按{pool}排名，优势学科为{_names(adv)}（{pool}前25%）。")
         elif not ask_weak:
-            lines.append("按全市排名，没有落入前25%的优势学科。")
+            lines.append(f"按{pool}排名，没有落入前25%的优势学科。")
             if worst:
                 best = sorted(labeled, key=lambda x: (x["ratio"] or 1, x["rank"]))[:2]
                 lines.append("相对最好的是" + "、".join(_cite(x) for x in best) + "。")
@@ -189,7 +201,7 @@ def apply_subject_strength_verdict(
     exec_results: list[dict[str, Any]] | None,
     question: str,
 ) -> str:
-    """纠正把全市前列误写成薄弱的结论。"""
+    """纠正把对照池前列误写成薄弱的结论。"""
     if not is_subject_strength_query(question):
         return text or ""
     verdict = ""

@@ -135,6 +135,25 @@ def test_single_named_school_still_fills() -> None:
     assert filled.get(SLOT_SCHOOL) == "丁沟中学"
 
 
+def test_which_school_am_i_principal_is_not_named_school() -> None:
+    q = "我是哪个学校的校长"
+    assert extract_school_target(q) is None
+    assert is_which_school_lookup_query(q)
+    assert is_interrogative_school_name("哪个学校")
+
+
+def test_principal_which_school_is_not_out_of_scope() -> None:
+    from src.agent.education.scope_guard import out_of_scope_question
+
+    edu = {
+        "edu_role": "school_admin",
+        "school_name": "扬州中学",
+        "school_id": "GZ_19D9D68D",
+    }
+    assert out_of_scope_question(edu, "我是哪个学校的校长") is None
+    assert out_of_scope_question(edu, "新华中学均分") == "当前数据无权限访问"
+
+
 def test_baonan_zhongxue_links_to_baonan_xuexiao() -> None:
     """口语「宝楠中学」应对齐目录「宝楠学校」，不再当成没指定学校。"""
     catalog = {

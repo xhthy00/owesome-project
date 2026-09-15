@@ -823,8 +823,10 @@ def lint_edu_sql_blocks(
         )
     if _class_rank_missing_school_type_filter(s, question):
         blocks.append(
-            "问句已点名引领/支撑/发展校：班级排名池必须 xxlb LIKE '%该类%'，"
-            "禁止用全市普通高中（只排除其他校）当对照池。"
+            "跨校学校/班级排名与优势薄弱学科对照池必须 xxlb LIKE '%引领/支撑/发展%'："
+            "校长/老师默认同层次（问句写全市仍是该类，不是全市所有普高）；"
+            "禁止落到其他层次学校/班级。禁止只用排除其他校的全市普通高中混排。"
+            "问句写不限校类/全市普通高中才放开。全校/校内班排不套校类。"
         )
     if _subject_class_rank_keeps_empty_avg(s, question):
         blocks.append(
@@ -1040,24 +1042,65 @@ def _class_rank_sql_for_question(sql: str, question: str | None) -> bool:
     return False
 
 
-def _class_rank_missing_school_type_filter(sql: str, question: str | None) -> bool:
-    """问句点名校类，但班级排名 SQL 没有把池子收到该类。"""
+def _edu_scope_from_constraints() -> dict | None:
     try:
-        from src.agent.education.query_parse import extract_school_type_target
+        from src.agent.education.query_frame import active_constraints
+    except Exception:
+        return None
+    edu = (active_constraints() or {}).get("edu_scope")
+    return edu if isinstance(edu, dict) else None
+
+
+def _is_peer_rank_sql(sql: str, question: str | None) -> bool:
+    if _class_rank_sql_for_question(sql, question):
+        return True
+    if _class_rank_sql_kind(sql, question):
+        return True
+    s = sql or ""
+    if "tb_score_overview" not in s.lower():
+        return False
+    if not re.search(r"\b(?:RANK|DENSE_RANK)\s*\(", s, re.I):
+        return False
+    try:
+        from src.agent.education.query_parse import is_peer_rank_query
     except Exception:
         return False
-    st = extract_school_type_target(question or "")
-    if not st:
+    return is_peer_rank_query(question or "")
+
+
+def _class_rank_missing_school_type_filter(sql: str, question: str | None) -> bool:
+    """点名校类或校长/老师默认同层次，但排名 SQL 没有正向 xxlb 校类过滤。"""
+    try:
+        from src.agent.education.query_parse import (
+            extract_school_type_target,
+            peer_rank_type_required,
+            rank_pool_school_type,
+            wants_unrestricted_school_type_rank,
+        )
+    except Exception:
         return False
-    if not _class_rank_sql_for_question(sql, question):
+    q = question or ""
+    if wants_unrestricted_school_type_rank(q):
+        return False
+    edu = _edu_scope_from_constraints()
+    st = rank_pool_school_type(q, edu) or extract_school_type_target(q)
+    if not st and not peer_rank_type_required(q, edu):
+        return False
+    if not _is_peer_rank_sql(sql, question):
         return False
     s = sql or ""
-    token = re.escape(st)
-    if re.search(rf"xxlb\s+not\s+like\s*['\"]%[^\n'\"]*{token}", s, re.I):
+    if st:
+        token = re.escape(st)
+        if re.search(rf"xxlb\s+not\s+like\s*['\"]%[^\n'\"]*{token}", s, re.I):
+            return True
+        if re.search(rf"xxlb\s+like\s*['\"]%[^\n'\"]*{token}", s, re.I):
+            return False
+        if re.search(rf"xxlb\s*=\s*['\"][^'\"]*{token}", s, re.I):
+            return False
         return True
-    if re.search(rf"xxlb\s+like\s*['\"]%[^\n'\"]*{token}", s, re.I):
+    if re.search(r"xxlb\s+like\s*['\"]%[^\n'\"]*(?:引领|支撑|发展)", s, re.I):
         return False
-    if re.search(rf"xxlb\s*=\s*['\"][^'\"]*{token}", s, re.I):
+    if re.search(r"xxlb\s*=\s*['\"][^'\"]*(?:引领|支撑|发展)", s, re.I):
         return False
     return True
 
@@ -1092,6 +1135,10 @@ def _class_rank_outer_target_without_neighborhood(sql: str, question: str | None
         return False
     q = question or ""
     if is_citywide_nth_class_lookup_query(q):
+        return False
+    edu = _edu_scope_from_constraints()
+    role = str((edu or {}).get("edu_role") or "").strip()
+    if role in {"school_admin", "teacher"}:
         return False
     if not _class_rank_sql_kind(sql, q):
         return False

@@ -2572,7 +2572,7 @@ def _format_sub_tasks_block(
                     block += f"判定口径：{SUBJECT_STRENGTH_RULE}\n"
                     if verdict:
                         block += (
-                            "权威判定（须照抄，禁止把全市前列说成薄弱）：\n"
+                            "权威判定（须照抄，禁止把对照池前列说成薄弱）：\n"
                             f"{verdict}\n"
                         )
         elif fact_answer:
