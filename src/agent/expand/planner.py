@@ -440,8 +440,16 @@ def _score_band_fact_hint() -> str:
 
 def _class_rank_pool_hint(question: str, *, mini: bool = False) -> str:
     """洗净其他校/小班；问句点名校类时对照池必须落在该类。"""
-    from src.agent.education.query_parse import extract_school_type_target
+    from src.agent.education.query_parse import (
+        extract_school_type_target,
+        is_class_rank_school_scope,
+    )
 
+    if is_class_rank_school_scope(question):
+        return (
+            "对照池只限该校各班：WHERE xx LIKE '%校名%'，禁止扫全市其他学校；"
+            "整班参考人数 HAVING COUNT(*)>=10。"
+        )
     if mini:
         wash = (
             "排名池必须先洗：排除其他校（xxlb NOT LIKE '%其他%'，含中专/职校），"
@@ -463,51 +471,54 @@ def _class_rank_pool_hint(question: str, *, mini: bool = False) -> str:
 
 
 def _class_city_rank_fact_hint(question: str) -> str:
-    """班级全市六门排名：选考方向一行 + 不区分选考一行。"""
-    from src.agent.education.query_parse import class_city_rank_answer_mode
+    """班级全市/全校六门排名：默认只出区分文理（物理类/历史类）的一个名次。"""
+    from src.agent.education.query_parse import (
+        class_city_rank_answer_mode,
+        is_class_rank_school_scope,
+    )
 
     mode = class_city_rank_answer_mode(question)
+    scope = "全校" if is_class_rank_school_scope(question) else "全市"
     locate = "定位目标班必须同时用学校 xx 与班级 bj，禁止只写班级（同名班会串校）。"
     near = (
-        "查询结果每个口径须带对照班：第1名 + 目标班名次前后各3名（含本班），"
-        "列含学校、班级、全市排名、均分，本班加标记；"
+        "查询结果须带对照班：第1名 + 目标班名次前后各3名（含本班），"
+        f"列含学校、班级、{scope}排名、均分，本班加标记；"
         "用目标校+班算窗口，禁止外层 WHERE 只留下目标班一行。"
         "对话结论只写目标班的名次/总数/均分，不要把附近班整表贴进结论。"
     )
     wash = _class_rank_pool_hint(question)
     if mode == "physics":
         return (
-            "本题是班级全市排名，问句已点名物理类：只排物理类。"
+            f"本题是班级{scope}排名，问句已点名物理类：只排物理类。"
             "物理类 xkkm LIKE '物%'；班级均分只算该班物理类学生 zf6m；"
             f"{wash}对照池=洗净后该类参考人数≥3 的班级；GROUP BY xx,bj 后 RANK()/COUNT(*) OVER()；"
-            f"{locate}{near}禁止文理混排。terminate 写明物理类第几/共几班。"
+            f"{locate}{near}禁止文理混排，禁止再出「不区分选考」名次。"
+            "terminate 写明物理类第几/共几班。"
         )
     if mode == "history":
         return (
-            "本题是班级全市排名，问句已点名历史类：只排历史类。"
+            f"本题是班级{scope}排名，问句已点名历史类：只排历史类。"
             "历史类 xkkm LIKE '史%' OR LIKE '历%'；班级均分只算该班历史类学生 zf6m；"
             f"{wash}对照池=洗净后该类参考人数≥3 的班级；GROUP BY xx,bj 后 RANK()/COUNT(*) OVER()；"
-            f"{locate}{near}禁止文理混排。terminate 写明历史类第几/共几班。"
+            f"{locate}{near}禁止文理混排，禁止再出「不区分选考」名次。"
+            "terminate 写明历史类第几/共几班。"
         )
     if mode == "mixed":
         return (
-            "本题是班级全市排名，问句要求不区分选考：洗净后的普通高中班按六门均分混排一行即可；"
+            f"本题是班级{scope}排名，问句要求不区分选考：洗净后按六门均分混排一行即可；"
             f"{wash}GROUP BY xx,bj 后 RANK()/COUNT(*) OVER()；{locate}{near}"
             "terminate 必须写明「不区分选考」。"
         )
     return (
-        "本题是班级全市六门排名，必须给出两个口径，禁止只报文理混排一个名次。"
-        "**必须一条 SQL 用 UNION ALL 一次返回两个口径**（列含口径：按选考方向 / 不区分选考）；"
-        "禁止拆成两次 execute_sql——查询结果只保留最后一次 SQL，分开查会丢掉选考那一行。"
-        f"{wash}"
-        "（1）按选考方向：先数该班物理类（xkkm LIKE '物%'）与历史类"
-        "（LIKE '史%' OR LIKE '历%'）在籍且 zf6m>0 的人数；不足 3 人的方向丢掉；"
-        "只按人数多的那一类排（两类人数相等且都≥3 则两类都排）；"
+        f"本题是班级{scope}六门排名，只给出区分文理的一个名次，禁止再出「不区分选考」混排名次。"
+        "先数该班物理类（xkkm LIKE '物%'）与历史类（LIKE '史%' OR LIKE '历%'）"
+        "在籍且 zf6m>0 的人数；不足 3 人的方向丢掉；"
+        "只按人数多的那一类排（两类人数相等则只报物理类）。"
         "该类均分只算该类学生；对照池=洗净后该类参考人数≥3 的班级。"
-        "（2）不区分选考：洗净后的普通高中班按整班六门均分再排一行。"
-        "两口径都用 GROUP BY xx,bj 后 RANK() OVER (ORDER BY 均分 DESC) 与 COUNT(*) OVER()；"
+        f"{wash}"
+        "GROUP BY xx,bj 后 RANK() OVER (ORDER BY 均分 DESC) 与 COUNT(*) OVER()；"
         f"禁止 PARTITION BY bj，禁止 COUNT(DISTINCT bj)；{locate}{near}"
-        "terminate 两口径都要有目标班名次和班级总数。"
+        "terminate 写明物理类或历史类第几/共几班，不要第二行混排。"
     )
 
 
@@ -618,8 +629,12 @@ _COMPULSORY_SUBJECTS = frozenset({"语文", "数学", "英语"})
 
 
 def _class_subject_city_rank_fact_hint(question: str) -> str:
-    """班级单科全市排名：洗净池 + NULLS LAST，不走六门双行。"""
+    """班级单科全市排名：洗净池 + 默认文理分轨 + NULLS LAST。"""
     from src.agent.education.orchestrator import _extract_subject
+    from src.agent.education.query_parse import (
+        class_city_rank_answer_mode,
+        is_class_rank_school_scope,
+    )
 
     subject = (_extract_subject(question) or "").strip()
     col = _SUBJECT_AVG_COL.get(subject, "")
@@ -638,20 +653,49 @@ def _class_subject_city_rank_fact_hint(question: str) -> str:
         if subject in _COMPULSORY_SUBJECTS
         else "面向用户只说在籍生、排除未选考/缺考。"
     )
+    mode = class_city_rank_answer_mode(question)
+    if mode == "physics":
+        track_txt = (
+            "问句已点名物理类：只排物理类。物理类 xkkm LIKE '物%'；"
+            "该科均分只算该类学生；禁止再出「不区分选考」名次。"
+        )
+    elif mode == "history":
+        track_txt = (
+            "问句已点名历史类：只排历史类。历史类 xkkm LIKE '史%' OR LIKE '历%'；"
+            "该科均分只算该类学生；禁止再出「不区分选考」名次。"
+        )
+    elif mode == "mixed":
+        track_txt = (
+            "问句要求不区分选考：洗净后按该科均分混排一行即可。"
+            "terminate 必须写明「不区分选考」。"
+        )
+    else:
+        track_txt = (
+            "只给出区分文理的一个名次，禁止再出「不区分选考」混排名次。"
+            "先数该班物理类（xkkm LIKE '物%'）与历史类（LIKE '史%' OR LIKE '历%'）"
+            "在籍人数；不足 3 人的方向丢掉；只按人数多的那一类排（两类人数相等则只报物理类）。"
+            "该科均分只算该类学生；对照池=洗净后该类该科有效人数≥3 的班级。"
+            "terminate 写明物理类或历史类第几/共几班。"
+        )
     return (
-        "本题是班级单科全市排名，不是六门总分："
-        "禁止 UNION ALL 文理双行，禁止只报 zf6m。"
-        f"{col_txt}。"
-        f"{_class_rank_pool_hint(question, mini=True)}"
-        "RANK() OVER (ORDER BY 均分 DESC NULLS LAST)，禁止把无分班排第1。"
-        "GROUP BY xx,bj 后 COUNT(*) OVER() 为洗净后班级数；"
-        "用目标校+班定位窗口：第1名 + 目标班名次前后各3名（含本班并加标记），"
-        "xx LIKE '%校名%'（常带 A01 前缀，禁止 xx='扬州中学' 精确等于）且同时用 bj；"
-        "禁止外层 WHERE 只留下目标班一行。"
-        "terminate 只写目标班均分、第几/共几班；名次/总数≤25% 称前列，禁止称中上段。"
-        "对话结论不要罗列附近班。"
-        f"{oral}"
-        "面向用户禁止字段名 yy/rk/avg_yy、禁止校码 A01。"
+        (
+            "本题是班级单科全校排名，不是六门总分、也不是全市排名："
+            if is_class_rank_school_scope(question)
+            else "本题是班级单科全市排名，不是六门总分："
+        )
+        + "禁止 UNION ALL 第二行混排，禁止只报 zf6m。"
+        + f"{col_txt}。"
+        + track_txt
+        + _class_rank_pool_hint(question, mini=True)
+        + "RANK() OVER (ORDER BY 均分 DESC NULLS LAST)，禁止把无分班排第1。"
+        + "GROUP BY xx,bj 后 COUNT(*) OVER() 为洗净后班级数；"
+        + "用目标校+班定位窗口：第1名 + 目标班名次前后各3名（含本班并加标记），"
+        + "xx LIKE '%校名%'（常带 A01 前缀，禁止 xx='扬州中学' 精确等于）且同时用 bj；"
+        + "禁止外层 WHERE 只留下目标班一行。"
+        + "terminate 只写目标班均分、第几/共几班；名次/总数≤25% 称前列，禁止称中上段。"
+        + "对话结论不要罗列附近班。"
+        + oral
+        + "面向用户禁止字段名 yy/rk/avg_yy、禁止校码 A01。"
     )
 
 

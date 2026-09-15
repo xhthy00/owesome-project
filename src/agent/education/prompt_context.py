@@ -84,6 +84,7 @@ def build_education_sql_hint_text(question: str) -> str:
         extract_school_type_target,
         is_citywide_nth_class_lookup_query,
         is_class_city_rank_query,
+        is_class_rank_school_scope,
         is_class_subject_city_rank_query,
         is_school_class_comparison_query,
         is_school_vs_school_type_avg_query,
@@ -97,17 +98,26 @@ def build_education_sql_hint_text(question: str) -> str:
         else ""
     )
     if is_class_city_rank_query(q):
-        rules.append(
-            "班级全市六门排名必须一条 SQL 用 UNION ALL 一次返回两个口径："
-            "按选考方向（人数多的一类，该类满3人进池）+ 不区分选考；"
-            "禁止只报文理混排，禁止拆两次 execute_sql。"
-            "每个口径返回第1名+目标班前后各3名（标记本班），禁止只查出目标班一行。"
-            "排名池排除其他校（xxlb NOT LIKE '%其他%'）和整班不足10人的小班。"
-            f"{type_pool}"
-            "物理类 xkkm LIKE '物%'，历史类 LIKE '史%' OR LIKE '历%'；"
-            "GROUP BY xx,bj 后 RANK() OVER (ORDER BY 均分 DESC)，"
-            "用学校 xx 与班级 bj 定位窗口。"
-        )
+        if is_class_rank_school_scope(q):
+            rules.append(
+                "班级全校六门排名默认只出区分文理的一个名次："
+                "按该班人数多的物理类或历史类排（该类满3人进池；人数相等只报物理类）；"
+                "禁止再出「不区分选考」混排。对照池只限该校各班（xx LIKE '%校名%'），禁止扫全市。"
+                "查询结果返回第1名+目标班前后各3名（标记本班）。"
+                "物理类 xkkm LIKE '物%'，历史类 LIKE '史%' OR LIKE '历%'。"
+            )
+        else:
+            rules.append(
+                "班级全市六门排名默认只出区分文理的一个名次："
+                "按该班人数多的物理类或历史类排（该类满3人进池；人数相等只报物理类）；"
+                "禁止再出「不区分选考」混排。问句写明不分文理才混排。"
+                "查询结果返回第1名+目标班前后各3名（标记本班），禁止只查出目标班一行。"
+                "排名池排除其他校（xxlb NOT LIKE '%其他%'）和整班不足10人的小班。"
+                f"{type_pool}"
+                "物理类 xkkm LIKE '物%'，历史类 LIKE '史%' OR LIKE '历%'；"
+                "GROUP BY xx,bj 后 RANK() OVER (ORDER BY 均分 DESC)，"
+                "用学校 xx 与班级 bj 定位窗口。"
+            )
     if is_citywide_nth_class_lookup_query(q):
         rules.append(
             "全市第N是哪个班：没有目标班；洗净其他校（xxlb NOT LIKE '%其他%'）和整班不足10人；"
@@ -116,14 +126,25 @@ def build_education_sql_hint_text(question: str) -> str:
             "化学/生物/政治/地理用 hxzh/swzh/zzzh/dlzh，禁止把行政班总数当再选科分母。"
         )
     if is_class_subject_city_rank_query(q):
-        rules.append(
-            "班级单科全市排名：洗净其他校（xxlb NOT LIKE '%其他%'）和整班不足10人的小班；"
-            f"{type_pool}"
-            "该科 FILTER col>0 且 HAVING 有效人数>=3；RANK() OVER (ORDER BY 均分 DESC NULLS LAST)；"
-            "查询结果返回第1名+目标班前后各3名并标记本班，禁止只查出目标班一行；"
-            "用 xx LIKE '%校名%' 与 bj 定位窗口；禁止 UNION ALL 文理双行；"
-            "名次/总数≤25% 称前列，禁止称中上段；结论禁止字段名与 A01 校码。"
-        )
+        if is_class_rank_school_scope(q):
+            rules.append(
+                "班级单科全校排名默认只出区分文理的一个名次："
+                "按该班人数多的物理类或历史类排；对照池只限该校各班，禁止扫全市；"
+                "该科 FILTER col>0 且 HAVING 有效人数>=3；RANK() OVER (ORDER BY 均分 DESC NULLS LAST)；"
+                "查询结果返回第1名+目标班前后各3名并标记本班。"
+            )
+        else:
+            rules.append(
+                "班级单科全市排名默认只出区分文理的一个名次："
+                "按该班人数多的物理类或历史类排（该类满3人进池；人数相等只报物理类）；"
+                "禁止再出「不区分选考」混排。问句写明不分文理才混排。"
+                "洗净其他校（xxlb NOT LIKE '%其他%'）和整班不足10人的小班；"
+                f"{type_pool}"
+                "该科 FILTER col>0 且 HAVING 有效人数>=3；RANK() OVER (ORDER BY 均分 DESC NULLS LAST)；"
+                "查询结果返回第1名+目标班前后各3名并标记本班，禁止只查出目标班一行；"
+                "用 xx LIKE '%校名%' 与 bj 定位窗口；"
+                "名次/总数≤25% 称前列，禁止称中上段；结论禁止字段名与 A01 校码。"
+            )
 
     if is_subject_strength_query(q):
         rules.append(

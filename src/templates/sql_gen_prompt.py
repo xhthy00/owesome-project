@@ -252,26 +252,41 @@ LIMIT 1000;
   </example>
   <example>
     <question>2026届高三1月扬州中学高三(1)班数学成绩全市排名</question>
-    <suggestion-answer>WITH eligible AS (
-  SELECT xx, bj
+    <suggestion-answer>WITH base AS (
+  SELECT xx, bj, sx, xkkm,
+         CASE WHEN xkkm LIKE '物%' THEN '物理类'
+              WHEN xkkm LIKE '史%' OR xkkm LIKE '历%' THEN '历史类'
+              ELSE NULL END AS track
   FROM tb_score_overview
   WHERE exam_name LIKE '%2026届高三1月%'
     AND xsxz = '在籍生'
     AND xxlb NOT LIKE '%其他%'
-  GROUP BY xx, bj
-  HAVING COUNT(*) &gt;= 10
+),
+regular AS (
+  SELECT xx, bj FROM base GROUP BY xx, bj HAVING COUNT(*) &gt;= 10
+),
+tgt_n AS (
+  SELECT track, COUNT(*) AS n
+  FROM base
+  WHERE xx LIKE '%扬州中学%' AND bj LIKE '%高三(1)班%' AND track IS NOT NULL
+  GROUP BY track
+  HAVING COUNT(*) &gt;= 3
+),
+majority AS (
+  SELECT track FROM tgt_n
+  ORDER BY n DESC, CASE WHEN track = '物理类' THEN 0 ELSE 1 END
+  LIMIT 1
 ),
 class_avg AS (
-  SELECT o.xx, o.bj, ROUND(AVG(o.sx) FILTER (WHERE o.sx &gt; 0), 2) AS avg_sx
-  FROM tb_score_overview o
-  JOIN eligible e ON e.xx = o.xx AND e.bj = o.bj
-  WHERE o.exam_name LIKE '%2026届高三1月%'
-    AND o.xsxz = '在籍生'
-  GROUP BY o.xx, o.bj
-  HAVING COUNT(*) FILTER (WHERE o.sx &gt; 0) &gt;= 3
+  SELECT b.xx, b.bj, b.track, ROUND(AVG(b.sx) FILTER (WHERE b.sx &gt; 0), 2) AS avg_sx
+  FROM base b
+  JOIN regular r ON r.xx = b.xx AND r.bj = b.bj
+  WHERE b.track IN (SELECT track FROM majority)
+  GROUP BY b.xx, b.bj, b.track
+  HAVING COUNT(*) FILTER (WHERE b.sx &gt; 0) &gt;= 3
 ),
 ranked AS (
-  SELECT xx, bj, avg_sx,
+  SELECT xx, bj, track, avg_sx,
          RANK() OVER (ORDER BY avg_sx DESC NULLS LAST) AS city_rank,
          COUNT(*) OVER () AS n_class
   FROM class_avg
@@ -280,12 +295,12 @@ tgt AS (
   SELECT city_rank FROM ranked
   WHERE xx LIKE '%扬州中学%' AND bj LIKE '%高三(1)班%'
 )
-SELECT xx, bj, avg_sx, city_rank, n_class,
+SELECT track AS 口径, xx, bj, avg_sx, city_rank, n_class,
        CASE WHEN xx LIKE '%扬州中学%' AND bj LIKE '%高三(1)班%' THEN '本班' ELSE '' END AS 标记
 FROM ranked
 WHERE city_rank = 1
    OR city_rank BETWEEN (SELECT city_rank FROM tgt) - 3 AND (SELECT city_rank FROM tgt) + 3;
--- 单科全市班级排名：洗净其他校/整班不足10人，该科有效人数&gt;=3 才进池，RANK ... NULLS LAST。禁止 PARTITION BY bj。返回第1名+目标班前后各3名并标记本班，禁止外层只留目标班一行。数学=sx 且 FILTER sx&gt;0</suggestion-answer>
+-- 单科全市班级排名默认只出区分文理一个名次（人数多的一类，人数相等只报物理类）。洗净其他校/整班不足10人，该科有效人数&gt;=3 才进池，RANK ... NULLS LAST。禁止 PARTITION BY bj。禁止 UNION「不区分选考」。返回第1名+目标班前后各3名并标记本班，禁止外层只留目标班一行。数学=sx 且 FILTER sx&gt;0</suggestion-answer>
   </example>
   <example>
     <question>扬州中学高三(1)班在全市班级中的排名</question>
@@ -311,7 +326,9 @@ tgt_n AS (
   HAVING COUNT(*) &gt;= 3
 ),
 majority AS (
-  SELECT track FROM tgt_n WHERE n = (SELECT MAX(n) FROM tgt_n)
+  SELECT track FROM tgt_n
+  ORDER BY n DESC, CASE WHEN track = '物理类' THEN 0 ELSE 1 END
+  LIMIT 1
 ),
 track_class AS (
   SELECT b.xx, b.bj, b.track, AVG(b.zf6m) AS avg_zf6m, COUNT(*) AS n_stu
@@ -323,42 +340,20 @@ track_class AS (
 ),
 track_rank AS (
   SELECT *,
-         RANK() OVER (PARTITION BY track ORDER BY avg_zf6m DESC) AS city_rank,
-         COUNT(*) OVER (PARTITION BY track) AS n_class
-  FROM track_class
-),
-all_class AS (
-  SELECT b.xx, b.bj, AVG(b.zf6m) AS avg_zf6m, COUNT(*) AS n_stu
-  FROM base b
-  JOIN regular r ON r.xx = b.xx AND r.bj = b.bj
-  GROUP BY b.xx, b.bj
-),
-all_rank AS (
-  SELECT *,
          RANK() OVER (ORDER BY avg_zf6m DESC) AS city_rank,
          COUNT(*) OVER () AS n_class
-  FROM all_class
+  FROM track_class
 ),
 tgt_dir AS (
   SELECT city_rank FROM track_rank
   WHERE xx LIKE '%扬州中学%' AND bj LIKE '%高三(1)班%'
-),
-tgt_all AS (
-  SELECT city_rank FROM all_rank
-  WHERE xx LIKE '%扬州中学%' AND bj LIKE '%高三(1)班%'
 )
-SELECT '按选考方向' AS 口径, xx, bj, city_rank, n_class, ROUND(avg_zf6m, 1) AS avg_zf6m,
+SELECT track AS 口径, xx, bj, city_rank, n_class, ROUND(avg_zf6m, 1) AS avg_zf6m,
        CASE WHEN xx LIKE '%扬州中学%' AND bj LIKE '%高三(1)班%' THEN '本班' ELSE '' END AS 标记
 FROM track_rank
 WHERE city_rank = 1
-   OR city_rank BETWEEN (SELECT city_rank FROM tgt_dir) - 3 AND (SELECT city_rank FROM tgt_dir) + 3
-UNION ALL
-SELECT '不区分选考', xx, bj, city_rank, n_class, ROUND(avg_zf6m, 1),
-       CASE WHEN xx LIKE '%扬州中学%' AND bj LIKE '%高三(1)班%' THEN '本班' ELSE '' END
-FROM all_rank
-WHERE city_rank = 1
-   OR city_rank BETWEEN (SELECT city_rank FROM tgt_all) - 3 AND (SELECT city_rank FROM tgt_all) + 3;
--- 一条 SQL、UNION ALL 两个口径。每个口径返回第1名+目标班前后各3名并标记本班。排名池排除其他校和整班不足10人。问句点名支撑/引领/发展校时再加 xxlb LIKE '%该类%'。用目标校+班定位窗口，禁止外层只留下目标班一行。</suggestion-answer>
+   OR city_rank BETWEEN (SELECT city_rank FROM tgt_dir) - 3 AND (SELECT city_rank FROM tgt_dir) + 3;
+-- 只出区分文理的一个名次（人数多的一类，人数相等只报物理类）。返回第1名+目标班前后各3名并标记本班。禁止 UNION「不区分选考」。排名池排除其他校和整班不足10人。问句点名支撑/引领/发展校时再加 xxlb LIKE '%该类%'。用目标校+班定位窗口，禁止外层只留下目标班一行。</suggestion-answer>
   </example>
   <example>
     <question>2026届高三1月新华中学的优势学科</question>
@@ -881,7 +876,7 @@ def education_terminologies_block() -> str:
   </terminology>
   <terminology>
     <words><word>排名</word><word>全市排名</word><word>优势学科</word><word>薄弱学科</word><word>在籍</word><word>市报</word><word>往届</word></words>
-    <description>查 tb_score_overview 默认 AND xsxz='在籍生'。市报生/往届不进均分、不进全市班级或学校排名池（否则虚拟市报班会挤占名次）。问句明确要市报/往届/含市报时才放开。点名班级的全市六门/总分排名必须两个口径、且必须一条 SQL 用 UNION ALL 一次返回（禁止拆两次 execute_sql）：按选考方向（物理类 xkkm LIKE '物%'，历史类 LIKE '史%' OR LIKE '历%'；只报该班人数多的一类，该类参考人数≥3 的班才进池；均分只算该类学生）+ 不区分选考（洗净后的普通高中班整班六门均分）。每个口径的查询结果返回第1名及目标班前后各3名并标记本班，禁止只返回目标班一行；对话结论仍只写目标班。排名池必须排除其他校（xxlb NOT LIKE '%其他%'，含中专/职校）和整班参考人数不足 10 人的小班。问句点名引领/支撑/发展校时，班级排名对照池必须再加 xxlb LIKE '%该类%'（如支撑校 LIKE '%支撑%'），禁止用全市普通高中混排。禁止只报文理混排一个名次。问句已点名物理类/历史类/不分文理时只出对应那一口径。单科班排仍可混池，查询结果同样返回第1名及目标班前后各3名并标记本班，禁止只返回目标班一行。问句是「全市第N是哪个班」（无点名班）时：外层 WHERE 排名=N，禁止目标班前后3名窗口，化学/生物/政治/地理用 hxzh/swzh/zzzh/dlzh，COUNT(*) OVER() 必须在该科进池之后（禁止把行政班洗净数当再选科分母）。班级全市排名：GROUP BY xx,bj 后 RANK() OVER (ORDER BY 均分 DESC) 与 COUNT(*) OVER()，用学校 xx 与班级 bj 定位窗口；禁止只写班级（同名班会串校）；禁止 PARTITION BY bj（同名班跨校互比），禁止 COUNT(DISTINCT bj)（班名种类≠全市班级数）。优势学科/薄弱学科/优势科目/短板学科：按该校（点名班级则该班）各科均分的全市排名相对位置判断，名次/参赛数≤25%为全市前列（优势），≥50%为全市靠后（薄弱），中间为中游；禁止把本校各科里名次较差的直接叫薄弱（第7/37仍属前列）；禁止用本校各科均分互相比较（满分与选考人数不同）。化学/生物/政治/地理用 hxzh/swzh/zzzh/dlzh，禁止 hx/sw/zz/dl</description>
+    <description>查 tb_score_overview 默认 AND xsxz='在籍生'。市报生/往届不进均分、不进全市班级或学校排名池（否则虚拟市报班会挤占名次）。问句明确要市报/往届/含市报时才放开。点名班级的全市六门/总分排名默认只出区分文理的一个名次：物理类 xkkm LIKE '物%'，历史类 LIKE '史%' OR LIKE '历%'；只报该班人数多的一类（人数相等只报物理类），该类参考人数≥3 的班才进池，均分只算该类学生。禁止再出「不区分选考」混排。查询结果返回第1名及目标班前后各3名并标记本班，禁止只返回目标班一行；对话结论仍只写目标班。排名池必须排除其他校（xxlb NOT LIKE '%其他%'，含中专/职校）和整班参考人数不足 10 人的小班。问句点名引领/支撑/发展校时，班级排名对照池必须再加 xxlb LIKE '%该类%'（如支撑校 LIKE '%支撑%'），禁止用全市普通高中混排。问句写明不分文理/不区分选考才混排。问句已点名物理类/历史类时只出对应那一口径。单科班排（语文/数学/英语等）全市或全校同样默认只出区分文理的一个名次，查询结果返回第1名及目标班前后各3名并标记本班，禁止只返回目标班一行。全校班排对照池只限该校（xx LIKE '%校名%'），禁止扫全市。问句是「全市第N是哪个班」（无点名班）时：外层 WHERE 排名=N，禁止目标班前后3名窗口，化学/生物/政治/地理用 hxzh/swzh/zzzh/dlzh，COUNT(*) OVER() 必须在该科进池之后（禁止把行政班洗净数当再选科分母）。班级全市排名：GROUP BY xx,bj 后 RANK() OVER (ORDER BY 均分 DESC) 与 COUNT(*) OVER()，用学校 xx 与班级 bj 定位窗口；禁止只写班级（同名班会串校）；禁止 PARTITION BY bj（同名班跨校互比），禁止 COUNT(DISTINCT bj)（班名种类≠全市班级数）。优势学科/薄弱学科/优势科目/短板学科：按该校（点名班级则该班）各科均分的全市排名相对位置判断，名次/参赛数≤25%为全市前列（优势），≥50%为全市靠后（薄弱），中间为中游；禁止把本校各科里名次较差的直接叫薄弱（第7/37仍属前列）；禁止用本校各科均分互相比较（满分与选考人数不同）。化学/生物/政治/地理用 hxzh/swzh/zzzh/dlzh，禁止 hx/sw/zz/dl</description>
   </terminology>
   <terminology>
     <words><word>均分</word><word>各科</word><word>选考</word><word>选课</word><word>历史</word><word>地理</word><word>政治</word><word>均衡</word><word>标准差</word><word>离散</word></words>

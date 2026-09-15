@@ -754,7 +754,15 @@ def lint_edu_sql_blocks(
             "目标校/班只允许在排名完成后再 WHERE 过滤。"
         )
     if _rank_pool_shrunk_by_target_filter(s):
-        blocks.append(_RANK_POOL_SHRINK_MSG)
+        school_scope = False
+        try:
+            from src.agent.education.query_parse import is_class_rank_school_scope
+
+            school_scope = is_class_rank_school_scope(question or "")
+        except Exception:
+            school_scope = False
+        if not school_scope:
+            blocks.append(_RANK_POOL_SHRINK_MSG)
     if _subject_rank_keeps_null_avgs(s):
         blocks.append(_SUBJECT_RANK_NULL_POOL_MSG)
     if _citywide_subject_avg_union_then_rank(s):
@@ -785,11 +793,11 @@ def lint_edu_sql_blocks(
             "检测到 SELECT 班级别名却只 GROUP BY xx：会把全校塌成一行学校均分。"
             "各班对比必须 SELECT bj AS class_name，GROUP BY xx, bj。"
         )
-    if _dual_class_rank_missing_union(s, question):
+    if _class_rank_missing_track_split(s, question):
         blocks.append(
-            "班级全市六门排名须一条 SQL 用 UNION ALL 一次返回两个口径"
-            "（按选考方向 + 不区分选考），禁止只查文理混排；"
-            "禁止拆两次 execute_sql（查询结果只保留最后一次）。"
+            "班级全市/全校六门或单科排名默认只出区分文理的一个名次："
+            "按物理类（xkkm LIKE '物%'）或历史类（LIKE '史%' OR LIKE '历%'）分轨，"
+            "禁止不区分选考的混排，禁止再 UNION「不区分选考」。"
         )
     if _class_rank_outer_target_without_neighborhood(s, question):
         blocks.append(
@@ -958,10 +966,10 @@ def _class_rank_sql_kind(sql: str, question: str | None) -> str:
     except Exception:
         return ""
     q = question or ""
-    if class_city_rank_answer_mode(q) and _is_zf6m_class_city_rank_sql(sql):
-        return "zf6m"
     if is_class_subject_city_rank_query(q) and _is_subject_class_city_rank_sql(sql):
         return "subject"
+    if class_city_rank_answer_mode(q) and _is_zf6m_class_city_rank_sql(sql):
+        return "zf6m"
     if is_citywide_nth_class_lookup_query(q):
         if _is_subject_class_city_rank_sql(sql):
             return "subject"
@@ -988,20 +996,31 @@ def _subject_class_rank_keeps_empty_avg(sql: str, question: str | None) -> bool:
     return True
 
 
-def _dual_class_rank_missing_union(sql: str, question: str | None) -> bool:
-    """默认两行口径却只查了混排（无 UNION ALL 或缺两行标签）。"""
+def _class_rank_missing_track_split(sql: str, question: str | None) -> bool:
+    """默认/点名文理的班排：必须按物理类或历史类分轨，禁止混排或不区分选考。"""
     try:
         from src.agent.education.query_parse import class_city_rank_answer_mode
     except Exception:
         return False
-    if class_city_rank_answer_mode(question or "") != "dual":
+    mode = class_city_rank_answer_mode(question or "")
+    if mode not in {"track", "physics", "history"}:
         return False
-    if not _is_zf6m_class_city_rank_sql(sql):
+    if not (
+        _is_zf6m_class_city_rank_sql(sql) or _is_subject_class_city_rank_sql(sql)
+    ):
         return False
     s = sql or ""
-    # 只拦「没有 UNION ALL」的混排单查。口径列名允许「物理类方向」等，
-    # 不必一字不差写「按选考方向」（否则正确双行 SQL 会被误拦）。
-    return not bool(re.search(r"\bUNION\s+ALL\b", s, re.I))
+    if "不区分选考" in s:
+        return True
+    has_phy = bool(re.search(r"xkkm[^\n]{0,80}物", s, re.I) or ("物理类" in s))
+    has_his = bool(
+        re.search(r"xkkm[^\n]{0,80}(?:史|历)", s, re.I) or ("历史类" in s)
+    )
+    if mode == "physics":
+        return not has_phy
+    if mode == "history":
+        return not has_his
+    return not (has_phy or has_his)
 
 
 def _class_rank_sql_for_question(sql: str, question: str | None) -> bool:
@@ -1014,10 +1033,10 @@ def _class_rank_sql_for_question(sql: str, question: str | None) -> bool:
     except Exception:
         return False
     q = question or ""
-    if class_city_rank_answer_mode(q):
-        return _is_zf6m_class_city_rank_sql(sql)
     if is_class_subject_city_rank_query(q):
         return _is_subject_class_city_rank_sql(sql)
+    if class_city_rank_answer_mode(q):
+        return _is_zf6m_class_city_rank_sql(sql)
     return False
 
 
@@ -1044,7 +1063,13 @@ def _class_rank_missing_school_type_filter(sql: str, question: str | None) -> bo
 
 
 def _class_rank_pool_unwashed(sql: str, question: str | None) -> bool:
-    """班级全市排名未排除其他校/整班不足 10 人。"""
+    """班级全市排名未排除其他校/整班不足 10 人。全校班排不套用全市洗净。"""
+    try:
+        from src.agent.education.query_parse import is_class_rank_school_scope
+    except Exception:
+        return False
+    if is_class_rank_school_scope(question or ""):
+        return False
     if not _class_rank_sql_kind(sql, question):
         return False
     s = sql or ""

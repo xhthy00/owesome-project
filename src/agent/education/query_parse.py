@@ -834,10 +834,25 @@ def is_citywide_nth_class_lookup_query(question: str) -> bool:
 
 
 _TRACK_STRIP_FOR_CLASS_RANK = re.compile(r"物理类|物理方向|历史类|历史方向|理科|文科")
+_CLASS_RANK_CITY_HINTS = ("全市", "全域", "市域")
+_CLASS_RANK_SCHOOL_HINTS = ("全校", "校内", "本校")
+
+
+def _has_class_rank_pool(question: str) -> bool:
+    q = question or ""
+    return any(h in q for h in _CLASS_RANK_CITY_HINTS + _CLASS_RANK_SCHOOL_HINTS)
+
+
+def is_class_rank_school_scope(question: str) -> bool:
+    """点名班排的对照池是本校（全校/校内），不是全市。"""
+    q = (question or "").strip()
+    if any(h in q for h in _CLASS_RANK_CITY_HINTS):
+        return False
+    return any(h in q for h in _CLASS_RANK_SCHOOL_HINTS)
 
 
 def is_class_city_rank_query(question: str) -> bool:
-    """点名班级的全市六门/总分排名（非单科、非优势薄弱）。"""
+    """点名班级的全市/全校六门或总分排名（非单科、非优势薄弱）。"""
     q = (question or "").strip()
     if not q or not is_rank_query(q):
         return False
@@ -845,7 +860,7 @@ def is_class_city_rank_query(question: str) -> bool:
         return False
     if "班" not in q:
         return False
-    if not any(m in q for m in ("全市", "全域", "市域")):
+    if not _has_class_rank_pool(q):
         return False
     if is_subject_strength_query(q):
         return False
@@ -856,13 +871,13 @@ def is_class_city_rank_query(question: str) -> bool:
 
 
 def is_class_subject_city_rank_query(question: str) -> bool:
-    """点名班级的单科全市班级排名（英语/数学等，不是六门总分）。"""
+    """点名班级的单科全市/全校班级排名（英语/数学等，不是六门总分）。"""
     q = (question or "").strip()
     if not q or not is_rank_query(q):
         return False
     if "班" not in q:
         return False
-    if not any(m in q for m in ("全市", "全域", "市域")):
+    if not _has_class_rank_pool(q):
         return False
     if is_subject_strength_query(q):
         return False
@@ -875,11 +890,15 @@ def is_class_subject_city_rank_query(question: str) -> bool:
 
 
 def class_city_rank_answer_mode(question: str) -> str:
-    """dual / physics / history / mixed；非本问法返回空串。"""
+    """track / physics / history / mixed；非本问法返回空串。
+
+    默认 ``track``：六门与单科、全市与全校班排都只出区分文理的一个名次。
+    问句写明「不分文理/不区分选考」才走混排。
+    """
     q = (question or "").strip()
-    if not is_class_city_rank_query(q):
+    if not is_class_city_rank_query(q) and not is_class_subject_city_rank_query(q):
         return ""
-    only_mixed = any(h in q for h in ("不分文理", "所有班级"))
+    only_mixed = any(h in q for h in ("不分文理", "不区分选考", "所有班级"))
     only_phy = (not only_mixed) and any(h in q for h in ("物理类", "物理方向", "理科"))
     only_his = (not only_mixed) and any(h in q for h in ("历史类", "历史方向", "文科"))
     if only_phy and not only_his:
@@ -888,7 +907,7 @@ def class_city_rank_answer_mode(question: str) -> str:
         return "history"
     if only_mixed:
         return "mixed"
-    return "dual"
+    return "track"
 
 
 def is_oral_score_inquiry(question: str) -> bool:
@@ -1447,6 +1466,9 @@ def is_school_class_comparison_query(question: str) -> bool:
         return False
     # 「成绩总览 / 班级总览」独立路由，不占用班级横向对比
     if is_class_overview_query(q):
+        return False
+    # 点名班的全市/全校排名是事实查询，不走各班横向对比报告
+    if is_class_city_rank_query(q) or is_class_subject_city_rank_query(q):
         return False
     # 「群体特征」口径独立路由，不占用班级横向对比
     if is_group_feature_query(q):
@@ -3066,6 +3088,7 @@ __all__ = [
     "is_rank_query",
     "is_class_city_rank_query",
     "is_class_subject_city_rank_query",
+    "is_class_rank_school_scope",
     "class_city_rank_answer_mode",
     "is_oral_score_inquiry",
     "has_class_alias",
