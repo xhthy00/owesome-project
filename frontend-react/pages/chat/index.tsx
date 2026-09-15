@@ -1,5 +1,6 @@
+import { MenuFoldOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Flex, Layout, message } from "antd";
+import { Flex, Layout, Tooltip, message } from "antd";
 import { useRouter } from "next/router";
 import ChatContentContainer from "@/components/chat/ChatContentContainer";
 import ChatExecutionPanel from "@/components/chat/ChatExecutionPanel";
@@ -9,6 +10,7 @@ import ChatInputPanel from "@/new-components/chat/input/ChatInputPanel";
 import QuestionDock from "@/new-components/chat/input/QuestionDock";
 
 const initConversations = [{ id: "default", title: "Default Assistant" }];
+const EXPERT_PANEL_OPEN_KEY = "chat-expert-panel-open";
 
 export default function ChatPage() {
   const router = useRouter();
@@ -47,12 +49,35 @@ export default function ChatPage() {
   const [resourceValue, setResourceValue] = useState("database:sales");
   const [modelValue, setModelValue] = useState("dbgpt-pro");
   const [selectedStepId, setSelectedStepId] = useState<string | undefined>(undefined);
+  const [expertPanelOpen, setExpertPanelOpen] = useState(true);
   const prevConversationQuery = useRef<string | null>(null);
   const loadedConversationIdRef = useRef<number | null>(null);
   /** 探索广场 ?q= 只消费一次，避免 send/router 引用变化把同一问发成多条会话 */
   const consumedExploreQueryRef = useRef<string | null>(null);
   /** 新建任务清屏时先挡住当前 ?q=，避免 replace 完成前同一问再发一遍 */
   const ignoreExploreQueryRef = useRef(false);
+
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(EXPERT_PANEL_OPEN_KEY) === "0") {
+        setExpertPanelOpen(false);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const toggleExpertPanel = () => {
+    setExpertPanelOpen((open) => {
+      const next = !open;
+      try {
+        window.localStorage.setItem(EXPERT_PANEL_OPEN_KEY, next ? "1" : "0");
+      } catch {
+        /* ignore */
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     const onNewTask = () => {
@@ -213,7 +238,11 @@ export default function ChatPage() {
         <Layout className="h-full min-h-0 overflow-hidden bg-gradient-light bg-cover bg-center dark:bg-gradient-dark">
           <Layout className="h-full min-h-0 overflow-hidden !bg-transparent">
             <div className="dbgpt-ui-font flex h-full min-h-0 flex-1 flex-col">
-              <div className="grid h-full min-h-0 flex-1 grid-cols-[45%_55%] overflow-hidden">
+              <div
+                className={`grid h-full min-h-0 flex-1 overflow-hidden ${
+                  expertPanelOpen ? "grid-cols-[45%_55%]" : "grid-cols-[minmax(0,1fr)_48px]"
+                }`}
+              >
                 <div className="flex min-h-0 min-w-0 flex-col overflow-hidden border-r border-[#eceff5] bg-[#f5f6f8] dark:border-[#2f3441] dark:bg-[#0f1219]">
                   <div className="min-h-0 flex-1 overflow-hidden px-6 pt-4">
                     <ChatContentContainer
@@ -243,25 +272,62 @@ export default function ChatPage() {
                     <ChatInputPanel />
                   </div>
                 </div>
-                <div className="relative min-h-0 min-w-0 overflow-hidden bg-[#f8f9fc] dark:bg-[#171b24]">
-                  <div className="pointer-events-none absolute left-0 top-0 h-full w-px bg-[#eceff5] dark:bg-[#2f3441]" />
-                  <div className="absolute left-0 top-1/2 z-10 flex h-8 w-4 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-[#e5e7eb] bg-white text-[#cbd5e1] dark:border-[#2f3441] dark:bg-[#141923]">
-                    ›
+                {expertPanelOpen ? (
+                  <div className="relative min-h-0 min-w-0 overflow-hidden bg-[#f8f9fc] dark:bg-[#171b24]">
+                    <div className="pointer-events-none absolute left-0 top-0 h-full w-px bg-[#eceff5] dark:bg-[#2f3441]" />
+                    <button
+                      type="button"
+                      onClick={toggleExpertPanel}
+                      className="absolute left-0 top-1/2 z-10 flex h-8 w-4 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border border-[#e5e7eb] bg-white text-[#94a3b8] hover:border-[#93c5fd] hover:text-[#2563eb] dark:border-[#2f3441] dark:bg-[#141923]"
+                      aria-label="收起专家团"
+                      title="收起专家团"
+                    >
+                      ›
+                    </button>
+                    <ChatExecutionPanel
+                      steps={executionSteps}
+                      summary={summary}
+                      summaryByRunId={summaryByRunId}
+                      reports={reports}
+                      queryResults={queryResults}
+                      chartByRunId={chartByRunId}
+                      selectedStepId={selectedStepId}
+                      onSelectStep={setSelectedStepId}
+                      runMetrics={runMetrics}
+                      agentMode={agentMode}
+                      onPatchReport={patchReport}
+                      onCollapse={toggleExpertPanel}
+                    />
                   </div>
-                  <ChatExecutionPanel
-                    steps={executionSteps}
-                    summary={summary}
-                    summaryByRunId={summaryByRunId}
-                    reports={reports}
-                    queryResults={queryResults}
-                    chartByRunId={chartByRunId}
-                    selectedStepId={selectedStepId}
-                    onSelectStep={setSelectedStepId}
-                    runMetrics={runMetrics}
-                    agentMode={agentMode}
-                    onPatchReport={patchReport}
-                  />
-                </div>
+                ) : (
+                  <div className="flex h-full min-h-0 flex-col items-center border-l border-[#eceff5] bg-[#f8f9fc] pt-3 dark:border-[#2f3441] dark:bg-[#171b24]">
+                    <Tooltip title="展开专家团" placement="left">
+                      <button
+                        type="button"
+                        onClick={toggleExpertPanel}
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+                        aria-label="展开专家团"
+                      >
+                        <MenuFoldOutlined style={{ fontSize: 14 }} />
+                      </button>
+                    </Tooltip>
+                    <button
+                      type="button"
+                      onClick={toggleExpertPanel}
+                      className="mt-3 flex flex-1 flex-col items-center gap-2 px-1 text-[11px] text-[#64748b] hover:text-[#2563eb]"
+                      aria-label="展开专家团"
+                    >
+                      <img
+                        src="/expert-team-avatar.png?v=2"
+                        alt=""
+                        width={28}
+                        height={28}
+                        className="h-7 w-7 rounded-lg object-cover shadow-sm ring-1 ring-[#dbeafe]"
+                      />
+                      <span className="[writing-mode:vertical-rl] tracking-widest">专家团</span>
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
           </Layout>

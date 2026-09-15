@@ -2,6 +2,7 @@ import { render } from "@testing-library/react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { describe, expect, it } from "vitest";
+import { normalizeAssistantMarkdown } from "@/utils/toolLabels";
 import { eduMarkdownComponents } from "./eduMarkdownComponents";
 
 function renderMd(md: string) {
@@ -107,6 +108,31 @@ describe("eduMarkdownComponents table align", () => {
     ]);
   });
 
+  it("六门总分与总分名次表头和数字同为右对齐", () => {
+    const md = `
+| 姓名 | 班级 | 六门总分 | 总分名次 |
+| --- | --- | --- | --- |
+| 杨秋宇 | 高三(1)班 | 684.00 | 1 |
+| 朱晨旭 | 高三(1)班 | 682.00 | 2 |
+`;
+    const { container } = renderMd(md);
+    const table = container.querySelector("table");
+    const headers = Array.from(table!.querySelectorAll("thead th"));
+    expect(headers.map((el) => el.classList.contains("num"))).toEqual([
+      false,
+      false,
+      true,
+      true
+    ]);
+    const firstRow = table!.querySelectorAll("tbody tr")[0].querySelectorAll("td");
+    expect(Array.from(firstRow).map((el) => el.classList.contains("num"))).toEqual([
+      false,
+      false,
+      true,
+      true
+    ]);
+  });
+
   it("单科排名表头把 yy/rk/total_classes 译成中文", () => {
     const md = `
 | 学校 | 班级 | 均分yy | 人数yy | rk | total_classes |
@@ -123,5 +149,21 @@ describe("eduMarkdownComponents table align", () => {
       "排名",
       "全市班级数"
     ]);
+  });
+
+  it("表头少一列时补齐后能渲染成表格", () => {
+    const md = normalizeAssistantMarkdown(`
+| 选科方向 | 1 月期末线上 15 分人数 | 3 月月未达特控线人数 |
+| --- | --- | --- | --- |
+| 物理类 | 316 | 315 | 41 |
+| 合计 | 380 | 379 | 43 |
+`);
+    const { container } = renderMd(md);
+    const table = container.querySelector("table");
+    expect(table).toBeTruthy();
+    expect(table!.querySelectorAll("thead th").length).toBe(4);
+    expect(table!.querySelectorAll("tbody tr")[0].querySelectorAll("td").length).toBe(4);
+    expect(table!.querySelectorAll("tbody tr")[0].textContent).toContain("316");
+    expect(table!.querySelectorAll("tbody tr")[0].textContent).toContain("41");
   });
 });

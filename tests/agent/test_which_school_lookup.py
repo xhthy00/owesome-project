@@ -9,9 +9,12 @@ from src.agent.education.clarification import (
 from src.agent.education.entity_resolve import resolve_entities
 from src.agent.education.query_parse import (
     extract_school_target,
+    extract_school_targets,
     is_interrogative_school_name,
+    is_vague_exam_name,
     is_which_school_lookup_query,
 )
+from src.agent.education.slot_merge import merge_turn_slots
 
 _Q_YANGZHOU = "扬州市哪几所学校本科达线人数一直在增长"
 _Q_CITYWIDE = "全市 哪几所学校本科达线人数一直在增长"
@@ -24,6 +27,7 @@ def test_extract_rejects_which_schools_phrase() -> None:
     assert extract_school_target("全市哪几所学校本科达线人数一直在增长") is None
     assert extract_school_target("扬州中学本科达线人数") == "扬州中学"
     assert extract_school_target("扬州市第一中学达线人数") == "扬州市第一中学"
+    assert extract_school_target("请帮我分析扬州大学附属中学") == "扬州大学附属中学"
 
 
 def test_which_school_lookup_skips_named_school() -> None:
@@ -77,6 +81,58 @@ def test_sanitize_and_resolve_drop_interrogative_school() -> None:
         edu_scope=_EDU,
     )
     assert typo.clarify_slot == SLOT_SCHOOL
+
+
+def test_conjoined_schools_are_split_not_forced_pick_one() -> None:
+    q = "丁沟中学和大桥中学 在1月考试中 各自第一名的成绩对比"
+    assert extract_school_targets(q) == ["丁沟中学", "大桥中学"]
+    assert extract_school_target(q) == "丁沟中学"
+    assert is_vague_exam_name("1月")
+    assert is_vague_exam_name("1月考试")
+
+    filled = extract_filled_slots(q, _EDU)
+    assert SLOT_SCHOOL not in filled
+    assert SLOT_EXAM not in filled
+    missing = candidate_missing_slots(None, q, filled, _EDU)
+    assert SLOT_SCHOOL not in missing
+    assert SLOT_CLASS not in missing
+    assert SLOT_EXAM in missing
+
+    catalog = {
+        "exams": ["2026届高三1月期末", "2026届高三11月期中", "2026届高三3月"],
+        "schools": ["丁沟中学", "大桥中学", "扬州中学"],
+    }
+    hit = resolve_entities({SLOT_SCHOOL: "丁沟中学和大桥中学"}, catalog, edu_scope=_EDU)
+    assert hit.clarify_slot is None
+    assert SLOT_SCHOOL not in hit.bound
+
+    merged = merge_turn_slots(
+        q,
+        rule_slots=filled,
+        llm_mentions=[
+            {
+                "kind": "school",
+                "value": "丁沟中学",
+                "role": "filter",
+                "evidence": "丁沟中学",
+                "confidence": 0.95,
+            },
+            {
+                "kind": "school",
+                "value": "大桥中学",
+                "role": "filter",
+                "evidence": "大桥中学",
+                "confidence": 0.95,
+            },
+        ],
+    )
+    assert "school:conflict" not in merged.frame.diagnostics
+
+
+def test_single_named_school_still_fills() -> None:
+    q = "丁沟中学在2026届高三1月期末的均分"
+    filled = extract_filled_slots(q, _EDU)
+    assert filled.get(SLOT_SCHOOL) == "丁沟中学"
 
 
 def test_baonan_zhongxue_links_to_baonan_xuexiao() -> None:

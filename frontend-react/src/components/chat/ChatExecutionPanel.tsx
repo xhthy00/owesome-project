@@ -15,9 +15,10 @@ import {
   PieChartOutlined,
   TableOutlined,
   FilePdfOutlined,
-  FileWordOutlined
+  FileWordOutlined,
+  MenuUnfoldOutlined
 } from "@ant-design/icons";
-import { Input, Pagination, message, Modal } from "antd";
+import { Input, Pagination, message, Modal, Tooltip } from "antd";
 import React, { useRef } from "react";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -35,6 +36,7 @@ import G2Chart, {
   pickYField,
   preferQueryTableOverChart
 } from "@/components/chat/G2Chart";
+import { UserWatermark } from "@/components/UserWatermark";
 import { labelColumn } from "@/utils/columnLabels";
 import { formatNumericDisplay } from "@/utils/formatNumericDisplay";
 import ReactMarkdown from "react-markdown";
@@ -80,6 +82,7 @@ type Props = {
     report: ReportPayload,
     patch: { recommendationsText?: string; reviewStatus?: "pending" | "approved" }
   ) => Promise<ReportPayload>;
+  onCollapse?: () => void;
 };
 
 function formatQueryCell(value: unknown): string {
@@ -215,7 +218,8 @@ export default function ChatExecutionPanel({
   onSelectStep,
   runMetrics = null,
   agentMode = "team",
-  onPatchReport
+  onPatchReport,
+  onCollapse
 }: Props) {
   const isSingleAgent = agentMode === "agent";
   const [activeTab, setActiveTab] = useState<"steps" | "summary">("steps");
@@ -677,13 +681,27 @@ export default function ChatExecutionPanel({
             <span className="hidden text-[11px] text-[#94a3b8] sm:inline">思考 · 工具调用 · 结果</span>
           )}
         </div>
-        {showRunMetrics && runMetrics ? (
-          <span className="run-metrics-blink shrink-0 text-[13px] font-bold tabular-nums">
-            Token {formatTokenCount(runMetrics.totalTokens, runMetrics.tokenKnown)}
-            {" · "}
-            耗时 {formatElapsed(runMetrics.elapsedMs, runMetrics.elapsedKnown)}
-          </span>
-        ) : null}
+        <div className="flex shrink-0 items-center gap-2">
+          {showRunMetrics && runMetrics ? (
+            <span className="run-metrics-blink shrink-0 text-[13px] font-bold tabular-nums">
+              Token {formatTokenCount(runMetrics.totalTokens, runMetrics.tokenKnown)}
+              {" · "}
+              耗时 {formatElapsed(runMetrics.elapsedMs, runMetrics.elapsedKnown)}
+            </span>
+          ) : null}
+          {onCollapse ? (
+            <Tooltip title="收起专家团">
+              <button
+                type="button"
+                onClick={onCollapse}
+                className="flex h-7 w-7 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+                aria-label="收起专家团"
+              >
+                <MenuUnfoldOutlined style={{ fontSize: 14 }} />
+              </button>
+            </Tooltip>
+          ) : null}
+        </div>
       </div>
 
       {!isSingleAgent ? (
@@ -1228,15 +1246,17 @@ export default function ChatExecutionPanel({
         destroyOnClose
       >
         {activeQuery ? (
-          <QueryResultTable
-            columns={activeQuery.columns}
-            rows={fullPagedRows}
-            rowCount={activeQuery.rowCount}
-            page={fullDataPage}
-            pageSize={fullPageSize}
-            onPageChange={setFullDataPage}
-            maxHeight="78vh"
-          />
+          <UserWatermark>
+            <QueryResultTable
+              columns={activeQuery.columns}
+              rows={fullPagedRows}
+              rowCount={activeQuery.rowCount}
+              page={fullDataPage}
+              pageSize={fullPageSize}
+              onPageChange={setFullDataPage}
+              maxHeight="78vh"
+            />
+          </UserWatermark>
         ) : null}
       </Modal>
       <Modal

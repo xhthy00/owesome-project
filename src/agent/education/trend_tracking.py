@@ -199,12 +199,11 @@ def build_trend_tracking_data(
                 _fmt(st.get("min")),
                 _fmt(st.get("stdev")),
                 f"{_fmt(st.get('pass_rate'))}%",
-                f"{_fmt(st.get('excellent_rate'))}%",
             ]
         )
     trend_table = (
         _table_html(
-            ["考试", "参考人数", "均分", "最高", "最低", "标准差", "及格率", "优秀率"],
+            ["考试", "参考人数", "均分", "最高", "最低", "标准差", "及格率"],
             table_rows,
         )
         if table_rows

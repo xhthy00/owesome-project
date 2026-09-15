@@ -1121,8 +1121,6 @@ def _fill_class_overview_multi_subject(
             f'<div class="value">{_fmt_metric(st.get("avg"))}</div></div>'
             f'<div class="edu-kpi ok"><div class="label">及格率</div>'
             f'<div class="value">{_normalize_pct_display(_fmt_metric(st.get("pass_rate")))}</div></div>'
-            f'<div class="edu-kpi ok"><div class="label">优秀率</div>'
-            f'<div class="value">{_normalize_pct_display(_fmt_metric(st.get("excellent_rate")))}</div></div>'
             f'<div class="edu-kpi"><div class="label">最高分</div>'
             f'<div class="value">{_fmt_metric(st.get("max"))}</div></div>'
             f'<div class="edu-kpi warn"><div class="label">最低分</div>'
@@ -1141,7 +1139,6 @@ def _fill_class_overview_multi_subject(
             "最高": st.get("max"),
             "最低": st.get("min"),
             "及格率": _normalize_pct_display(_fmt_metric(st.get("pass_rate"))),
-            "优秀率": _normalize_pct_display(_fmt_metric(st.get("excellent_rate"))),
             "标准差": st.get("stdev"),
         })
 
@@ -1443,7 +1440,6 @@ def _fill_class_overview_ability_portrait(
     # 3) 单科/班级 KPI 维度雷达（与此前「数学能力维度」一致，统一到 0–100）
     avg = _metric_float(out.get("AVG_SCORE"))
     pass_rate = _metric_float(out.get("PASS_RATE"))
-    exc_rate = _metric_float(out.get("EXCELLENT_RATE"))
     max_score = _metric_float(out.get("MAX_SCORE"))
     stdev = _metric_float(out.get("STDEV"))
     full = _metric_float(out.get("_FULL_SCORE") or out.get("FULL_SCORE"))
@@ -1462,11 +1458,10 @@ def _fill_class_overview_ability_portrait(
     if stdev is not None and full > 0:
         balance = round(max(0.0, min(100.0, 100.0 - (stdev / float(full) * 100.0))), 1)
 
-    levels = ["平均分", "及格率", "优秀率", "最高分", "成绩均衡"]
+    levels = ["平均分", "及格率", "最高分", "成绩均衡"]
     values = [
         _pct_of_full(avg),
         round(max(0.0, min(100.0, pass_rate or 0.0)), 1),
-        round(max(0.0, min(100.0, exc_rate or 0.0)), 1),
         _pct_of_full(max_score),
         balance,
     ]
@@ -1842,6 +1837,7 @@ def describe_table(
     from src.agent.education.privacy_mode import (
         filter_display_fields,
         is_anonymize_display_enabled,
+        privacy_describe_student_note,
     )
 
     fields = filter_display_fields(fields, table_key)
@@ -1866,19 +1862,10 @@ def describe_table(
                 lines.append("说明：学校展示/过滤请用 `id` 或 `name`（脱敏码）；禁止查询明文列。")
             else:
                 lines.append("说明：当前已关闭匿名脱敏，学校可用 `s_name`（中文全称）或 `name`/`id`（校码）。")
-        if any(
-            k in table_key
-            for k in ("score", "student", "exam", "overview")
-        ):
+        student_note = privacy_describe_student_note(table_key)
+        if student_note:
             lines.append("")
-            if anon:
-                lines.append(
-                    "说明：学生标识请用 `student_id`（或学号列）；禁止查询/展示姓名明文（xm/姓名）。"
-                )
-            else:
-                lines.append(
-                    "说明：当前已关闭匿名脱敏，可查询 xm（姓名）、xh（学号）；仍禁止 sfzh/ksh。"
-                )
+            lines.append(f"说明：{student_note}")
         content = "\n".join(lines)
 
     match_out = dict(match)
@@ -2227,16 +2214,16 @@ def execute_sql(
         logging.getLogger(__name__).warning(
             "wide subject-rank unpivot failed: %s", exc, exc_info=True
         )
-    preview = _format_rows_as_markdown(columns, rows, EXECUTE_SQL_PREVIEW_ROWS)
     fix_hint = format_auto_fix_note(fixes, success=True) if fixes else ""
     row_count = len(rows)
-    preview_n = min(EXECUTE_SQL_PREVIEW_ROWS, row_count)
     try:
         from src.agent.education.summary_context import (
             format_sql_result_authority_notes,
             sql_looks_row_capped,
+            sql_result_preview_limit,
         )
 
+        preview_n = sql_result_preview_limit(row_count, question=q or None)
         capped = sql_looks_row_capped(sql_run)
         authority_notes = format_sql_result_authority_notes(
             sql=sql_run,
@@ -2244,11 +2231,20 @@ def execute_sql(
             sample_shown=preview_n,
         )
     except Exception:
+        preview_n = min(EXECUTE_SQL_PREVIEW_ROWS, row_count)
         capped = bool(re.search(r"\bLIMIT\s+\d+|\bOFFSET\b", sql_run or "", re.I))
+        truncated = preview_n < row_count
         authority_notes = (
             f"返回 {row_count} 行；预览仅前 {preview_n} 行。"
             "**禁止**把预览行数写成班级/全体参考人数。"
         )
+        if truncated:
+            authority_notes += (
+                "**禁止**对预览表点数科目分布并外推到全量；分布须另查 GROUP BY / COUNT。"
+            )
+    preview = _format_rows_as_markdown(
+        columns, rows, preview_n if preview_n > 0 else EXECUTE_SQL_PREVIEW_ROWS
+    )
     content = (
         f"SQL 执行成功{fix_hint}，返回 {row_count} 行：\n"
         f"【人数口径】AUTHORITATIVE_ROW_COUNT={row_count}；"

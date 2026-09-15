@@ -93,8 +93,6 @@ def test_subject_avg_excludes_unselected_zero():
             "yw": 100,
             "ls": 0,
             "wl": 70,
-            "zz": 0,
-            "dl": 0,
             "zf6m": 500,
         },
         {
@@ -104,8 +102,8 @@ def test_subject_avg_excludes_unselected_zero():
             "yw": 110,
             "ls": 90,
             "wl": 0,
-            "zz": 80,
-            "dl": 70,
+            "zzzh": 80,
+            "dlzh": 70,
             "zf6m": 480,
         },
     ]
@@ -113,8 +111,8 @@ def test_subject_avg_excludes_unselected_zero():
     assert city["ls"] == 90
     assert city["ls_n"] == 1
     assert city["wl"] == 70
-    assert city["zz"] == 80
-    assert city["dl"] == 70
+    assert city["zzzh"] == 80
+    assert city["dlzh"] == 70
     assert city["yw"] == 105
 
 

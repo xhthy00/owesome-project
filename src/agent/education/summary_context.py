@@ -6,7 +6,10 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from src.agent.education.query_parse import find_upstream_fetch_data
+from src.agent.education.query_parse import (
+    find_upstream_fetch_data,
+    wants_full_student_roster,
+)
 
 #: 率/分数类 KPI 对账容差（与格式化两位小数对齐）
 _KPI_FLOAT_TOLERANCE = 0.05
@@ -132,7 +135,13 @@ def sql_looks_row_capped(sql: str | None) -> bool:
     return bool(_SQL_OFFSET_RE.search(s) or _SQL_LIMIT_RE.search(s))
 
 
-_KEEP_TABLE_MAX_ROWS = 30
+#: execute_sql / 写手共用：小结果集整表，超过此行数才截成预览。
+SQL_RESULT_PREVIEW_ROWS = 20
+SQL_RESULT_FULL_TABLE_ROWS = 80
+#: 用户明确要完整名单时，学生表明细可整表进观察窗/结论（防止 155 人被截成 20）。
+SQL_RESULT_ROSTER_FULL_ROWS = 200
+# 已判定可进结论的小表不再二次截成 30 行；上限与观察窗整表阈值对齐。
+_KEEP_TABLE_MAX_ROWS = SQL_RESULT_FULL_TABLE_ROWS
 _AGG_TABLE_COL_HINTS = (
     "subject",
     "学科",
@@ -211,6 +220,7 @@ def looks_like_keepable_result_table(
     *,
     row_count: int,
     sql: str | None = None,
+    question: str | None = None,
 ) -> bool:
     """对比/排名/各科小表应进最终结论；学生明细预览表不进。"""
     cols = [str(c).strip() for c in (columns or []) if str(c).strip()]
@@ -226,6 +236,8 @@ def looks_like_keepable_result_table(
             return False
         if lim is not None and lim <= 30:
             return False
+        if wants_full_student_roster(question) and n <= SQL_RESULT_ROSTER_FULL_ROWS:
+            return True
         return n <= 12
     if _blob_has_hint(blob, _AGG_TABLE_COL_HINTS) and n <= 40:
         return True
@@ -471,6 +483,8 @@ def result_table_already_in_text(columns: list[Any], text: str) -> bool:
 def append_keepable_result_tables(
     text: str,
     exec_results: list[dict[str, Any]] | None,
+    *,
+    question: str | None = None,
 ) -> str:
     """总结若丢掉了合理小表，把查询结果表补回正文。"""
     out = (text or "").rstrip()
@@ -483,11 +497,14 @@ def append_keepable_result_tables(
         rows = list(er.get("rows") or [])
         row_count = int(er.get("row_count") or len(rows) or 0)
         sql = str(er.get("sql") or "")
-        if not looks_like_keepable_result_table(columns, row_count=row_count, sql=sql):
+        if not looks_like_keepable_result_table(
+            columns, row_count=row_count, sql=sql, question=question
+        ):
             continue
         if result_table_already_in_text(columns, out):
             continue
-        table = format_result_markdown_table(columns, rows)
+        table_limit = sql_result_preview_limit(row_count, question=question)
+        table = format_result_markdown_table(columns, rows, limit=table_limit)
         if not table or table in seen:
             continue
         seen.add(table)
@@ -1289,16 +1306,29 @@ def extract_stats_authority_block(
         lines.append(
             f"- 参考人数 count={best.get('count')}；均分={best.get('avg')}；"
             f"满分={best.get('full_score')}；标准差={best.get('stdev')}；"
-            f"及格线={best.get('pass_line')}；优秀线={best.get('excellent_line')}；"
-            f"及格率={best.get('pass_rate')}%；优秀率={best.get('excellent_rate')}%"
+            f"及格线={best.get('pass_line')}；"
+            f"及格率={best.get('pass_rate')}%"
         )
     if best_content:
         lines.append(f"- 统计工具原文：{best_content.strip()[:500]}")
     lines.append(
         "- **禁止**把下方「样例」行数或带 LIMIT/OFFSET 的「共 N 行」当成参考人数；"
-        "有本块时人数、均分、及格率、优秀率一律以本块为准。"
+        "有本块时人数、均分、及格率一律以本块为准。"
     )
     return "\n".join(lines)
+
+
+def sql_result_preview_limit(row_count: int, question: str | None = None) -> int:
+    """返回应写入观察窗的行数：≤80 行整表，更大则只预览前 20 行。
+
+    用户明确要完整名单时，学生表明细最多给 200 行整表。
+    """
+    n = max(0, int(row_count or 0))
+    if wants_full_student_roster(question):
+        return min(n, SQL_RESULT_ROSTER_FULL_ROWS)
+    if n <= SQL_RESULT_FULL_TABLE_ROWS:
+        return n
+    return min(SQL_RESULT_PREVIEW_ROWS, n)
 
 
 def format_sql_result_authority_notes(
@@ -1325,12 +1355,48 @@ def format_sql_result_authority_notes(
         lines.append(
             f"样例仅预览前 {sample_shown} 行（非全量），**禁止**按样例表「数人头」写班级人数，"
             f"**禁止**写「所查看的 {sample_shown} 名」充当整体结论。"
+            f"**禁止**对预览表点数科目分布/命中人数/比例并外推到全部 {row_count} 行；"
+            f"末位分、并列人数、选科组合、弱科分布须另查 MIN/MAX/COUNT/GROUP BY，禁止根据预览猜；"
+            f"分布须另查 GROUP BY / COUNT；个案分数只能照抄预览里出现的原值，禁止心算改写。"
+        )
+    elif sample_shown > 0 and row_count > 15:
+        lines.append(
+            f"样例已展示全部 {sample_shown} 行。"
+            f"**禁止**目测明细表点人头做科目分布；分布须另查 GROUP BY / COUNT。"
+            f"个案分数必须照抄结果表原值，禁止心算改写。"
+            f"**禁止**把样例行数写成全班参考人数。"
         )
     elif sample_shown > 0:
         lines.append(
             f"样例展示 {sample_shown} 行（含系统预览上限），**禁止**把样例行数写成全班参考人数。"
         )
     return "\n".join(lines)
+
+
+def format_omitted_detail_note(
+    *,
+    row_count: int,
+    sample_shown: int,
+    fact_answer: bool,
+) -> str:
+    """写手上下文里省略明细时的口径（不改变「哪些表可进用户结论」）。"""
+    if fact_answer:
+        text = f"（明细已省略：共 {row_count} 行；勿把行数写成班级人数。"
+    else:
+        text = (
+            f"（明细样例已省略：共 {row_count} 行；"
+            "人数/率值以权威 KPI 或 AUTHORITATIVE_ROW_COUNT 为准，"
+            "禁止按预览行数写参考人数。"
+        )
+    if sample_shown > 0 and sample_shown < row_count:
+        text += (
+            f"观察窗仅前 {sample_shown} 行；"
+            "禁止把样本分布改写成全体；没有 GROUP BY/COUNT 不要写分布人数表；"
+            "末位分/并列人数/选科组合/弱科分布须另有聚合结果，禁止根据预览猜。"
+        )
+    elif row_count > 15:
+        text += "禁止把查询结论中的样本统计改写成全体分布；个案分数照抄原值。"
+    return text.rstrip("。") + "）"
 
 
 def format_tool_expert_sub_task_block(
@@ -1389,19 +1455,19 @@ def format_education_pipeline_footer(report_data: dict[str, Any] | None) -> str:
     parts.append(
         "- **人数口径**：以「报告权威 KPI」/「权威统计 count」为准；"
         "**禁止**把样例行数、LIMIT/OFFSET 本页「共 N 行」写成参考人数；"
-        "均分/及格率/优秀率亦须与报告权威 KPI 一致。"
+        "均分/及格率亦须与报告权威 KPI 一致。"
     )
     try:
         from src.agent.education.config_store import get_config
 
         cfg = get_config()
-        pr, er = float(cfg.pass_ratio), float(cfg.excellent_ratio)
+        pr = float(cfg.pass_ratio)
         parts.append(
-            f"- **及格/优秀阈值（异常规则）**：及格 {round(pr * 100, 2)}%、优秀 {round(er * 100, 2)}%；"
-            f"有卷面满分时及格线=满分×{pr}、优秀线=满分×{er}。"
-            "**禁止**在结论中改用惯例 60%/85%（如 150 分卷写 90/127.5）。"
-            "若统计结果已给出及格线/优秀线，必须原样采用；"
-            "**禁止**把 SQL 里手写的 `>=90`/`127.5` 当成系统配置线。"
+            f"- **及格阈值（异常规则）**：及格 {round(pr * 100, 2)}%；"
+            f"有卷面满分时及格线=满分×{pr}。"
+            "**禁止**在结论中改用惯例 60%。"
+            "若统计结果已给出及格线，必须原样采用。"
+            "全局优秀率口径暂不对外展示，**禁止**写优秀率/优秀线。"
         )
     except Exception:
         pass
@@ -1423,8 +1489,13 @@ __all__ = [
     "extract_stats_authority_data",
     "extract_stats_from_report_html",
     "format_education_pipeline_footer",
+    "format_omitted_detail_note",
     "format_sql_result_authority_notes",
     "format_tool_expert_sub_task_block",
+    "sql_result_preview_limit",
+    "SQL_RESULT_FULL_TABLE_ROWS",
+    "SQL_RESULT_PREVIEW_ROWS",
+    "SQL_RESULT_ROSTER_FULL_ROWS",
     "reconcile_answer_with_artifacts",
     "reconcile_answer_with_artifacts_detailed",
     "reconcile_summary_kpis",

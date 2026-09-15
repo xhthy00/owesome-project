@@ -48,11 +48,28 @@ _EQ_LIT = re.compile(
     r"(?:exam_name|district|dq|school_name|s_name|xx|bj|class_name)\s*=\s*'([^']+)'",
     re.IGNORECASE,
 )
-#: 化/生/政/地必须用转换分；AVG(hx) 会命中 hx 而不会误伤 hxzh。
-_RAW_ELECTIVE_STAT = re.compile(
-    r"\b(?:AVG|MEDIAN|MIN|MAX|SUM|STDDEV(?:_SAMP|_POP)?|STDEV(?:_SAMP|_POP)?|"
-    r"VAR(?:_SAMP|_POP)?|VARIANCE)\s*\(\s*(?:[\w]+\.)?(?P<col>hx|sw|zz|dl)\s*\)",
+#: 化/生/政/地必须用转换分。只拦独立标识符 hx/sw/zz/dl（含 t.hx），
+#: 不拦 hxzh，也不拦别名 rk_hx、CTE hx_rk、ssw（尾缀碰巧是 sw）。
+_RAW_ELECTIVE_COL = re.compile(
+    r"(?<![\w])(?:(?P<alias>[\w]+)\.)?(?P<col>hx|sw|zz|dl)(?![\w])",
     re.IGNORECASE,
+)
+_SQL_STR_LIT = re.compile(r"'(?:''|[^'])*'")
+#: 未选考 rank 为 NULL 时用 999… 哨兵再与 Top-N 比较，会把全体未选考算成弱科。
+_WEAK_RANK_SENTINEL = re.compile(
+    r"(?:COALESCE|IFNULL)\s*\(\s*[^,]+,\s*9{3,}\s*\)\s*(?:>|>=)\s*\d+",
+    re.IGNORECASE | re.DOTALL,
+)
+#: RANK 的第一排序列是选考分。未排除 0 分时，未选考会排到榜尾并被当成「名次之外」。
+_ELECTIVE_RANK_OVER = re.compile(
+    r"\b(?:RANK|DENSE_RANK)\s*\(\s*\)\s*OVER\s*\(\s*"
+    r"(?:PARTITION\s+BY\s+[\w.,\s]+)?ORDER\s+BY\s+"
+    r"(?:[\w.]+\.)?(?P<col>hxzh|swzh|zzzh|dlzh|ls|wl)\b",
+    re.IGNORECASE | re.DOTALL,
+)
+_WEAK_RANK_SENTINEL_MSG = (
+    "检测到用 COALESCE/IFNULL(名次, 999…) > N 把未选考（名次为 NULL）算成弱科。"
+    "弱科判定须该科分数>0 且名次>N；禁止哨兵值填充未选考。"
 )
 _RANK_PARTITION_BY_BJ = re.compile(
     r"\b(?:RANK|DENSE_RANK|ROW_NUMBER)\s*\(\s*\)\s*OVER\s*\("
@@ -715,6 +732,16 @@ def lint_edu_sql_blocks(
             "凡均分/标准差/方差/中位/最值/分数段，须 AGG(col) FILTER (WHERE col > 0)，"
             "并同时给出 COUNT(*) FILTER (WHERE col > 0) 作为该科参考人数。"
         )
+    if _weak_rank_uses_sentinel(s):
+        blocks.append(_WEAK_RANK_SENTINEL_MSG)
+    zero_rank_cols = _elective_rank_includes_zero(s)
+    if zero_rank_cols:
+        cols = "、".join(zero_rank_cols)
+        blocks.append(
+            f"检测到对 {cols} 做 RANK 未排除 0 分：未选考不得进该科排名池。"
+            "须 WHERE col>0 后再 RANK；筛弱科须 col>0 AND 名次>N，"
+            "禁止把未选考当成名次之外。"
+        )
     if _overview_rank_missing_enrolled(s):
         blocks.append(
             "检测到全市班级/学校排名未排除市报生：tb_score_overview 须 "
@@ -745,8 +772,8 @@ def lint_edu_sql_blocks(
     if raw_electives:
         cols = "、".join(raw_electives)
         blocks.append(
-            f"检测到对 {cols} 做分数统计：化学/生物/政治/地理必须用转换分 "
-            "hxzh/swzh/zzzh/dlzh，禁止 hx/sw/zz/dl。"
+            f"检测到使用卷面列 {cols}：化学/生物/政治/地理对外展示必须用转换分 "
+            "hxzh/swzh/zzzh/dlzh（含 SELECT/ORDER BY/MAX/MIN/AVG），禁止 hx/sw/zz/dl。"
         )
     if _school_column_aliased_as_class(s):
         blocks.append(
@@ -853,12 +880,29 @@ def _count_distinct_class_name_as_city_n(sql: str) -> bool:
     return bool(_COUNT_DISTINCT_BJ.search(s))
 
 
+def _weak_rank_uses_sentinel(sql: str) -> bool:
+    return bool(_WEAK_RANK_SENTINEL.search(sql or ""))
+
+
+def _elective_rank_includes_zero(sql: str) -> list[str]:
+    s = sql or ""
+    if "tb_score_overview" not in s.lower():
+        return []
+    bad: list[str] = []
+    for m in _ELECTIVE_RANK_OVER.finditer(s):
+        col = (m.group("col") or "").lower()
+        if col and col not in bad and not _subject_stat_excludes_zero(s, col, m.end()):
+            bad.append(col)
+    return bad
+
+
 def _raw_elective_cols(sql: str) -> list[str]:
     s = sql or ""
     if "tb_score_overview" not in s.lower():
         return []
+    scanned = _SQL_STR_LIT.sub("''", s)
     out: list[str] = []
-    for m in _RAW_ELECTIVE_STAT.finditer(s):
+    for m in _RAW_ELECTIVE_COL.finditer(scanned):
         col = (m.group("col") or "").lower()
         if col and col not in out:
             out.append(col)

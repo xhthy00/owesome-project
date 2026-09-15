@@ -1,6 +1,7 @@
 """学科教研分析报告：一校 × 一场（九科或点名一科）。
 
-均分 / 全市排序 / 层级均分只读 ``tb_score.score`` + ``tb_school.type``。
+均分 / 全市排序 / 层级均分：语数英物史读 ``tb_score.score``，
+化生政地读 overview 赋分列；层级用 ``tb_school.type``。
 卷1/卷2 只读小题明细按题型分桶，禁止用总分互减。
 名单第一期出明文 ``xm``，不调用隐私开关。
 """
@@ -11,6 +12,7 @@ import re
 from collections import defaultdict
 from typing import Any
 
+from src.agent.education.assign_score import DISPLAY_SCORE_SQL
 from src.agent.education.bureau_analysis import aggregate_contribution
 from src.agent.education.line_reach import pick_col
 from src.agent.education.report_types import ReportType, report_type_label
@@ -439,7 +441,7 @@ def score_select_sql(exam_name: str, subject: str = "") -> str:
     lit = _esc(exam_name)
     subj = f" AND sc.subject_name = '{_esc(subject)}'" if _str(subject) else ""
     return (
-        "SELECT sc.school_id, sc.student_id, sc.score, sc.subject_name, "
+        f"SELECT sc.school_id, sc.student_id, ({DISPLAY_SCORE_SQL}) AS score, sc.subject_name, "
         "ov.xsxz, "
         f"{EXAM_NAME_SQL} AS exam_name\n"
         "FROM tb_score sc\n"
@@ -457,7 +459,7 @@ def score_school_avg_select_sql(exam_name: str, subject: str = "") -> str:
     subj = f" AND sc.subject_name = '{_esc(subject)}'" if _str(subject) else ""
     return (
         "SELECT sc.school_id, sc.subject_name,\n"
-        "       AVG(sc.score) AS score,\n"
+        f"       AVG({DISPLAY_SCORE_SQL}) AS score,\n"
         "       COUNT(*) AS n,\n"
         "       '在籍生' AS xsxz\n"
         "FROM tb_score sc\n"

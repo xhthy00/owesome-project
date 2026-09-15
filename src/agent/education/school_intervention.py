@@ -331,8 +331,7 @@ def build_class_compare_table_html(
             f"<tr{style}><td class='edu-cell-text'>{name}{tag}</td>"
             f"<td class='num'>{g.get('count', '-')}</td>"
             f"<td class='num'>{_fmt(g.get('avg'))}</td>"
-            f"<td class='num'>{_fmt(g.get('pass_rate'))}%</td>"
-            f"<td class='num'>{_fmt(g.get('excellent_rate'))}%</td></tr>"
+            f"<td class='num'>{_fmt(g.get('pass_rate'))}%</td></tr>"
         )
     school_row = ""
     if school_avg is not None or school_pass is not None:
@@ -340,13 +339,12 @@ def build_class_compare_table_html(
             "<tr style='background:#e6f4ff;font-weight:600'>"
             f"<td>{baseline_label}</td><td class='num'>-</td>"
             f"<td class='num'>{_fmt(school_avg)}</td>"
-            f"<td class='num'>{_fmt(school_pass)}%</td>"
-            "<td class='num'>-</td></tr>"
+            f"<td class='num'>{_fmt(school_pass)}%</td></tr>"
         )
     inner = (
         "<table class='edu-table'><thead><tr>"
         "<th>班级</th><th class='num'>人数</th><th class='num'>均分</th>"
-        "<th class='num'>及格率</th><th class='num'>优秀率</th></tr></thead>"
+        "<th class='num'>及格率</th></tr></thead>"
         f"<tbody>{school_row}{''.join(rows_html)}</tbody></table>"
     )
     return f'<div class="edu-table-wrap">{inner}</div>'

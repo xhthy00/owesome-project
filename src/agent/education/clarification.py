@@ -407,7 +407,7 @@ def extract_filled_slots(
     from src.agent.education.query_parse import (
         extract_class_target,
         extract_exam_name_hint,
-        extract_school_target,
+        extract_school_targets,
         extract_student_target,
         is_citywide_analysis_query,
         is_vague_exam_name,
@@ -418,7 +418,8 @@ def extract_filled_slots(
     role = str(edu.get("edu_role") or "").strip()
     filled: dict[str, str] = {}
 
-    school = extract_school_target(q) or ""
+    named_schools = extract_school_targets(q)
+    school = named_schools[0] if len(named_schools) == 1 else ""
     if role in ("teacher", "school_admin") and not is_citywide_analysis_query(q):
         bound = _bound_school(edu)
         if bound:
@@ -570,7 +571,7 @@ def _candidate_missing_slots_legacy(
     两条路径同构：查表得必填槽，再由豁免层（宽范围 / 点名学校 / 权限唯一绑定）减掉。
     """
     from src.agent.education.query_parse import (
-        extract_school_target,
+        extract_school_targets,
         has_class_alias,
         is_bureau_report_query,
         is_citywide_analysis_query,
@@ -646,7 +647,8 @@ def _candidate_missing_slots_legacy(
         # 「扬大附中的优势学科」却追问，本身也不自洽。
         # 只看问句：教师/校管的 school_name 可能来自绑定权限而非用户表达，不能当作
         # 用户主动限定了范围。问句带口语班级线索（我们班/三班）时仍需澄清。
-        school_scoped = bool(extract_school_target(q)) and not has_class_alias(q)
+        named_schools = extract_school_targets(q)
+        school_scoped = bool(named_schools) and not has_class_alias(q)
         kind = fact_query_kind(q)
         # 达线已点名邗江区/宝应地区：范围是区县，不再追问班/校。不并入
         # _has_wide_scope，以免排名/均分等其它口径被放开。
@@ -679,6 +681,9 @@ def _candidate_missing_slots_legacy(
                 if is_citywide_nth_class_lookup_query(q):
                     continue
                 if is_which_school_lookup_query(q):
+                    continue
+                # 「A中学和B中学」已点名多校，不再逼选一所
+                if len(named_schools) >= 2:
                     continue
                 bound = _bound_school(edu)
                 if not bound or role not in ("teacher", "school_admin", "student"):

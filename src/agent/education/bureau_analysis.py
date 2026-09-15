@@ -74,14 +74,10 @@ _AVG_METRICS: tuple[tuple[str, str], ...] = (
     ("yyzw", "英作文均分"),
     ("wl", "物理均分"),
     ("ls", "历史均分"),
-    ("hx", "化学均分"),
-    ("hxzh", "化转换均分"),
-    ("sw", "生物均分"),
-    ("swzh", "生转换均分"),
-    ("zz", "政治均分"),
-    ("zzzh", "政转换均分"),
-    ("dl", "地理均分"),
-    ("dlzh", "地转换均分"),
+    ("hxzh", "化学均分"),
+    ("swzh", "生物均分"),
+    ("zzzh", "政治均分"),
+    ("dlzh", "地理均分"),
 )
 _CONTRIB_COLS: tuple[tuple[str, str], ...] = (
     ("zf6m", "ZF6"),
@@ -90,10 +86,10 @@ _CONTRIB_COLS: tuple[tuple[str, str], ...] = (
     ("yy", "英语"),
     ("wl", "物理"),
     ("ls", "历史"),
-    ("hxzh", "化转换"),
-    ("swzh", "生转换"),
-    ("zzzh", "政转换"),
-    ("dlzh", "地转换"),
+    ("hxzh", "化学"),
+    ("swzh", "生物"),
+    ("zzzh", "政治"),
+    ("dlzh", "地理"),
 )
 _ROSTER_SUBJECTS: tuple[tuple[str, str], ...] = (
     ("yw", "语文"),
@@ -101,10 +97,10 @@ _ROSTER_SUBJECTS: tuple[tuple[str, str], ...] = (
     ("yy", "英语"),
     ("wl", "物理"),
     ("ls", "历史"),
-    ("hx", "化学"),
-    ("sw", "生物"),
-    ("zz", "政治"),
-    ("dl", "地理"),
+    ("hxzh", "化学"),
+    ("swzh", "生物"),
+    ("zzzh", "政治"),
+    ("dlzh", "地理"),
 )
 _FOCUS_LINES = ("特控线", "本科线", "211线")
 

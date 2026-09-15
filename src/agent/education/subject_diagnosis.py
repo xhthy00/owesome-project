@@ -766,7 +766,6 @@ def build_diagnosis_summary(
         parts.append(_diag_stat_card("参考人数", str(show_count), tone="primary"))
         parts.append(_diag_stat_card("平均分", _fmt(stats.get("avg")), tone="primary"))
         parts.append(_diag_stat_card("及格率", f"{_fmt(stats.get('pass_rate'))}%", tone=pass_tone))
-        parts.append(_diag_stat_card("优秀率", f"{_fmt(stats.get('excellent_rate'))}%", tone="neutral"))
         parts.append("</div>")
         if multi_exam_note:
             parts.append(multi_exam_note)

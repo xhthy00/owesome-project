@@ -23,6 +23,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
+from src.agent.education.assign_score import DISPLAY_SCORE_SQL, OVERVIEW_SCORE_JOIN
 from src.agent.education.charts import build_chart_option
 from src.agent.education.config import EducationConfig, load_config
 from src.agent.education.knowledge_tier import (
@@ -916,7 +917,7 @@ class ReportOrchestrator:
             "<ul>"
             f"<li>关注均分末位班级（{bottom.get('name')}）的低分段与及格率提升。</li>"
             f"<li>组织领先班级（{top.get('name')}）经验分享，缩小班际差距。</li>"
-            "<li>结合各班及格率/优秀率结构，安排分层辅导与临界生盯梢。</li>"
+            "<li>结合各班及格率结构，安排分层辅导与临界生盯梢。</li>"
             "</ul>"
         )
 
@@ -931,13 +932,12 @@ class ReportOrchestrator:
                 f"<td class='num'>{r.get('count') if r.get('count') is not None else '-'}</td>"
                 f"<td class='num'>{_fmt(r.get('value'))}</td>"
                 f"<td class='num'>{_fmt_pct(r.get('pass_rate'))}</td>"
-                f"<td class='num'>{_fmt_pct(r.get('excellent_rate'))}</td>"
                 "</tr>"
             )
         inner = (
             "<table class='edu-table'><thead><tr>"
             "<th>排名</th><th>班级</th><th class='num'>人数</th>"
-            "<th class='num'>均分</th><th class='num'>及格率</th><th class='num'>优秀率</th>"
+            "<th class='num'>均分</th><th class='num'>及格率</th>"
             "</tr></thead>"
             f"<tbody>{''.join(rows)}</tbody></table>"
         )
@@ -1696,7 +1696,7 @@ class ReportOrchestrator:
 
         items = [
             x
-            for x in (_rank_of("avg"), _rank_of("pass_rate"), _rank_of("excellent_rate"))
+            for x in (_rank_of("avg"), _rank_of("pass_rate"))
             if x
         ]
         if not items:
@@ -1812,7 +1812,7 @@ class ReportOrchestrator:
 
     def _build_sql_config_edu(self, spec: ReportSpec, mapping: ScoreSchemaMapping) -> str:
         f = mapping.fields
-        score_expr = f.get("score", "sc.score")
+        score_expr = DISPLAY_SCORE_SQL
         full_expr = f.get("full_score", "sc.exam_score")
         subject_expr = f.get("subject", "sc.subject_name")
         class_expr = f.get("class_name", "sc.class")
@@ -1837,7 +1837,8 @@ class ReportOrchestrator:
             f"       {exam_expr} AS exam_name\n"
             "FROM tb_score sc\n"
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
-            f"{EXAM_JOIN}"
+            f"{EXAM_JOIN}\n"
+            f"{OVERVIEW_SCORE_JOIN}"
         )
         # 多场考试类报告：未指定考试时不按单场过滤，便于趋势/综合/学生画像/诊断动态性；
         # 若表单已选考试（含多选 ``a;;b``），则按所选过滤。

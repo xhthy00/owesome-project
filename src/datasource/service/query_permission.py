@@ -827,10 +827,61 @@ def _strip_xx_from_select(select: Any) -> Any:
     return select
 
 
+def _select_arg(select: Any, *names: str) -> Any:
+    for name in names:
+        val = select.args.get(name) if hasattr(select, "args") else None
+        if val is not None:
+            return val
+    return None
+
+
+def _direct_from_tables(select: Any) -> list[Any]:
+    """本层 FROM/JOIN 的物理表，不含 CTE 定义和子查询内部。"""
+    from sqlglot import exp
+
+    items: list[Any] = []
+    from_ = _select_arg(select, "from_", "from")
+    if from_ is not None and from_.this is not None:
+        items.append(from_.this)
+    for join in _select_arg(select, "joins") or []:
+        if getattr(join, "this", None) is not None:
+            items.append(join.this)
+    out: list[Any] = []
+    for item in items:
+        node = item.this if isinstance(item, exp.Alias) and isinstance(item.this, exp.Table) else item
+        if isinstance(node, exp.Table):
+            out.append(node)
+    return out
+
+
+def _select_direct_uses_fact_table(select: Any) -> bool:
+    names = (
+        _METRIC_TABLE_NAMES
+        | _DETAIL_TABLE_NAMES
+        | _STUDENT_TABLE_NAMES
+    )
+    for table in _direct_from_tables(select):
+        if (table.name or "").strip().lower() in names:
+            return True
+    return False
+
+
+def _sql_is_citywide_rank_pool(sql: str) -> bool:
+    """全市班级/学校排名：对照池必须全市，不能收成本校。"""
+    s = sql or ""
+    if not (_OVERVIEW_SQL_RE.search(s) or re.search(r"\btb_score\b", s, re.I)):
+        return False
+    if not re.search(r"\b(?:RANK|DENSE_RANK|ROW_NUMBER)\s*\(", s, re.I):
+        return False
+    if re.search(r"GROUP\s+BY\s+[^;]*\bbj\b", s, re.I):
+        return True
+    return bool(re.search(r"GROUP\s+BY\s+[^;]*\bxx\b", s, re.I))
+
+
 def _walk_selects(tree: Any, fn: Any) -> Any:
     from sqlglot import exp
 
-    if isinstance(tree, (exp.Limit, exp.Order, exp.Offset)):
+    if isinstance(tree, (exp.Limit, exp.Order, exp.Offset, exp.Alias)):
         tree.set("this", _walk_selects(tree.this, fn))
         return tree
     if isinstance(tree, exp.Union):
@@ -840,7 +891,29 @@ def _walk_selects(tree: Any, fn: Any) -> Any:
     if isinstance(tree, exp.Subquery):
         tree.set("this", _walk_selects(tree.this, fn))
         return tree
+    if isinstance(tree, exp.CTE):
+        tree.set("this", _walk_selects(tree.this, fn))
+        return tree
+    if isinstance(tree, exp.With):
+        tree.set("expressions", [_walk_selects(e, fn) for e in (tree.expressions or [])])
+        return tree
+    if isinstance(tree, exp.From):
+        tree.set("this", _walk_selects(tree.this, fn))
+        return tree
     if isinstance(tree, exp.Select):
+        with_ = _select_arg(tree, "with_", "with")
+        if with_ is not None:
+            key = "with_" if tree.args.get("with_") is not None else "with"
+            tree.set(key, _walk_selects(with_, fn))
+        from_ = _select_arg(tree, "from_", "from")
+        if from_ is not None:
+            key = "from_" if tree.args.get("from_") is not None else "from"
+            tree.set(key, _walk_selects(from_, fn))
+        joins = _select_arg(tree, "joins")
+        if joins:
+            for join in joins:
+                if getattr(join, "this", None) is not None:
+                    join.set("this", _walk_selects(join.this, fn))
         return fn(tree)
     return tree
 
@@ -886,9 +959,14 @@ def _pred_targets_overview_student(pred: str) -> bool:
     return bool(re.search(r"anon_stu_id|student_id", pred, re.I))
 
 
-def _preds_for_overview_select(select: Any, predicates: list[str]) -> list[str]:
-    """全市/区县指标不注入本校/本班；明细与点名他校仍注入。"""
-    if not _is_citywide_metric_select(select):
+def _preds_for_overview_select(
+    select: Any,
+    predicates: list[str],
+    *,
+    skip_school_scope: bool = False,
+) -> list[str]:
+    """全市/区县指标与全市排名不注入本校/本班；明细与点名他校仍注入。"""
+    if not skip_school_scope and not _is_citywide_metric_select(select):
         return predicates
     out: list[str] = []
     for p in predicates:
@@ -1060,8 +1138,14 @@ def merge_row_predicates_into_sql(sql: str, db_type: str, predicates: list[str])
         logger.warning("row merge parse failed: %s", e)
         return sql
 
+    skip_school_scope = _sql_is_citywide_rank_pool(sql)
+
     def _on_select(select: Any) -> Any:
-        leaf_preds = _preds_for_overview_select(select, predicates)
+        if not _select_direct_uses_fact_table(select):
+            return select
+        leaf_preds = _preds_for_overview_select(
+            select, predicates, skip_school_scope=skip_school_scope
+        )
         combined = _combine_predicate_tree(leaf_preds, dialect)
         if combined is None:
             return select

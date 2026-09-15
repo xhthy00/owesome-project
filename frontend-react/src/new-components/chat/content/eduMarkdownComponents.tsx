@@ -4,13 +4,15 @@ import {
   Children,
   createContext,
   isValidElement,
+  useCallback,
   useContext,
+  useLayoutEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode
 } from "react";
 import type { Components } from "react-markdown";
+import { UserWatermark } from "@/components/UserWatermark";
 import { labelColumn } from "@/utils/columnLabels";
 import { formatNumericDisplay } from "@/utils/formatNumericDisplay";
 
@@ -33,7 +35,7 @@ function flattenText(node: ReactNode): string {
 
 function looksLikeNumericHeader(text: string): boolean {
   const t = text.replace(/\s/g, "");
-  return /均分|分差|名次|得分率|及格率|优秀率|差值|数值|对照|人数|满分|排名|率差|学校数|班级数|参赛校数|参赛班数|校数|班数|段位|占比|百分/.test(
+  return /均分|总分|分数|得分|分差|名次|位次|得分率|及格率|优秀率|差值|数值|对照|人数|满分|排名|率差|学校数|班级数|参赛校数|参赛班数|校数|班数|段位|占比|百分|合计|转换分|标准差|最高|最低/.test(
     t
   );
 }
@@ -59,15 +61,21 @@ function rowLooksWeak(text: string): boolean {
 
 function EduMarkdownTable({ children }: { children?: ReactNode }) {
   const [open, setOpen] = useState(false);
-  const numColsRef = useRef<Set<number>>(new Set());
+  const [numCols, setNumCols] = useState<ReadonlySet<number>>(() => new Set());
+  const markNumCol = useCallback((index: number) => {
+    setNumCols((prev) => {
+      if (prev.has(index)) return prev;
+      const next = new Set(prev);
+      next.add(index);
+      return next;
+    });
+  }, []);
   const ctx = useMemo(
     () => ({
-      isNumCol: (index: number) => numColsRef.current.has(index),
-      markNumCol: (index: number) => {
-        numColsRef.current.add(index);
-      }
+      isNumCol: (index: number) => numCols.has(index),
+      markNumCol
     }),
-    []
+    [numCols, markNumCol]
   );
   return (
     <NumColContext.Provider value={ctx}>
@@ -94,12 +102,14 @@ function EduMarkdownTable({ children }: { children?: ReactNode }) {
         footer={null}
         width="96%"
         style={{ top: 16 }}
-        styles={{ body: { padding: 12, maxHeight: "80vh", overflow: "auto" } }}
+        styles={{ body: { padding: 12, maxHeight: "80vh", overflow: "hidden" } }}
         destroyOnClose
       >
-        <div className="edu-md-table-wrap edu-md-table-wrap--full">
-          <table>{children}</table>
-        </div>
+        <UserWatermark>
+          <div className="edu-md-table-wrap edu-md-table-wrap--full">
+            <table>{children}</table>
+          </div>
+        </UserWatermark>
       </Modal>
     </NumColContext.Provider>
   );
@@ -122,19 +132,26 @@ function TableRow({ children }: { children?: ReactNode }) {
 
 function TableHeaderCell({ children }: { children?: ReactNode }) {
   const index = useContext(ColIndexContext);
-  const { markNumCol } = useContext(NumColContext);
+  const { isNumCol, markNumCol } = useContext(NumColContext);
   const labeled = labelColumn(flattenText(children));
-  const num = looksLikeNumericHeader(labeled);
-  if (num) markNumCol(index);
+  const headerNum = looksLikeNumericHeader(labeled);
+  useLayoutEffect(() => {
+    if (headerNum) markNumCol(index);
+  }, [headerNum, index, markNumCol]);
+  const num = headerNum || isNumCol(index);
   return <th className={num ? "num" : undefined}>{labeled}</th>;
 }
 
 function TableDataCell({ children }: { children?: ReactNode }) {
   const index = useContext(ColIndexContext);
-  const { isNumCol } = useContext(NumColContext);
+  const { isNumCol, markNumCol } = useContext(NumColContext);
   const text = flattenText(children);
   const formatted = formatNumericDisplay(text);
-  const num = isNumCol(index) || looksLikeNumericValue(formatted);
+  const fromValue = looksLikeNumericValue(formatted);
+  useLayoutEffect(() => {
+    if (fromValue) markNumCol(index);
+  }, [fromValue, index, markNumCol]);
+  const num = isNumCol(index) || fromValue;
   const cls = [num ? "num" : "", looksWeakLabel(formatted) ? "is-weak-label" : ""]
     .filter(Boolean)
     .join(" ");

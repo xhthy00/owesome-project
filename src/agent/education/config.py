@@ -120,7 +120,7 @@ class EducationConfig:
     excellent_threshold: float = 85.0
     #: 当提供 ``full_score`` 时，及格/优秀线 = full_score × ratio（优先于绝对阈值）。
     pass_ratio: float = 0.6
-    excellent_ratio: float = 0.85
+    excellent_ratio: float = 0.85  # 配置页仍保留；对外展示见 SHOW_EXCELLENT_RATE
     #: 当提供 ``full_score`` 时，分数段边界 = full_score × ratio 列表。
     score_segment_ratios: list[float] = field(default_factory=lambda: [0.6, 0.7, 0.8, 0.9])
     #: 及格线上下 ``critical_margin`` 分视为临界生。
@@ -151,6 +151,14 @@ class EducationConfig:
         else:
             segs.update(float(s) for s in self.score_segments)
         return sorted(segs)
+
+
+#: 全局优秀率（满分 × excellent_ratio）口径不合理，问答/报告先不展示；配置页仍保留。
+SHOW_EXCELLENT_RATE = False
+
+
+def excellent_display_enabled() -> bool:
+    return bool(SHOW_EXCELLENT_RATE)
 
 
 def build_default_anomaly_rules(cfg: EducationConfig) -> list[AnomalyRule]:
@@ -305,10 +313,12 @@ __all__ = [
     "COMPARE_PREV_EXAM",
     "COMPARE_SELF_SUBJECTS",
     "EducationConfig",
+    "SHOW_EXCELLENT_RATE",
     "anomaly_rule_from_dict",
     "anomaly_rules_as_dicts",
     "build_default_anomaly_rules",
     "config_to_public_dict",
+    "excellent_display_enabled",
     "load_config",
     "resolve_anomaly_rules",
 ]

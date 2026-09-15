@@ -222,6 +222,9 @@ def _mark_conflicts(frame: QueryFrame) -> None:
         values = {item.value for item in current if item.value}
         if len(values) <= 1:
             continue
+        if kind == "school":
+            # 问句点名多校（A和B对比）不是规则/LLM 冲突。
+            continue
         for item in current:
             item.status = EntityStatus.AMBIGUOUS
             item.reason = "本轮规则与语义抽取结果冲突"

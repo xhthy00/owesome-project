@@ -20,8 +20,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+from src.agent.education.assign_score import DISPLAY_SCORE_SQL, OVERVIEW_SCORE_JOIN
 from src.agent.education.charts import build_chart_option as _build_chart_option
-from src.agent.education.config import EducationConfig
+from src.agent.education.config import EducationConfig, SHOW_EXCELLENT_RATE
 from src.agent.education.config_store import get_config as _get_effective_config
 from src.agent.education.report_types import Audience, ReportType, report_type_label
 from src.agent.education.schema_mapping import (
@@ -217,8 +218,8 @@ def _format_config_schema_result(bundle, warnings: list[str]) -> ToolResult:
         f"- score 表：{m.tables.get('score', '')}",
         f"- school 表：{m.tables.get('school', '')}",
         f"- 满分字段：{m.fields.get('full_score', '（未配置）')}（运行时从库读取，非固定值）",
-        f"- 及格/优秀比例（异常规则配置）：{pass_ratio} / {excellent_ratio}"
-        f"（即 {round(pass_ratio * 100, 2)}% / {round(excellent_ratio * 100, 2)}%）",
+        f"- 及格比例（异常规则配置）：{pass_ratio}"
+        f"（即 {round(pass_ratio * 100, 2)}%）",
     ]
     if m.joins:
         lines.append("- 标准 JOIN（节选）：")
@@ -231,6 +232,19 @@ def _format_config_schema_result(bundle, warnings: list[str]) -> ToolResult:
         "tb_student 主键为 id（学号），JOIN 须写 sc.student_id = st.id，禁止 st.student_id；"
         "查 tb_score_detail 须 JOIN tb_score sc。"
     )
+    from src.agent.education.privacy_mode import is_anonymize_display_enabled
+
+    if is_anonymize_display_enabled():
+        lines.append(
+            "- 学生展示：禁止 xm。"
+            "未要求学号时不要 SELECT student_id / anon_stu_id；点名用班级/分数。"
+        )
+    else:
+        lines.append(
+            "- 学生姓名：在 tb_score_overview.xm（tb_student / tb_score 无姓名列）。"
+            "未要求学号时不要 SELECT anon_stu_id/xh/qh；anon_stu_id 是系统编码不是本人学号。"
+            "点名/前N/最高分必须 SELECT ov.xm；JOIN ov.anon_stu_id = sc.student_id。"
+        )
     if warnings:
         lines.append("- 校验警告（不阻断）：")
         for w in warnings:
@@ -653,8 +667,9 @@ def compute_score_stats_tool(
 
     **满分与阈值**：优先使用 ``full_score`` 参数；否则从 ``rows`` 的
     ``full_score_field``（默认 ``exam_score``，对应 tb_exam/tb_score 卷面满分）
-    读取。有 ``full_score`` 时及格/优秀线 = 满分 × pass_ratio(0.6) / excellent_ratio(0.85)，
-    禁止写死 60/85/150。无满分列时回退 ``default_full_score``(100) 并在 observation 中 warning。
+    读取。有 ``full_score`` 时及格线 = 满分 × pass_ratio(0.6)，
+    禁止写死 60/150。无满分列时回退 ``default_full_score``(100) 并在 observation 中 warning。
+    全局优秀率口径暂不对外返回。
 
     Returns:
         ``data`` 含 ``count`` / ``avg`` / ``median`` / ``stdev`` / ``min`` /
@@ -743,18 +758,27 @@ def compute_score_stats_tool(
     if warnings:
         stats["warnings"] = warnings
     pass_line = stats.get("pass_line")
-    excellent_line = stats.get("excellent_line")
     pr = stats.get("pass_ratio")
-    er = stats.get("excellent_ratio")
-    content = (
-        f"成绩统计完成：共 {stats['count']} 人，均分 {stats['avg']}，"
-        f"满分 {stats['full_score']}，"
-        f"及格线 {pass_line}（按异常规则 {stats['full_score']}×{round(float(pr or 0) * 100, 2)}%），"
-        f"优秀线 {excellent_line}（按异常规则 {stats['full_score']}×{round(float(er or 0) * 100, 2)}%），"
-        f"及格率 {stats['pass_rate']}%，优秀率 {stats['excellent_rate']}%，"
-        f"标准差 {stats['stdev']}。"
-        "撰写结论时必须使用上述及格线/优秀线，禁止改用惯例 60%/85%。"
-    )
+    bits = [
+        f"成绩统计完成：共 {stats['count']} 人，均分 {stats['avg']}，",
+        f"满分 {stats['full_score']}，",
+        f"及格线 {pass_line}（按异常规则 {stats['full_score']}×{round(float(pr or 0) * 100, 2)}%），",
+        f"及格率 {stats['pass_rate']}%，",
+        f"标准差 {stats['stdev']}。",
+        "撰写结论时必须使用上述及格线，禁止改用惯例 60%。",
+    ]
+    if SHOW_EXCELLENT_RATE:
+        excellent_line = stats.get("excellent_line")
+        er = stats.get("excellent_ratio")
+        bits[2] = (
+            f"及格线 {pass_line}（按异常规则 {stats['full_score']}×{round(float(pr or 0) * 100, 2)}%），"
+            f"优秀线 {excellent_line}（按异常规则 {stats['full_score']}×{round(float(er or 0) * 100, 2)}%），"
+        )
+        bits[3] = (
+            f"及格率 {stats['pass_rate']}%，优秀率 {stats['excellent_rate']}%，"
+        )
+        bits[5] = "撰写结论时必须使用上述及格线/优秀线，禁止改用惯例 60%/85%。"
+    content = "".join(bits)
     if warnings:
         content += "\n" + "\n".join(warnings)
     return ToolResult(content=content, data=stats)
@@ -1808,14 +1832,15 @@ def _diagnosis_sql_bundle(
         "ORDER BY score_rate ASC\nLIMIT 1000"
     )
     score_sql = (
-        "SELECT sc.score AS score, sc.exam_score AS exam_score, sc.exam_id AS exam_id,\n"
+        "SELECT (" + DISPLAY_SCORE_SQL + ") AS score, sc.exam_score AS exam_score, sc.exam_id AS exam_id,\n"
         "       " + EXAM_NAME_SQL + " AS exam_name, e.exam_time AS exam_time,\n"
         "       sc.class AS class, sc.class AS class_name, sc.student_id AS student_id,\n"
         "       sc.subject_name AS subject, sch.name AS school_name,\n"
         "       sch.district AS district\n"
         "FROM tb_score sc\n"
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
-        "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
+        "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id\n"
+        + OVERVIEW_SCORE_JOIN
         + where_clause_score
         # 勿按 score DESC：LIMIT 截断时会偏向高分，导致参考人数偏少、及格/优秀率虚高。
         + "\nORDER BY e.exam_time DESC\n"
@@ -4700,12 +4725,13 @@ def _fetch_class_score_long_table(
         "SELECT " + EXAM_NAME_SQL + " AS exam_name,\n"
         "       sc.student_id AS student_id,\n"
         "       sc.subject_name AS subject_name,\n"
-        "       sc.score AS score,\n"
+        "       (" + DISPLAY_SCORE_SQL + ") AS score,\n"
         "       sc.class AS class,\n"
         "       e.exam_time AS exam_time\n"
         "FROM tb_score sc\n"
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
-        "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
+        "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id\n"
+        + OVERVIEW_SCORE_JOIN
         + where
         + "\nORDER BY e.exam_time, sc.student_id, sc.subject_name\nLIMIT 20000"
     )
@@ -7802,10 +7828,16 @@ def query_certified_metric_tool(
         payload["stats"] = stats
         content = (
             f"认证指标 {spec.id}：均分 {stats.get('avg')}，"
-            f"参考人数 {stats.get('count')}，及格率 {stats.get('pass_rate')}%，"
-            f"优秀率 {stats.get('excellent_rate')}%。"
+            f"参考人数 {stats.get('count')}，及格率 {stats.get('pass_rate')}%。"
             "面向用户不要写表名或 SQL。"
         )
+        if SHOW_EXCELLENT_RATE:
+            content = (
+                f"认证指标 {spec.id}：均分 {stats.get('avg')}，"
+                f"参考人数 {stats.get('count')}，及格率 {stats.get('pass_rate')}%，"
+                f"优秀率 {stats.get('excellent_rate')}%。"
+                "面向用户不要写表名或 SQL。"
+            )
         return ToolResult(content=content, data=payload)
     if not rows:
         return ToolResult(

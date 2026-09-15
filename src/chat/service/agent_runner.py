@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 EmitCallback = Callable[[str, dict[str, Any]], Awaitable[None]]
 
-# Summarizer / Charter 上下文里塞给 LLM 的样例行数上限，避免 prompt 爆炸
+# Charter 单任务样例仍限 20 行，避免作图 prompt 膨胀；写手明细口径见 sql_result_preview_limit
 _SAMPLE_ROWS_LIMIT = 20
 _SQL_TABLE_RE = re.compile(r"""(?i)\b(?:from|join)\s+([`"]?[A-Za-z0-9_.]+[`"]?)""")
 _ADHOC_REPORT_MAX_HTML = 120_000
@@ -2384,7 +2384,7 @@ def _reconcile_summary_with_sub_phases(
     return apply_subject_strength_verdict(
         relabel_result_table_headers(
             scrub_implementation_details(
-                append_keepable_result_tables(reconciled, exec_results)
+                append_keepable_result_tables(reconciled, exec_results, question=question)
             )
         ),
         exec_results,
@@ -2446,10 +2446,12 @@ def _format_sub_tasks_block(
     from src.agent.education.summary_context import (
         extract_stats_authority_block,
         format_education_pipeline_footer,
+        format_omitted_detail_note,
         format_result_markdown_table,
         format_sql_result_authority_notes,
         format_tool_expert_sub_task_block,
         looks_like_keepable_result_table,
+        sql_result_preview_limit,
         truncate_keeping_kpi_lines,
     )
 
@@ -2486,24 +2488,26 @@ def _format_sub_tasks_block(
         columns = list(exec_result.get("columns") or [])
         rows = list(exec_result.get("rows") or [])
         row_count = int(exec_result.get("row_count") or len(rows))
-        sample_shown = min(_SAMPLE_ROWS_LIMIT, row_count) if row_count else 0
+        sample_shown = (
+            sql_result_preview_limit(row_count, question=question) if row_count else 0
+        )
         stats_block = ""
         if not fact_answer:
             stats_block = extract_stats_authority_block(
                 phase.state.tool_calls,
                 reports=phase.state.reports,
             )
+        authority_notes = format_sql_result_authority_notes(
+            sql=sql_text,
+            row_count=row_count,
+            sample_shown=sample_shown,
+        )
         if fact_answer:
             authority_notes = (
                 f"⚠️ 事实问答：下列「共 {row_count} 行」仅为本次查询返回行数"
                 "（可能含 Top-N / 并列 / LIMIT），**禁止**写成参考人数/共N人参考/班级人数；"
-                "直接依据查询结论回答用户问题即可。"
-            )
-        else:
-            authority_notes = format_sql_result_authority_notes(
-                sql=sql_text,
-                row_count=row_count,
-                sample_shown=sample_shown,
+                "直接依据查询结论回答用户问题即可。\n"
+                + authority_notes
             )
         # DataAnalyst 的 terminate 结论也注入（保留 KPI 行），避免只剩样例表
         final_ans = (phase.reply.content if phase.reply else "") or ""
@@ -2519,7 +2523,8 @@ def _format_sub_tasks_block(
             if fact_answer:
                 final_snip = (
                     "\n查询结论（事实问答：优先照抄其中的 student_id/分数等直接答案；"
-                    "忽略其中的参考人数/共N人参考套话）：\n"
+                    "忽略其中的参考人数/共N人参考套话；"
+                    "禁止把其中的样本分布改写成全体，没有 GROUP BY/COUNT 不要写分布人数）：\n"
                     + truncate_keeping_kpi_lines(final_ans.strip(), limit=2500)
                 )
             else:
@@ -2537,16 +2542,21 @@ def _format_sub_tasks_block(
         if stats_block:
             block += f"{stats_block}\n"
         keep_table = looks_like_keepable_result_table(
-            columns, row_count=row_count, sql=sql_text
+            columns, row_count=row_count, sql=sql_text, question=question
         )
         if keep_table:
-            table = format_result_markdown_table(columns, rows)
+            table_limit = sample_shown or sql_result_preview_limit(
+                len(rows), question=question
+            )
+            table = format_result_markdown_table(
+                columns, rows, limit=table_limit
+            )
             if table:
                 block += (
                     "结果表（须原样保留在最终结论中，禁止压成一句话）：\n"
                     f"{table}\n"
                 )
-                shown = min(len(rows), 30)
+                shown = min(len(rows), table_limit)
                 if row_count > shown:
                     block += f"（仅展示前 {shown} 行 / 共 {row_count} 行）\n"
                 from src.agent.education.query_parse import is_subject_strength_query
@@ -2566,13 +2576,17 @@ def _format_sub_tasks_block(
                             f"{verdict}\n"
                         )
         elif fact_answer:
-            block += f"（明细已省略：共 {row_count} 行；勿把行数写成班级人数）\n"
+            block += format_omitted_detail_note(
+                row_count=row_count,
+                sample_shown=sample_shown,
+                fact_answer=True,
+            ) + "\n"
         else:
-            block += (
-                f"（明细样例已省略：共 {row_count} 行；"
-                "人数/率值以权威 KPI 或 AUTHORITATIVE_ROW_COUNT 为准，"
-                "禁止按预览行数写参考人数）\n"
-            )
+            block += format_omitted_detail_note(
+                row_count=row_count,
+                sample_shown=sample_shown,
+                fact_answer=False,
+            ) + "\n"
         if final_snip:
             block += final_snip
         if is_tool_expert:

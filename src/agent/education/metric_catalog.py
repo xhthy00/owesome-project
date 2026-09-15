@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from src.agent.education.assign_score import DISPLAY_SCORE_SQL
 from src.agent.education.clarification import SLOT_CLASS, SLOT_EXAM, SLOT_SCHOOL, SLOT_SUBJECT
 from src.agent.education.kpi_sql import SCORE_JOIN_FROM, build_kpi_aggregate_sql
 from src.agent.education.query_parse import (
@@ -175,8 +176,8 @@ def compile_metric_sql(
     # 优势/薄弱：各科均分全市排名骨架，供工具执行
     return (
         "SELECT e.subject_name AS subject, "
-        "ROUND(AVG(sc.score) FILTER (WHERE sc.score > 0)::numeric, 2) AS avg, "
-        "COUNT(*) FILTER (WHERE sc.score > 0) AS n "
+        f"ROUND(AVG({DISPLAY_SCORE_SQL}) FILTER (WHERE ({DISPLAY_SCORE_SQL}) > 0)::numeric, 2) AS avg, "
+        f"COUNT(*) FILTER (WHERE ({DISPLAY_SCORE_SQL}) > 0) AS n "
         f"{SCORE_JOIN_FROM}\n{where}\n"
         "GROUP BY e.subject_name"
     )

@@ -802,6 +802,12 @@ def education_terminologies_block() -> str:
                 "tb_score_overview.xx 是学校明文，点名学校用 xx LIKE '%校名%'；"
                 "禁止把 GZ_ 校码写进 overview.xx。"
             )
+            student_desc = (
+                "JOIN 必须写 sc.student_id = st.id。"
+                "禁止 SELECT xm。"
+                "未要求学号时不要 SELECT/展示 student_id、anon_stu_id；"
+                "anon_stu_id 是系统编码不是本人学号，点名用学校/班级/名次/分数。"
+            )
         else:
             school_desc = (
                 "对应 tb_school.s_name（学校全称，当前允许展示）。"
@@ -811,15 +817,26 @@ def education_terminologies_block() -> str:
                 "禁止 xx='GZ_…' / xx=tb_school.id / xx=tb_school.name（那些是脱敏校码）。"
                 "禁止 WHERE sch.name = '扬州中学'（name 仍是脱敏码）。"
             )
+            student_desc = (
+                "姓名在 tb_score_overview.xm（tb_student 无 xm 列）。"
+                "未要求学号时不要 SELECT anon_stu_id/xh/qh；"
+                "anon_stu_id 是系统编码不是本人学号；xh 是学校编号、qh 是地区编号。"
+                "点名/前N/最高分必须 SELECT ov.xm；JOIN ov.anon_stu_id = sc.student_id。"
+                "禁止查 st.xm；禁止因学生表无姓名就改口用学号。"
+            )
     except Exception:
         privacy_desc = (
             "学校字段：展示与过滤只用 sch.name 或 sch.id / sc.school_id（脱敏码）；"
             "**禁止** SELECT/引用 tb_school.s_name。"
-            "学生标识只用 student_id / anon_stu_id；禁止 SELECT xm/xh/sfzh/ksh。"
+            "未要求学号时不要 SELECT student_id/anon_stu_id；禁止 SELECT xm/xh/sfzh/ksh。"
         )
         school_desc = (
             "对应 tb_school.name，过滤用 JOIN tb_school sch ON sc.school_id = sch.id "
             "WHERE sch.name = '学校名'"
+        )
+        student_desc = (
+            "JOIN 必须写 sc.student_id = st.id；禁止 SELECT xm。"
+            "未要求学号时不要展示 student_id。"
         )
     return f"""<terminologies>
   <terminology>
@@ -832,7 +849,7 @@ def education_terminologies_block() -> str:
   </terminology>
   <terminology>
     <words><word>学生</word><word>学号</word></words>
-    <description>tb_student.id / tb_score.student_id，格式如 STU20240001；JOIN 必须写 sc.student_id = st.id，tb_student 无 student_id 列；无姓名字段时用学号展示</description>
+    <description>{student_desc}</description>
   </terminology>
   <terminology>
     <words><word>小题</word><word>逐题</word><word>题目</word></words>

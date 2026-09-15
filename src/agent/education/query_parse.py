@@ -165,12 +165,15 @@ def normalize_student_key(name: str) -> str:
 _INFORMAL_CLASS_RE = re.compile(
     r"(初[一二三]|高[一二三]|[三四五六七八九]年级)\s*(\d{1,2})\s*班"
 )
+_SPACED_PAREN_CLASS_RE = re.compile(
+    r"(初[一二三]|高[一二三]|[三四五六七八九]年级)\s*\(\s*(\d{1,2})\s*\)\s*班"
+)
 
 
 def normalize_fullwidth_parentheses(text: str) -> str:
     """班级名与库内一致：全角括号→半角，「高三2班」→「高三(2)班」。
 
-    不改写「高三1月」：必须是年级+数字+「班」。
+    也收「高三 (5) 班」这种括号两侧空格。不改写「高三1月」。
     """
     if not text:
         return text
@@ -179,6 +182,7 @@ def normalize_fullwidth_parentheses(text: str) -> str:
     def _paren(m: re.Match[str]) -> str:
         return f"{m.group(1)}({int(m.group(2))})班"
 
+    out = _SPACED_PAREN_CLASS_RE.sub(_paren, out)
     return _INFORMAL_CLASS_RE.sub(_paren, out)
 
 
@@ -371,6 +375,9 @@ def is_vague_exam_name(name: str) -> bool:
     """是否为不可用于 SQL 过滤的模糊考试表述（这几次/本次考试等）。"""
     n = str(name or "").strip()
     if not n:
+        return True
+    # 「1月」「1月考试」不是专名，且「1月」会误含子串命中「11月」。
+    if re.fullmatch(r"\d{1,2}月(?:考试|期末|期中|模拟|月考|摸底)?", n):
         return True
     if is_recent_n_exam_window(n):
         return True
@@ -1138,6 +1145,22 @@ def is_combo_reach_report_query(question: str) -> bool:
     return "物化生" in q and "达线" in q and _has_reportish(q)
 
 
+_FULL_ROSTER_HINTS = (
+    "完整名单",
+    "全部名单",
+    "全量名单",
+    "逐人名单",
+    "完整明细",
+    "所有人的名单",
+)
+
+
+def wants_full_student_roster(question: str | None) -> bool:
+    """用户明确要完整学生名单（不是聚合表）。"""
+    q = str(question or "")
+    return any(h in q for h in _FULL_ROSTER_HINTS)
+
+
 def is_elite_roster_report_query(question: str) -> bool:
     q = (question or "").strip()
     if not q or not _has_reportish(q):
@@ -1869,6 +1892,18 @@ def _is_exam_window_fragment(name: str) -> bool:
     return bool(re.search(r"(?:[次场](?:考试|测试|检测)?|考试|测试|检测)$", n))
 
 
+def split_conjoined_school_names(name: str) -> list[str]:
+    """「丁沟中学和大桥中学」拆成两所；拆不出则原样返回。"""
+    n = re.sub(r"\s+", "", str(name or ""))
+    if not n:
+        return []
+    parts = [p.strip() for p in re.split(r"(?:和|与|及|以及|、)", n) if p.strip()]
+    if len(parts) < 2:
+        return [n]
+    ok = [p for p in parts if re.search(_SCHOOL_SUFFIX + r"$", p) and _school_name_stem(p)]
+    return ok if len(ok) >= 2 else [n]
+
+
 def extract_school_targets(question: str) -> list[str]:
     """从问题中抽取全部学校名，保持出现顺序去重。"""
     q = (question or "").strip()
@@ -1901,11 +1936,22 @@ def extract_school_targets(question: str) -> list[str]:
                     or is_interrogative_school_name(name)
                 ):
                     continue
-                seen = [s for s in seen if not (name.endswith(s) and s != name)]
-                if any(s.endswith(name) and s != name for s in seen):
-                    continue
-                if name not in seen:
-                    seen.append(name)
+                for piece in split_conjoined_school_names(name):
+                    if (
+                        not piece
+                        or not _school_name_stem(piece)
+                        or _is_request_speech_school_name(piece)
+                        or _is_regional_exam_label(piece)
+                        or _is_exam_window_fragment(piece)
+                        or piece in _GENERIC_SCHOOL_LABELS
+                        or is_interrogative_school_name(piece)
+                    ):
+                        continue
+                    seen = [s for s in seen if not (piece.endswith(s) and s != piece)]
+                    if any(s.endswith(piece) and s != piece for s in seen):
+                        continue
+                    if piece not in seen:
+                        seen.append(piece)
     return seen
 
 
@@ -1935,6 +1981,9 @@ def build_edu_aware_constraints(
     edu = edu_scope if isinstance(edu_scope, dict) else {}
     role = str(edu.get("edu_role") or "").strip()
     target_school = extract_school_target(question)
+    named_schools = extract_school_targets(question)
+    if len(named_schools) != 1:
+        target_school = None
     target_student = extract_student_target(question)
     target_student_id = extract_student_id_target(question) or (
         target_student if target_student and re.match(r"^STU\d+$", target_student, re.I) else None
@@ -2991,6 +3040,8 @@ __all__ = [
     "extract_district_target",
     "extract_exam_name_hint",
     "extract_school_target",
+    "extract_school_targets",
+    "split_conjoined_school_names",
     "peel_rhetorical_school_suffix",
     "extract_school_type_target",
     "extract_student_id_target",
@@ -3026,6 +3077,7 @@ __all__ = [
     "is_contribution_report_query",
     "is_combo_reach_report_query",
     "is_elite_roster_report_query",
+    "wants_full_student_roster",
     "is_item_difficulty_curve_query",
     "is_difficulty_curve_report_query",
     "is_score_band_report_query",

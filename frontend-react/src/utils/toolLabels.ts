@@ -960,8 +960,14 @@ function normalizeThinkBlocks(blocks: string[]): string[] {
   return out;
 }
 
-function isMdTableLine(line: string): boolean {
+function unwrapMdTableLine(line: string): string {
   const t = line.trim();
+  const wrapped = t.match(/^\[(\|.+\|)\]$/);
+  return wrapped ? wrapped[1] : line;
+}
+
+function isMdTableLine(line: string): boolean {
+  const t = unwrapMdTableLine(line).trim();
   if (!t.startsWith("|")) return false;
   return /^\|.+\|\s*$/.test(t) || /^\|[-:| \t]+\|\s*$/.test(t);
 }
@@ -979,6 +985,30 @@ function isMdSeparatorRow(cells: string[]): boolean {
 
 function cellsToMdRow(cells: string[]): string {
   return `| ${cells.join(" | ")} |`;
+}
+
+function padMdTableRow(cells: string[], width: number, fill: string, insertBeforeLast: boolean): string[] {
+  if (cells.length >= width) return cells;
+  const gap = width - cells.length;
+  const extra = Array.from({ length: gap }, () => fill);
+  if (insertBeforeLast && cells.length >= 2) {
+    return [...cells.slice(0, -1), ...extra, cells[cells.length - 1]];
+  }
+  return [...cells, ...extra];
+}
+
+/** 同一张表的表头/分隔行/数据行列数必须一致，否则 remark-gfm 整表不渲染。 */
+function alignMdTableBlock(lines: string[]): string[] {
+  const parsed = lines.map((ln) => mdTableCells(ln));
+  const width = Math.max(0, ...parsed.map((cells) => cells.length));
+  if (width < 2) return lines;
+  let seenBody = false;
+  return parsed.map((cells) => {
+    const sep = isMdSeparatorRow(cells);
+    const isHeader = !sep && !seenBody;
+    if (!sep) seenBody = true;
+    return cellsToMdRow(padMdTableRow(cells, width, sep ? "---" : "", isHeader));
+  });
 }
 
 /** 仅当一行里粘了「相同列数的两行」、中间空单元格当胶水时才拆开；普通空单元格保留。 */
@@ -1031,10 +1061,25 @@ export function normalizeAssistantMarkdown(md: string): string {
   const lines = text.split("\n");
   const out: string[] = [];
   let tableCols: number | undefined;
-  for (const line of lines) {
+  let tableBuf: string[] = [];
+
+  const flushTable = () => {
+    if (!tableBuf.length) return;
+    const aligned = alignMdTableBlock(tableBuf);
+    const prev = out.length ? out[out.length - 1] : undefined;
+    if (prev != null && prev.trim() !== "" && !isMdTableLine(prev)) {
+      out.push("");
+    }
+    out.push(...aligned);
+    tableBuf = [];
+    tableCols = undefined;
+  };
+
+  for (const rawLine of lines) {
+    const line = unwrapMdTableLine(rawLine);
     if (!isMdTableLine(line)) {
-      tableCols = undefined;
-      out.push(line);
+      flushTable();
+      out.push(rawLine);
       continue;
     }
     const parts = unglueMdTableLine(line, tableCols);
@@ -1044,12 +1089,9 @@ export function normalizeAssistantMarkdown(md: string): string {
         tableCols = firstCells.length;
       }
     }
-    const prev = out.length ? out[out.length - 1] : undefined;
-    if (prev != null && prev.trim() !== "" && !isMdTableLine(prev)) {
-      out.push("");
-    }
-    out.push(...parts);
+    tableBuf.push(...parts);
   }
+  flushTable();
   return out.join("\n");
 }
 

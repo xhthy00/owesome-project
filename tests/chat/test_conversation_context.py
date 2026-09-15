@@ -229,3 +229,25 @@ def test_follow_up_rewrite_strips_minimax_think_block(monkeypatch) -> None:
 
     assert result.resolved_question == "查询扬州中学清北达线人数"
     assert "<think>" not in result.resolved_question
+
+
+def test_complete_roster_request_is_follow_up(monkeypatch) -> None:
+    monkeypatch.setattr(
+        context,
+        "load_turn_context",
+        lambda *args, **kwargs: context.TurnContext(
+            inherited={"exam_name": "2026届高三5月模拟"},
+            brief="用户：全市理科前150名但是有单科在150名之外的学生数据\n助手：入围155人",
+            latest_record_id=2171,
+        ),
+    )
+    result = asyncio.run(
+        context.resolve_turn_context(
+            question="需 155 人完整名单",
+            conversation_id=955,
+            user_id=1,
+        )
+    )
+    assert result.turn_type == context.TURN_FOLLOW_UP
+    assert "完整名单" in result.resolved_question
+    assert "考试=2026届高三5月模拟" in result.resolved_question

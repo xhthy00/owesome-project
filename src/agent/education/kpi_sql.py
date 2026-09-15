@@ -2,20 +2,23 @@
 
 聚合字段与 ``stats.compute_score_stats`` 对齐；满分取 ``MAX(exam_score)``，
 缺省时回退 ``config.default_full_score``，阈值按 ratio 计算（与有满分时的 Python 路径一致）。
+化生政地的 ``score`` 列取 overview 赋分（见 ``assign_score.DISPLAY_SCORE_SQL``）。
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from src.agent.education.config import EducationConfig
+from src.agent.education.assign_score import DISPLAY_SCORE_SQL, OVERVIEW_SCORE_JOIN
+from src.agent.education.config import SHOW_EXCELLENT_RATE, EducationConfig
 from src.agent.education.schema_mapping import EXAM_JOIN
 from src.agent.education.stats import _seg_label, _seg_pairs
 
 SCORE_JOIN_FROM = (
     "FROM tb_score sc\n"
     "JOIN tb_school sch ON sc.school_id = sch.id\n"
-    f"{EXAM_JOIN}"
+    f"{EXAM_JOIN}\n"
+    f"{OVERVIEW_SCORE_JOIN}"
 )
 
 
@@ -48,12 +51,12 @@ def build_score_count_sql(where_sql: str = "") -> str:
             "SELECT COUNT(*) AS cnt\n"
             f"{SCORE_JOIN_FROM}"
             f"{where}\n"
-            "AND sc.score > 0"
+            f"AND ({DISPLAY_SCORE_SQL}) > 0"
         )
     return (
         "SELECT COUNT(*) AS cnt\n"
         f"{SCORE_JOIN_FROM}\n"
-        "WHERE sc.score > 0"
+        f"WHERE ({DISPLAY_SCORE_SQL}) > 0"
     )
 
 
@@ -80,7 +83,7 @@ def build_kpi_aggregate_sql(where_sql: str, config: EducationConfig) -> str:
 
     return (
         "WITH base AS (\n"
-        "  SELECT sc.score AS score, sc.exam_score AS exam_score\n"
+        f"  SELECT ({DISPLAY_SCORE_SQL}) AS score, sc.exam_score AS exam_score\n"
         f"  {SCORE_JOIN_FROM}"
         f"{where}\n"
         "),\n"
@@ -163,13 +166,13 @@ def kpi_row_to_stats(
         "min": _f("min"),
         "max": _f("max"),
         "pass_rate": _f("pass_rate"),
-        "excellent_rate": _f("excellent_rate"),
+        "excellent_rate": _f("excellent_rate") if SHOW_EXCELLENT_RATE else None,
         "good_rate": _f("good_rate"),
         "low_score_rate": _f("low_score_rate"),
         "fail_rate": _f("fail_rate"),
         "full_score": upper,
         "pass_line": round(pass_thr, 4),
-        "excellent_line": round(exc_thr, 4),
+        "excellent_line": round(exc_thr, 4) if SHOW_EXCELLENT_RATE else None,
         "pass_ratio": float(config.pass_ratio),
         "excellent_ratio": float(config.excellent_ratio),
         "segments": segments,

@@ -107,7 +107,7 @@ def compare_class_subjects_vs_peers(
                 peer_exc.append(float(st["excellent_rate"]))
         class_avg = avgs[target]
         pass_rate = float(tgt_stats.get("pass_rate") or 0)
-        exc_rate = float(tgt_stats.get("excellent_rate") or 0)
+        exc = tgt_stats.get("excellent_rate")
         p_pass = sum(peer_pass) / len(peer_pass) if peer_pass else None
         p_exc = sum(peer_exc) / len(peer_exc) if peer_exc else None
         out.append({
@@ -120,7 +120,7 @@ def compare_class_subjects_vs_peers(
             "pass_rate": round(pass_rate, 2),
             "peer_pass_rate": round(p_pass, 2) if p_pass is not None else None,
             "pass_gap": round((p_pass - pass_rate), 2) if p_pass is not None else None,
-            "excellent_rate": round(exc_rate, 2),
+            "excellent_rate": round(float(exc), 2) if exc is not None else None,
             "peer_excellent_rate": round(p_exc, 2) if p_exc is not None else None,
             "n": len(tgt_scores),
         })

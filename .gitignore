@@ -28,3 +28,7 @@ tests/agent/*
 !tests/agent/test_line_offset_hint.py
 !tests/agent/test_class_compare_track.py
 !tests/agent/test_privacy_display.py
+!tests/agent/test_row_perm_rank.py
+!tests/agent/test_assign_score.py
+!tests/agent/test_class_name_normalize.py
+!tests/agent/test_sql_preview_notes.py

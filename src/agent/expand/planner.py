@@ -106,20 +106,20 @@ PLANNER_DESC = """[你的职责]
 - 年级对比报告（grade_comparison）/ **学校 + 各班横向多维对比**
   （如「扬州中学在连淮扬镇数学考试中各个班级的横向多维对比分析」）——
   **必须拆 3 个子任务**，范围是**全校各班**，**严禁**填写 class_name（不得缩成某一个班）：
-  ["查询【XX学校】在【XX考试】【XX科目】整体成绩 KPI：均分、及格率、优秀率、分数段、各班对比（各班列必须是 bj 不是 xx；GROUP BY xx,bj；禁止 SELECT xx AS class_name；禁止只 GROUP BY xx；SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score；**禁止**按单班过滤）",
+  ["查询【XX学校】在【XX考试】【XX科目】整体成绩 KPI：均分、及格率、分数段、各班对比（各班列必须是 bj 不是 xx；GROUP BY xx,bj；禁止 SELECT xx AS class_name；禁止只 GROUP BY xx；SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score；**禁止**按单班过滤）",
    {"task": "调 fetch_subject_diagnosis_data_tool(school_name=【XX学校】, subject_name=【XX科目】, exam_name=【XX考试】) 查询小题明细与知识点——本步仅 fetch，禁止 render，**禁止传 class_name**；完成后 terminate", "sub_task_agent": "ToolExpert"},
    {"task": "调 build_subject_diagnosis_sections_tool(school_name=【XX学校】, exam_name=【XX考试】, subject_name=【XX科目】, render=true) 一步完成全校 stats+各班对比 HTML；**禁止传 class_name**；完成后 terminate", "sub_task_agent": "ToolExpert"}]
 - 科目诊断报告（subject_diagnosis）：
-  ["查询该科目分数段分布与及格率/优秀率", {"task": "用 education/subject_diagnosis.html 模板组装 HTML 报告（数据取上游子任务）", "sub_task_agent": "ToolExpert"}]
+  ["查询该科目分数段分布与及格率", {"task": "用 education/subject_diagnosis.html 模板组装 HTML 报告（数据取上游子任务）", "sub_task_agent": "ToolExpert"}]
 - **学校 + 科目 + 考试 + 多维分析/分析报告**（如「分析【XX学校】在【XX考试】的数学成绩，多维分析形成报告」）——
   **必须拆 3 个子任务**（与班级诊断同构，**省略 class_name 表示全校该科**）：
-  ["查询【XX学校】在【XX考试】【XX科目】整体成绩 KPI：均分、及格率、优秀率、分数段、各班对比（SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score；**禁止**按单班过滤）",
+  ["查询【XX学校】在【XX考试】【XX科目】整体成绩 KPI：均分、及格率、分数段、各班对比（SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score；**禁止**按单班过滤）",
    {"task": "调 fetch_subject_diagnosis_data_tool(school_name=【XX学校】, subject_name=【XX科目】, exam_name=【XX考试】) 查询小题明细与知识点——本步仅 fetch，完成后 terminate，**禁止传 class_name**", "sub_task_agent": "ToolExpert"},
    {"task": "调 build_subject_diagnosis_sections_tool(school_name=【XX学校】, exam_name=【XX考试】, subject_name=【XX科目】, render=true) 一步完成 stats+HTML；**禁止传 class_name**；完成后 terminate", "sub_task_agent": "ToolExpert"}]
   **禁止** plans=[原问题]；**禁止** DataAnalyst 在子任务 2/3 组装报告。
 - **学校/班级 + 科目 + 小题（逐题）诊断**（如「分析【XX学校】在【XX考试】的数学成绩，
   细化到每一小题，形成详细分析报告」）——**拆 3 个子任务**，小题查询须在工具链可见：
-  ["查询【XX学校】【XX班级】在【XX考试】【XX科目】整体成绩 KPI：均分、及格率、优秀率、分数段（SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score）",
+  ["查询【XX学校】【XX班级】在【XX考试】【XX科目】整体成绩 KPI：均分、及格率、分数段（SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score）",
    {"task": "调 fetch_subject_diagnosis_data_tool(school_name=【XX学校】, subject_name=【XX科目】, exam_name=【XX考试】, class_name=【XX班级】) 查询 tb_score_detail 小题明细与知识点——**本步必须在工具链出现，禁止跳过**", "sub_task_agent": "ToolExpert"},
    {"task": "调 build_subject_diagnosis_sections_tool(school_name=【XX学校】, exam_name=【XX考试】, subject_name=【XX科目】, class_name=【XX班级】, render=true) **一步完成 stats 计算 + HTML 渲染并推送**（勿手传 fetch_data，工具自动读取上游 fetch）；完成后 terminate。**禁止**再调 compute_score_stats / select_report_template / build_chart_option / render_html_report。若 fetch 返回 0 题，terminate 说明 SQL 日志与原因", "sub_task_agent": "ToolExpert"}]
   **严禁** DataAnalyst 自行写 tb_score_detail JOIN SQL；**严禁**跳过 fetch 直接 render。
@@ -205,14 +205,17 @@ def _plan_exam_name(question: str) -> str:
 def _plan_school_name(question: str) -> str:
     """优先用闸门 grounding 的校名；lookup 维度不再二次抽校。"""
     from src.agent.education.query_frame import constraint_filter_value, constraint_looks_up
-    from src.agent.education.query_parse import extract_school_target
+    from src.agent.education.query_parse import extract_school_targets
 
     named = constraint_filter_value("school")
     if named:
         return named
     if constraint_looks_up("school"):
         return ""
-    return extract_school_target(question) or ""
+    found = extract_school_targets(question)
+    if len(found) != 1:
+        return ""
+    return found[0]
 
 
 def _plan_subject_name(question: str) -> str:
@@ -282,7 +285,7 @@ def build_school_subject_report_plan_items(question: str) -> list[dict[str, str]
         {
             "sub_task": (
                 f"查询【{school}】在【{exam_l}】【{subject_l}】整体成绩 KPI："
-                f"均分、及格率、优秀率、分数段分布、{kpi_scope}；"
+                f"均分、及格率、分数段分布、{kpi_scope}；"
                 "**exam_name / subject_name 必须取自问题原文，禁止填「本次考试」「该科目」**"
             ),
             "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
@@ -318,7 +321,7 @@ def build_school_class_comparison_plan_items(question: str) -> list[dict[str, st
         {
             "sub_task": (
                 f"查询【{school}】在【{exam_l}】【{subject_l}】整体成绩 KPI："
-                "均分、及格率、优秀率、分数段分布、各班对比"
+                "均分、及格率、分数段分布、各班对比"
                 "（各班列必须是 bj 不是 xx；GROUP BY xx,bj；禁止 SELECT xx AS class_name；"
                 "禁止只 GROUP BY xx；SQL 须 JOIN tb_school/tb_exam 且 SELECT exam_score；**禁止**按单班过滤）；"
                 "**exam_name / subject_name 必须取自问题原文，禁止填「本次考试」「该科目」**"
@@ -573,6 +576,11 @@ def _elective_subject_avg_hint() -> str:
         "多科并列只能 FILTER，禁止 WHERE ls>0（会把语数英也滤成选考历史的人）。"
         "同时给出该科参考人数 COUNT(*) FILTER (WHERE col > 0)。"
         "查 tb_score 长表按 subject_name 过滤则一行一科，且须 score > 0。"
+        "化学/生物/政治/地理对外展示必须用 hxzh/swzh/zzzh/dlzh（赋分），"
+        "禁止 hx/sw/zz/dl（卷面），最高分/最低分/ORDER BY/SELECT 同样用转换分。"
+        "单科名次/弱科：未选考（宽表 0 分）不得进该科排名池、不得算弱科；"
+        "RANK 该科须 WHERE col>0；筛名次>N 须 col>0 AND 名次>N，"
+        "禁止 COALESCE(名次, 99999)>N。"
     )
 
 

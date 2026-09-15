@@ -209,6 +209,12 @@ body {
 .edu-md-table-wrap--full {
   margin: 0;
   max-height: 76vh;
+  scrollbar-gutter: stable;
+}
+.edu-md-table-wrap--full table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
 }
 .edu-md-table-wrap table {
   display: table;

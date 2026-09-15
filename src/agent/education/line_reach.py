@@ -64,11 +64,11 @@ _SUBJECT_KEYS = (
     ("sx", "数学"),
     ("yy", "英语", "yingyu"),
     ("wl", "物理", "wuli"),
-    ("hx", "化学", "huaxue"),
-    ("sw", "生物", "shengwu"),
-    ("zz", "政治", "zhengzhi"),
+    ("hxzh", "化学", "huaxue"),
+    ("swzh", "生物", "shengwu"),
+    ("zzzh", "政治", "zhengzhi"),
     ("ls", "历史", "lishi"),
-    ("dl", "地理", "dili"),
+    ("dlzh", "地理", "dili"),
 )
 
 

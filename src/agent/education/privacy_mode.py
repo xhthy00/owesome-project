@@ -72,11 +72,19 @@ def privacy_sql_instruction() -> str:
             "**禁止** SELECT/引用 tb_school.s_name（可能含中文明文）。"
             "但 tb_score_overview.xx 仍是学校明文，点名学校用 xx LIKE '%校名%'；"
             "禁止把 GZ_ 校码写进 overview.xx。"
-            "学生标识只用 student_id / anon_stu_id；"
-            "**禁止** SELECT xm（姓名）、xh（真实学号）、sfzh/ksh。"
+            "anon_stu_id / student_id 是系统编码，不是学生本人学号。"
+            "用户未明确要求「学号」时禁止 SELECT/展示 anon_stu_id、xh、qh，"
+            "点名用学校、班级、名次、分数；**禁止** SELECT xm（姓名）、sfzh/ksh。"
+            "仅当用户明确要求学号时才 SELECT anon_stu_id；"
+            "`xh` 是学校编号、`qh` 是地区编号，禁止当学号。"
         )
     return (
-        "当前已关闭匿名脱敏：可 SELECT xm（姓名）、xh（学号）、tb_school.s_name（学校全称）；"
+        "当前已关闭匿名脱敏：可 SELECT xm（姓名）、tb_school.s_name（学校全称）；"
+        "anon_stu_id 是系统编码，不是学生本人学号；用户未明确要求「学号」时"
+        "禁止 SELECT/展示 anon_stu_id、xh、qh，点名用姓名+班级+分数；"
+        "仅当用户明确要求学号时才 SELECT anon_stu_id（JOIN 键仍可用，不必出现在结果里）；"
+        "`xh` 是学校编号、`qh` 是地区编号，禁止当学号；"
+        "姓名列只在 tb_score_overview.xm，禁止查 tb_student.xm（该表无此列）；"
         "点名学校时 tb_score 用 sch.s_name LIKE '%校名%'；"
         "tb_score_overview.xx 是学校明文（如「扬州中学」），用 xx LIKE '%校名%'；"
         "禁止 xx='GZ_…' / xx=tb_school.id / xx=tb_school.name（那些是脱敏校码，不是校名）；"
@@ -89,14 +97,20 @@ def privacy_student_hint() -> str:
     """Planner / DataAnalyst：SELECT 与结论如何点名学生。"""
     if is_anonymize_display_enabled():
         return (
-            "涉及学生时 SELECT **仅用 student_id**（或 sc.student_id / st.id 学号），"
-            "以及 score、exam_score、class 等；"
-            "**禁止** SELECT/展示姓名明文（xm、name、student_name、真实姓名）；"
-            "结论里点名学生时**一律写 student_id**，禁止写中文姓名。"
+            "涉及学生时 SELECT 学校/班级/分数/名次即可；"
+            "**禁止** SELECT/展示姓名明文（xm、name、student_name、真实姓名）。"
+            "anon_stu_id 是系统编码不是本人学号；用户未明确要求「学号」时"
+            "禁止 SELECT/展示 student_id、anon_stu_id、xh、qh。"
+            "仅当用户明确要求学号时才 SELECT anon_stu_id。"
         )
     return (
-        "当前已关闭匿名脱敏：涉及学生时可 SELECT xm（姓名）、xh/student_id（学号）、"
-        "sch.s_name（学校全称）；结论里可用姓名/学号/校名。"
+        "当前已关闭匿名脱敏：涉及学生时可 SELECT xm（姓名）。"
+        "姓名列只在 tb_score_overview.xm，tb_student / tb_score 没有 xm。"
+        "点名/前N/最高分必须 SELECT ov.xm；JOIN 可用 ov.anon_stu_id = sc.student_id（或 st.id），"
+        "但用户未明确要求「学号」时禁止 SELECT/展示 anon_stu_id、xh、qh。"
+        "anon_stu_id 是系统编码，不是学生本人学号；仅当用户明确要求学号时才列出。"
+        "`xh` 是学校编号、`qh` 是地区编号，禁止当学号。"
+        "禁止查 st.xm；查不到姓名时禁止改口「未开放/用学号」。"
         "用户要求「给出姓名」时必须输出姓名，禁止改成只写 student_id。"
         "仍禁止 SELECT sfzh/ksh。"
     )
@@ -107,12 +121,14 @@ def privacy_conclusion_brief() -> str:
     if is_anonymize_display_enabled():
         return (
             "[隐私强制]\n"
-            "- 点名学生时**一律写 student_id**（学号），**禁止**输出中文姓名明文；\n"
-            "  若输入中同时出现姓名与 student_id，只保留 student_id。"
+            "- **禁止**输出中文姓名明文；用户未明确要求「学号」时不要写学号列"
+            "（anon_stu_id 是系统编码，不是本人学号），点名用学校/班级/名次/分数。"
         )
     return (
         "[隐私]\n"
-        "- 当前已关闭匿名脱敏：点名学生时**优先写姓名**（xm），可同时写学号；\n"
+        "- 当前已关闭匿名脱敏：点名学生时**优先写姓名**（xm）。\n"
+        "  用户未明确要求「学号」时不要写学号列；anon_stu_id 是系统编码不是本人学号。\n"
+        "  **禁止**把 xh（学校编号）或 qh（地区编号）标成学号。\n"
         "  用户要求「给出姓名」时必须输出姓名，禁止改成只写 student_id。\n"
         "  仍禁止输出身份证号、考生号。"
     )
@@ -121,15 +137,15 @@ def privacy_conclusion_brief() -> str:
 def privacy_conclusion_constraint() -> str:
     """Summarizer 硬约束一行。"""
     if is_anonymize_display_enabled():
-        return "点名学生只用 student_id，禁止输出姓名明文"
-    return "当前已关闭匿名脱敏：点名学生可用姓名或学号；仍禁止输出身份证/考生号"
+        return "禁止输出姓名明文；未要求学号时不要写学号"
+    return "当前已关闭匿名脱敏：点名用姓名；未要求学号时不要写学号；仍禁止输出身份证/考生号"
 
 
 def privacy_who_ref() -> str:
     """事实问答里「最好/最高/谁」的点名口径。"""
     if is_anonymize_display_enabled():
-        return "student_id"
-    return "姓名（可附学号）"
+        return "学校、班级与分数（勿写学号）"
+    return "姓名"
 
 
 def filter_display_fields(
@@ -195,11 +211,63 @@ def overlay_table_comments(comments: dict[str, str]) -> dict[str, str]:
     if is_anonymize_display_enabled() or not comments:
         return comments
     out = dict(comments)
-    note = "【当前已关闭匿名脱敏：可查询 xm/xh/s_name，仍禁止 sfzh/ksh】"
+    note = (
+        "【当前已关闭匿名脱敏：可查询 xm/s_name；未要求学号时不要查 anon_stu_id；"
+        "xh 是学校编号不是学号；仍禁止 sfzh/ksh】"
+    )
     for key in ("tb_school", "tb_score_overview", "tb_student", "tb_score"):
         if key in out and note not in out[key]:
             out[key] = f"{out[key]} {note}"
+    overview = out.get("tb_score_overview") or ""
+    if overview:
+        out["tb_score_overview"] = overview.replace(
+            "学生标识只用 anon_stu_id。禁止 SELECT xm/sfzh/ksh。",
+            "点名学生必须 SELECT xm（姓名）；仍禁止 sfzh/ksh。",
+        )
+    student = out.get("tb_student") or ""
+    if student and "tb_score_overview.xm" not in student:
+        out["tb_student"] = (
+            student
+            + " 本表无姓名列；点名学生须查 tb_score_overview.xm"
+            "（JOIN ov.anon_stu_id = st.id），禁止 SELECT st.xm。"
+        )
     return out
+
+
+def privacy_describe_student_note(table_key: str) -> str | None:
+    """describe_table 页脚：按表说明姓名列在哪。"""
+    key = str(table_key or "").split(".")[-1].lower()
+    anon = is_anonymize_display_enabled()
+    if key == "tb_score_overview":
+        if anon:
+            return (
+                "禁止查询/展示姓名明文（xm）。"
+                "未要求学号时不要 SELECT `anon_stu_id`/`xh`；点名用班级/分数。"
+            )
+        return (
+            "点名学生必须 SELECT `xm`（姓名）。"
+            "未要求学号时不要 SELECT `anon_stu_id`/`xh`/`qh`；"
+            "`anon_stu_id` 是系统编码不是本人学号；"
+            "`xh` 是学校编号、`qh` 是地区编号。仍禁止 sfzh/ksh。"
+        )
+    if key in {"tb_student", "tb_score"}:
+        if anon:
+            return (
+                "禁止查询/展示姓名明文（xm/姓名）。"
+                "未要求学号时不要 SELECT student_id；JOIN 键可用。"
+            )
+        return (
+            "本表无姓名列。点名学生须查 `tb_score_overview.xm`，"
+            "JOIN `ov.anon_stu_id = sc.student_id`（或 `st.id`）；禁止 SELECT st.xm。"
+        )
+    if any(k in key for k in ("score", "student", "exam", "overview")):
+        if anon:
+            return (
+                "禁止查询/展示姓名明文（xm/姓名）。"
+                "未要求学号时不要 SELECT student_id。"
+            )
+        return "当前已关闭匿名脱敏：姓名在 `tb_score_overview.xm`；仍禁止 sfzh/ksh。"
+    return None
 
 
 def overlay_schema_fields(fields: dict[str, str]) -> dict[str, str]:
@@ -259,6 +327,7 @@ __all__ = [
     "is_anonymize_display_enabled",
     "overlay_schema_fields",
     "overlay_table_comments",
+    "privacy_describe_student_note",
     "privacy_conclusion_brief",
     "privacy_conclusion_constraint",
     "privacy_sql_instruction",

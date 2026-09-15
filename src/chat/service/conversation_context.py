@@ -237,9 +237,14 @@ def is_follow_up_question(question: str) -> bool:
         return False
     if any(hint in q for hint in _FOLLOW_UP_HINTS):
         return True
-    from src.agent.education.query_parse import refers_to_unspecified_exam
+    from src.agent.education.query_parse import (
+        refers_to_unspecified_exam,
+        wants_full_student_roster,
+    )
 
     if refers_to_unspecified_exam(q):
+        return True
+    if wants_full_student_roster(q):
         return True
     return len(q) <= 12 and bool(re.search(r"(多少|谁|如何|怎样|排名|均分|及格|优秀|最高|最低)", q))
 
@@ -412,6 +417,10 @@ async def resolve_turn_context(
     # 二次改写，否则模型推理文本或近似值会覆盖已绑定真值。
     if resolved == current and current == original:
         resolved = await _rewrite_follow_up(current, turn_ctx.brief, llm_client)
+    from src.agent.education.query_parse import wants_full_student_roster as _wants_roster
+
+    if _wants_roster(original) and not _wants_roster(resolved):
+        resolved = resolved.rstrip("。． ") + "（需完整名单）"
     # 只有无法改写成独立问题时才给单 Agent 一个短背景兜底；正常路径不把历史
     # 继续传给执行 Agent。
     capsule = ""

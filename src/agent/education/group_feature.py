@@ -168,7 +168,6 @@ def build_group_feature_data(
         + _kpi_card("参考人数", str(school_stats.get("count") or 0))
         + _kpi_card("校级均分", _fmt(school_stats.get("avg")))
         + _kpi_card("及格率", _fmt_pct(school_stats.get("pass_rate")))
-        + _kpi_card("优秀率", _fmt_pct(school_stats.get("excellent_rate")))
         + _kpi_card("最高分", _fmt(school_stats.get("max")))
         + _kpi_card("最低分", _fmt(school_stats.get("min")))
         + _kpi_card("标准差", _fmt(school_stats.get("stdev"), digits=2))
@@ -200,7 +199,6 @@ def build_group_feature_data(
                 str(g.get("count") or 0),
                 _fmt(g.get("avg")),
                 _fmt_pct(g.get("pass_rate")),
-                _fmt_pct(g.get("excellent_rate")),
                 _fmt(g.get("stdev"), digits=2),
                 _fmt(g.get("max")),
                 _fmt(g.get("min")),
@@ -215,7 +213,6 @@ def build_group_feature_data(
             "人数",
             "均分",
             "及格率",
-            "优秀率",
             "标准差",
             "最高",
             "最低",

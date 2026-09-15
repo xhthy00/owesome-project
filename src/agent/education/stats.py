@@ -11,7 +11,7 @@ import math
 import statistics
 from typing import Any
 
-from src.agent.education.config import EducationConfig
+from src.agent.education.config import SHOW_EXCELLENT_RATE, EducationConfig
 
 
 def _safe_mean(values: list[float]) -> float | None:
@@ -134,13 +134,15 @@ def compute_score_stats(
         "min": min(valid),
         "max": max(valid),
         "pass_rate": _rate(valid, lambda v: v >= pass_thr),
-        "excellent_rate": _rate(valid, lambda v: v >= exc_thr),
+        "excellent_rate": (
+            _rate(valid, lambda v: v >= exc_thr) if SHOW_EXCELLENT_RATE else None
+        ),
         "good_rate": _rate(valid, lambda v: v >= good_thr),
         "low_score_rate": _rate(valid, lambda v: v < low_thr),
         "fail_rate": _rate(valid, lambda v: v < pass_thr),
         "full_score": upper,
         "pass_line": round(pass_thr, 4),
-        "excellent_line": round(exc_thr, 4),
+        "excellent_line": round(exc_thr, 4) if SHOW_EXCELLENT_RATE else None,
         "pass_ratio": float(config.pass_ratio),
         "excellent_ratio": float(config.excellent_ratio),
         "segments": segments,

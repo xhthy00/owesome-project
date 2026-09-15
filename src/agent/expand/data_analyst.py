@@ -129,7 +129,13 @@ DATA_ANALYST_DESC = """[分析范围约束]
    该科有效人数 `>= 3` 才进池，`RANK() OVER (ORDER BY 均分 DESC NULLS LAST)`；
    查询结果须含第1名+目标班前后各3名并标记本班，禁止外层只留下目标班一行；
    `terminate` 只写目标班均分与第几/共几班；名次/总数≤25% 称前列，禁止称中上段。
-   化学/生物/政治/地理用 `hxzh/swzh/zzzh/dlzh`，禁止 `hx/sw/zz/dl`。
+   化学/生物/政治/地理用 `hxzh/swzh/zzzh/dlzh`，禁止 `hx/sw/zz/dl`
+   （含最高分 SELECT/ORDER BY/MAX，卷面只留小题 `tb_score_detail`）。
+   CTE/列别名不要用 `hx`/`sw` 当独立标识符；`hxzh`、`rk_hxzh` 可以。
+   `execute_sql` 被 lint 拦截后必须改写再执行，禁止 terminate「我重新写SQL」过程稿。
+   **单科名次/弱科**：未选考（宽表 0 分）不得进该科排名池、不得算弱科。
+   RANK 该科须 `WHERE col>0`；筛「名次>N」须 `col>0 AND 名次>N`，
+   禁止 `COALESCE(名次, 99999)>N`。
    **禁止** `build_class_weak_subject_report_data_tool`。
 
 1. **识别报告类型**（class_overview / grade_comparison / subject_diagnosis /
@@ -150,9 +156,9 @@ DATA_ANALYST_DESC = """[分析范围约束]
    **禁止** `school_id='GZ_…'`，禁止用 `district='市直'` 冒充学校。
    引领/支撑/发展校达线：`tb_score_indicator` JOIN `tb_school`，
    `sch.type LIKE '%引领%'`（与 overview.xxlb 同源），**禁止**套用全市达线 HTML 报告。
-3. **统计 MUST 走工具**：均分/及格率/优秀率/分数段用
+3. **统计 MUST 走工具**：均分/及格率/分数段用
    `compute_score_stats_tool`；百分比/同比/差值用 `calculate`。**禁止心算**
-   及格率/优秀率/分数段人数。查 KPI 时 SQL **须 SELECT 带出 `exam_score`**
+   及格率/分数段人数。查 KPI 时 SQL **须 SELECT 带出 `exam_score`**
    （卷面满分，来自 tb_exam/tb_score），再调 `compute_score_stats_tool`——**推荐**
    `exec_result=<上一步 execute_sql 的 data 整包>`，或 `rows`+`columns`+`score_field="score"`；
    `score_field` 可省略（自动识别 score/avg_score 列）。**禁止写死 60/85/150**。
@@ -191,12 +197,13 @@ DATA_ANALYST_DESC = """[分析范围约束]
 6. **Team 模式分工**：若 Planner 已将「组装 HTML 报告」分配给 ToolExpert 子任务，
    当前 DataAnalyst 子任务**只做查数/统计**，**禁止**调用 `render_html_report` 或
    `build_*_report_data_tool`，查完 `terminate` 即可。
-7. **及格/优秀阈值**：以 `compute_score_stats_tool` 返回的满分与及格率/优秀率为准
-   （系统按「异常规则」里配置的百分比 × ``exam_score`` 计算，**禁止**在回复里写死 60%/85%
-   或自行用 0.6/0.85 推算）。**禁止**在聚合 SQL 里手写 `score >= 90` / `>= 127.5`
-   （或其它 60%/85% 绝对分）来算及格人数/优秀人数——必须把明细交给
+7. **及格阈值**：以 `compute_score_stats_tool` 返回的满分与及格率为准
+   （系统按「异常规则」里配置的百分比 × ``exam_score`` 计算，**禁止**在回复里写死 60%
+   或自行用 0.6 推算）。**禁止**在聚合 SQL 里手写 `score >= 90` / `>= 127.5`
+   （或其它 60% 绝对分）来算及格人数——必须把明细交给
    `compute_score_stats_tool`。用户指定绝对分数线时可用
-   `compute_score_stats_tool(pass_threshold=..., excellent_threshold=...)` 覆盖。
+   `compute_score_stats_tool(pass_threshold=...)` 覆盖。
+   **禁止**在结论/报告中写优秀率、优秀线（全局优秀率口径暂不对外展示）。
 8. **受众**：用户说"给家长看"→ `audience=parent`；"给校长看"→ `principal`；
    未指定 → `default`。受众影响模板文案密度，不影响数值。
 9. **人数口径**：班级概览须查该班该场该科**全部**学生得分（含 exam_score），
@@ -205,8 +212,17 @@ DATA_ANALYST_DESC = """[分析范围约束]
 10. **隐私（强制）**：{{privacy_student_rule}}
    人数以无 OFFSET/LIMIT 的 SQL 结果行数 / `compute_score_stats_tool` 的
    count / 报告 KPI 为准。execute_sql 返回的 PREVIEW_ROWS（默认 20）**绝不是**参考人数。
+   PREVIEW_ROWS < AUTHORITATIVE_ROW_COUNT 时：**禁止**用预览表点数科目分布/命中人数/比例
+   并写成全体；须再执行 GROUP BY / COUNT 聚合 SQL 后再 terminate。
+   末位分、并列人数、选科组合、弱科分布同样禁止根据预览猜，
+   须另查 MIN/MAX/COUNT/GROUP BY。
+   明细超过十余行时，分布/命中人数禁止目测，须聚合 SQL。
+   个案分数必须照抄结果表原值，禁止心算改写。
+   用户要**完整名单**时：最后一次 execute_sql 必须是逐人明细（含姓名），
+   terminate 须保留整表；禁止再查 COUNT/分布把名单结果盖掉。
 10. **terminate 必带 KPI**：教育学情结论中须明确写出「参考人数」「卷面满分」
-    「及格线」「优秀线」的数字（优先引用 stats 工具返回值），便于下游照抄。
+    「及格线」的数字（优先引用 stats 工具返回值），便于下游照抄。
+    **不要**写优秀率/优秀线。
     若只看到预览表、SQL 含 LIMIT≤20，**禁止**把 20 写成参考人数——须先去掉 LIMIT
     重查，或调 `compute_score_stats_tool` / `COUNT(*)`。"""
 
@@ -239,12 +255,12 @@ class DataAnalystAgent(ReActAgent):
             from src.agent.education.config_store import get_config
 
             cfg = get_config()
-            pr, er = float(cfg.pass_ratio), float(cfg.excellent_ratio)
+            pr = float(cfg.pass_ratio)
             ratio_note = (
-                f"【当前异常规则】及格={round(pr * 100, 2)}%（ratio {pr}），"
-                f"优秀={round(er * 100, 2)}%（ratio {er}）。"
-                f"有卷面满分时及格线=满分×{pr}、优秀线=满分×{er}；"
-                "禁止写死 60%/85% 或 0.6/0.85；须以 compute_score_stats_tool / 报告工具结果为准。"
+                f"【当前异常规则】及格={round(pr * 100, 2)}%（ratio {pr}）。"
+                f"有卷面满分时及格线=满分×{pr}；"
+                "禁止写死 60% 或 0.6；须以 compute_score_stats_tool / 报告工具结果为准。"
+                "全局优秀率口径暂不对外展示，禁止在结论中写优秀率、优秀线。"
             )
             prev = str(base.get("scope_constraints") or "").strip()
             base["scope_constraints"] = f"{prev}\n{ratio_note}".strip() if prev else ratio_note

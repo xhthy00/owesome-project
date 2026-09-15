@@ -18,6 +18,7 @@ from src.agent.education.query_parse import (
     extract_district_target,
     is_interrogative_school_name,
     normalize_fullwidth_parentheses,
+    split_conjoined_school_names,
 )
 
 _SCHOOL_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
@@ -120,6 +121,26 @@ def link_school_values(hint: str, candidates: list[str]) -> list[str]:
     return [c for c in candidates if str(c).strip() and _school_link_stem(c) == want]
 
 
+def link_multi_school_values(hint: str, candidates: list[str]) -> list[str]:
+    """「A中学和B中学」分别对齐目录。对不上或不足两所时返回空。"""
+    want = str(hint or "").strip()
+    pool = [str(c).strip() for c in candidates if str(c).strip()]
+    if not want or not pool:
+        return []
+    parts = split_conjoined_school_names(want)
+    if len(parts) < 2:
+        contained = [c for c in pool if c != want and c in want]
+        return contained if len(contained) >= 2 else []
+    hits: list[str] = []
+    for part in parts:
+        linked = link_school_values(part, pool)
+        if len(linked) != 1:
+            return []
+        if linked[0] not in hits:
+            hits.append(linked[0])
+    return hits if len(hits) >= 2 else []
+
+
 def _similar_candidates(hint: str, candidates: list[str], *, limit: int = 12) -> list[str]:
     """零命中时只给相近候选，避免把全量目录误当成用户选择题。"""
     want = re.sub(r"\s+", "", str(hint or ""))
@@ -185,23 +206,28 @@ def resolve_entities(
     # 教师/校管账号只有脱敏 school_id 时，filled 会带 GZ_…；peek 目录是中文 s_name，
     # 对不上不等于「用户没说哪所学校」。权限已唯一绑校，不再追问。
     if school_hint and not _is_permission_school_id(school_hint, edu) and school_cands:
-        hits = link_school_values(school_hint, school_cands)
-        if len(hits) == 1:
-            bound[SLOT_SCHOOL] = hits[0]
-        elif len(hits) > 1:
-            return EntityResolveResult(
-                bound=bound,
-                clarify_slot=SLOT_SCHOOL,
-                options=hits[:12],
-                reason="学校名对应多所",
-            )
-        elif len(hits) == 0:
-            return EntityResolveResult(
-                bound=bound,
-                clarify_slot=SLOT_SCHOOL,
-                options=school_cands[:12],
-                reason="学校名未对齐目录",
-            )
+        multi = link_multi_school_values(school_hint, school_cands)
+        if len(multi) >= 2:
+            # 用户点名多校对比：不要逼选一所，也不要把拼接名写进单校槽。
+            bound.pop(SLOT_SCHOOL, None)
+        else:
+            hits = link_school_values(school_hint, school_cands)
+            if len(hits) == 1:
+                bound[SLOT_SCHOOL] = hits[0]
+            elif len(hits) > 1:
+                return EntityResolveResult(
+                    bound=bound,
+                    clarify_slot=SLOT_SCHOOL,
+                    options=hits[:12],
+                    reason="学校名对应多所",
+                )
+            elif len(hits) == 0:
+                return EntityResolveResult(
+                    bound=bound,
+                    clarify_slot=SLOT_SCHOOL,
+                    options=school_cands[:12],
+                    reason="学校名未对齐目录",
+                )
 
     class_hint = bound.get(SLOT_CLASS) or ""
     if class_hint:
@@ -311,6 +337,7 @@ def bound_literals(bound: Mapping[str, str]) -> list[str]:
 __all__ = [
     "EntityResolveResult",
     "bound_literals",
+    "link_multi_school_values",
     "link_school_values",
     "link_values",
     "normalize_class_name",
