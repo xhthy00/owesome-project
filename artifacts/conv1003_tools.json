@@ -1,0 +1,155 @@
+[
+  {
+    "idx": 15,
+    "tool": "fetch_subject_diagnosis_data_tool",
+    "sub_task_index": 1,
+    "round": 1,
+    "success": true,
+    "args": {
+      "school_name": "扬州中学",
+      "subject_name": "数学",
+      "exam_name": "2026届高三1月期末"
+    },
+    "content": "【小题明细查询】fetch_subject_diagnosis_data_tool（ds=exam，db=pg）\n- 小题明细（tb_score_detail）：0 题\n- 知识点汇总：0 个\n- 学生成绩（tb_score）：738 条\n无小题明细不影响班级横向对比：已有带班级(bj)字段的成绩行。**禁止**手写 execute_sql；禁止 SELECT xx AS class_name；禁止只 GROUP BY xx。\nSQL 执行记录：\n- [primary/item_detail] 成功，0 行\n- [primary/knowledge] 成功，0 行\n- [primary/score] 成功，0 行\n- [primary/exam_ids] 成功，0 行\n- [fallback_no_exam_name/item_detail] 成功，0 行\n- [fallback_no_exam_name/knowledge] 成功，0 行\n- [fallback_no_exam_name/score] 成功，0 行\n- [fallback_no_exam_name/exam_ids] 成功，0 行\n- [overview_class_fallback/score_by_class] 成功，738 行\n- [kpi_aggregate/overview_class_scores] 成功，738 行\n下一步：**本步请 terminate**（禁止同子任务渲染报告，禁止手写 overview 聚合 SQL）。组装留给后续子任务：科目诊断/班级横向对比调 `build_subject_diagnosis_sections_tool(render=true)`；全市诊断调 `build_diagnostic_report_data_tool(render=true)`——工具会自动读取本步 fetch 结果。\ntb_score/小题明细为空，已从 tb_score_overview 按班级(bj)回落各班成绩；下一步调 build_subject_diagnosis_sections_tool(render=true)。禁止手写 execute_sql，禁止 SELECT xx AS class_name / GROUP BY xx。",
+    "data_summary": {
+      "keys": [
+        "item_rows",
+        "knowledge_rows",
+        "item_class_rows",
+        "knowledge_class_rows",
+        "score_rows",
+        "score_result",
+        "warnings",
+        "errors",
+        "sql_logs"
+      ],
+      "item_rows_n": 0,
+      "knowledge_rows_n": 0,
+      "item_class_rows_n": 0,
+      "knowledge_class_rows_n": 0,
+      "score_rows_n": 738,
+      "warnings": [
+        "tb_score/小题明细为空，已从 tb_score_overview 按班级(bj)回落各班成绩；下一步调 build_subject_diagnosis_sections_tool(render=true)。禁止手写 execute_sql，禁止 SELECT xx AS class_name / GROUP BY xx。"
+      ],
+      "errors": [],
+      "sql_logs": [
+        {
+          "phase": "primary",
+          "label": "item_detail",
+          "success": true,
+          "row_count": 0,
+          "message": "",
+          "sql_preview": "SELECT sd.question_no,\n       COALESCE(kn.knowledge_name, '未关联知识点') AS knowledge_name,\n       eq.question_type AS question_type,\n       COALESCE(eq.question_score, sd.question_score) AS full_score,\n       ROUND(AVG(sd.score), 2) AS avg_score,\n       ROUND((AVG(sd.score))::numeric / NULLIF(COALESCE(eq.question_score, sd.question_score), 0) * 100, 2) AS score_rate\nFROM tb_score_detail sd\nLEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\nLEFT JOIN (\n  SELECT eqk.question_id,\n         string_agg(DISTINCT k.knowledge_name, '、' ORDER BY k"
+        },
+        {
+          "phase": "primary",
+          "label": "knowledge",
+          "success": true,
+          "row_count": 0,
+          "message": "",
+          "sql_preview": "SELECT COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n       k.ability_level AS ability_level,\n       COUNT(DISTINCT sd.question_no) AS question_count,\n       ROUND((SUM(sd.score * COALESCE(eqk.w_norm, 1)))::numeric / NULLIF(SUM(COALESCE(eq.question_score, sd.question_score) * COALESCE(eqk.w_norm, 1)), 0) * 100, 2) AS score_rate\nFROM tb_score_detail sd\nLEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\nLEFT JOIN (\n  SELECT question_id, knowledge_id,\n         weight / NULLIF(SUM(weight) OVER (PARTITION BY question_id), 0) AS "
+        },
+        {
+          "phase": "primary",
+          "label": "score",
+          "success": true,
+          "row_count": 0,
+          "message": "",
+          "sql_preview": "SELECT (CASE sc.subject_name WHEN '化学' THEN COALESCE(ov.hxzh, sc.score) WHEN '生物' THEN COALESCE(ov.swzh, sc.score) WHEN '政治' THEN COALESCE(ov.zzzh, sc.score) WHEN '地理' THEN COALESCE(ov.dlzh, sc.score) ELSE sc.score END) AS score, sc.exam_score AS exam_score, sc.exam_id AS exam_id,\n       COALESCE(eb.batch_name, e.exam_name) AS exam_name, e.exam_time AS exam_time,\n       sc.class AS class, sc.class AS class_name, sc.student_id AS student_id,\n       sc.subject_name AS subject, sch.name AS school_name,\n       sch.district AS district\nFROM tb_score sc\nJOIN tb_school sch ON sc.school_id = sch.id\nJO"
+        },
+        {
+          "phase": "primary",
+          "label": "exam_ids",
+          "success": true,
+          "row_count": 0,
+          "message": "",
+          "sql_preview": "SELECT DISTINCT sc.exam_id AS exam_id\nFROM tb_score sc\nJOIN tb_school sch ON sc.school_id = sch.id\nJOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id WHERE sch.name = '扬州中学' AND sc.subject_name = '数学' AND (COALESCE(eb.batch_name, e.exam_name) LIKE '%2026届高三1月期末%' OR COALESCE(eb.batch_name, e.exam_name) LIKE '%高三1月期末%' OR COALESCE(eb.batch_name, e.exam_name) LIKE '%期末%' OR COALESCE(eb.batch_name, e.exam_name) LIKE '%期末考试%' OR COALESCE(eb.batch_name, e.exam_name) LIKE '%期末质量检测%')\nLIMIT 50"
+        },
+        {
+          "phase": "fallback_no_exam_name",
+          "label": "item_detail",
+          "success": true,
+          "row_count": 0,
+          "message": "",
+          "sql_preview": "SELECT sd.question_no,\n       COALESCE(kn.knowledge_name, '未关联知识点') AS knowledge_name,\n       eq.question_type AS question_type,\n       COALESCE(eq.question_score, sd.question_score) AS full_score,\n       ROUND(AVG(sd.score), 2) AS avg_score,\n       ROUND((AVG(sd.score))::numeric / NULLIF(COALESCE(eq.question_score, sd.question_score), 0) * 100, 2) AS score_rate\nFROM tb_score_detail sd\nLEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\nLEFT JOIN (\n  SELECT eqk.question_id,\n         string_agg(DISTINCT k.knowledge_name, '、' ORDER BY k"
+        },
+        {
+          "phase": "fallback_no_exam_name",
+          "label": "knowledge",
+          "success": true,
+          "row_count": 0,
+          "message": "",
+          "sql_preview": "SELECT COALESCE(k.knowledge_name, '未关联知识点') AS knowledge_name,\n       k.ability_level AS ability_level,\n       COUNT(DISTINCT sd.question_no) AS question_count,\n       ROUND((SUM(sd.score * COALESCE(eqk.w_norm, 1)))::numeric / NULLIF(SUM(COALESCE(eq.question_score, sd.question_score) * COALESCE(eqk.w_norm, 1)), 0) * 100, 2) AS score_rate\nFROM tb_score_detail sd\nLEFT JOIN tb_exam_question eq ON sd.question_id = eq.id\n    AND (eq.exam_id IS NULL OR eq.exam_id = sd.exam_id)\nLEFT JOIN (\n  SELECT question_id, knowledge_id,\n         weight / NULLIF(SUM(weight) OVER (PARTITION BY question_id), 0) AS "
+        },
+        {
+          "phase": "fallback_no_exam_name",
+          "label": "score",
+          "success": true,
+          "row_count": 0,
+          "message": "",
+          "sql_preview": "SELECT (CASE sc.subject_name WHEN '化学' THEN COALESCE(ov.hxzh, sc.score) WHEN '生物' THEN COALESCE(ov.swzh, sc.score) WHEN '政治' THEN COALESCE(ov.zzzh, sc.score) WHEN '地理' THEN COALESCE(ov.dlzh, sc.score) ELSE sc.score END) AS score, sc.exam_score AS exam_score, sc.exam_id AS exam_id,\n       COALESCE(eb.batch_name, e.exam_name) AS exam_name, e.exam_time AS exam_time,\n       sc.class AS class, sc.class AS class_name, sc.student_id AS student_id,\n       sc.subject_name AS subject, sch.name AS school_name,\n       sch.district AS district\nFROM tb_score sc\nJOIN tb_school sch ON sc.school_id = sch.id\nJO"
+        },
+        {
+          "phase": "fallback_no_exam_name",
+          "label": "exam_ids",
+          "success": true,
+          "row_count": 0,
+          "message": "",
+          "sql_preview": "SELECT DISTINCT sc.exam_id AS exam_id\nFROM tb_score sc\nJOIN tb_school sch ON sc.school_id = sch.id\nJOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id WHERE sch.name = '扬州中学' AND sc.subject_name = '数学'\nLIMIT 50"
+        },
+        {
+          "phase": "overview_class_fallback",
+          "label": "score_by_class",
+          "success": true,
+          "row_count": 738,
+          "message": "",
+          "sql_preview": "SELECT bj AS class, bj AS class_name, xx AS school_name, exam_name,\n       anon_stu_id AS student_id, dq AS district, xkkm,\n       sx AS score, 150 AS exam_score\nFROM tb_score_overview\nWHERE xx LIKE '%扬州中学%'\n  AND xsxz = '在籍生'\n  AND sx IS NOT NULL AND sx > 0\n  AND bj IS NOT NULL AND CAST(bj AS TEXT) <> ''\n AND exam_name LIKE '%2026届高三1月期末%'ORDER BY exam_name DESC, bj\nLIMIT 50000"
+        },
+        {
+          "phase": "kpi_aggregate",
+          "label": "overview_class_scores",
+          "success": true,
+          "row_count": 738,
+          "message": "",
+          "sql_preview": "tb_score_overview class fallback"
+        }
+      ],
+      "error": null
+    }
+  },
+  {
+    "idx": 17,
+    "tool": "build_subject_diagnosis_sections_tool",
+    "sub_task_index": 2,
+    "round": 1,
+    "success": true,
+    "args": null,
+    "content": "科目诊断报告已渲染完成（小题 0 条，知识点 0 个，薄弱 0 个、738 条成绩、HTML 26762 字符）。\n报告已自动推送到前端。\n**禁止**再调 select_report_template / build_chart_option / render_html_report。\n任务已完成，无需再调用其他工具。",
+    "data_summary": {
+      "keys": [
+        "output_type",
+        "title",
+        "html",
+        "mode",
+        "chunks",
+        "_stats",
+        "TOTAL_COUNT",
+        "AVG_SCORE",
+        "PASS_RATE",
+        "STDEV",
+        "FULL_SCORE",
+        "report_type",
+        "report_type_label"
+      ],
+      "item_rows_n": "NoneType",
+      "knowledge_rows_n": "NoneType",
+      "item_class_rows_n": "NoneType",
+      "knowledge_class_rows_n": "NoneType",
+      "score_rows_n": "NoneType",
+      "warnings": null,
+      "errors": null,
+      "sql_logs": null,
+      "error": null
+    }
+  }
+]

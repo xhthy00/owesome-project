@@ -142,6 +142,23 @@ def collect_class_names(rows: list[dict[str, Any]]) -> list[str]:
 _UNLINKED_KNOWLEDGE = "未关联知识点"
 
 
+def item_row_sort_key(row: dict[str, Any]) -> tuple:
+    """小题明细排序：优先 tb_exam_question.id 升序，缺省再按题号。"""
+    qid = _num(row.get("question_id"))
+    qno = str(row.get("question_no") or "")
+    if qid is not None:
+        return (0, qid, qno)
+    return (1, 0.0, qno)
+
+
+def filter_linked_knowledge_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """知识点诊断去掉「未关联知识点」占位行；全部未关联时返回空列表。"""
+    return [
+        r for r in rows
+        if _knowledge_label(r.get("knowledge_name")) != _UNLINKED_KNOWLEDGE
+    ]
+
+
 def _knowledge_label(name: Any) -> str:
     """规范知识点展示串：多知识点按顿号拆分后排序去重，与 SQL string_agg ORDER BY 一致。"""
     s = str(name or "").strip()
@@ -313,6 +330,7 @@ def build_item_table_html(rows: list[dict[str, Any]]) -> str:
     if len(collect_class_names(rows)) >= 2:
         return build_item_compare_table_html(rows)
     norm = [normalize_item_row(r) for r in rows]
+    norm.sort(key=item_row_sort_key)
     score_label = "得分" if any("score" in r for r in rows) else "均分"
     extra_cols = any(
         r.get(k) is not None
@@ -370,11 +388,15 @@ def build_item_compare_table_html(rows: list[dict[str, Any]]) -> str:
                 "knowledge_name": kn_map.get(qno) or r.get("knowledge_name") or "-",
                 "full_score": r.get("full_score"),
                 "question_type": r.get("question_type") or "-",
+                "question_id": r.get("question_id"),
             }
             scores[qno] = {}
+        elif meta[qno].get("question_id") is None and r.get("question_id") is not None:
+            meta[qno]["question_id"] = r.get("question_id")
         cls = _row_class_name(r)
         if cls:
             scores[qno][cls] = _num(r.get("avg_score"))
+    order.sort(key=lambda q: item_row_sort_key({"question_id": meta[q].get("question_id"), "question_no": q}))
     has_qtype = any(str(meta[q].get("question_type") or "") not in ("", "-") for q in order)
     class_heads = "".join(f"<th class='num'>{c}均分</th>" for c in classes)
     qtype_head = "<th>题型</th>" if has_qtype else ""
@@ -1513,7 +1535,9 @@ __all__ = [
     "coerce_report_table_fields",
     "collect_class_names",
     "enrich_knowledge_rows",
+    "filter_linked_knowledge_rows",
     "identify_weak_items",
+    "item_row_sort_key",
     "identify_weak_knowledge",
     "pick_weak_knowledge_topn",
     "knowledge_names_subquery_join",

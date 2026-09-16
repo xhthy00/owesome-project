@@ -1,0 +1,23 @@
+.....F...                                                                [100%]
+================================== FAILURES ===================================
+_________________ test_exam_extract_not_class_subject_garbage _________________
+
+    def test_exam_extract_not_class_subject_garbage():
+        """「高二(6)班数学期末考试…」不得抽成「班数学期末考试」。"""
+        from src.agent.education.orchestrator import _extract_exam
+        from src.agent.education.query_parse import (
+            _clean_exam_name_candidate,
+            extract_exam_name_hint,
+        )
+        from src.agent.education.tools import exam_name_like_candidates
+        from src.agent.expand.planner import _plan_exam_name, build_knowledge_cohort_plan_items
+    
+        q = "高二(6)班数学期末考试最后十名与中位数在知识点掌握方面的差距"
+>       assert _clean_exam_name_candidate("班数学期末考试") == "期末考试"
+E       AssertionError: assert None == '期末考试'
+E        +  where None = <function _clean_exam_name_candidate at 0x000001CDAC6D0F40>('班数学期末考试')
+
+tests\agent\test_knowledge_cohort.py:171: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/agent/test_knowledge_cohort.py::test_exam_extract_not_class_subject_garbage
+1 failed, 8 passed in 0.59s

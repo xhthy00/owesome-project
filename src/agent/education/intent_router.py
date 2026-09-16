@@ -981,6 +981,7 @@ def _hard_route(question: str) -> ReportRoute | None:
         is_knowledge_cohort_gap_query,
         is_line_reach_query,
         is_line_reach_report_query,
+        is_school_class_comparison_query,
         is_school_vs_city_avg_query,
         is_school_vs_school_type_avg_query,
         is_score_threshold_fact_query,
@@ -1100,6 +1101,14 @@ def _hard_route(question: str) -> ReportRoute | None:
             report_type=ReportType.SUBJECT_DIAGNOSIS,
             confidence=0.95,
             reason="硬约束班级薄弱学科（同校同科班际对比）",
+            source="hard",
+        )
+    if is_school_class_comparison_query(q):
+        return ReportRoute(
+            needs_report=True,
+            report_type=ReportType.GRADE_COMPARISON,
+            confidence=0.95,
+            reason="硬约束班级横向对比",
             source="hard",
         )
 

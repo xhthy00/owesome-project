@@ -392,7 +392,7 @@ def test_llm_classify_grade_comparison_plan():
     route = _run(classify_report_intent(q, llm))
     assert route.needs_report is True
     assert route.report_type == ReportType.GRADE_COMPARISON
-    assert route.source == "llm"
+    assert route.source == "hard"
     plans = plan_items_for_route(route, q)
     blob = " ".join(p["sub_task"] for p in plans)
     assert "build_subject_diagnosis_sections_tool" in blob
@@ -400,6 +400,23 @@ def test_llm_classify_grade_comparison_plan():
     assert ReportIntentResolver().resolve(q, route=route).report_type == (
         ReportType.GRADE_COMPARISON
     )
+
+
+def test_class_compare_hard_route_overrides_llm_fact():
+    """班级横向对比不得被 LLM 判成事实问（conv 1046：新华中学化学）。"""
+    from src.agent.education.intent_router import plan_items_for_route
+
+    q = "新华中学化学学科的班级横向对比。补充：考试=2026届高三1月期末"
+    llm = _FakeLlm(
+        '{"needs_report":false,"report_type":null,"confidence":0.9,"reason":"选考均分事实"}'
+    )
+    route = _run(classify_report_intent(q, llm))
+    assert route.needs_report is True
+    assert route.report_type == ReportType.GRADE_COMPARISON
+    assert route.source == "hard"
+    blob = " ".join(p["sub_task"] for p in plan_items_for_route(route, q))
+    assert "fetch_subject_diagnosis_data_tool" in blob
+    assert "禁止生成 HTML 报告" not in blob
 
 
 def test_llm_classify_group_feature_plan():

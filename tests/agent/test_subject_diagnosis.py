@@ -375,6 +375,57 @@ def test_build_item_table_html_student_row_fields():
     assert "5" in html
 
 
+def test_build_item_table_html_sorts_by_question_id():
+    from src.agent.education.subject_diagnosis import build_item_table_html
+
+    html = build_item_table_html(
+        [
+            {"question_id": 20, "question_no": "12", "knowledge_name": "函数", "full_score": 5, "avg_score": 3},
+            {"question_id": 10, "question_no": "单选1", "knowledge_name": "集合", "full_score": 5, "avg_score": 4},
+        ]
+    )
+    assert html.find("单选1") < html.find(">12<") or html.find("单选1") < html.find(">12</td>")
+
+
+def test_build_item_compare_table_html_sorts_by_question_id():
+    from src.agent.education.subject_diagnosis import build_item_compare_table_html
+
+    html = build_item_compare_table_html(
+        [
+            {
+                "class_name": "高三(1)班",
+                "question_id": 20,
+                "question_no": "12",
+                "knowledge_name": "函数",
+                "full_score": 5,
+                "avg_score": 3.0,
+                "score_rate": 60,
+            },
+            {
+                "class_name": "高三(1)班",
+                "question_id": 10,
+                "question_no": "单选1",
+                "knowledge_name": "集合",
+                "full_score": 5,
+                "avg_score": 4.0,
+                "score_rate": 80,
+            },
+        ]
+    )
+    assert html.find("单选1") < html.find(">12<")
+
+
+def test_filter_linked_knowledge_rows_drops_unlinked_placeholder():
+    from src.agent.education.subject_diagnosis import filter_linked_knowledge_rows
+
+    rows = [
+        {"knowledge_name": "未关联知识点", "score_rate": 80},
+        {"knowledge_name": "集合", "score_rate": 70},
+    ]
+    linked = filter_linked_knowledge_rows(rows)
+    assert [r["knowledge_name"] for r in linked] == ["集合"]
+
+
 def test_build_item_compare_table_html_per_class_avg():
     from src.agent.education.subject_diagnosis import build_item_compare_table_html
 

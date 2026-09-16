@@ -1,0 +1,407 @@
+[1m[91mI001 [0m[[1m[96m*[0m] [1mImport block is un-sorted or un-formatted[0m
+  [1m[94m-->[0m src\agent\education\tools.py:15:1
+   [1m[94m|[0m
+[1m[94m13 |[0m   """
+[1m[94m14 |[0m
+[1m[94m15 |[0m [1m[91m/[0m from __future__ import annotations
+[1m[94m16 |[0m [1m[91m|[0m
+[1m[94m17 |[0m [1m[91m|[0m import logging
+[1m[94m18 |[0m [1m[91m|[0m import re
+[1m[94m19 |[0m [1m[91m|[0m import time
+[1m[94m20 |[0m [1m[91m|[0m from concurrent.futures import ThreadPoolExecutor
+[1m[94m21 |[0m [1m[91m|[0m from typing import Any
+[1m[94m22 |[0m [1m[91m|[0m
+[1m[94m23 |[0m [1m[91m|[0m from src.agent.education.assign_score import DISPLAY_SCORE_SQL, OVERVIEW_SCORE_JOIN
+[1m[94m24 |[0m [1m[91m|[0m from src.agent.education.charts import build_chart_option as _build_chart_option
+[1m[94m25 |[0m [1m[91m|[0m from src.agent.education.config import EducationConfig, SHOW_EXCELLENT_RATE
+[1m[94m26 |[0m [1m[91m|[0m from src.agent.education.config_store import get_config as _get_effective_config
+[1m[94m27 |[0m [1m[91m|[0m from src.agent.education.report_types import Audience, ReportType, report_type_label
+[1m[94m28 |[0m [1m[91m|[0m from src.agent.education.schema_mapping import (
+[1m[94m29 |[0m [1m[91m|[0m     EXAM_NAME_SQL,
+[1m[94m30 |[0m [1m[91m|[0m     ScoreSchemaMapping,
+[1m[94m31 |[0m [1m[91m|[0m     infer_normalized_mapping,
+[1m[94m32 |[0m [1m[91m|[0m     infer_wide_mapping,
+[1m[94m33 |[0m [1m[91m|[0m     load_schema_from_config,
+[1m[94m34 |[0m [1m[91m|[0m     validate_mapping_against_schema,
+[1m[94m35 |[0m [1m[91m|[0m )
+   [1m[94m|[0m [1m[91m|_^[0m
+[1m[94m36 |[0m
+[1m[94m37 |[0m   logger = logging.getLogger(__name__)
+   [1m[94m|[0m
+[1m[96mhelp[0m: [1mOrganize imports[0m
+
+[1m[91mE402 [0m[1mModule level import not at top of file[0m
+  [1m[94m-->[0m src\agent\education\tools.py:38:1
+   [1m[94m|[0m
+[1m[94m37 |[0m logger = logging.getLogger(__name__)
+[1m[94m38 |[0m from src.agent.education.aggregation import DIMENSIONS, aggregate_by as _aggregate_by
+   [1m[94m|[0m [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m39 |[0m from src.agent.education.capability import detect_available_dimensions
+[1m[94m40 |[0m from src.agent.education.cross_analysis import cross_analyze as _cross_analyze
+   [1m[94m|[0m
+
+[1m[91mI001 [0m[[1m[96m*[0m] [1mImport block is un-sorted or un-formatted[0m
+  [1m[94m-->[0m src\agent\education\tools.py:38:1
+   [1m[94m|[0m
+[1m[94m37 |[0m   logger = logging.getLogger(__name__)
+[1m[94m38 |[0m [1m[91m/[0m from src.agent.education.aggregation import DIMENSIONS, aggregate_by as _aggregate_by
+[1m[94m39 |[0m [1m[91m|[0m from src.agent.education.capability import detect_available_dimensions
+[1m[94m40 |[0m [1m[91m|[0m from src.agent.education.cross_analysis import cross_analyze as _cross_analyze
+[1m[94m41 |[0m [1m[91m|[0m from src.agent.education.diagnostic_report import build_diagnostic_data as _build_diagnostic_data
+[1m[94m42 |[0m [1m[91m|[0m from src.agent.education.knowledge_tier import (
+[1m[94m43 |[0m [1m[91m|[0m     ABILITY_LABELS,
+[1m[94m44 |[0m [1m[91m|[0m     build_ability_tier_insight,
+[1m[94m45 |[0m [1m[91m|[0m     build_ability_tier_summary,
+[1m[94m46 |[0m [1m[91m|[0m     build_ability_tier_table_html as _build_ability_tier_table_html,
+[1m[94m47 |[0m [1m[91m|[0m     build_question_type_compare_chart_payload as _build_question_type_compare_chart_payload,
+[1m[94m48 |[0m [1m[91m|[0m     build_question_type_table_html as _build_question_type_table_html,
+[1m[94m49 |[0m [1m[91m|[0m )
+[1m[94m50 |[0m [1m[91m|[0m from src.agent.education.stats import (
+[1m[94m51 |[0m [1m[91m|[0m     compute_item_metrics as _compute_item_metrics,
+[1m[94m52 |[0m [1m[91m|[0m     compute_rankings as _compute_rankings,
+[1m[94m53 |[0m [1m[91m|[0m     compute_score_stats as _compute_stats,
+[1m[94m54 |[0m [1m[91m|[0m     identify_at_risk_students as _identify_at_risk,
+[1m[94m55 |[0m [1m[91m|[0m     normalize_segments as _normalize_segments,
+[1m[94m56 |[0m [1m[91m|[0m )
+[1m[94m57 |[0m [1m[91m|[0m from src.agent.education.comprehensive import build_comprehensive_data as _build_comprehensive_data
+[1m[94m58 |[0m [1m[91m|[0m from src.agent.education.student_exam import build_student_exam_data as _build_student_exam_data
+[1m[94m59 |[0m [1m[91m|[0m from src.agent.education.school_intervention import (
+[1m[94m60 |[0m [1m[91m|[0m     build_class_compare_table_html,
+[1m[94m61 |[0m [1m[91m|[0m     build_intervention_section_html,
+[1m[94m62 |[0m [1m[91m|[0m     build_school_intervention_insights,
+[1m[94m63 |[0m [1m[91m|[0m )
+[1m[94m64 |[0m [1m[91m|[0m from src.agent.education.subject_diagnosis import (
+[1m[94m65 |[0m [1m[91m|[0m     build_diagnosis_recommendations,
+[1m[94m66 |[0m [1m[91m|[0m     build_diagnosis_summary,
+[1m[94m67 |[0m [1m[91m|[0m     build_item_table_html,
+[1m[94m68 |[0m [1m[91m|[0m     build_knowledge_compare_chart_payload,
+[1m[94m69 |[0m [1m[91m|[0m     build_knowledge_table_html,
+[1m[94m70 |[0m [1m[91m|[0m     build_segment_table_html,
+[1m[94m71 |[0m [1m[91m|[0m     collect_class_names,
+[1m[94m72 |[0m [1m[91m|[0m     enrich_knowledge_rows,
+[1m[94m73 |[0m [1m[91m|[0m     knowledge_names_subquery_join,
+[1m[94m74 |[0m [1m[91m|[0m     knowledge_weighted_join,
+[1m[94m75 |[0m [1m[91m|[0m )
+[1m[94m76 |[0m [1m[91m|[0m from src.agent.education.templates import select_report_template as _select_template
+[1m[94m77 |[0m [1m[91m|[0m from src.agent.resource.tool.base import ToolResult
+[1m[94m78 |[0m [1m[91m|[0m from src.agent.resource.tool.function_tool import tool
+   [1m[94m|[0m [1m[91m|______________________________________________________^[0m
+   [1m[94m|[0m
+[1m[96mhelp[0m: [1mOrganize imports[0m
+
+[1m[91mE402 [0m[1mModule level import not at top of file[0m
+  [1m[94m-->[0m src\agent\education\tools.py:39:1
+   [1m[94m|[0m
+[1m[94m37 |[0m logger = logging.getLogger(__name__)
+[1m[94m38 |[0m from src.agent.education.aggregation import DIMENSIONS, aggregate_by as _aggregate_by
+[1m[94m39 |[0m from src.agent.education.capability import detect_available_dimensions
+   [1m[94m|[0m [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m40 |[0m from src.agent.education.cross_analysis import cross_analyze as _cross_analyze
+[1m[94m41 |[0m from src.agent.education.diagnostic_report import build_diagnostic_data as _build_diagnostic_data
+   [1m[94m|[0m
+
+[1m[91mF401 [0m[[1m[96m*[0m] [1m`src.agent.education.capability.detect_available_dimensions` imported but unused[0m
+  [1m[94m-->[0m src\agent\education\tools.py:39:44
+   [1m[94m|[0m
+[1m[94m37 |[0m logger = logging.getLogger(__name__)
+[1m[94m38 |[0m from src.agent.education.aggregation import DIMENSIONS, aggregate_by as _aggregate_by
+[1m[94m39 |[0m from src.agent.education.capability import detect_available_dimensions
+   [1m[94m|[0m                                            [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m40 |[0m from src.agent.education.cross_analysis import cross_analyze as _cross_analyze
+[1m[94m41 |[0m from src.agent.education.diagnostic_report import build_diagnostic_data as _build_diagnostic_data
+   [1m[94m|[0m
+[1m[96mhelp[0m: [1mRemove unused import: `src.agent.education.capability.detect_available_dimensions`[0m
+
+[1m[91mE402 [0m[1mModule level import not at top of file[0m
+  [1m[94m-->[0m src\agent\education\tools.py:40:1
+   [1m[94m|[0m
+[1m[94m38 |[0m from src.agent.education.aggregation import DIMENSIONS, aggregate_by as _aggregate_by
+[1m[94m39 |[0m from src.agent.education.capability import detect_available_dimensions
+[1m[94m40 |[0m from src.agent.education.cross_analysis import cross_analyze as _cross_analyze
+   [1m[94m|[0m [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m41 |[0m from src.agent.education.diagnostic_report import build_diagnostic_data as _build_diagnostic_data
+[1m[94m42 |[0m from src.agent.education.knowledge_tier import (
+   [1m[94m|[0m
+
+[1m[91mE402 [0m[1mModule level import not at top of file[0m
+  [1m[94m-->[0m src\agent\education\tools.py:41:1
+   [1m[94m|[0m
+[1m[94m39 |[0m from src.agent.education.capability import detect_available_dimensions
+[1m[94m40 |[0m from src.agent.education.cross_analysis import cross_analyze as _cross_analyze
+[1m[94m41 |[0m from src.agent.education.diagnostic_report import build_diagnostic_data as _build_diagnostic_data
+   [1m[94m|[0m [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m42 |[0m from src.agent.education.knowledge_tier import (
+[1m[94m43 |[0m     ABILITY_LABELS,
+   [1m[94m|[0m
+
+[1m[91mE402 [0m[1mModule level import not at top of file[0m
+  [1m[94m-->[0m src\agent\education\tools.py:42:1
+   [1m[94m|[0m
+[1m[94m40 |[0m   from src.agent.education.cross_analysis import cross_analyze as _cross_analyze
+[1m[94m41 |[0m   from src.agent.education.diagnostic_report import build_diagnostic_data as _build_diagnostic_data
+[1m[94m42 |[0m [1m[91m/[0m from src.agent.education.knowledge_tier import (
+[1m[94m43 |[0m [1m[91m|[0m     ABILITY_LABELS,
+[1m[94m44 |[0m [1m[91m|[0m     build_ability_tier_insight,
+[1m[94m45 |[0m [1m[91m|[0m     build_ability_tier_summary,
+[1m[94m46 |[0m [1m[91m|[0m     build_ability_tier_table_html as _build_ability_tier_table_html,
+[1m[94m47 |[0m [1m[91m|[0m     build_question_type_compare_chart_payload as _build_question_type_compare_chart_payload,
+[1m[94m48 |[0m [1m[91m|[0m     build_question_type_table_html as _build_question_type_table_html,
+[1m[94m49 |[0m [1m[91m|[0m )
+   [1m[94m|[0m [1m[91m|_^[0m
+[1m[94m50 |[0m   from src.agent.education.stats import (
+[1m[94m51 |[0m       compute_item_metrics as _compute_item_metrics,
+   [1m[94m|[0m
+
+[1m[91mE402 [0m[1mModule level import not at top of file[0m
+  [1m[94m-->[0m src\agent\education\tools.py:50:1
+   [1m[94m|[0m
+[1m[94m48 |[0m       build_question_type_table_html as _build_question_type_table_html,
+[1m[94m49 |[0m   )
+[1m[94m50 |[0m [1m[91m/[0m from src.agent.education.stats import (
+[1m[94m51 |[0m [1m[91m|[0m     compute_item_metrics as _compute_item_metrics,
+[1m[94m52 |[0m [1m[91m|[0m     compute_rankings as _compute_rankings,
+[1m[94m53 |[0m [1m[91m|[0m     compute_score_stats as _compute_stats,
+[1m[94m54 |[0m [1m[91m|[0m     identify_at_risk_students as _identify_at_risk,
+[1m[94m55 |[0m [1m[91m|[0m     normalize_segments as _normalize_segments,
+[1m[94m56 |[0m [1m[91m|[0m )
+   [1m[94m|[0m [1m[91m|_^[0m
+[1m[94m57 |[0m   from src.agent.education.comprehensive import build_comprehensive_data as _build_comprehensive_data
+[1m[94m58 |[0m   from src.agent.education.student_exam import build_student_exam_data as _build_student_exam_data
+   [1m[94m|[0m
+
+[1m[91mE402 [0m[1mModule level import not at top of file[0m
+  [1m[94m-->[0m src\agent\education\tools.py:57:1
+   [1m[94m|[0m
+[1m[94m55 |[0m     normalize_segments as _normalize_segments,
+[1m[94m56 |[0m )
+[1m[94m57 |[0m from src.agent.education.comprehensive import build_comprehensive_data as _build_comprehensive_data
+   [1m[94m|[0m [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m58 |[0m from src.agent.education.student_exam import build_student_exam_data as _build_student_exam_data
+[1m[94m59 |[0m from src.agent.education.school_intervention import (
+   [1m[94m|[0m
+
+[1m[91mE402 [0m[1mModule level import not at top of file[0m
+  [1m[94m-->[0m src\agent\education\tools.py:58:1
+   [1m[94m|[0m
+[1m[94m56 |[0m )
+[1m[94m57 |[0m from src.agent.education.comprehensive import build_comprehensive_data as _build_comprehensive_data
+[1m[94m58 |[0m from src.agent.education.student_exam import build_student_exam_data as _build_student_exam_data
+   [1m[94m|[0m [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m59 |[0m from src.agent.education.school_intervention import (
+[1m[94m60 |[0m     build_class_compare_table_html,
+   [1m[94m|[0m
+
+[1m[91mE402 [0m[1mModule level import not at top of file[0m
+  [1m[94m-->[0m src\agent\education\tools.py:59:1
+   [1m[94m|[0m
+[1m[94m57 |[0m   from src.agent.education.comprehensive import build_comprehensive_data as _build_comprehensive_data
+[1m[94m58 |[0m   from src.agent.education.student_exam import build_student_exam_data as _build_student_exam_data
+[1m[94m59 |[0m [1m[91m/[0m from src.agent.education.school_intervention import (
+[1m[94m60 |[0m [1m[91m|[0m     build_class_compare_table_html,
+[1m[94m61 |[0m [1m[91m|[0m     build_intervention_section_html,
+[1m[94m62 |[0m [1m[91m|[0m     build_school_intervention_insights,
+[1m[94m63 |[0m [1m[91m|[0m )
+   [1m[94m|[0m [1m[91m|_^[0m
+[1m[94m64 |[0m   from src.agent.education.subject_diagnosis import (
+[1m[94m65 |[0m       build_diagnosis_recommendations,
+   [1m[94m|[0m
+
+[1m[91mE402 [0m[1mModule level import not at top of file[0m
+  [1m[94m-->[0m src\agent\education\tools.py:64:1
+   [1m[94m|[0m
+[1m[94m62 |[0m       build_school_intervention_insights,
+[1m[94m63 |[0m   )
+[1m[94m64 |[0m [1m[91m/[0m from src.agent.education.subject_diagnosis import (
+[1m[94m65 |[0m [1m[91m|[0m     build_diagnosis_recommendations,
+[1m[94m66 |[0m [1m[91m|[0m     build_diagnosis_summary,
+[1m[94m67 |[0m [1m[91m|[0m     build_item_table_html,
+[1m[94m68 |[0m [1m[91m|[0m     build_knowledge_compare_chart_payload,
+[1m[94m69 |[0m [1m[91m|[0m     build_knowledge_table_html,
+[1m[94m70 |[0m [1m[91m|[0m     build_segment_table_html,
+[1m[94m71 |[0m [1m[91m|[0m     collect_class_names,
+[1m[94m72 |[0m [1m[91m|[0m     enrich_knowledge_rows,
+[1m[94m73 |[0m [1m[91m|[0m     knowledge_names_subquery_join,
+[1m[94m74 |[0m [1m[91m|[0m     knowledge_weighted_join,
+[1m[94m75 |[0m [1m[91m|[0m )
+   [1m[94m|[0m [1m[91m|_^[0m
+[1m[94m76 |[0m   from src.agent.education.templates import select_report_template as _select_template
+[1m[94m77 |[0m   from src.agent.resource.tool.base import ToolResult
+   [1m[94m|[0m
+
+[1m[91mE402 [0m[1mModule level import not at top of file[0m
+  [1m[94m-->[0m src\agent\education\tools.py:76:1
+   [1m[94m|[0m
+[1m[94m74 |[0m     knowledge_weighted_join,
+[1m[94m75 |[0m )
+[1m[94m76 |[0m from src.agent.education.templates import select_report_template as _select_template
+   [1m[94m|[0m [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m77 |[0m from src.agent.resource.tool.base import ToolResult
+[1m[94m78 |[0m from src.agent.resource.tool.function_tool import tool
+   [1m[94m|[0m
+
+[1m[91mE402 [0m[1mModule level import not at top of file[0m
+  [1m[94m-->[0m src\agent\education\tools.py:77:1
+   [1m[94m|[0m
+[1m[94m75 |[0m )
+[1m[94m76 |[0m from src.agent.education.templates import select_report_template as _select_template
+[1m[94m77 |[0m from src.agent.resource.tool.base import ToolResult
+   [1m[94m|[0m [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m78 |[0m from src.agent.resource.tool.function_tool import tool
+   [1m[94m|[0m
+
+[1m[91mE402 [0m[1mModule level import not at top of file[0m
+  [1m[94m-->[0m src\agent\education\tools.py:78:1
+   [1m[94m|[0m
+[1m[94m76 |[0m from src.agent.education.templates import select_report_template as _select_template
+[1m[94m77 |[0m from src.agent.resource.tool.base import ToolResult
+[1m[94m78 |[0m from src.agent.resource.tool.function_tool import tool
+   [1m[94m|[0m [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+   [1m[94m|[0m
+
+[1m[91mI001 [0m[[1m[96m*[0m] [1mImport block is un-sorted or un-formatted[0m
+   [1m[94m-->[0m src\agent\education\tools.py:182:5
+    [1m[94m|[0m
+[1m[94m180 |[0m ) -> tuple[bool, str, dict[str, Any] | None, str]:
+[1m[94m181 |[0m     """教育工具查数：走行列权限 + edu 模板谓词。返回 (success, msg, result, sql_run)。"""
+[1m[94m182 |[0m     from src.datasource.service.execute_with_permission import execute_sql_with_permission_by_user_id
+    [1m[94m|[0m     [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m183 |[0m
+[1m[94m184 |[0m     uid = user_id if apply_row_scope else None
+    [1m[94m|[0m
+[1m[96mhelp[0m: [1mOrganize imports[0m
+
+[1m[91mI001 [0m[[1m[96m*[0m] [1mImport block is un-sorted or un-formatted[0m
+   [1m[94m-->[0m src\agent\education\tools.py:822:5
+    [1m[94m|[0m
+[1m[94m820 |[0m           class_name: 班级名，可选。
+[1m[94m821 |[0m       """
+[1m[94m822 |[0m [1m[91m/[0m     from src.agent.resource.tool.business import _load_datasource
+[1m[94m823 |[0m [1m[91m|[0m     from src.agent.education.query_parse import (
+[1m[94m824 |[0m [1m[91m|[0m         find_upstream_fetch_data,
+[1m[94m825 |[0m [1m[91m|[0m         sub_task_primary_tool,
+[1m[94m826 |[0m [1m[91m|[0m     )
+    [1m[94m|[0m [1m[91m|_____^[0m
+[1m[94m827 |[0m
+[1m[94m828 |[0m       task_text = (sub_task or "").strip()
+    [1m[94m|[0m
+[1m[96mhelp[0m: [1mOrganize imports[0m
+
+[1m[91mF401 [0m[[1m[96m*[0m] [1m`src.agent.education.subject_diagnosis.build_item_table_html` imported but unused[0m
+    [1m[94m-->[0m src\agent\education\tools.py:1334:9
+     [1m[94m|[0m
+[1m[94m1332 |[0m         build_diagnosis_recommendations,
+[1m[94m1333 |[0m         build_diagnosis_summary,
+[1m[94m1334 |[0m         build_item_table_html,
+     [1m[94m|[0m         [1m[91m^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m1335 |[0m         build_knowledge_table_html,
+[1m[94m1336 |[0m         enrich_knowledge_rows,
+     [1m[94m|[0m
+[1m[96mhelp[0m: [1mRemove unused import[0m
+
+[1m[91mF401 [0m[[1m[96m*[0m] [1m`src.agent.education.subject_diagnosis.build_knowledge_table_html` imported but unused[0m
+    [1m[94m-->[0m src\agent\education\tools.py:1335:9
+     [1m[94m|[0m
+[1m[94m1333 |[0m         build_diagnosis_summary,
+[1m[94m1334 |[0m         build_item_table_html,
+[1m[94m1335 |[0m         build_knowledge_table_html,
+     [1m[94m|[0m         [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m1336 |[0m         enrich_knowledge_rows,
+[1m[94m1337 |[0m     )
+     [1m[94m|[0m
+[1m[96mhelp[0m: [1mRemove unused import[0m
+
+[1m[91mF541 [0m[[1m[96m*[0m] [1mf-string without any placeholders[0m
+    [1m[94m-->[0m src\agent\education\tools.py:1776:15
+     [1m[94m|[0m
+[1m[94m1774 |[0m     kn_join = knowledge_names_subquery_join(db_type)
+[1m[94m1775 |[0m     w_join = knowledge_weighted_join()
+[1m[94m1776 |[0m     w_score = f"sd.score * COALESCE(eqk.w_norm, 1)"
+     [1m[94m|[0m               [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m1777 |[0m     w_full = f"{full_score_expr} * COALESCE(eqk.w_norm, 1)"
+[1m[94m1778 |[0m     if student_id:
+     [1m[94m|[0m
+[1m[96mhelp[0m: [1mRemove extraneous `f` prefix[0m
+
+[1m[91mF541 [0m[[1m[96m*[0m] [1mf-string without any placeholders[0m
+    [1m[94m-->[0m src\agent\education\tools.py:1869:15
+     [1m[94m|[0m
+[1m[94m1867 |[0m     kn_join = knowledge_names_subquery_join(db_type)
+[1m[94m1868 |[0m     w_join = knowledge_weighted_join()
+[1m[94m1869 |[0m     w_score = f"sd.score * COALESCE(eqk.w_norm, 1)"
+     [1m[94m|[0m               [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m1870 |[0m     w_full = f"{full_score_expr} * COALESCE(eqk.w_norm, 1)"
+[1m[94m1871 |[0m     item_rate = _score_rate_sql("AVG(sd.score)", full_score_expr, db_type)
+     [1m[94m|[0m
+[1m[96mhelp[0m: [1mRemove extraneous `f` prefix[0m
+
+[1m[91mI001 [0m[[1m[96m*[0m] [1mImport block is un-sorted or un-formatted[0m
+    [1m[94m-->[0m src\agent\education\tools.py:7724:5
+     [1m[94m|[0m
+[1m[94m7722 |[0m       禁止臆造「月广陵区」等把月份拼进区县的条件。
+[1m[94m7723 |[0m       """
+[1m[94m7724 |[0m [1m[91m/[0m     from src.agent.education.filter_peek import (
+[1m[94m7725 |[0m [1m[91m|[0m         format_peek_payload,
+[1m[94m7726 |[0m [1m[91m|[0m         peek_edu_filter_values as _peek,
+[1m[94m7727 |[0m [1m[91m|[0m     )
+     [1m[94m|[0m [1m[91m|_____^[0m
+[1m[94m7728 |[0m
+[1m[94m7729 |[0m       ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+     [1m[94m|[0m
+[1m[96mhelp[0m: [1mOrganize imports[0m
+
+[1m[91mF811 [0m[1mRedefinition of unused `test_select_report_template_tool_unknown_report_type` from line 371[0m
+   [1m[94m-->[0m tests\agent\test_education_tools.py:377:5
+    [1m[94m|[0m
+[1m[94m377 |[0m def test_select_report_template_tool_unknown_report_type():
+    [1m[94m|[0m     [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m [1m[91m`test_select_report_template_tool_unknown_report_type` redefined here[0m
+[1m[94m378 |[0m     result = _run(select_report_template_tool.execute(report_type="bogus"))
+[1m[94m379 |[0m     assert result.data["error"] == "unknown report_type"
+    [1m[94m|[0m
+   [1m[94m:::[0m tests\agent\test_education_tools.py:371:5
+    [1m[94m|[0m
+[1m[94m371 |[0m def test_select_report_template_tool_unknown_report_type():
+    [1m[94m|[0m     [1m[33m----------------------------------------------------[0m [1m[33mprevious definition of `test_select_report_template_tool_unknown_report_type` here[0m
+[1m[94m372 |[0m     # 全部 9 类 ReportType 已实现；未知类型应返回 error
+[1m[94m373 |[0m     result = _run(select_report_template_tool.execute(report_type="bogus"))
+    [1m[94m|[0m
+[1m[96mhelp[0m: [1mRemove definition: `test_select_report_template_tool_unknown_report_type`[0m
+
+[1m[91mN802 [0m[1mFunction name `test_comprehensive_level_labels_not_all_D` should be lowercase[0m
+    [1m[94m-->[0m tests\agent\test_education_tools.py:1521:5
+     [1m[94m|[0m
+[1m[94m1521 |[0m def test_comprehensive_level_labels_not_all_D():
+     [1m[94m|[0m     [1m[91m^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+[1m[94m1522 |[0m     """水平等级不应全员 D：无论 full_score 传单科满分、总分满分还是缺省，
+[1m[94m1523 |[0m     都要产出差异化等级（自适应回退到数据最大总分）。"""
+     [1m[94m|[0m
+
+[1m[91mI001 [0m[[1m[96m*[0m] [1mImport block is un-sorted or un-formatted[0m
+    [1m[94m-->[0m tests\agent\test_education_tools.py:1524:5
+     [1m[94m|[0m
+[1m[94m1522 |[0m       """水平等级不应全员 D：无论 full_score 传单科满分、总分满分还是缺省，
+[1m[94m1523 |[0m       都要产出差异化等级（自适应回退到数据最大总分）。"""
+[1m[94m1524 |[0m [1m[91m/[0m     import re
+[1m[94m1525 |[0m [1m[91m|[0m     from src.agent.education.comprehensive import build_comprehensive_data
+[1m[94m1526 |[0m [1m[91m|[0m     from src.agent.education.config import load_config
+     [1m[94m|[0m [1m[91m|______________________________________________________^[0m
+[1m[94m1527 |[0m       records = [
+[1m[94m1528 |[0m           {"exam": "一", "student": "s1", "subjects": {"语文": 120, "数学": 130, "英语": 110}, "total": 360},
+     [1m[94m|[0m
+[1m[96mhelp[0m: [1mOrganize imports[0m
+
+[1m[91mI001 [0m[[1m[96m*[0m] [1mImport block is un-sorted or un-formatted[0m
+    [1m[94m-->[0m tests\agent\test_education_tools.py:1549:5
+     [1m[94m|[0m
+[1m[94m1547 |[0m       """LLM 误把总分满分当 full_score 传入（再乘科目数会远超实际总分）时，
+[1m[94m1548 |[0m       自适应回退到数据最大总分，避免全员 D。"""
+[1m[94m1549 |[0m [1m[91m/[0m     import re
+[1m[94m1550 |[0m [1m[91m|[0m     from src.agent.education.comprehensive import build_comprehensive_data
+[1m[94m1551 |[0m [1m[91m|[0m     from src.agent.education.config import load_config
+     [1m[94m|[0m [1m[91m|______________________________________________________^[0m
+[1m[94m1552 |[0m       records = [
+[1m[94m1553 |[0m           {"exam": "一", "student": "s1", "subjects": {"语文": 120, "数学": 130, "英语": 110}, "total": 360},
+     [1m[94m|[0m
+[1m[96mhelp[0m: [1mOrganize imports[0m
+
+Found 27 errors.
+[[36m*[0m] 12 fixable with the `--fix` option.

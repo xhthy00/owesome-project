@@ -70,6 +70,7 @@ from src.agent.education.subject_diagnosis import (
     build_segment_table_html,
     collect_class_names,
     enrich_knowledge_rows,
+    filter_linked_knowledge_rows,
     knowledge_names_subquery_join,
     knowledge_weighted_join,
 )
@@ -1005,7 +1006,7 @@ def build_subject_diagnosis_sections_tool(
         if not score_result:
             score_result = fetch_data.get("score_result")
     items = list(item_rows or [])
-    knowledge = enrich_knowledge_rows(list(knowledge_rows or []))
+    knowledge = filter_linked_knowledge_rows(enrich_knowledge_rows(list(knowledge_rows or [])))
 
     # stats 未传但有 score_result/fetch_data 时，内部计算 KPI
     if (not stats or not stats.get("count")) and score_result:
@@ -1384,7 +1385,7 @@ def build_subject_diagnosis_report_tool(
     stats = _compute_stats(score_values, cfg, full_score)
 
     # ---------- 3. 组装区块 ----------
-    knowledge_enriched = enrich_knowledge_rows(knowledge_rows)
+    knowledge_enriched = filter_linked_knowledge_rows(enrich_knowledge_rows(knowledge_rows))
     weak_threshold = 60.0
     score_rows = list(bundle.get("score_rows") or [])
     intervention_insights: dict[str, Any] = {}
@@ -1640,16 +1641,17 @@ def _looks_like_school_id(value: str) -> bool:
 def _school_scope_predicate(school_name: str) -> str | None:
     """生成学校范围 WHERE 片段。
 
-    - 规范中文全称 → ``sch.name = ...``
-    - school_id 形态（如 ``YZZX``）→ ``sc.school_id = ...``
-    - 中文简称等不安全值 → 仍尝试 ``sch.name``（由上层按需重试放宽）
+    - 中文校名 → ``sch.s_name LIKE``（明文，如 A01扬州中学）；``sch.name``
+      仍是脱敏码，禁止 ``sch.name = '扬州中学'``。
+    - school_id 形态（如 ``YZZX`` / ``GZ_…``）→ ``sc.school_id = ...``
     """
     n = (school_name or "").strip()
     if not n:
         return None
     if _looks_like_school_id(n):
         return f"sc.school_id = '{_esc(n)}'"
-    return f"sch.name = '{_esc(n)}'"
+    lit = _esc(n)
+    return f"(sch.s_name LIKE '%{lit}%' OR sch.name LIKE '%{lit}%')"
 
 
 def _keep_school_filter_arg(school_name: str) -> str:
@@ -1665,6 +1667,16 @@ def _keep_school_filter_arg(school_name: str) -> str:
     if _is_unsafe_school_name_filter(n):
         return ""
     return n
+
+
+_SPECIFIC_EXAM_RE = re.compile(
+    r"\d{4}\s*届|(?:高|初)[一二三四五六七八九].{0,6}\d{1,2}\s*月"
+)
+
+
+def _exam_name_is_specific(name: str) -> bool:
+    """已含届次或「高三1月」这类场次标记，不能再泛化成「期末」。"""
+    return bool(_SPECIFIC_EXAM_RE.search(name or ""))
 
 
 def exam_name_like_candidates(exam_name: str) -> list[str]:
@@ -1694,14 +1706,16 @@ def exam_name_like_candidates(exam_name: str) -> list[str]:
             add(cleaned)
     except Exception:
         pass
-    if "期末" in raw:
-        add("期末")
-        add("期末考试")
-        add("期末质量检测")
-    if "期中" in raw:
-        add("期中")
-        add("期中考试")
-        add("期中质量检测")
+    # 用户已点名具体场次时，禁止再 OR LIKE '%期末%'，否则会命中高二期末等另一场。
+    if not _exam_name_is_specific(raw):
+        if "期末" in raw:
+            add("期末")
+            add("期末考试")
+            add("期末质量检测")
+        if "期中" in raw:
+            add("期中")
+            add("期中考试")
+            add("期中质量检测")
     return out
 
 
@@ -1777,7 +1791,8 @@ def _diagnosis_sql_bundle(
     if student_id:
         item_rate = _score_rate_sql("sd.score", full_score_expr, db_type)
         item_sql = (
-            "SELECT sd.question_no,\n"
+            "SELECT eq.id AS question_id,\n"
+            "       COALESCE(eq.question_no, sd.question_no) AS question_no,\n"
             "       COALESCE(kn.knowledge_name, '未关联知识点') AS knowledge_name,\n"
             "       eq.question_type AS question_type,\n"
             f"       {full_score_expr} AS full_score,\n"
@@ -1791,12 +1806,13 @@ def _diagnosis_sql_bundle(
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
             "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
             + where_clause_detail
-            + "\nORDER BY sd.question_no\nLIMIT 1000"
+            + "\nORDER BY eq.id, sd.question_no\nLIMIT 1000"
         )
     else:
         item_rate = _score_rate_sql("AVG(sd.score)", full_score_expr, db_type)
         item_sql = (
-            "SELECT sd.question_no,\n"
+            "SELECT eq.id AS question_id,\n"
+            "       COALESCE(eq.question_no, sd.question_no) AS question_no,\n"
             "       COALESCE(kn.knowledge_name, '未关联知识点') AS knowledge_name,\n"
             "       eq.question_type AS question_type,\n"
             f"       {full_score_expr} AS full_score,\n"
@@ -1810,9 +1826,10 @@ def _diagnosis_sql_bundle(
             "JOIN tb_school sch ON sc.school_id = sch.id\n"
             "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
             + where_clause_detail
-            + f"\nGROUP BY sd.question_no, COALESCE(kn.knowledge_name, '未关联知识点'), "
+            + f"\nGROUP BY eq.id, COALESCE(eq.question_no, sd.question_no), "
+            f"COALESCE(kn.knowledge_name, '未关联知识点'), "
             f"eq.question_type, {full_score_expr}\n"
-            "ORDER BY sd.question_no\nLIMIT 1000"
+            "ORDER BY eq.id\nLIMIT 1000"
         )
     know_rate = _score_rate_sql(f"SUM({w_score})", f"SUM({w_full})", db_type)
     knowledge_sql = (
@@ -1870,7 +1887,8 @@ def _diagnosis_class_compare_sql(
     item_rate = _score_rate_sql("AVG(sd.score)", full_score_expr, db_type)
     item_sql = (
         "SELECT sc.class AS class_name,\n"
-        "       sd.question_no,\n"
+        "       eq.id AS question_id,\n"
+        "       COALESCE(eq.question_no, sd.question_no) AS question_no,\n"
         "       COALESCE(kn.knowledge_name, '未关联知识点') AS knowledge_name,\n"
         "       eq.question_type AS question_type,\n"
         f"       {full_score_expr} AS full_score,\n"
@@ -1884,9 +1902,10 @@ def _diagnosis_class_compare_sql(
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
         "JOIN tb_exam e ON sc.exam_id = e.id\nLEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
         + where_clause_detail
-        + f"\nGROUP BY sc.class, sd.question_no, COALESCE(kn.knowledge_name, '未关联知识点'), "
+        + f"\nGROUP BY sc.class, eq.id, COALESCE(eq.question_no, sd.question_no), "
+        f"COALESCE(kn.knowledge_name, '未关联知识点'), "
         f"eq.question_type, {full_score_expr}\n"
-        "ORDER BY sd.question_no, sc.class\nLIMIT 10000"
+        "ORDER BY eq.id, sc.class\nLIMIT 10000"
     )
     know_rate = _score_rate_sql(f"SUM({w_score})", f"SUM({w_full})", db_type)
     knowledge_sql = (
@@ -2309,7 +2328,7 @@ def _fetch_subject_diagnosis_rows(
             if isinstance(r, dict) and str(r.get("exam_id") or "").strip()
         }
         if len(exam_keys) > 1:
-            primary = pick_primary_exam_id(score_rows)
+            primary = pick_primary_exam_id(score_rows, preferred_exam_name=exam_name)
             if primary:
                 detail_wc_n, score_wc_n = _diagnosis_where_clause_pair(
                     **base_kw, exam_ids=[primary], skip_exam_name=True
@@ -2820,7 +2839,8 @@ def _apply_grade_compare_section_tables(
 ) -> None:
     """班级横向对比：小题/知识点/题型改为各班对比表与分组柱图。"""
     item_cmp = list(item_class_rows or [])
-    know_cmp = list(knowledge_class_rows or [])
+    know_cmp = filter_linked_knowledge_rows(list(knowledge_class_rows or []))
+    knowledge = filter_linked_knowledge_rows(list(knowledge))
     tracks = dict(class_tracks or {})
     from src.agent.education.class_track import (
         TRACK_ORDER,
@@ -6220,7 +6240,7 @@ def compare_knowledge_cohort_tool(
             if isinstance(r, dict) and str(r.get("exam_id") or "").strip()
         }
         if len(exam_keys) > 1:
-            primary = pick_primary_exam_id(score_rows)
+            primary = pick_primary_exam_id(score_rows, preferred_exam_name=exam_raw or exam)
             if primary:
                 narrowed = _fetch_scores(
                     exam_ids_f=[primary], skip_exam=True, phase="narrow_primary_exam"

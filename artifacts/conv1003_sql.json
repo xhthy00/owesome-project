@@ -1,0 +1,26 @@
+[
+  {
+    "idx": 7,
+    "success": true,
+    "sql": "SELECT id, s_name, name FROM tb_school WHERE s_name LIKE '%扬州中学%' OR name LIKE '%扬州中学%'",
+    "content_head": "SQL 执行成功，返回 1 行：\n【人数口径】AUTHORITATIVE_ROW_COUNT=1；PREVIEW_ROWS=1；SQL_ROW_CAPPED=false。**禁止**用 PREVIEW_ROWS / 样例表行数写参考人数；总人数以 AUTHORITATIVE_ROW_COUNT（且 SQL_ROW_CAPPED=false）或 compute_score_stats_tool.count / 报告 KPI 为准。\n权威行数：共 1 行（无 LIMIT/OFFSET 时可作为明细人数；若另有权威统计块，以统计块的 count 为准）。\n样例展示 1 行（含系统预览上限），**禁止**把样例行数写成全班参考人数。\n\n| id | s_name | name |\n| --- | --- | --- |\n| GZ_19D9D68D | A01扬州中学 | GZ_19D9D68D |"
+  },
+  {
+    "idx": 8,
+    "success": true,
+    "sql": "SELECT sc.class AS bj, sc.score, sc.exam_score, sch.s_name AS school_name\nFROM tb_score sc\nJOIN tb_school sch ON sc.school_id = sch.id\nJOIN tb_exam e ON sc.exam_id = e.id\nWHERE e.exam_name = '2026届高三1月期末'\n  AND e.subject = '数学'\n  AND sc.subject_name = '数学'\n  AND sch.s_name LIKE '%扬州中学%'\n  AND sc.score > 0",
+    "content_head": "SQL 执行成功，返回 738 行：\n【人数口径】AUTHORITATIVE_ROW_COUNT=738；PREVIEW_ROWS=20；SQL_ROW_CAPPED=false。**禁止**用 PREVIEW_ROWS / 样例表行数写参考人数；总人数以 AUTHORITATIVE_ROW_COUNT（且 SQL_ROW_CAPPED=false）或 compute_score_stats_tool.count / 报告 KPI 为准。\n权威行数：共 738 行（无 LIMIT/OFFSET 时可作为明细人数；若另有权威统计块，以统计块的 count 为准）。\n样例仅预览前 20 行（非全量），**禁止**按样例表「数人头」写班级人数，**禁止**写「所查看的 20 名」充当整体结论。**禁止**对预览表点数科目分布/命中人数/比例并外推到全部 738 行；末位分、并列人数、选科组合、弱科分布须另查 MIN/MAX/COUNT/GROUP BY，禁止根据预览猜；分布须另查 GROUP BY / COUNT；个案分数只能照抄预览里出现的原值，禁止心算改写。\n\n| bj | score | exam_score | school_name |\n| --- | --- | --- | --- |\n| 高三(4)班 | 116.0 | 150.0 | A01扬州中学 |\n| 高三(4)班 | 138.0 | 150.0 | A01扬州中学 |\n| 高三(4)班 | 90.0 | 150.0 | A01扬州中学 |\n| 高三(4)班 | 133.0 | 150.0 | A01扬州中学 |\n| 高三(4)班 | 125.0 | 150.0 | A01扬州中学 |\n| 高三(4)班 | 116.0 | 150.0 | A01扬州中学 |\n| 高三(4)班 | 127.0 | 150.0"
+  },
+  {
+    "idx": 10,
+    "success": true,
+    "sql": "SELECT\n  sch.s_name AS xx,\n  sc.class AS bj,\n  COUNT(*) AS n,\n  AVG(sc.score) FILTER (WHERE sc.score > 0) AS avg_score,\n  SUM(CASE WHEN sc.score >= 90.0 THEN 1 ELSE 0 END) AS pass_n,\n  ROUND(100.0 * SUM(CASE WHEN sc.score >= 90.0 THEN 1 ELSE 0 END)::numeric / NULLIF(COUNT(*), 0), 2) AS pass_rate\nFROM tb_score sc\nJOIN tb_school sch ON sc.school_id = sch.id\nJOIN tb_exam e ON sc.exam_id = e.id\nWHERE e.exam_name = '2026届高三1月期末'\n  AND e.subject = '数学'\n  AND sc.subject_name = '数学'\n  AND sch.s_name LIKE '%扬州中学%'\n  AND sc.score > 0\nGROUP BY sch.s_name, sc.class\nORDER BY avg_score DESC",
+    "content_head": "SQL 执行成功，返回 16 行：\n【人数口径】AUTHORITATIVE_ROW_COUNT=16；PREVIEW_ROWS=16；SQL_ROW_CAPPED=false。**禁止**用 PREVIEW_ROWS / 样例表行数写参考人数；总人数以 AUTHORITATIVE_ROW_COUNT（且 SQL_ROW_CAPPED=false）或 compute_score_stats_tool.count / 报告 KPI 为准。\n权威行数：共 16 行（无 LIMIT/OFFSET 时可作为明细人数；若另有权威统计块，以统计块的 count 为准）。\n样例已展示全部 16 行。**禁止**目测明细表点人头做科目分布；分布须另查 GROUP BY / COUNT。个案分数必须照抄结果表原值，禁止心算改写。**禁止**把样例行数写成全班参考人数。\n\n| xx | bj | n | avg_score | pass_n | pass_rate |\n| --- | --- | --- | --- | --- | --- |\n| A01扬州中学 | 高三(1)班 | 52 | 131.8846153846154 | 52 | 100.0 |\n| A01扬州中学 | 高三(2)班 | 48 | 128.14583333333334 | 48 | 100.0 |\n| A01扬州中学 | 高三(4)班 | 51 | 122.33333333333333 | 51 | 100.0 |\n| A01扬州中学 | 高三(5)班 | 52 | 121.59615384615384 | 52 | 100.0 |\n| A01扬州中学 | 高三(6)班 | 52 | 120.65384615384616 | 51 | 98.08 |\n| A01扬州中学 | 高三(3)班 | 52 | 120.019"
+  },
+  {
+    "idx": 12,
+    "success": true,
+    "sql": "SELECT band, COUNT(*) AS n, ROUND(100.0 * COUNT(*)::numeric / SUM(COUNT(*)) OVER (), 2) AS pct FROM (SELECT CASE WHEN sc.score < 30 THEN '[0,30)' WHEN sc.score < 60 THEN '[30,60)' WHEN sc.score < 90 THEN '[60,90)' WHEN sc.score < 100 THEN '[90,100)' WHEN sc.score < 110 THEN '[100,110)' WHEN sc.score < 120 THEN '[110,120)' WHEN sc.score < 130 THEN '[120,130)' WHEN sc.score < 140 THEN '[130,140)' ELSE '[140,150]' END AS band FROM tb_score sc JOIN tb_school sch ON sc.school_id = sch.id JOIN tb_exam e ON sc.exam_id = e.id WHERE e.exam_name = '2026届高三1月期末' AND e.subject = '数学' AND sc.subject_name = '数学' AND sch.s_name LIKE '%扬州中学%' AND sc.score > 0) t GROUP BY band ORDER BY band",
+    "content_head": "SQL 执行成功，返回 9 行：\n【人数口径】AUTHORITATIVE_ROW_COUNT=9；PREVIEW_ROWS=9；SQL_ROW_CAPPED=false。**禁止**用 PREVIEW_ROWS / 样例表行数写参考人数；总人数以 AUTHORITATIVE_ROW_COUNT（且 SQL_ROW_CAPPED=false）或 compute_score_stats_tool.count / 报告 KPI 为准。\n权威行数：共 9 行（无 LIMIT/OFFSET 时可作为明细人数；若另有权威统计块，以统计块的 count 为准）。\n样例展示 9 行（含系统预览上限），**禁止**把样例行数写成全班参考人数。\n\n| band | n | pct |\n| --- | --- | --- |\n| [0,30) | 1 | 0.14 |\n| [100,110) | 153 | 20.73 |\n| [110,120) | 169 | 22.9 |\n| [120,130) | 169 | 22.9 |\n| [130,140) | 91 | 12.33 |\n| [140,150] | 17 | 2.3 |\n| [30,60) | 1 | 0.14 |\n| [60,90) | 57 | 7.72 |\n| [90,100) | 80 | 10.84 |"
+  }
+]

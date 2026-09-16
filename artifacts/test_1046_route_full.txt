@@ -1,0 +1,64 @@
+......................................................F...FF............ [ 72%]
+...........................                                              [100%]
+================================== FAILURES ===================================
+E   AssertionError: assert 'build_score_band_report_data_tool' in '范围约束含待确认口径。先调用 question，questions 参数必须原样使用约束中给出的 JSON，不得改写或增删选项，禁止询问学校/班级/考试/学生。用户选择后再调用对应 build_*_report_data_tool(render=true)；选择前禁止调用任何 build_* 报告工具。完成后 terminate。'
+D:\data\whole_project\xhthy00\awesome-data\tests\agent\test_report_intent_routing.py:737: AssertionError: assert 'build_score_band_report_data_tool' in '范围约束含待确认口径。先调用 question，questions 参数必须原样使用约束中给出的 JSON，不得改写或增删选项，禁止询问学校/班级/考试/学生。用户选择后再调用对应 build_*_report_data_tool(render=true)；选择前禁止调用任何 build_* 报告工具。完成后 terminate。'
+E   assert 'yw > 0' in "<sql-examples>\n<example>\n    <question>扬州中学高三(1)班在全市班级中的排名</question>\n    <suggestion-answer>WITH base AS (\n  SEL...)。必须 xsxz='在籍生'，单科 FILTER col&gt;0；化学/生物/政治/地理用 hxzh/swzh/zzzh/dlzh</suggestion-answer>\n  </example>\n</sql-examples>"
+D:\data\whole_project\xhthy00\awesome-data\tests\agent\test_report_intent_routing.py:899: assert 'yw > 0' in "<sql-examples>\n<example>\n    <question>扬州中学高三(1)班在全市班级中的排名</question>\n    <suggestion-answer>WITH base AS (\n  SEL...)。必须 xsxz='在籍生'，单科 FILTER col&gt;0；化学/生物/政治/地理用 hxzh/swzh/zzzh/dlzh</suggestion-answer>\n  </example>\n</sql-examples>"
+E   AssertionError: assert 'build_diagnostic_report_data_tool' in '范围约束含待确认口径。先调用 question，questions 参数必须原样使用约束中给出的 JSON，不得改写或增删选项，禁止询问学校/班级/考试/学生。用户选择后再调用对应 build_*_report_data_tool(render=true)；选择前禁止调用任何 build_* 报告工具。完成后 terminate。'
+D:\data\whole_project\xhthy00\awesome-data\tests\agent\test_report_intent_routing.py:934: AssertionError: assert 'build_diagnostic_report_data_tool' in '范围约束含待确认口径。先调用 question，questions 参数必须原样使用约束中给出的 JSON，不得改写或增删选项，禁止询问学校/班级/考试/学生。用户选择后再调用对应 build_*_report_data_tool(render=true)；选择前禁止调用任何 build_* 报告工具。完成后 terminate。'
+============================== warnings summary ===============================
+src\chat\schemas.py:22
+tests/agent/test_report_intent_routing.py::test_normalize_fullwidth_parentheses_for_class
+  D:\data\whole_project\xhthy00\awesome-data\src\chat\schemas.py:22: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class ConversationResponse(BaseModel):
+
+src\chat\schemas.py:78
+tests/agent/test_report_intent_routing.py::test_normalize_fullwidth_parentheses_for_class
+  D:\data\whole_project\xhthy00\awesome-data\src\chat\schemas.py:78: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class ConversationRecordResponse(BaseModel):
+
+src\common\schemas\response.py:15
+  D:\data\whole_project\xhthy00\awesome-data\src\common\schemas\response.py:15: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class ResponseModel(ResponseBase, Generic[T]):
+
+src\system\schemas.py:26
+  D:\data\whole_project\xhthy00\awesome-data\src\system\schemas.py:26: PydanticDeprecatedSince20: Support for class-based `config` is deprecated, use ConfigDict instead. Deprecated in Pydantic V2.0 to be removed in V3.0. See Pydantic V2 Migration Guide at https://errors.pydantic.dev/2.13/migration/
+    class UserResponse(BaseModel):
+
+tests/agent/test_report_intent_routing.py::test_llm_classify_fact_query_no_report
+  D:\data\whole_project\xhthy00\awesome-data\src\system\crud\crud_edu_privacy.py:14: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with increased type
+          annotations.
+  
+          Or otherwise you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    row = session.query(SysEduPrivacy).order_by(SysEduPrivacy.id.asc()).first()
+
+tests/agent/test_chat_stream_routing.py::test_agent_mode_defaults_to_agent_branch
+tests/agent/test_chat_stream_routing.py::test_agent_mode_explicit_team_routes_to_team_runner
+tests/agent/test_chat_stream_routing.py::test_team_mode_can_disable_tool_agent
+tests/agent/test_chat_stream_routing.py::test_agent_mode_explicit_legacy_routes_to_sql_generator
+tests/agent/test_chat_stream_routing.py::test_legacy_mode_does_not_enter_clarification_gate
+tests/agent/test_chat_stream_routing.py::test_chat_stream_emits_x_trace_id_header
+tests/agent/test_chat_stream_routing.py::test_chat_stream_emits_x_trace_id_header
+  D:\data\whole_project\xhthy00\awesome-data\src\system\crud\crud_user.py:20: DeprecationWarning: 
+          🚨 You probably want to use `session.exec()` instead of `session.query()`.
+  
+          `session.exec()` is SQLModel's own short version with increased type
+          annotations.
+  
+          Or otherwise you might want to use `session.execute()` instead of
+          `session.query()`.
+          
+    return session.query(SysUser).filter(SysUser.id == user_id).first()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/agent/test_report_intent_routing.py::test_score_band_report_vs_threshold_fact
+FAILED tests/agent/test_report_intent_routing.py::test_school_vs_leading_subject_avg_is_fact_uses_xxlb
+FAILED tests/agent/test_report_intent_routing.py::test_gexiao_exam_analysis_is_citywide_not_class_comprehensive
+3 failed, 96 passed, 14 warnings in 6.06s

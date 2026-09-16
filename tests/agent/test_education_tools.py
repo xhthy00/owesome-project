@@ -1970,7 +1970,9 @@ def test_unsafe_school_abbreviation_blocks_exact_match():
     assert _looks_like_school_id("扬州中学") is False
     assert _looks_like_school_id("南京一中") is False
     assert _school_scope_predicate("YZZX") == "sc.school_id = 'YZZX'"
-    assert _school_scope_predicate("扬州中学") == "sch.name = '扬州中学'"
+    assert _school_scope_predicate("扬州中学") == (
+        "(sch.s_name LIKE '%扬州中学%' OR sch.name LIKE '%扬州中学%')"
+    )
     assert _keep_school_filter_arg("YZZX") == "YZZX"
     assert _keep_school_filter_arg("扬州中学") == "扬州中学"
     assert _keep_school_filter_arg("南京一中") == ""
@@ -1992,7 +1994,8 @@ def test_diagnosis_where_uses_school_id_for_code_like_school_name():
 
     parts_name = _diagnosis_where_parts(school_name="扬州中学", subject_name="数学")
     blob_name = " AND ".join(parts_name)
-    assert "sch.name = '扬州中学'" in blob_name
+    assert "s_name LIKE '%扬州中学%'" in blob_name
+    assert "sch.name = '扬州中学'" not in blob_name
     assert "sc.school_id" not in blob_name
 
 
@@ -2052,9 +2055,9 @@ def test_fetch_student_diagnosis_retries_without_school_abbreviation(monkeypatch
 
     def fake_run(sql, **kwargs):
         calls.append(sql)
-        if "sch.name = '南京一中'" in sql:
+        if "南京一中" in sql:
             return True, "", {"columns": ["score"], "rows": []}, sql
-        if "sc.student_id = 'STU20240003'" in sql and "sch.name" not in sql:
+        if "sc.student_id = 'STU20240003'" in sql and "南京一中" not in sql:
             return True, "", {
                 "columns": ["question_no", "knowledge_name", "question_type", "full_score", "avg_score", "score_rate"],
                 "rows": [["1", "集合", "选择", 5, 4, 80]],

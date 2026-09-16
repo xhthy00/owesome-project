@@ -1,0 +1,27 @@
+F.F                                                                      [100%]
+================================== FAILURES ===================================
+__________ test_chinese_school_name_matches_s_name_like_not_name_eq ___________
+
+    def test_chinese_school_name_matches_s_name_like_not_name_eq():
+        pred = _school_scope_predicate("扬州中学")
+        assert pred is not None
+>       assert "s_name LIKE '%扬州中学%'" in pred
+E       assert "s_name LIKE '%扬州中学%'" in "sch.name = '扬州中学'"
+
+tests\agent\test_school_scope_predicate.py:13: AssertionError
+________________ test_diagnosis_where_for_yangzhou_uses_s_name ________________
+
+    def test_diagnosis_where_for_yangzhou_uses_s_name():
+        where = _diagnosis_where_clause(
+            school_name="扬州中学",
+            subject_name="数学",
+            exam_name="2026届高三1月期末",
+        )
+>       assert "s_name LIKE '%扬州中学%'" in where
+E       assert "s_name LIKE '%扬州中学%'" in " WHERE sch.name = '扬州中学' AND sc.subject_name = '数学' AND (COALESCE(eb.batch_name, e.exam_name) LIKE '%2026届高三1月期末%' OR... '%期末%' OR COALESCE(eb.batch_name, e.exam_name) LIKE '%期末考试%' OR COALESCE(eb.batch_name, e.exam_name) LIKE '%期末质量检测%')"
+
+tests\agent\test_school_scope_predicate.py:29: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/agent/test_school_scope_predicate.py::test_chinese_school_name_matches_s_name_like_not_name_eq
+FAILED tests/agent/test_school_scope_predicate.py::test_diagnosis_where_for_yangzhou_uses_s_name
+2 failed, 1 passed in 0.80s

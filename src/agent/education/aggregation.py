@@ -149,10 +149,35 @@ def _exam_key(row: dict[str, Any]) -> str:
     return ""
 
 
-def pick_primary_exam_id(score_rows: list[dict[str, Any]]) -> str | None:
-    """多场考试并存时，选参与学生数（或行数）最多的一场。"""
+def _exam_label(row: dict[str, Any]) -> str:
+    for k in ("exam_name", "exam"):
+        v = row.get(k)
+        if v is not None and str(v).strip():
+            return str(v).strip()
+    return ""
+
+
+def _exam_name_match_score(exam_label: str, preferred: str) -> int:
+    a = (exam_label or "").strip()
+    b = (preferred or "").strip()
+    if not a or not b:
+        return 0
+    if a == b:
+        return 2
+    if b in a or a in b:
+        return 1
+    return 0
+
+
+def pick_primary_exam_id(
+    score_rows: list[dict[str, Any]],
+    preferred_exam_name: str = "",
+) -> str | None:
+    """多场考试并存时，优先选考试名最接近用户指定的一场；否则选参与人数最多的一场。"""
     by_exam_students: dict[str, set[str]] = defaultdict(set)
     by_exam_rows: dict[str, int] = defaultdict(int)
+    by_exam_name_score: dict[str, int] = defaultdict(int)
+    preferred = (preferred_exam_name or "").strip()
     for r in score_rows:
         if not isinstance(r, dict):
             continue
@@ -163,30 +188,36 @@ def pick_primary_exam_id(score_rows: list[dict[str, Any]]) -> str | None:
         sk = _student_key(r)
         if sk:
             by_exam_students[eid].add(sk)
+        if preferred:
+            by_exam_name_score[eid] = max(
+                by_exam_name_score[eid],
+                _exam_name_match_score(_exam_label(r), preferred),
+            )
     if not by_exam_rows:
         return None
 
-    def _sort_key(eid: str) -> tuple[int, int, int]:
+    def _sort_key(eid: str) -> tuple[int, int, int, int]:
         students = len(by_exam_students.get(eid) or ())
         rows = by_exam_rows[eid]
         try:
             id_num = int(float(eid))
         except (TypeError, ValueError):
             id_num = 0
-        return (students or rows, rows, id_num)
+        return (by_exam_name_score.get(eid, 0), students or rows, rows, id_num)
 
     return max(by_exam_rows.keys(), key=_sort_key)
 
 
 def narrow_score_rows_to_primary_exam(
     score_rows: list[dict[str, Any]],
+    preferred_exam_name: str = "",
 ) -> tuple[list[dict[str, Any]], str | None]:
-    """若含多场考试，只保留参与人数最多的一场。"""
+    """若含多场考试，优先保留考试名最接近用户指定的一场。"""
     rows = [dict(r) for r in score_rows if isinstance(r, dict)]
     exams = {_exam_key(r) for r in rows if _exam_key(r)}
     if len(exams) <= 1:
         return rows, (next(iter(exams)) if exams else None)
-    primary = pick_primary_exam_id(rows)
+    primary = pick_primary_exam_id(rows, preferred_exam_name=preferred_exam_name)
     if not primary:
         return rows, None
     return [r for r in rows if _exam_key(r) == primary], primary

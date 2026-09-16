@@ -1,0 +1,47 @@
+F.FF                                                                     [100%]
+================================== FAILURES ===================================
+_______________ test_specific_exam_name_does_not_add_bare_qimo ________________
+
+    def test_specific_exam_name_does_not_add_bare_qimo():
+        cands = exam_name_like_candidates("2026届高三1月期末")
+        assert "2026届高三1月期末" in cands
+        assert "高三1月期末" in cands
+>       assert "期末" not in cands
+E       AssertionError: assert '期末' not in ['2026届高三1月期末', '高三1月期末', '期末', '期末考试', '期末质量检测']
+
+tests\agent\test_exam_name_match.py:14: AssertionError
+_________ test_diagnosis_where_specific_exam_excludes_bare_qimo_like __________
+
+    def test_diagnosis_where_specific_exam_excludes_bare_qimo_like():
+        where = _diagnosis_where_clause(
+            school_name="扬州中学",
+            subject_name="数学",
+            exam_name="2026届高三1月期末",
+        )
+        assert "LIKE '%2026届高三1月期末%'" in where
+>       assert "LIKE '%期末%'" not in where
+E       assert "LIKE '%期末%'" not in " WHERE (sch... '%期末质量检测%')"
+E         
+E         "LIKE '%期末%'" is contained here:
+E           xam_name) LIKE '%期末%' OR COALESCE(eb.batch_name, e.exam_name) LIKE '%期末考试%' OR COALESCE(eb.batch_name, e.exam_name) LIKE '%期末质量检测%')
+E         ?           +++++++++++
+
+tests\agent\test_exam_name_match.py:32: AssertionError
+_______ test_pick_primary_prefers_requested_exam_over_larger_headcount ________
+
+    def test_pick_primary_prefers_requested_exam_over_larger_headcount():
+        rows = [
+            *[{"exam_id": "6", "exam_name": "2027届高二6月期末", "student_id": f"a{i}"} for i in range(10)],
+            *[{"exam_id": "35", "exam_name": "2026届高三1月期末", "student_id": f"b{i}"} for i in range(7)],
+        ]
+        assert pick_primary_exam_id(rows) == "6"
+>       assert pick_primary_exam_id(rows, preferred_exam_name="2026届高三1月期末") == "35"
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       TypeError: pick_primary_exam_id() got an unexpected keyword argument 'preferred_exam_name'
+
+tests\agent\test_exam_name_match.py:42: TypeError
+=========================== short test summary info ===========================
+FAILED tests/agent/test_exam_name_match.py::test_specific_exam_name_does_not_add_bare_qimo
+FAILED tests/agent/test_exam_name_match.py::test_diagnosis_where_specific_exam_excludes_bare_qimo_like
+FAILED tests/agent/test_exam_name_match.py::test_pick_primary_prefers_requested_exam_over_larger_headcount
+3 failed, 1 passed in 0.71s
