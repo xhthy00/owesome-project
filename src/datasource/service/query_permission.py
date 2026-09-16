@@ -510,7 +510,14 @@ _DETAIL_TABLE_NAMES = frozenset({"tb_score_detail", "score_detail"})
 _STUDENT_TABLE_NAMES = frozenset({"tb_student", "student"})
 _INDICATOR_TABLE_NAMES = frozenset({"tb_score_indicator", "score_indicator"})
 _OVERVIEW_TABLE_NAMES = frozenset({"tb_score_overview", "score_overview"})
-_FRACTION_BAR_TABLE_NAMES = frozenset({"tb_fraction_bar", "fraction_bar"})
+_FRACTION_BAR_TABLE_NAMES = frozenset(
+    {
+        "tb_fraction_bar",
+        "fraction_bar",
+        "tb_score_contribution",
+        "score_contribution",
+    }
+)
 
 
 def _table_alias_name(table: Any) -> str:
@@ -1055,7 +1062,7 @@ def qualify_edu_row_predicates(
 ) -> list[str]:
     """为教育权限谓词补全正确表别名，避免 sd.school_id / st.student_id 等错误引用。
 
-    若 SQL 未涉及成绩事实表（如只查 tb_exam / tb_fraction_bar），无法安全挂
+    若 SQL 未涉及成绩事实表（如只查 tb_exam / tb_fraction_bar / tb_score_contribution），无法安全挂
     school_id/class：丢弃该谓词，避免把裸列注入维表导致 ``column "class" does not exist``。
     tb_score_overview 用 xx/bj/anon_stu_id；tb_score_indicator 有明文校名时挂
     school_name LIKE，否则挂 school_id。

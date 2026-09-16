@@ -1,6 +1,8 @@
 import { ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, Form, InputNumber, Space, Table, Typography, message } from "antd";
+import { useRouter } from "next/router";
 import { useCallback, useEffect, useState } from "react";
+import { getCurrentUser } from "@/api/auth";
 import {
   educationApi,
   type AnomalyRuleItem,
@@ -20,6 +22,8 @@ const COMPARE_LABEL: Record<string, string> = {
 };
 
 export default function AnomalyRulesPage() {
+  const router = useRouter();
+  const [allowed, setAllowed] = useState(false);
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -54,8 +58,28 @@ export default function AnomalyRulesPage() {
   }, [applyConfig]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    let active = true;
+    void getCurrentUser()
+      .then((u) => {
+        const ok = u.account === "admin" && u.id === 1;
+        if (!active) return;
+        if (!ok) {
+          void router.replace("/");
+          return;
+        }
+        setAllowed(true);
+      })
+      .catch(() => {
+        if (active) void router.replace("/");
+      });
+    return () => {
+      active = false;
+    };
+  }, [router]);
+
+  useEffect(() => {
+    if (allowed) void load();
+  }, [allowed, load]);
 
   const onSave = async () => {
     try {
@@ -91,6 +115,10 @@ export default function AnomalyRulesPage() {
       setSaving(false);
     }
   };
+
+  if (!allowed) {
+    return null;
+  }
 
   return (
     <div className="h-full min-h-0 overflow-y-auto">

@@ -76,9 +76,10 @@ Team 模式 Planner 会拆 3 步查数 + 1 步 ToolExpert 组装；ToolExpert �
 |----|------|------|
 | `tb_fraction_bar` | 一场批次一行 | 预测分数线阈值（`wl_score_*` 物理类、`ls_score_*` 历史类；物理美术列为 `wl_socre_ms`） |
 | `tb_score_indicator` | 批次×选科×学校×线种 | 达线人数 `reached_count`、参考人数 `candidates`、学校达线率 `reach_rate`。区县/全市须 `SUM` 后重算率，禁止 `AVG(reach_rate)` |
+| `tb_score_contribution` | 批次×选科×线种（全市） | 各科贡献分 `yw/sx/yy/wl/ls/hxzh/swzh/zzzh/dlzh`，切线 `threshold`，达线人数 `reached_count`。无学校列；NULL=该选科不考 |
 | `tb_score_overview` | 一学生一场批次 | 全科总分 `zf6m`、选科 `xkkm`、学校 `xx`、区县 `dq`、班级 `bj`；科目/转换/等级 `yw`…`dldj`；应届 `xsxz`、校层 `xxlb`。学生标识只用 `anon_stu_id`，禁止 `xm`/`sfzh`/`ksh` |
 
-三表的 `exam_name` 均与 `tb_exam_batch.batch_name` 对齐；`tb_fraction_bar` / `tb_score_indicator` / `tb_score_overview` 的 `exam_batch_id` 关联批次。
+四表的 `exam_name` 均与 `tb_exam_batch.batch_name` 对齐；`tb_fraction_bar` / `tb_score_indicator` / `tb_score_contribution` / `tb_score_overview` 的 `exam_batch_id` 关联批次。
 
 ### 局端基础分析（扬州模考口径）
 
@@ -91,7 +92,7 @@ Team 模式 Planner 会拆 3 步查数 + 1 步 ToolExpert 组装；ToolExpert �
 | 三/四/六门均分 | `AVG(zf3m/zf4m/zf6m)`，禁止再除以 3；报告默认分全员/理科（物理类）/文科（历史类） |
 | ABCDE | 聚合 `hxdj/swdj/zzdj/dldj` |
 | 位次前 N | 含并列（`zf6m ≥` 第 N 名分数） |
-| 贡献分 | 达线且总分等于切线分的学生各科均值 |
+| 贡献分 | 查 `tb_score_contribution`；不要扫 overview 现算。问句同时有贡献分和薄弱学科：差值=贡献分−该校该选科实际均分，≥1.5 才薄弱，文理分轨，按校类选线，每条线最多 3 科 |
 | 尖子班 | 只认 `tb_elite_class`，不猜班级号 |
 | 高分名单 | 只出 `anon_stu_id`，禁止 xm/ksh/sfzh |
 

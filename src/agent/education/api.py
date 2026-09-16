@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from audit.service.decorators import audit_access
-from common.exceptions.base import BadRequestException, NotFoundException
+from common.exceptions.base import BadRequestException, ForbiddenException, NotFoundException
 from common.schemas.response import error_response, success_response
 from src.agent.education import config_store
 from src.agent.education.config import config_to_public_dict
@@ -37,7 +37,11 @@ from src.agent.education.schema_mapping import (
 )
 from system.api.auth_deps import get_current_user
 from system.schemas import UserResponse
-from system.workspace_scope import assert_datasource_accessible, get_workspace_oid
+from system.workspace_scope import (
+    assert_datasource_accessible,
+    get_workspace_oid,
+    is_platform_admin_user,
+)
 
 router = APIRouter(prefix="/education", tags=["education"])
 
@@ -70,20 +74,35 @@ class ReportConfigPayload(BaseModel):
     )
 
 
+def _require_platform_admin(current_user: UserResponse) -> None:
+    if not is_platform_admin_user(current_user):
+        raise ForbiddenException("仅系统管理员可配置异常规则")
+
+
 @router.get("/report-config")
-async def get_report_config() -> dict:
+async def get_report_config(
+    current_user: UserResponse = Depends(get_current_user),
+) -> dict:
+    _require_platform_admin(current_user)
     cfg = config_store.get_config()
     return success_response(config_to_public_dict(cfg))
 
 
 @router.put("/report-config")
-async def update_report_config(payload: ReportConfigPayload) -> dict:
+async def update_report_config(
+    payload: ReportConfigPayload,
+    current_user: UserResponse = Depends(get_current_user),
+) -> dict:
+    _require_platform_admin(current_user)
     cfg = config_store.update_config(payload.model_dump(exclude_none=True))
     return success_response(config_to_public_dict(cfg), message="配置已更新")
 
 
 @router.post("/report-config/reset")
-async def reset_report_config() -> dict:
+async def reset_report_config(
+    current_user: UserResponse = Depends(get_current_user),
+) -> dict:
+    _require_platform_admin(current_user)
     config_store.reset_config()
     return success_response(config_to_public_dict(config_store.get_config()), message="已恢复默认配置")
 

@@ -2341,6 +2341,7 @@ def _reconcile_summary_with_sub_phases(
     question: str = "",
 ) -> str:
     """有报告/权威 KPI 时改写结论；无权威时清洗预览规模人数幻觉。"""
+    from src.agent.education.contribution_weak import apply_contribution_weak_verdict
     from src.agent.education.subject_strength import apply_subject_strength_verdict
     from src.agent.education.summary_context import (
         append_keepable_result_tables,
@@ -2381,14 +2382,18 @@ def _reconcile_summary_with_sub_phases(
                 f"{c.field}:{c.claimed}->{c.authority}" for c in conflicts[:20]
             ),
         )
-    return apply_subject_strength_verdict(
-        relabel_result_table_headers(
-            scrub_implementation_details(
-                append_keepable_result_tables(reconciled, exec_results, question=question)
-            )
+    return apply_contribution_weak_verdict(
+        apply_subject_strength_verdict(
+            relabel_result_table_headers(
+                scrub_implementation_details(
+                    append_keepable_result_tables(reconciled, exec_results, question=question)
+                )
+            ),
+            exec_results,
+            question,
         ),
-        exec_results,
         question,
+        tool_calls,
     )
 
 

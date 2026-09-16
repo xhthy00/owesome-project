@@ -14,6 +14,7 @@ build/
 frontend-react/tsconfig.tsbuildinfo
 temp/
 testdata/
+artifacts/
 tests/
 !tests/
 tests/*
@@ -33,3 +34,5 @@ tests/agent/*
 !tests/agent/test_class_name_normalize.py
 !tests/agent/test_sql_preview_notes.py
 !tests/agent/test_peer_rank_pool.py
+!tests/agent/test_score_contribution.py
+!tests/agent/test_contribution_weak.py

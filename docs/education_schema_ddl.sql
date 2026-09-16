@@ -220,3 +220,52 @@ CREATE TABLE IF NOT EXISTS tb_elite_class (
 
 COMMENT ON TABLE tb_elite_class IS
     '尖子班配置：exam_name×school_id(xx)×class_name(bj)×track(物理类/历史类)';
+
+-- 全市各科贡献分（基础分析表「14高三各科贡献分」；无学校/区县粒度）
+CREATE TABLE IF NOT EXISTS tb_score_contribution (
+    id              BIGSERIAL PRIMARY KEY,
+    exam_name       VARCHAR(128) NOT NULL,
+    exam_batch_id   BIGINT,
+    track           VARCHAR(32)  NOT NULL DEFAULT '',
+    line_code       VARCHAR(32)  NOT NULL DEFAULT '',
+    line_name       VARCHAR(64)  NOT NULL,
+    threshold       NUMERIC(8, 2),
+    reached_count   INTEGER NOT NULL DEFAULT 0,
+    yw              NUMERIC(8, 2),
+    sx              NUMERIC(8, 2),
+    yy              NUMERIC(8, 2),
+    wl              NUMERIC(8, 2),
+    ls              NUMERIC(8, 2),
+    hxzh            NUMERIC(8, 2),
+    swzh            NUMERIC(8, 2),
+    zzzh            NUMERIC(8, 2),
+    dlzh            NUMERIC(8, 2),
+    source          VARCHAR(16)  NOT NULL DEFAULT 'import',
+    updated_at      TIMESTAMP NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_score_contribution UNIQUE (exam_name, track, line_name)
+);
+
+COMMENT ON TABLE tb_score_contribution IS
+    '全市各科贡献分：一行=一场考试×选科×线种。无学校/区县粒度。科目 NULL=该选科不考。权威来自基础分析表导入';
+COMMENT ON COLUMN tb_score_contribution.exam_name IS '考试名称，与 tb_exam_batch.batch_name / tb_fraction_bar.exam_name 一致';
+COMMENT ON COLUMN tb_score_contribution.exam_batch_id IS '考试批次ID，关联 tb_exam_batch.id';
+COMMENT ON COLUMN tb_score_contribution.track IS '选科方向：物理类 / 历史类';
+COMMENT ON COLUMN tb_score_contribution.line_code IS '线种代码 tz/bk/211；特招线=特控线 tz';
+COMMENT ON COLUMN tb_score_contribution.line_name IS '线种名称：特控线/本科线/211线';
+COMMENT ON COLUMN tb_score_contribution.threshold IS '该选科该线预测分数线，对应 Excel ZF6 贡献分';
+COMMENT ON COLUMN tb_score_contribution.reached_count IS '全市该选科达线人数（总分≥threshold）';
+COMMENT ON COLUMN tb_score_contribution.yw IS '语文贡献分';
+COMMENT ON COLUMN tb_score_contribution.sx IS '数学贡献分';
+COMMENT ON COLUMN tb_score_contribution.yy IS '英语贡献分';
+COMMENT ON COLUMN tb_score_contribution.wl IS '物理贡献分；历史类为空';
+COMMENT ON COLUMN tb_score_contribution.ls IS '历史贡献分；物理类为空';
+COMMENT ON COLUMN tb_score_contribution.hxzh IS '化学转换分贡献分';
+COMMENT ON COLUMN tb_score_contribution.swzh IS '生物转换分贡献分';
+COMMENT ON COLUMN tb_score_contribution.zzzh IS '政治转换分贡献分';
+COMMENT ON COLUMN tb_score_contribution.dlzh IS '地理转换分贡献分';
+COMMENT ON COLUMN tb_score_contribution.source IS 'import=基础分析表导入；computed=系统现算回填';
+COMMENT ON COLUMN tb_score_contribution.updated_at IS '最近一次写入时间';
+
+CREATE INDEX IF NOT EXISTS idx_score_contribution_exam ON tb_score_contribution (exam_name);
+CREATE INDEX IF NOT EXISTS idx_score_contribution_batch ON tb_score_contribution (exam_batch_id);
+CREATE INDEX IF NOT EXISTS idx_score_contribution_line ON tb_score_contribution (line_name);

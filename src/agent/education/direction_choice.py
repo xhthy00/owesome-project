@@ -379,6 +379,7 @@ def is_fact_metric_unresolved(question: str, route: Any = None) -> bool:
         FactQueryKind.SUBJECT_RESEARCH,
         FactQueryKind.CLASS_WEAK_SUBJECT,
         FactQueryKind.SUBJECT_STRENGTH,
+        FactQueryKind.CONTRIBUTION_WEAK,
         FactQueryKind.LINE_REACH,
         FactQueryKind.RANK,
     }:

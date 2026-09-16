@@ -7727,6 +7727,144 @@ def query_school_vs_city_avg_tool(
 
 
 @tool()
+def query_contribution_weak_tool(
+    exam_name: str = "",
+    school_name: str = "",
+    class_name: str = "",
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+    user_id: int | None = None,
+    tool_runtime_ctx: dict[str, Any] | None = None,
+) -> ToolResult:
+    """学校贡献分薄弱学科：贡献分−实际均分≥1.5，按校类选线、文理分轨。
+
+    贡献分只读 tb_score_contribution。禁止 HTML 报告，禁止对照池排名口径。
+    """
+    from src.agent.education.bureau_analysis import parse_track
+    from src.agent.education.contribution_weak import (
+        contribution_select_sql,
+        evaluate_contribution_weak,
+        format_contribution_weak_verdict,
+        is_school_id_token,
+        pick_class_filter_token,
+        pick_school_filter_token,
+        school_subject_avg_sql,
+    )
+    from src.agent.education.scope_guard import lookup_bound_school_labels
+    from src.agent.education.line_reach_report import (
+        exam_batch_select_sql,
+        ordered_exam_names,
+        pick_exam_for_question,
+        sql_result_to_dicts,
+    )
+    from src.agent.education.query_parse import extract_school_target
+
+    ctx = tool_runtime_ctx if isinstance(tool_runtime_ctx, dict) else {}
+    ds_id = datasource_id if datasource_id is not None else ctx.get("datasource_id")
+    ws_oid = workspace_oid if workspace_oid is not None else ctx.get("workspace_oid")
+    uid = user_id if user_id is not None else ctx.get("user_id")
+    if not ds_id:
+        return ToolResult(
+            content="query_contribution_weak_tool 失败：缺少 datasource_id。",
+            data={"error": "missing datasource_id"},
+        )
+    user_q = str(ctx.get("user_question") or (ctx.get("constraints") or {}).get("question") or "")
+    edu = _research_edu_scope(ctx, uid)
+    named = extract_school_target(user_q) or ""
+    arg = str(school_name or "").strip()
+    bound_name = str(edu.get("school_name") or "").strip()
+    bound_id = str(edu.get("school_id") or "").strip()
+    sid = bound_id if is_school_id_token(bound_id) else (
+        arg if is_school_id_token(arg) else ""
+    )
+    looked: list[str] = []
+    if sid:
+        display, _disp_logs = _lookup_display_name_for_school_id(
+            sid,
+            datasource_id=int(ds_id),
+            workspace_oid=ws_oid,
+            user_id=uid,
+        )
+        if display:
+            looked.append(display)
+        looked.extend(
+            lookup_bound_school_labels(
+                sid, datasource_id=int(ds_id), workspace_oid=ws_oid
+            )
+        )
+    school = pick_school_filter_token(
+        named=named, arg=arg, bound_name=bound_name, looked_up=looked
+    )
+    if not school:
+        return ToolResult(
+            content="贡献分薄弱学科需要具体学校。局端请点名学校；校长/教师用绑定本校。",
+            data={"error": "missing_school"},
+        )
+    cls = pick_class_filter_token(user_q, class_name)
+    chat_fn = ctx.get("exam_pick_chat")
+    if not callable(chat_fn):
+        chat_fn = None
+    ok_b, msg_b, batch_res, _ = _run_edu_sql(
+        exam_batch_select_sql(), datasource_id=int(ds_id), workspace_oid=ws_oid, user_id=uid
+    )
+    names = ordered_exam_names(sql_result_to_dicts(batch_res if ok_b else None))
+    exam = pick_exam_for_question(
+        names, question=user_q, hint=(exam_name or "").strip(), chat_fn=chat_fn
+    )
+    if not exam:
+        return ToolResult(
+            content="query_contribution_weak_tool 失败：未解析到考试名称。"
+            + (f"（{msg_b}）" if not ok_b and msg_b else ""),
+            data={"error": "missing exam_name"},
+        )
+    track = parse_track(user_q)
+    contrib_sql = contribution_select_sql(exam, track)
+    ok_c, msg_c, contrib_res, contrib_run = _run_edu_sql(
+        contrib_sql, datasource_id=int(ds_id), workspace_oid=ws_oid, user_id=uid
+    )
+    if not ok_c:
+        return ToolResult(
+            content=f"读取 tb_score_contribution 失败：{msg_c}",
+            data={"error": msg_c, "sql": contrib_run or contrib_sql},
+        )
+    avg_sql = school_subject_avg_sql(exam, school, class_name=cls, track=track)
+    ok_a, msg_a, avg_res, avg_run = _run_edu_sql(
+        avg_sql, datasource_id=int(ds_id), workspace_oid=ws_oid, user_id=uid
+    )
+    if not ok_a:
+        return ToolResult(
+            content=f"读取该校各科均分失败：{msg_a}",
+            data={"error": msg_a, "sql": avg_run or avg_sql},
+        )
+    tracks = (track,) if track else None
+    judged = evaluate_contribution_weak(
+        sql_result_to_dicts(contrib_res),
+        sql_result_to_dicts(avg_res),
+        tracks=tracks,
+    )
+    verdict = format_contribution_weak_verdict(
+        judged, exam_name=exam, school_name=school, class_name=cls
+    )
+    payload = {
+        "kind": "contribution_weak",
+        "verdict": verdict,
+        "exam_name": exam,
+        "school_name": school,
+        "class_name": cls,
+        "track": track,
+        "school_type": judged.get("school_type"),
+        "groups": judged.get("groups") or [],
+        "error": judged.get("error") or "",
+        "sql": [contrib_run or contrib_sql, avg_run or avg_sql],
+    }
+    return ToolResult(
+        content=verdict + "\n任务已完成，无需再调用其他工具。",
+        data=payload,
+        is_final=True,
+    )
+
+
+@tool()
 def peek_edu_filter_values(
     exam_hint: str = "",
     table: str = "tb_score_indicator",
@@ -7881,6 +8019,7 @@ EDUCATION_TOOLS = [
     peek_edu_filter_values,
     query_certified_metric_tool,
     query_school_vs_city_avg_tool,
+    query_contribution_weak_tool,
     compute_score_stats_tool,
     compute_rankings_tool,
     identify_at_risk_students_tool,
@@ -7951,6 +8090,7 @@ __all__ = [
     "identify_at_risk_students_tool",
     "peek_edu_filter_values",
     "query_certified_metric_tool",
+    "query_contribution_weak_tool",
     "query_school_vs_city_avg_tool",
     "resolve_score_schema",
     "select_report_template_tool",

@@ -347,6 +347,12 @@ def _is_rank_fact(question: str) -> bool:
     return not _has_explicit_report_intent(q)
 
 
+def _is_contribution_weak_fact(question: str) -> bool:
+    from src.agent.education.query_parse import is_contribution_weak_query
+
+    return is_contribution_weak_query(question or "")
+
+
 def _is_subject_strength_fact(question: str) -> bool:
     """优势/薄弱学科按各科均分全市排名，不是本校各科互比、不是班际报告。"""
     from src.agent.education.query_parse import is_subject_strength_query
@@ -415,6 +421,8 @@ def _candidate_pool(question: str) -> list[ReportType]:
     all_types = list(ReportType)
 
     if is_item_difficulty_curve_query(q):
+        return []
+    if _is_contribution_weak_fact(q):
         return []
     if is_difficulty_curve_report_query(q):
         return [ReportType.DIFFICULTY_CURVE]
@@ -644,6 +652,15 @@ def fallback_classify_report_intent(question: str) -> ReportRoute:
             report_type=ReportType.DIFFICULTY_CURVE,
             confidence=0.95,
             reason="硬约束整卷难度曲线",
+            source="hard",
+        )
+
+    if _is_contribution_weak_fact(q):
+        return ReportRoute(
+            needs_report=False,
+            report_type=None,
+            confidence=0.95,
+            reason="贡献分薄弱学科按差值口径事实查询",
             source="hard",
         )
 
@@ -1004,6 +1021,14 @@ def _hard_route(question: str) -> ReportRoute | None:
             report_type=ReportType.DIFFICULTY_CURVE,
             confidence=0.95,
             reason="硬约束整卷难度曲线",
+            source="hard",
+        )
+    if _is_contribution_weak_fact(q):
+        return ReportRoute(
+            needs_report=False,
+            report_type=None,
+            confidence=0.95,
+            reason="贡献分薄弱学科按差值口径事实查询",
             source="hard",
         )
     bureau = _bureau_report_type(q)

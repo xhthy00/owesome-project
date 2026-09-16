@@ -9,6 +9,7 @@ from src.agent.education.assign_score import DISPLAY_SCORE_SQL
 from src.agent.education.clarification import SLOT_CLASS, SLOT_EXAM, SLOT_SCHOOL, SLOT_SUBJECT
 from src.agent.education.kpi_sql import SCORE_JOIN_FROM, build_kpi_aggregate_sql
 from src.agent.education.query_parse import (
+    is_contribution_weak_query,
     is_line_reach_query,
     is_overview_total_query,
     is_score_stat_query,
@@ -78,6 +79,8 @@ def resolve_metric(question: str) -> MetricSpec | None:
         return next(s for s in _CATALOG if s.id == METRIC_OVERVIEW_TOTAL)
     if is_line_reach_query(q):
         return next(s for s in _CATALOG if s.id == METRIC_LINE_REACH)
+    if is_contribution_weak_query(q):
+        return None
     if is_subject_strength_query(q):
         return next(s for s in _CATALOG if s.id == METRIC_SUBJECT_STRENGTH)
     if is_score_stat_query(q):

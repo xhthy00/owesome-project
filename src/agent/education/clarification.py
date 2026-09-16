@@ -124,6 +124,7 @@ class FactQueryKind(str, Enum):
     SUBJECT_RESEARCH = "subject_research"      # 一校一场学科教研
     CLASS_WEAK_SUBJECT = "class_weak_subject"  # 指定班级薄弱学科
     SUBJECT_STRENGTH = "subject_strength"      # 优势/薄弱学科（各科均分排名）
+    CONTRIBUTION_WEAK = "contribution_weak"    # 贡献分差值薄弱学科
     LINE_REACH = "line_reach"                  # 达线/预测线人数或率
     SCORE_STAT = "score_stat"                  # 单场均分/最高分/口语分数问
     RANK = "rank"                              # 单场排名（班级/学校全市名次）
@@ -139,6 +140,7 @@ REQUIRED_SLOTS_BY_FACT: dict[FactQueryKind, tuple[str, ...]] = {
     FactQueryKind.SUBJECT_RESEARCH: (SLOT_EXAM, SLOT_SUBJECT, SLOT_SCHOOL),
     FactQueryKind.CLASS_WEAK_SUBJECT: (SLOT_EXAM, SLOT_SCHOOL, SLOT_CLASS),
     FactQueryKind.SUBJECT_STRENGTH: (SLOT_EXAM, SLOT_SCHOOL, SLOT_CLASS),
+    FactQueryKind.CONTRIBUTION_WEAK: (SLOT_EXAM, SLOT_SCHOOL),
     FactQueryKind.LINE_REACH: (SLOT_EXAM, SLOT_SCHOOL, SLOT_CLASS),
     FactQueryKind.SCORE_STAT: (SLOT_EXAM, SLOT_SCHOOL, SLOT_CLASS),
     FactQueryKind.RANK: (SLOT_EXAM, SLOT_SCHOOL, SLOT_CLASS),
@@ -320,6 +322,7 @@ def fact_query_kind(question: str) -> FactQueryKind | None:
     """事实问归到哪个口径。按特异性从高到低取第一个命中的。"""
     from src.agent.education.query_parse import (
         is_class_weak_subject_query,
+        is_contribution_weak_query,
         is_line_reach_query,
         is_oral_score_inquiry,
         is_rank_query,
@@ -339,6 +342,8 @@ def fact_query_kind(question: str) -> FactQueryKind | None:
         return FactQueryKind.SUBJECT_RESEARCH
     if is_class_weak_subject_query(q):
         return FactQueryKind.CLASS_WEAK_SUBJECT
+    if is_contribution_weak_query(q):
+        return FactQueryKind.CONTRIBUTION_WEAK
     if is_subject_strength_query(q):
         return FactQueryKind.SUBJECT_STRENGTH
     if is_line_reach_query(q):
@@ -681,6 +686,11 @@ def _candidate_missing_slots_legacy(
                 if not (role == "teacher" and len(bound_classes) == 1):
                     add(SLOT_CLASS)
             elif slot == SLOT_SCHOOL:
+                if kind == FactQueryKind.CONTRIBUTION_WEAK:
+                    bound = _bound_school(edu)
+                    if not bound or role not in ("teacher", "school_admin", "student"):
+                        add(SLOT_SCHOOL)
+                    continue
                 if skip_class or district_scoped:
                     continue
                 # 全市第N是哪个班：学校是答案，不是筛选范围

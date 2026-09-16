@@ -209,7 +209,9 @@ export default function SideBar() {
     const hideAnomalyAlerts = eduRole === "bureau_admin" || eduRole === "student";
     let list = routes;
     if (!isPlatformAdmin) {
-      list = routes.filter((item) => menuVisibility[item.key] !== false);
+      list = routes.filter(
+        (item) => item.key !== "anomaly-rules" && menuVisibility[item.key] !== false
+      );
     }
     if (hideAnomalyAlerts) {
       list = list.filter((item) => item.key !== "anomaly-alerts");

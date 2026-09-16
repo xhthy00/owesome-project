@@ -728,6 +728,7 @@ def resolve_edu_sql_intent(question: str) -> str:
     """教育问数意图标签，用于裁剪 few-shot/术语。"""
     from src.agent.education.query_parse import (
         extract_class_target,
+        is_contribution_weak_query,
         is_line_reach_query,
         is_overview_total_query,
         is_school_vs_city_avg_query,
@@ -746,6 +747,8 @@ def resolve_edu_sql_intent(question: str) -> str:
     if is_score_threshold_fact_query(q):
         return "score_band"
     if is_school_vs_city_avg_query(q) or is_school_vs_school_type_avg_query(q) or is_overview_total_query(q):
+        return "overview_avg"
+    if is_contribution_weak_query(q):
         return "overview_avg"
     if is_subject_strength_query(q):
         return "overview_avg"
@@ -876,7 +879,7 @@ def education_terminologies_block() -> str:
   </terminology>
   <terminology>
     <words><word>排名</word><word>全市排名</word><word>优势学科</word><word>薄弱学科</word><word>在籍</word><word>市报</word><word>往届</word></words>
-    <description>查 tb_score_overview 默认 AND xsxz='在籍生'。市报生/往届不进均分、不进全市班级或学校排名池（否则虚拟市报班会挤占名次）。问句明确要市报/往届/含市报时才放开。点名班级的全市六门/总分排名默认只出区分文理的一个名次：物理类 xkkm LIKE '物%'，历史类 LIKE '史%' OR LIKE '历%'；只报该班人数多的一类（人数相等只报物理类），该类参考人数≥3 的班才进池，均分只算该类学生。禁止再出「不区分选考」混排。查询结果返回第1名及目标班前后各3名并标记本班，禁止只返回目标班一行；对话结论仍只写目标班。排名池必须排除其他校（xxlb NOT LIKE '%其他%'，含中专/职校）和整班参考人数不足 10 人的小班。问句点名引领/支撑/发展校时，班级排名对照池必须再加 xxlb LIKE '%该类%'（如支撑校 LIKE '%支撑%'），禁止用全市普通高中混排。校长/教师角色默认对照池为同层次校（xxlb 与绑定学校同类），问句写全市排名仍是同层次不是全市所有普高；问句写不限校类/全市普通高中才放开。优势学科/薄弱学科同一对照池。问句写明不分文理/不区分选考才混排。问句已点名物理类/历史类时只出对应那一口径。单科班排（语文/数学/英语等）全市或全校同样默认只出区分文理的一个名次，查询结果返回第1名及目标班前后各3名并标记本班，禁止只返回目标班一行。全校班排对照池只限该校（xx LIKE '%校名%'），禁止扫全市。问句是「全市第N是哪个班」（无点名班）时：外层 WHERE 排名=N，禁止目标班前后3名窗口，化学/生物/政治/地理用 hxzh/swzh/zzzh/dlzh，COUNT(*) OVER() 必须在该科进池之后（禁止把行政班洗净数当再选科分母）。班级全市排名：GROUP BY xx,bj 后 RANK() OVER (ORDER BY 均分 DESC) 与 COUNT(*) OVER()，用学校 xx 与班级 bj 定位窗口；禁止只写班级（同名班会串校）；禁止 PARTITION BY bj（同名班跨校互比），禁止 COUNT(DISTINCT bj)（班名种类≠全市班级数）。优势学科/薄弱学科/优势科目/短板学科：按该校（点名班级则该班）各科均分的对照池排名相对位置判断，名次/参赛数≤25%为对照池前列（优势），≥50%为对照池靠后（薄弱），中间为中游；禁止把本校各科里名次较差的直接叫薄弱（第7/37仍属前列）；禁止用本校各科均分互相比较（满分与选考人数不同）。校长/教师默认同层次（问句写全市仍是同层次）。化学/生物/政治/地理用 hxzh/swzh/zzzh/dlzh，禁止 hx/sw/zz/dl</description>
+    <description>问句同时含贡献分时按贡献分差值口径（见贡献分术语），禁止对照池排名。查 tb_score_overview 默认 AND xsxz='在籍生'。市报生/往届不进均分、不进全市班级或学校排名池（否则虚拟市报班会挤占名次）。问句明确要市报/往届/含市报时才放开。点名班级的全市六门/总分排名默认只出区分文理的一个名次：物理类 xkkm LIKE '物%'，历史类 LIKE '史%' OR LIKE '历%'；只报该班人数多的一类（人数相等只报物理类），该类参考人数≥3 的班才进池，均分只算该类学生。禁止再出「不区分选考」混排。查询结果返回第1名及目标班前后各3名并标记本班，禁止只返回目标班一行；对话结论仍只写目标班。排名池必须排除其他校（xxlb NOT LIKE '%其他%'，含中专/职校）和整班参考人数不足 10 人的小班。问句点名引领/支撑/发展校时，班级排名对照池必须再加 xxlb LIKE '%该类%'（如支撑校 LIKE '%支撑%'），禁止用全市普通高中混排。校长/教师角色默认对照池为同层次校（xxlb 与绑定学校同类），问句写全市排名仍是同层次不是全市所有普高；问句写不限校类/全市普通高中才放开。优势学科/薄弱学科同一对照池。问句写明不分文理/不区分选考才混排。问句已点名物理类/历史类时只出对应那一口径。单科班排（语文/数学/英语等）全市或全校同样默认只出区分文理的一个名次，查询结果返回第1名及目标班前后各3名并标记本班，禁止只返回目标班一行。全校班排对照池只限该校（xx LIKE '%校名%'），禁止扫全市。问句是「全市第N是哪个班」（无点名班）时：外层 WHERE 排名=N，禁止目标班前后3名窗口，化学/生物/政治/地理用 hxzh/swzh/zzzh/dlzh，COUNT(*) OVER() 必须在该科进池之后（禁止把行政班洗净数当再选科分母）。班级全市排名：GROUP BY xx,bj 后 RANK() OVER (ORDER BY 均分 DESC) 与 COUNT(*) OVER()，用学校 xx 与班级 bj 定位窗口；禁止只写班级（同名班会串校）；禁止 PARTITION BY bj（同名班跨校互比），禁止 COUNT(DISTINCT bj)（班名种类≠全市班级数）。优势学科/薄弱学科/优势科目/短板学科：按该校（点名班级则该班）各科均分的对照池排名相对位置判断，名次/参赛数≤25%为对照池前列（优势），≥50%为对照池靠后（薄弱），中间为中游；禁止把本校各科里名次较差的直接叫薄弱（第7/37仍属前列）；禁止用本校各科均分互相比较（满分与选考人数不同）。校长/教师默认同层次（问句写全市仍是同层次）。化学/生物/政治/地理用 hxzh/swzh/zzzh/dlzh，禁止 hx/sw/zz/dl</description>
   </terminology>
   <terminology>
     <words><word>均分</word><word>各科</word><word>选考</word><word>选课</word><word>历史</word><word>地理</word><word>政治</word><word>均衡</word><word>标准差</word><word>离散</word></words>
@@ -888,7 +891,7 @@ def education_terminologies_block() -> str:
   </terminology>
   <terminology>
     <words><word>特招线</word><word>应届</word><word>贡献分</word><word>位次</word><word>ABCDE</word></words>
-    <description>特招线=特控线。应届=tb_score_overview.xsxz 在籍生（排除市报生）。ABCDE 聚合 hxdj/swdj/zzdj/dldj。位次前N含并列（zf6m≥第N名分数）。贡献分=达该线且 zf6m 等于切线分的学生各科均值</description>
+    <description>特招线=特控线。应届=tb_score_overview.xsxz 在籍生（排除市报生）。ABCDE 聚合 hxdj/swdj/zzdj/dldj。位次前N含并列（zf6m≥第N名分数）。贡献分查 tb_score_contribution（禁止扫 overview 现算）。问句同时有贡献分和薄弱学科：差值=贡献分−该校该选科实际均分，≥1.5 才薄弱，文理分轨，按校类选线（引领211+特控，支撑特控+本科，发展本科），每条线最多3科，不要对照池排名</description>
   </terminology>
   <terminology>
     <words><word>分以上</word><word>十分段</word><word>10分段</word><word>五分段</word><word>总分</word></words>

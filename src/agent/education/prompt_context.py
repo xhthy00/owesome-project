@@ -87,6 +87,7 @@ def build_education_sql_hint_text(question: str) -> str:
         is_class_city_rank_query,
         is_class_rank_school_scope,
         is_class_subject_city_rank_query,
+        is_contribution_weak_query,
         is_school_class_comparison_query,
         is_school_vs_school_type_avg_query,
         is_subject_strength_query,
@@ -152,7 +153,15 @@ def build_education_sql_hint_text(question: str) -> str:
                 "名次/总数≤25% 称前列，禁止称中上段；结论禁止字段名与 A01 校码。"
             )
 
-    if is_subject_strength_query(q):
+    if is_contribution_weak_query(q):
+        rules.append(
+            "贡献分薄弱学科：读 tb_score_contribution，禁止扫 overview 现算贡献分；"
+            "实际均分=该校该选科在籍生 AVG FILTER col>0；"
+            "差值=贡献分−实际均分，≥1.5 才算薄弱，按差值倒序每条线最多3科；"
+            "文理分开；引领校用211+特控，支撑校用特控+本科，发展校只用本科；"
+            "特招=特控。不要用对照池排名后50%那套。不要列出他校分数。"
+        )
+    elif is_subject_strength_query(q):
         rules.append(
             "优势/薄弱学科：按该校（有班则该班）各科均分的对照池排名相对位置判断，"
             "名次/参赛数≤25%为前列（优势），≥50%为靠后（薄弱），中间为中游；"

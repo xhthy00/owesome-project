@@ -814,11 +814,13 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     from src.agent.education.metric_catalog import format_metric_plan, resolve_metric
     from src.agent.education.orchestrator import _extract_class_name, _extract_subject
     from src.agent.education.query_parse import (
+        extract_class_target,
         extract_district_target,
         extract_school_type_target,
         is_citywide_nth_class_lookup_query,
         is_class_city_rank_query,
         is_class_subject_city_rank_query,
+        is_contribution_weak_query,
         is_item_difficulty_curve_query,
         is_line_reach_citywide_scope,
         is_line_reach_query,
@@ -859,6 +861,7 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
         and not is_line_reach_query(q)
         and not is_overview_total_query(q)
         and not is_subject_strength_query(q)
+        and not is_contribution_weak_query(q)
         and not is_score_threshold_fact_query(q)
         and not is_school_vs_city_avg_query(q)
         and not is_school_vs_school_type_avg_query(q)
@@ -875,6 +878,33 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     class_name = _extract_class_name(q) or filled.get("class_name") or ""
     subject = _plan_subject_name(q) or (_extract_subject(q) or "") or filled.get("subject_name") or ""
     exam = _plan_exam_name(q) or filled.get("exam_name") or ""
+    if is_contribution_weak_query(q):
+        from src.agent.education.contribution_weak import is_school_id_token
+
+        named_cls = (filled.get("class_name") or extract_class_target(q) or "").strip()
+        if is_school_id_token(school):
+            school = ""
+        arg_bits = []
+        if exam:
+            arg_bits.append(f"exam_name='{exam}'")
+        if school:
+            arg_bits.append(f"school_name='{school}'")
+        if named_cls:
+            arg_bits.append(f"class_name='{named_cls}'")
+        args = ", ".join(arg_bits)
+        return [
+            {
+                "sub_task": (
+                    f"调 query_contribution_weak_tool({args}) "
+                    "按「贡献分−实际均分≥1.5」判定薄弱学科，文理分轨、按校类选预测线、每条线最多3科；"
+                    "贡献分只读 tb_score_contribution，禁止扫 overview 现算覆盖；"
+                    "**禁止** execute_sql 手写；**禁止** HTML 报告；"
+                    "**禁止**对照池排名那套优势/薄弱口径；答完即 terminate。"
+                    f"原问：{q}"
+                ),
+                "sub_task_agent": _DEFAULT_SUB_TASK_AGENT,
+            }
+        ]
     district = extract_district_target(q) or ""
     spec_district = district if district and district not in _GENERIC_DISTRICT_LABELS else ""
     scope_bits = []

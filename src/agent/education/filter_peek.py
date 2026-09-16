@@ -13,6 +13,7 @@ ExecuteFn = Callable[[str], tuple[bool, str, dict[str, Any] | None]]
 _EDU_TABLES = frozenset(
     {
         "tb_score_indicator",
+        "tb_score_contribution",
         "tb_score_overview",
         "tb_fraction_bar",
         "tb_exam_batch",

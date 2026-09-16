@@ -1316,6 +1316,8 @@ def is_contribution_report_query(question: str) -> bool:
     q = (question or "").strip()
     if not q:
         return False
+    if is_contribution_weak_query(q):
+        return False
     return "贡献分" in q and _has_reportish(q)
 
 
@@ -1740,12 +1742,24 @@ _SUBJECT_STRENGTH_HINTS = (
 )
 
 
+def is_contribution_weak_query(question: str) -> bool:
+    """学校贡献分薄弱学科：差值口径，不是对照池排名，也不是贡献分 HTML 报告。"""
+    q = (question or "").strip()
+    if "贡献分" not in q:
+        return False
+    if any(h in q for h in ("知识点", "小题")):
+        return False
+    return any(h in q for h in ("薄弱", "弱势", "弱项", "短板"))
+
+
 def is_subject_strength_query(question: str) -> bool:
     """学校/班级优势或薄弱学科：按各科均分全市排名，不是本校各科互比。"""
     q = (question or "").strip()
     if not q:
         return False
     if any(h in q for h in ("知识点", "小题")):
+        return False
+    if is_contribution_weak_query(q):
         return False
     return any(h in q for h in _SUBJECT_STRENGTH_HINTS)
 
@@ -1768,7 +1782,7 @@ def is_class_weak_subject_query(question: str) -> bool:
     if not q:
         return False
     # 自由提问的优势/薄弱学科改走各科均分全市排名，不再用班际工具
-    if is_subject_strength_query(q):
+    if is_subject_strength_query(q) or is_contribution_weak_query(q):
         return False
     if not any(h in q for h in _CLASS_WEAK_SUBJECT_HINTS):
         return False
@@ -3293,6 +3307,7 @@ __all__ = [
     "is_assign_grade_report_query",
     "is_rank_bucket_report_query",
     "is_contribution_report_query",
+    "is_contribution_weak_query",
     "is_combo_reach_report_query",
     "is_elite_roster_report_query",
     "wants_full_student_roster",
