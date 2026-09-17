@@ -21,6 +21,8 @@ export interface CurrentUser {
   origin: number;
   create_time: number;
   is_platform_admin: boolean;
+  is_super_admin?: boolean;
+  sys_role?: string | null;
   edu_scope?: {
     edu_role?: string | null;
     edu_role_label?: string | null;

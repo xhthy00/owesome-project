@@ -24,3 +24,4 @@ class SysUser(SQLModel, table=True):
     language: str = Field(max_length=255, default="zh-CN")
     origin: int = Field(sa_column=Column(Integer, default=0))
     system_variables: Optional[dict] = Field(default=None, sa_column=Column(JSONB, nullable=True))
+    sys_role: Optional[str] = Field(default=None, max_length=32)

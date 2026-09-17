@@ -34,9 +34,11 @@ class UserResponse(BaseModel):
     language: str
     origin: int
     create_time: int
+    sys_role: Optional[str] = None
     is_platform_admin: bool = False
-    # 仅在 /system/me 的 dict 响应中由 authz.is_platform_admin 显式填充；
-    # 当 UserResponse 经 from_attributes 从 SysUser 构建时本字段回退为 False，不可依赖。
+    is_super_admin: bool = False
+    # is_platform_admin / is_super_admin 仅在 /system/me 显式填充；
+    # 当 UserResponse 经 from_attributes 从 SysUser 构建时回退为 False，鉴权请用 authz 函数。
 
     class Config:
         from_attributes = True

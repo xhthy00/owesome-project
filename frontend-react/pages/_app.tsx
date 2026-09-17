@@ -111,7 +111,9 @@ function LayoutWrapper({
         const name = String(user.name || "").trim();
         setLoginAccount(account);
         setLoginName(name);
-        setHideWorkspaceSwitcher(Boolean(user.is_platform_admin));
+        setHideWorkspaceSwitcher(
+          Boolean(user.is_platform_admin) || scope.edu_role === "bureau_admin"
+        );
         setCachedWatermarkText(userWatermarkText(account, name));
         const fromStorage = Number(window.localStorage.getItem(WORKSPACE_OID_KEY) || "");
         const hasStorage = Number.isFinite(fromStorage) && opts.some((o) => o.value === fromStorage);

@@ -17,6 +17,7 @@ export interface SystemUser {
   class_names?: string[] | null;
   student_id?: string | null;
   edu_remark?: string | null;
+  sys_role?: string | null;
 }
 
 export interface Workspace {
@@ -51,6 +52,11 @@ export const systemApi = {
       body: JSON.stringify({ id, status })
     }),
   deleteUser: (id: number) => apiRequest<{ id: number }>(`/user/${id}`, { method: "DELETE" }),
+  setUserSysRole: (id: number, sys_role: "platform_admin" | "") =>
+    apiRequest<{ id: number; sys_role: string | null }>(`/user/${id}/sys-role`, {
+      method: "PATCH",
+      body: JSON.stringify({ sys_role })
+    }),
   listWorkspaces: () => apiRequest<Workspace[]>("/system/workspace"),
   createWorkspace: (name: string) =>
     apiRequest<{ id: number; name: string }>("/system/workspace", {

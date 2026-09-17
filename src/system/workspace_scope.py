@@ -13,6 +13,7 @@ from common.exceptions.base import NotFoundException
 from datasource.crud import crud_datasource
 from datasource.models.datasource import CoreDatasource
 from system.api.auth_deps import get_current_user
+from system.authz import is_platform_admin
 from system.schemas import UserResponse
 
 WORKSPACE_OID_HEADER = "X-Workspace-Oid"
@@ -28,8 +29,8 @@ def _parse_oid_header(value: str | None) -> int | None:
 
 
 def is_platform_admin_user(user: UserResponse) -> bool:
-    """与 ``authz.is_platform_admin`` 语义一致（JWT 上下文使用 UserResponse）。"""
-    return user.id == 1 and user.account == "admin"
+    """与 ``authz.is_platform_admin`` 语义一致（JWT 上下文使用 UserResponse / SysUser）。"""
+    return is_platform_admin(user)
 
 
 def get_workspace_oid(

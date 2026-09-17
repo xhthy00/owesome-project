@@ -7,12 +7,52 @@ from sqlalchemy.orm import Session
 from system.models.user import SysUser
 from system.models.workspace import SysUserWorkspace
 
+SYS_ROLE_SUPER_ADMIN = "super_admin"
+SYS_ROLE_PLATFORM_ADMIN = "platform_admin"
 
-def is_platform_admin(user: SysUser | None) -> bool:
-    """与 ``permission._role_code`` 一致：内置 admin 账号视为平台管理员。"""
+
+def _sys_role(user) -> str:
+    return str(getattr(user, "sys_role", None) or "").strip()
+
+
+def is_legacy_builtin_admin(user) -> bool:
+    """历史内置账号：id=1 且 account=admin，作为超管兜底。"""
     if user is None:
         return False
-    return user.id == 1 and user.account == "admin"
+    try:
+        uid = int(getattr(user, "id", 0) or 0)
+    except (TypeError, ValueError):
+        return False
+    return uid == 1 and str(getattr(user, "account", "") or "") == "admin"
+
+
+def is_super_admin(user: SysUser | None) -> bool:
+    """仅超管。内置 admin 始终为超管，避免迁移漏写 sys_role。"""
+    if user is None:
+        return False
+    if is_legacy_builtin_admin(user):
+        return True
+    return _sys_role(user) == SYS_ROLE_SUPER_ADMIN
+
+
+def is_platform_admin(user: SysUser | None) -> bool:
+    """超管或平台管理员。现有 admin 仍走超管兜底，行为与改前一致。"""
+    if user is None:
+        return False
+    if is_super_admin(user):
+        return True
+    return _sys_role(user) == SYS_ROLE_PLATFORM_ADMIN
+
+
+def effective_sys_role(user: SysUser | None) -> str | None:
+    """对外展示的系统角色：超管优先于平台管理员。"""
+    if user is None:
+        return None
+    if is_super_admin(user):
+        return SYS_ROLE_SUPER_ADMIN
+    if is_platform_admin(user):
+        return SYS_ROLE_PLATFORM_ADMIN
+    return None
 
 
 def is_workspace_admin(session: Session, user_id: int) -> bool:

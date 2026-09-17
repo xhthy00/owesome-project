@@ -24,7 +24,7 @@ router = APIRouter(prefix="/permission", tags=["permission"])
 
 
 def _role_code(user: SysUser, weight: int) -> str:
-    if user.id == 1 and user.account == "admin":
+    if is_platform_admin(user):
         return "admin"
     if weight == 1:
         return "ws_admin"

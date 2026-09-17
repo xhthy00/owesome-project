@@ -72,7 +72,7 @@ export default function SideBar() {
   const [renamingId, setRenamingId] = useState<number | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const skipRenameBlurRef = useRef(false);
-  const isPlatformAdmin = useMemo(() => currentUser?.account === "admin" && currentUser?.id === 1, [currentUser]);
+  const isPlatformAdmin = useMemo(() => Boolean(currentUser?.is_platform_admin), [currentUser]);
 
   useEffect(() => {
     let active = true;

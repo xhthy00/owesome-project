@@ -31,9 +31,19 @@ import { systemApi, type SystemUser } from "@/api/system";
 
 const WORKSPACE_OID_KEY = "frontend_react_workspace_oid";
 
-function isProtectedUser(row: SystemUser, currentUserId?: number) {
+function isSuperUser(row: SystemUser) {
+  return row.sys_role === "super_admin" || (row.id === 1 && row.account === "admin");
+}
+
+function isPlatformUser(row: SystemUser) {
+  return isSuperUser(row) || row.sys_role === "platform_admin";
+}
+
+function isProtectedUser(row: SystemUser, currentUserId?: number, isSuperAdmin?: boolean) {
   if (currentUserId != null && row.id === currentUserId) return true;
-  return row.id === 1 && row.account === "admin";
+  if (isSuperUser(row)) return true;
+  if (isPlatformUser(row) && !isSuperAdmin) return true;
+  return false;
 }
 
 export default function PermissionUsersPage() {
@@ -42,6 +52,7 @@ export default function PermissionUsersPage() {
   const [pageNum, setPageNum] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [currentUserId, setCurrentUserId] = useState<number>();
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [batchOpen, setBatchOpen] = useState(false);
@@ -91,8 +102,14 @@ export default function PermissionUsersPage() {
 
   useEffect(() => {
     void getCurrentUser()
-      .then((u) => setCurrentUserId(u.id))
-      .catch(() => setCurrentUserId(undefined));
+      .then((u) => {
+        setCurrentUserId(u.id);
+        setIsSuperAdmin(Boolean(u.is_super_admin));
+      })
+      .catch(() => {
+        setCurrentUserId(undefined);
+        setIsSuperAdmin(false);
+      });
     void load(1, 20);
     // 仅首次进入拉取第一页
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -107,6 +124,18 @@ export default function PermissionUsersPage() {
       await load(nextPage, pageSize);
     } catch (err) {
       message.error(err instanceof Error ? err.message : "删除失败");
+      setLoading(false);
+    }
+  };
+
+  const confirmSetSysRole = async (row: SystemUser, sys_role: "platform_admin" | "") => {
+    setLoading(true);
+    try {
+      await systemApi.setUserSysRole(row.id, sys_role);
+      message.success(sys_role ? "已设为管理员" : "已取消管理员");
+      await load(pageNum, pageSize);
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : "操作失败");
       setLoading(false);
     }
   };
@@ -199,10 +228,11 @@ export default function PermissionUsersPage() {
     },
     {
       title: "角色",
-      dataIndex: "id",
+      dataIndex: "sys_role",
       width: 120,
       render: (_, row) => {
-        if (row.id === 1 && row.account === "admin") return <Tag color="red">admin</Tag>;
+        if (isSuperUser(row)) return <Tag color="red">超管</Tag>;
+        if (row.sys_role === "platform_admin") return <Tag color="volcano">管理员</Tag>;
         return <Tag color={row.status ? "blue" : "default"}>{row.status ? "member" : "disabled"}</Tag>;
       }
     },
@@ -210,27 +240,64 @@ export default function PermissionUsersPage() {
     {
       title: "操作",
       key: "actions",
-      width: 100,
+      width: 220,
       fixed: "right",
-      render: (_, row) =>
-        isProtectedUser(row, currentUserId) ? (
-          <Typography.Text type="secondary" className="text-xs">
-            —
-          </Typography.Text>
-        ) : (
-          <Popconfirm
-            title="删除用户"
-            description={`确定删除「${row.name}」（${row.account}）？删除后无法登录。`}
-            okText="删除"
-            okType="danger"
-            cancelText="取消"
-            onConfirm={() => void confirmDelete(row)}
-          >
-            <Button type="link" size="small" danger icon={<DeleteOutlined />}>
-              删除
-            </Button>
-          </Popconfirm>
-        )
+      render: (_, row) => {
+        const canAppoint = isSuperAdmin && !isSuperUser(row) && row.id !== currentUserId;
+        const canDelete = !isProtectedUser(row, currentUserId, isSuperAdmin);
+        if (!canAppoint && !canDelete) {
+          return (
+            <Typography.Text type="secondary" className="text-xs">
+              —
+            </Typography.Text>
+          );
+        }
+        return (
+          <Space size={0}>
+            {canAppoint ? (
+              row.sys_role === "platform_admin" ? (
+                <Popconfirm
+                  title="取消管理员"
+                  description={`取消「${row.name}」的平台管理员权限？`}
+                  okText="确定"
+                  cancelText="取消"
+                  onConfirm={() => void confirmSetSysRole(row, "")}
+                >
+                  <Button type="link" size="small">
+                    取消管理员
+                  </Button>
+                </Popconfirm>
+              ) : (
+                <Popconfirm
+                  title="设为管理员"
+                  description={`将「${row.name}」设为平台管理员？功能与超管一致，但不能任命其他管理员。`}
+                  okText="确定"
+                  cancelText="取消"
+                  onConfirm={() => void confirmSetSysRole(row, "platform_admin")}
+                >
+                  <Button type="link" size="small">
+                    设为管理员
+                  </Button>
+                </Popconfirm>
+              )
+            ) : null}
+            {canDelete ? (
+              <Popconfirm
+                title="删除用户"
+                description={`确定删除「${row.name}」（${row.account}）？删除后无法登录。`}
+                okText="删除"
+                okType="danger"
+                cancelText="取消"
+                onConfirm={() => void confirmDelete(row)}
+              >
+                <Button type="link" size="small" danger icon={<DeleteOutlined />}>
+                  删除
+                </Button>
+              </Popconfirm>
+            ) : null}
+          </Space>
+        );
+      }
     }
   ];
 

@@ -96,6 +96,9 @@ def _ensure_columns() -> None:
             "pass_ratio": "DOUBLE PRECISION NOT NULL DEFAULT 0.6",
             "excellent_ratio": "DOUBLE PRECISION NOT NULL DEFAULT 0.85",
         },
+        "sys_user": {
+            "sys_role": "VARCHAR(32)",
+        },
     }
 
     inspector = inspect(engine)
@@ -127,6 +130,14 @@ def _ensure_columns() -> None:
                             "DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP"
                         )
                     )
+        if inspector.has_table("sys_user"):
+            conn.execute(
+                text(
+                    "UPDATE sys_user SET sys_role = 'super_admin' "
+                    "WHERE id = 1 AND account = 'admin' "
+                    "AND (sys_role IS NULL OR sys_role = '')"
+                )
+            )
 
 
 def _ensure_tool_call_log_table(conn, dialect: str) -> None:

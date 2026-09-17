@@ -61,7 +61,7 @@ export default function AnomalyRulesPage() {
     let active = true;
     void getCurrentUser()
       .then((u) => {
-        const ok = u.account === "admin" && u.id === 1;
+        const ok = Boolean(u.is_platform_admin);
         if (!active) return;
         if (!ok) {
           void router.replace("/");

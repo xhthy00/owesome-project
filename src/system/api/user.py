@@ -26,7 +26,13 @@ from datasource.service.edu_permission import (
     validate_edu_scope,
 )
 from system.api.auth_deps import get_current_user
-from system.authz import can_manage_data_permissions
+from system.authz import (
+    SYS_ROLE_PLATFORM_ADMIN,
+    can_manage_data_permissions,
+    effective_sys_role,
+    is_platform_admin,
+    is_super_admin,
+)
 from system.models.user import SysUser
 from system.models.workspace import SysUserWorkspace
 from system.schemas import EduScopePayload
@@ -130,6 +136,13 @@ def _ensure_user_workspace(session: Session, uid: int, oid: int) -> None:
         )
 
 
+def _assert_can_mutate_account(current_user, row: SysUser) -> None:
+    if is_super_admin(row):
+        raise BadRequestException("不能操作超管账号")
+    if is_platform_admin(row) and not is_super_admin(current_user):
+        raise ForbiddenException("仅超管可操作管理员账号")
+
+
 @router.get("/pager/{page_num}/{page_size}")
 def pager_users(
     page_num: int,
@@ -163,6 +176,7 @@ def pager_users(
                 "class_names": scope.class_names or None,
                 "student_id": scope.student_id or None,
                 "edu_remark": scope.remark or None,
+                "sys_role": effective_sys_role(item),
             }
         )
     return success_response(data={"total": total, "items": items})
@@ -292,13 +306,18 @@ def update_user(
     row = session.query(SysUser).filter(SysUser.id == user_id).first()
     if not row:
         raise NotFoundException("User not found")
+    if is_super_admin(row):
+        raise BadRequestException("不能操作超管账号")
     for field in ("name", "email", "language"):
         if field in payload and payload[field] is not None:
             setattr(row, field, payload[field])
     if "oid" in payload and payload["oid"] is not None:
         row.oid = int(payload["oid"])
     if "status" in payload and payload["status"] is not None:
-        row.status = int(payload["status"])
+        new_status = int(payload["status"])
+        if new_status != int(row.status):
+            _assert_can_mutate_account(current_user, row)
+        row.status = new_status
     session.commit()
     return success_response(data={"id": row.id}, message="User updated")
 
@@ -316,8 +335,7 @@ def delete_user(
         raise NotFoundException("User not found")
     if int(user_id) == int(current_user.id):
         raise BadRequestException("不能删除当前登录账号")
-    if int(row.id) == 1 and str(row.account or "") == "admin":
-        raise BadRequestException("不能删除系统管理员")
+    _assert_can_mutate_account(current_user, row)
     session.query(SysUserWorkspace).filter(SysUserWorkspace.uid == user_id).delete(
         synchronize_session=False
     )
@@ -334,12 +352,14 @@ def update_user_status(
     session: Session = Depends(get_session),
     current_user=Depends(get_current_user),
 ):
-    _ = current_user
     user_id = payload.get("id")
     row = session.query(SysUser).filter(SysUser.id == user_id).first()
     if not row:
         raise NotFoundException("User not found")
-    row.status = int(payload.get("status", row.status))
+    new_status = int(payload.get("status", row.status))
+    if new_status != int(row.status):
+        _assert_can_mutate_account(current_user, row)
+    row.status = new_status
     session.commit()
     return success_response(data={"id": row.id, "status": row.status}, message="Status updated")
 
@@ -353,14 +373,47 @@ def reset_user_pwd(
     session: Session = Depends(get_session),
     current_user=Depends(get_current_user),
 ):
-    _ = current_user
     row = session.query(SysUser).filter(SysUser.id == user_id).first()
     if not row:
         raise NotFoundException("User not found")
+    _assert_can_mutate_account(current_user, row)
     password = payload.get("password") or "123456"
     row.password = get_password_hash(password)
     session.commit()
     return success_response(data={"id": row.id}, message="Password reset")
+
+
+@router.patch("/{user_id}/sys-role")
+@audit_operation(operation_type="patch", resource_type="user", resource_id_arg="user_id")
+def update_user_sys_role(
+    request: Request,
+    user_id: int,
+    payload: dict,
+    session: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    _ = request
+    if not is_super_admin(current_user):
+        raise ForbiddenException("仅超管可任命或取消管理员")
+    row = session.query(SysUser).filter(SysUser.id == user_id).first()
+    if not row:
+        raise NotFoundException("User not found")
+    if is_super_admin(row):
+        raise BadRequestException("不能修改超管角色")
+    raw = payload.get("sys_role")
+    role = str(raw or "").strip()
+    if role in ("", "none", "member"):
+        row.sys_role = None
+    elif role == SYS_ROLE_PLATFORM_ADMIN:
+        row.sys_role = SYS_ROLE_PLATFORM_ADMIN
+    else:
+        raise BadRequestException("sys_role 仅支持 platform_admin 或空")
+    session.commit()
+    session.refresh(row)
+    return success_response(
+        data={"id": row.id, "sys_role": effective_sys_role(row)},
+        message="管理员权限已更新",
+    )
 
 
 @router.get("/{user_id}/edu-scope")

@@ -9,7 +9,7 @@ from common.core.security import create_access_token, get_password_hash, verify_
 from common.exceptions.base import BadRequestException, NotFoundException, UnauthorizedException
 from common.schemas.response import success_response
 from system.api.auth_deps import get_current_user
-from system.authz import is_platform_admin
+from system.authz import effective_sys_role, is_platform_admin, is_super_admin
 from system.crud.crud_user import create_user, get_user_by_account, get_user_by_id
 from system.schemas import UserCreate
 
@@ -168,7 +168,9 @@ def get_me(
             "origin": current_user.origin,
             "create_time": current_user.create_time,
             "edu_scope": edu_scope,
+            "sys_role": effective_sys_role(db_user),
             "is_platform_admin": is_platform_admin(db_user) if db_user else False,
+            "is_super_admin": is_super_admin(db_user) if db_user else False,
         }
     )
 
