@@ -1141,15 +1141,89 @@ export function stripTechnicalSql(text: string): string {
     .trim();
 }
 
-/** 结论里已有表时，去掉文末重复的「### 查询结果」附表 */
+type MdPipeTable = {
+  start: number;
+  end: number;
+  colCount: number;
+  bodyRows: number;
+  complete: boolean;
+};
+
+function isClosedMdTableRow(line: string): boolean {
+  const t = unwrapMdTableLine(line).trim();
+  return /^\|.+\|\s*$/.test(t);
+}
+
+function parseMdPipeTables(text: string): MdPipeTable[] {
+  const lines = (text || "").split("\n");
+  const tables: MdPipeTable[] = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (!lines[i].trim().startsWith("|")) {
+      i += 1;
+      continue;
+    }
+    const start = i;
+    while (i < lines.length && lines[i].trim().startsWith("|")) i += 1;
+    const end = i - 1;
+    const block = lines.slice(start, end + 1);
+    const colCount = mdTableCells(block[0]).length;
+    let bodyRows = 0;
+    let complete = true;
+    block.forEach((ln, idx) => {
+      const closed = isClosedMdTableRow(ln);
+      if (!closed) complete = false;
+      if (idx >= 2 && closed) bodyRows += 1;
+    });
+    tables.push({ start, end, colCount, bodyRows, complete });
+  }
+  return tables;
+}
+
+function looksLikePartialResultTable(table: MdPipeTable, result: MdPipeTable): boolean {
+  if (!table.complete) return true;
+  return (
+    table.colCount >= 4 &&
+    Math.abs(table.colCount - result.colCount) <= 2 &&
+    table.bodyRows < result.bodyRows
+  );
+}
+
+function collapseBlankLines(text: string): string {
+  return text.replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/** 结论里已有完整同宽同长表时，去掉文末重复的「### 查询结果」附表。
+ *  残表（截断未闭合、或宽表行数少于查询结果）不能当「已有表」，应丢掉残表并保留查询结果。
+ */
 export function stripRedundantQueryResultSection(text: string): string {
   const t = (text || "").replace(/\r\n/g, "\n");
   const marker = /(?:^|\n)#{1,3}\s*查询结果\s*(?:\n|$)/;
   const found = marker.exec(t);
   if (!found) return t.trim();
   const before = t.slice(0, found.index);
-  if (!/^\s*\|.+\|\s*$/m.test(before)) return t.trim();
-  return before.replace(/\n{3,}/g, "\n\n").trim();
+  const after = t.slice(found.index);
+  const beforeTables = parseMdPipeTables(before);
+  const resultTable = parseMdPipeTables(after)[0];
+  if (!beforeTables.length || !resultTable) return t.trim();
+
+  const last = beforeTables[beforeTables.length - 1];
+  if (
+    last.complete &&
+    last.colCount === resultTable.colCount &&
+    last.bodyRows >= resultTable.bodyRows
+  ) {
+    return collapseBlankLines(before);
+  }
+
+  const lines = before.split("\n");
+  for (let i = beforeTables.length - 1; i >= 0; i -= 1) {
+    const table = beforeTables[i];
+    if (!looksLikePartialResultTable(table, resultTable)) continue;
+    lines.splice(table.start, table.end - table.start + 1);
+  }
+  const cleaned = collapseBlankLines(lines.join("\n"));
+  return collapseBlankLines(`${cleaned}\n\n${after.trim()}`);
 }
 
 /** 左侧气泡只展示给人看的结论，过滤 SQL / think / 执行完成等过程垃圾 */

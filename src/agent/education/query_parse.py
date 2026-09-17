@@ -840,9 +840,27 @@ _CLASS_RANK_CITY_HINTS = ("全市", "全域", "市域")
 _CLASS_RANK_SCHOOL_HINTS = ("全校", "校内", "本校")
 
 
+def _named_class_rank_scope(question: str) -> bool:
+    """已点名班级（高三(2)班 / 我们班），对照池默认定全市。"""
+    q = question or ""
+    return bool(extract_class_target(q) or has_class_alias(q))
+
+
 def _has_class_rank_pool(question: str) -> bool:
     q = question or ""
-    return any(h in q for h in _CLASS_RANK_CITY_HINTS + _CLASS_RANK_SCHOOL_HINTS)
+    if any(h in q for h in _CLASS_RANK_CITY_HINTS + _CLASS_RANK_SCHOOL_HINTS):
+        return True
+    return _named_class_rank_scope(q)
+
+
+def _class_rank_is_student_query(question: str) -> bool:
+    """个人名次/找人，不是班级对照池排名。"""
+    q = question or ""
+    if "个人排名" in q:
+        return True
+    if is_top_student_lookup_query(q):
+        return True
+    return bool(extract_student_target(q) or extract_student_id_target(q))
 
 
 def is_class_rank_school_scope(question: str) -> bool:
@@ -854,11 +872,13 @@ def is_class_rank_school_scope(question: str) -> bool:
 
 
 def is_class_city_rank_query(question: str) -> bool:
-    """点名班级的全市/全校六门或总分排名（非单科、非优势薄弱）。"""
+    """点名班级的六门/总分排名。未写全市时默认全市；全校/校内/本校走校内。"""
     q = (question or "").strip()
     if not q or not is_rank_query(q):
         return False
     if is_which_class_lookup_query(q):
+        return False
+    if _class_rank_is_student_query(q):
         return False
     if "班" not in q:
         return False
@@ -873,7 +893,7 @@ def is_class_city_rank_query(question: str) -> bool:
 
 
 def is_class_subject_city_rank_query(question: str) -> bool:
-    """点名班级的单科全市/全校班级排名（英语/数学等，不是六门总分）。"""
+    """点名班级的单科班级排名（英语/数学等，不是六门总分）。未写全市时默认全市。"""
     q = (question or "").strip()
     if not q or not is_rank_query(q):
         return False
@@ -884,6 +904,8 @@ def is_class_subject_city_rank_query(question: str) -> bool:
     if is_subject_strength_query(q):
         return False
     if is_which_class_lookup_query(q):
+        return False
+    if _class_rank_is_student_query(q):
         return False
     if is_class_city_rank_query(q):
         return False

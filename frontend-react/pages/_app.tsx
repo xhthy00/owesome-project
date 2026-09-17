@@ -6,14 +6,29 @@ import { useRouter } from "next/router";
 import { useContext, useEffect, useMemo, useState } from "react";
 import { getCurrentUser } from "@/api/auth";
 import { ChatContext, ChatContextProvider } from "@/app/chat-context";
+import { permissionApi } from "@/api/permission";
 import { systemApi } from "@/api/system";
-import { clearAccessToken, getAccessToken } from "@/auth/session";
+import { clearAccessToken, clearAuthSession, getAccessToken } from "@/auth/session";
 import SideBar from "@/components/layout/side-bar";
 import { setCachedWatermarkText, userWatermarkText } from "@/utils/userWatermark";
 import "../styles/globals.css";
 
 const APP_MODE_KEY = "frontend_react_mode";
 const WORKSPACE_OID_KEY = "frontend_react_workspace_oid";
+
+function looksLikeSchoolToken(value: string): boolean {
+  const tok = value.trim();
+  if (!tok || /[\u4e00-\u9fff]/.test(tok)) return false;
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(tok);
+}
+
+function schoolHeaderLabel(value: string): string {
+  const text = value.trim();
+  if (/^[A-Za-z]\d{2}/.test(text) && /[\u4e00-\u9fff]/.test(text)) {
+    return text.slice(3).trim() || text;
+  }
+  return text;
+}
 
 function LayoutWrapper({
   children,
@@ -26,6 +41,7 @@ function LayoutWrapper({
   const router = useRouter();
   const [workspaceOptions, setWorkspaceOptions] = useState<Array<{ value: number; label: string }>>([]);
   const [workspaceOid, setWorkspaceOid] = useState<number | undefined>(undefined);
+  const [hideWorkspaceSwitcher, setHideWorkspaceSwitcher] = useState(false);
   const [loginAccount, setLoginAccount] = useState("");
   const [loginName, setLoginName] = useState("");
   /** 仅在用户切换工作空间时递增，用于强制主内容区 remount，刷新当前页状态与接口数据 */
@@ -47,10 +63,10 @@ function LayoutWrapper({
     if (key !== "logout") return;
     setLoginAccount("");
     setLoginName("");
+    setHideWorkspaceSwitcher(false);
     setCachedWatermarkText("");
-    clearAccessToken();
-    const redirect = encodeURIComponent(router.asPath || "/");
-    void router.replace(`/login?redirect=${redirect}`);
+    clearAuthSession();
+    void router.replace("/login");
   };
 
   useEffect(() => {
@@ -69,15 +85,41 @@ function LayoutWrapper({
   useEffect(() => {
     if (isBypassLayout) return;
     let active = true;
-    void Promise.all([systemApi.listWorkspaces(), getCurrentUser()])
-      .then(([workspaces, user]) => {
+    void Promise.all([
+      systemApi.listWorkspaces(),
+      getCurrentUser(),
+      permissionApi.getEduPrivacy().catch(() => ({ anonymize_display: true }))
+    ])
+      .then(([workspaces, user, privacy]) => {
         if (!active) return;
-        const opts = workspaces.map((w) => ({ value: Number(w.id), label: w.name || `工作空间 ${w.id}` }));
+        const anonymize = privacy?.anonymize_display !== false;
+        const scope = user.edu_scope || {};
+        const schoolId = String(scope.school_id || "").trim();
+        const schoolName = schoolHeaderLabel(String(scope.school_name || "").trim());
+        const showSchoolPlain =
+          scope.edu_role === "school_admin" &&
+          !anonymize &&
+          !!schoolName &&
+          !looksLikeSchoolToken(schoolName);
+        const opts = workspaces.map((w) => {
+          const name = w.name || `工作空间 ${w.id}`;
+          const matchSchool =
+            showSchoolPlain &&
+            schoolId &&
+            name.trim().toLowerCase() === schoolId.toLowerCase();
+          const onlySchoolWs =
+            showSchoolPlain && workspaces.length === 1 && looksLikeSchoolToken(name);
+          return {
+            value: Number(w.id),
+            label: matchSchool || onlySchoolWs ? schoolName : name
+          };
+        });
         setWorkspaceOptions(opts);
         const account = String(user.account || "").trim();
         const name = String(user.name || "").trim();
         setLoginAccount(account);
         setLoginName(name);
+        setHideWorkspaceSwitcher(Boolean(user.is_platform_admin));
         setCachedWatermarkText(userWatermarkText(account, name));
         const fromStorage = Number(window.localStorage.getItem(WORKSPACE_OID_KEY) || "");
         const hasStorage = Number.isFinite(fromStorage) && opts.some((o) => o.value === fromStorage);
@@ -95,6 +137,7 @@ function LayoutWrapper({
         setWorkspaceOptions([]);
         setLoginAccount("");
         setLoginName("");
+        setHideWorkspaceSwitcher(false);
         setCachedWatermarkText("");
       });
     return () => {
@@ -153,14 +196,14 @@ function LayoutWrapper({
               <div className="flex h-14 shrink-0 items-center justify-between border-b border-gray-200 bg-white/80 px-8 text-sm text-[#3a465d] backdrop-blur dark:border-gray-800 dark:bg-[#111217]/80">
                 <span />
                 <div className="flex items-center gap-4 text-[#7d8ba2]">
-                  {workspaceOptions.length ? (
+                  {workspaceOptions.length && !hideWorkspaceSwitcher ? (
                     <div className="flex h-9 items-center gap-2 rounded-full border border-[#d9e2f0] bg-[#f7faff] px-3 pr-2 shadow-sm dark:border-[#2f3a52] dark:bg-[#1a2130]">
                       <ApartmentOutlined className="text-[13px] text-[#4f6fa8] dark:text-[#8aa8de]" />
                       <Select
                         size="middle"
                         variant="borderless"
                         value={workspaceOid}
-                        style={{ width: 190 }}
+                        style={{ width: 220 }}
                         options={workspaceOptions}
                         placeholder="选择工作空间"
                         popupMatchSelectWidth={240}

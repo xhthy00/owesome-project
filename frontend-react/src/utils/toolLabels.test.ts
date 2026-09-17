@@ -38,6 +38,35 @@ describe("stripRedundantQueryResultSection", () => {
 `;
     expect(stripRedundantQueryResultSection(text)).toContain("查询结果");
   });
+
+  it("宽表被截断时丢掉残表并保留查询结果", () => {
+    const text = `全校 19 个班级分学科均分与排名（均为在籍生群体）
+
+| 指标 | 数值 |
+| --- | --- |
+| 班级数 | 19 |
+
+| 班级 | 人数 | 语文均分 | 数学均分 | 英语均分 | 物理均分 |
+| --- | --- | --- | --- | --- | --- |
+| 高三(1)班 | 48 | 110 | 98 | 105 | 61 |
+| 高三(2)班 | 47 | 109 | 97 | 104 | 60 |
+| 高三(12)班
+
+### 查询结果
+
+| 班级 | 人数 | 语文均分 | 数学均分 | 英语均分 | 物理均分 |
+| --- | --- | --- | --- | --- | --- |
+| 高三(1)班 | 48 | 110 | 98 | 105 | 61 |
+| 高三(12)班 | 48 | 110.83 | 98.73 | 105.19 | 60.94 |
+| 高三(19)班 | 47 | 108 | 96 | 103 | 59 |
+`;
+    const out = stripRedundantQueryResultSection(text);
+    expect(out).toContain("查询结果");
+    expect(out).toContain("高三(19)班");
+    expect(out).toContain("班级数");
+    expect(out).not.toMatch(/\| 高三\(12\)班\s*$/m);
+    expect(out).toMatch(/\| 高三\(12\)班 \| 48 \| 110\.83/);
+  });
 });
 
 describe("normalizeAssistantMarkdown", () => {
@@ -82,5 +111,30 @@ describe("pickCustomerAnswer", () => {
     const out = pickCustomerAnswer(summary, "");
     expect(out).toContain("第 43 名");
     expect(out).not.toContain("查询结果");
+  });
+
+  it("截断宽表时保留完整查询结果", () => {
+    const summary = `均分 565。
+
+| 指标 | 数值 |
+| --- | --- |
+| 班级数 | 19 |
+
+| 班级 | 人数 | 语文均分 | 数学均分 | 英语均分 | 物理均分 |
+| --- | --- | --- | --- | --- | --- |
+| 高三(1)班 | 48 | 110 | 98 | 105 | 61 |
+| 高三(12)班
+
+### 查询结果
+
+| 班级 | 人数 | 语文均分 | 数学均分 | 英语均分 | 物理均分 |
+| --- | --- | --- | --- | --- | --- |
+| 高三(1)班 | 48 | 110 | 98 | 105 | 61 |
+| 高三(19)班 | 47 | 108 | 96 | 103 | 59 |
+`;
+    const out = pickCustomerAnswer(summary, "");
+    expect(out).toContain("查询结果");
+    expect(out).toContain("高三(19)班");
+    expect(out).toContain("班级数");
   });
 });

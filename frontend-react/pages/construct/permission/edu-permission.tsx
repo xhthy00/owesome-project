@@ -32,10 +32,13 @@ import type { UploadProps } from "antd";
 import { useEffect, useMemo, useState } from "react";
 import { getAccessToken } from "@/auth/session";
 import { getApiBaseUrl } from "@/api/client";
-import { permissionApi, type EduRoleItem } from "@/api/permission";
+import { permissionApi, type EduRoleItem, type EduSchoolItem } from "@/api/permission";
 import { systemApi, type SystemUser } from "@/api/system";
 
 const WORKSPACE_OID_KEY = "frontend_react_workspace_oid";
+const DEFAULT_DATASOURCE_ID = Number(process.env.NEXT_PUBLIC_DEFAULT_DATASOURCE_ID || 1);
+/** 添加/改派教育角色暂不支持老师、学生；编辑已有老师/学生权限时仍可看到原角色。 */
+const ADDABLE_EDU_ROLES = new Set(["bureau_admin", "school_admin"]);
 
 type ScopeForm = {
   edu_role: string;
@@ -73,13 +76,52 @@ export default function EduPermissionPage() {
   const [csvText, setCsvText] = useState("");
   const [batchResult, setBatchResult] = useState("");
   const [form] = Form.useForm<ScopeForm>();
+  const [anonymizeDisplay, setAnonymizeDisplay] = useState(true);
+  const [schools, setSchools] = useState<EduSchoolItem[]>([]);
+  const [schoolCatalogDsId, setSchoolCatalogDsId] = useState<number>(DEFAULT_DATASOURCE_ID);
 
   const selectedRole = Form.useWatch("edu_role", form);
+  const watchedSchoolId = Form.useWatch("school_id", form);
 
-  const roleOptions = useMemo(
-    () => roles.map((r) => ({ value: r.code, label: r.label || r.code })),
-    [roles]
-  );
+  const schoolLabelById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const school of schools) {
+      if (school.id) map.set(school.id, school.label || school.id);
+    }
+    return map;
+  }, [schools]);
+
+  const schoolOptions = useMemo(() => {
+    const opts = schools
+      .filter((s) => s.id)
+      .map((s) => ({
+        value: s.id,
+        label: anonymizeDisplay ? s.id : s.label || s.id
+      }));
+    if (watchedSchoolId && !opts.some((o) => o.value === watchedSchoolId)) {
+      opts.unshift({
+        value: watchedSchoolId,
+        label: anonymizeDisplay
+          ? watchedSchoolId
+          : schoolLabelById.get(watchedSchoolId) || watchedSchoolId
+      });
+    }
+    return opts;
+  }, [schools, anonymizeDisplay, watchedSchoolId, schoolLabelById]);
+
+  const displaySchool = (user: SystemUser) => {
+    const token = user.school_id || "";
+    if (!token) return "";
+    if (anonymizeDisplay) return token;
+    return user.school_name || schoolLabelById.get(token) || token;
+  };
+
+  const roleOptions = useMemo(() => {
+    const current = editingUser?.edu_role || "";
+    return roles
+      .filter((r) => ADDABLE_EDU_ROLES.has(r.code) || r.code === current)
+      .map((r) => ({ value: r.code, label: r.label || r.code }));
+  }, [roles, editingUser]);
 
   const configuredUsers = useMemo(
     () => users.filter((u) => u.edu_role),
@@ -96,7 +138,7 @@ export default function EduPermissionPage() {
       u.class_names?.length
         ? ` · ${u.class_names.join("、")}`
         : u.school_id
-          ? ` · ${u.school_id}`
+          ? ` · ${displaySchool(u)}`
           : "";
     return `${u.account} (${u.name}) · ${role}${scopeHint}`;
   };
@@ -105,6 +147,7 @@ export default function EduPermissionPage() {
     form.setFieldsValue({
       edu_role: scope.edu_role || undefined,
       school_id: scope.school_id,
+      school_name: scope.school_name,
       class_names: (scope.class_names || []).join("|"),
       student_id: scope.student_id
     });
@@ -134,12 +177,19 @@ export default function EduPermissionPage() {
   const loadMeta = async () => {
     setLoading(true);
     try {
-      const [roleList, userPage] = await Promise.all([
+      const [roleList, userPage, privacy, schoolCatalog] = await Promise.all([
         permissionApi.listEduRoles(),
-        systemApi.pagerUsers(1, 500)
+        systemApi.pagerUsers(1, 500),
+        permissionApi.getEduPrivacy().catch(() => ({ anonymize_display: true })),
+        permissionApi
+          .listEduSchools(DEFAULT_DATASOURCE_ID)
+          .catch(() => ({ datasource_id: DEFAULT_DATASOURCE_ID, items: [] as EduSchoolItem[] }))
       ]);
       setRoles(roleList);
       setUsers(userPage.items);
+      setAnonymizeDisplay(privacy?.anonymize_display !== false);
+      setSchools(schoolCatalog.items || []);
+      if (schoolCatalog.datasource_id) setSchoolCatalogDsId(schoolCatalog.datasource_id);
     } catch (err) {
       message.error(err instanceof Error ? err.message : "加载失败");
     } finally {
@@ -172,18 +222,31 @@ export default function EduPermissionPage() {
     }
     try {
       const values = await form.validateFields();
+      if (
+        !ADDABLE_EDU_ROLES.has(values.edu_role) &&
+        editingUser?.edu_role !== values.edu_role
+      ) {
+        message.warning("暂不支持配置老师或学生权限");
+        return;
+      }
       const classNames = (values.class_names || "")
         .split(/[|,，]/)
         .map((s) => s.trim())
         .filter(Boolean);
+      const selectedSchool = schools.find((s) => s.id === values.school_id);
       const payload = {
         edu_role: values.edu_role,
         school_id: values.school_id,
+        school_name: selectedSchool?.label || values.school_name,
         class_names: classNames.length ? classNames : undefined,
         student_id: values.student_id
       };
       setLoading(true);
-      await Promise.all(selectedUserIds.map((uid) => permissionApi.updateUserEduScope(uid, payload)));
+      await Promise.all(
+        selectedUserIds.map((uid) =>
+          permissionApi.updateUserEduScope(uid, payload, schoolCatalogDsId)
+        )
+      );
       message.success(
         selectedUserIds.length === 1
           ? "教育权限已保存"
@@ -233,7 +296,7 @@ export default function EduPermissionPage() {
       const res = await permissionApi.previewEduEffective({
         user_id: userId,
         sql: sampleSql,
-        datasource_id: 1
+        datasource_id: schoolCatalogDsId
       });
       setPreviewText(JSON.stringify(res, null, 2));
       setPreviewOpen(true);
@@ -361,7 +424,7 @@ export default function EduPermissionPage() {
             if (user.school_id) {
               scopeTags.push({
                 key: "school",
-                label: user.school_id,
+                label: displaySchool(user),
                 tone: "column"
               });
             }
@@ -526,12 +589,12 @@ export default function EduPermissionPage() {
         destroyOnClose
       >
         <Form form={form} layout="vertical" className="mt-2">
-          <Form.Item label="用户" required extra="选择已有权限的用户时将自动加载现有配置，可在班级等字段中继续追加">
+          <Form.Item label="用户" required extra="选择已有权限的用户时将自动加载现有配置">
             <Select
               mode="multiple"
               showSearch
               allowClear
-              placeholder="选择一位或多位用户（含已配置用户，如为老师追加班级）"
+              placeholder="选择一位或多位用户（含已配置用户）"
               optionFilterProp="label"
               value={selectedUserIds}
               onChange={handleUserSelectionChange}
@@ -550,20 +613,47 @@ export default function EduPermissionPage() {
             />
           ) : null}
 
-          <Form.Item name="edu_role" label="教育角色" rules={[{ required: true, message: "请选择角色" }]}>
+          <Form.Item
+            name="edu_role"
+            label="教育角色"
+            extra="暂不支持老师、学生"
+            rules={[{ required: true, message: "请选择角色" }]}
+          >
             <Select options={roleOptions} placeholder="选择角色" />
           </Form.Item>
 
           {(requiredFields.includes("school_id") || selectedRole === "bureau_admin") && (
-            <>
-              <Form.Item
-                name="school_id"
-                label="学校 ID"
-                extra="填写学校名称的加密结果（密文 id），与 edu.tb_school.id 一致；平台不展示学校明文"
-              >
-                <Input placeholder="如 gz_2d2b5c7b" />
-              </Form.Item>
-            </>
+            <Form.Item
+              name="school_id"
+              label={anonymizeDisplay ? "学校 ID" : "学校"}
+              extra={
+                anonymizeDisplay
+                  ? "当前已开启脱敏：填写学校名称的加密结果（密文 id），与 tb_school.id 一致"
+                  : schools.length
+                    ? "当前已关闭脱敏：选择学校明文名称，保存仍写入密文学校 ID"
+                    : "当前已关闭脱敏：填写学校明文名称，保存时解析为密文学校 ID"
+              }
+              rules={
+                requiredFields.includes("school_id")
+                  ? [{ required: true, message: anonymizeDisplay ? "请填写学校 ID" : "请选择学校" }]
+                  : undefined
+              }
+            >
+              {anonymizeDisplay || schools.length === 0 ? (
+                <Input
+                  placeholder={anonymizeDisplay ? "如 GZ_E62620B2" : "如 安宜中学 / 邗江中学"}
+                  allowClear
+                />
+              ) : (
+                <Select
+                  showSearch
+                  allowClear
+                  placeholder="选择学校"
+                  optionFilterProp="label"
+                  options={schoolOptions}
+                />
+              )}
+            </Form.Item>
           )}
 
           {requiredFields.includes("class_names") && (

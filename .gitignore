@@ -36,3 +36,5 @@ tests/agent/*
 !tests/agent/test_peer_rank_pool.py
 !tests/agent/test_score_contribution.py
 !tests/agent/test_contribution_weak.py
+!tests/agent/test_class_city_rank_detect.py
+!tests/agent/test_edu_school_catalog.py

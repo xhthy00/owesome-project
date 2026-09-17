@@ -5,6 +5,7 @@ export const ASSISTANT_AVATAR = "/assistant-avatar.png?v=3";
 export const ASSISTANT_THINKING = "助手正在抓紧分析您的提问…";
 export const ASSISTANT_WELCOME_TITLE = "您好，我是智学助手";
 export const ASSISTANT_WELCOME_DESC = "用自然语言提问即可，我会协助分析成绩、生成图表与报告，并给出可行建议。";
+/** 局端 / 未绑校角色：可点名学校、全市口径。 */
 export const ASSISTANT_SUGGESTIONS = [
   "邗江中学2026届高三1月考试整体在全市处于什么水平？哪些学科需要重点关注？",
   "扬州中学2026届高三1月考试整体在全市处于什么水平？哪些学科需要重点关注？",
@@ -12,6 +13,20 @@ export const ASSISTANT_SUGGESTIONS = [
   "对比各班本次月考成绩",
   "哪些学生需要分层预警"
 ] as const;
+
+/** 校长：只问本校，不点名他校/全市；考试缺省时由追问选择。 */
+export const PRINCIPAL_SUGGESTIONS = [
+  "本校六门总分均分怎么样？",
+  "本校的优势学科和薄弱学科有哪些？",
+  "对比本校各班成绩",
+  "本校本科线和特控线达线情况如何？",
+  "本校均分和全市均分差多少？"
+] as const;
+
+export function getAssistantSuggestions(eduRole?: string | null): readonly string[] {
+  if (eduRole === "school_admin") return PRINCIPAL_SUGGESTIONS;
+  return ASSISTANT_SUGGESTIONS;
+}
 
 export const STORY_FOLD_TITLE = "助手工作进展";
 export const THINK_FOLD_TITLE = "分析思路";

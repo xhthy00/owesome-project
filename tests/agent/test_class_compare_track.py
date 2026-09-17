@@ -7,6 +7,8 @@ from src.agent.education.class_track import (
     track_of_xkkm,
 )
 from src.agent.education.config import EducationConfig
+from src.agent.education.direction_choice import is_fact_metric_unresolved
+from src.agent.education.intent_router import ReportRoute, plan_items_for_route
 from src.agent.education.school_intervention import (
     build_class_compare_table_html,
     build_school_intervention_insights,
@@ -95,3 +97,13 @@ def test_single_track_does_not_split() -> None:
             school_stats=insights.get("stats"),
         )
     )
+
+
+def test_school_class_compare_does_not_ask_fact_metric() -> None:
+    q = "对比本校各班成绩。补充：考试=2026届高三1月期末"
+    route = ReportRoute(needs_report=False, report_type=None, confidence=0.2, reason="fact")
+    assert not is_fact_metric_unresolved(q, route)
+    assert not is_fact_metric_unresolved("对比本校各班成绩", route)
+    blob = " ".join(str(it.get("sub_task") or "") for it in plan_items_for_route(route, q))
+    assert "待确认口径" not in blob
+    assert "用 SQL 直接回答" in blob

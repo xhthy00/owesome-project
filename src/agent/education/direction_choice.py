@@ -369,6 +369,12 @@ def is_fact_metric_unresolved(question: str, route: Any = None) -> bool:
     q = (question or "").strip()
     if not q or _explicit_report_kind(q):
         return False
+    # 「对比本校各班成绩」已点名各班对照，不再问均分/达线/弱科。
+    # is_school_class_comparison_query 对「本校」抽不到校名会漏判，这里按字面兜底。
+    if ("各班" in q or "各个班级" in q or "各班级" in q) and any(
+        h in q for h in ("对比", "对照", "比较", "横向")
+    ):
+        return False
     if any(h in q for h in _EXPLICIT_FACT_HINTS):
         return False
     if is_item_difficulty_curve_query(q):

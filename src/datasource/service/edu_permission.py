@@ -15,6 +15,9 @@ _DEFAULT_CONFIG_PATH = Path("config/education_permission.json")
 _FIELD_SAFE = re.compile(r"^[A-Za-z_\u4e00-\u9fff][A-Za-z0-9_\u4e00-\u9fff]*$")
 _VALID_ROLES = frozenset({"bureau_admin", "school_admin", "teacher", "student"})
 _TEMPLATE_RE = re.compile(r"\$\{user\.(\w+)\}")
+_SCHOOL_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+_SCHOOL_CODE_PREFIX_RE = re.compile(r"^[A-Za-z]\d{2}")
+_SCHOOL_CATALOG_LIMIT = 800
 
 
 @dataclass
@@ -141,6 +144,253 @@ def list_edu_roles() -> list[dict[str, Any]]:
     return out
 
 
+def looks_like_school_token(value: str) -> bool:
+    """密文学校 ID（gz_/GZ_ 等），不含中文。"""
+    tok = str(value or "").strip()
+    if not tok or re.search(r"[\u4e00-\u9fff]", tok):
+        return False
+    return bool(_SCHOOL_TOKEN_RE.fullmatch(tok))
+
+
+def edu_school_display_label(school_id: str, name: str = "", s_name: str = "") -> str:
+    """权限页展示名：优先 s_name（B04安宜中学），密文回落到 id。"""
+    for cand in (s_name, name):
+        text = str(cand or "").strip()
+        if text and not looks_like_school_token(text):
+            return text
+    return str(school_id or "").strip()
+
+
+def _school_name_key(value: str) -> str:
+    text = str(value or "").strip().lower()
+    return _SCHOOL_CODE_PREFIX_RE.sub("", text)
+
+
+def _catalog_item(school_id: str, name: str, s_name: str) -> dict[str, str]:
+    sid = str(school_id or "").strip()
+    nm = str(name or "").strip()
+    sn = str(s_name or "").strip()
+    return {
+        "id": sid,
+        "name": nm,
+        "s_name": sn,
+        "label": edu_school_display_label(sid, nm, sn),
+    }
+
+
+def apply_school_catalog(scope: EduScope, catalog: list[dict[str, Any]]) -> str | None:
+    """把明文校名解析成密文 school_id；school_name 存展示名。失败返回错误文案。"""
+    sid = str(scope.school_id or "").strip()
+    sname = str(scope.school_name or "").strip()
+    if not sid and not sname:
+        return None
+
+    items = [r for r in catalog if isinstance(r, dict) and str(r.get("id") or "").strip()]
+    by_id = {str(r["id"]).strip(): r for r in items}
+
+    if looks_like_school_token(sid):
+        hit = by_id.get(sid)
+        scope.school_id = sid
+        if hit:
+            scope.school_name = str(hit.get("label") or sname or sid).strip()
+        elif sname and not looks_like_school_token(sname):
+            scope.school_name = sname
+        return None
+
+    query = sid if sid and not looks_like_school_token(sid) else sname
+    if not query:
+        return None
+    if not items:
+        return "无法从数据源解析学校名称，请填写密文学校 ID"
+
+    hit, err = match_edu_school(items, query)
+    if err:
+        return err
+    if hit is None:
+        return f"未找到学校：{query}"
+    scope.school_id = str(hit.get("id") or "").strip()
+    scope.school_name = str(hit.get("label") or query).strip()
+    return None
+
+
+def match_edu_school(
+    catalog: list[dict[str, Any]],
+    query: str,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """按 id / 展示名精确或包含匹配一所学校。"""
+    q = str(query or "").strip()
+    if not q:
+        return None, None
+    for row in catalog:
+        if str(row.get("id") or "").strip() == q:
+            return row, None
+    qk = _school_name_key(q)
+    exact: list[dict[str, Any]] = []
+    contains: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in catalog:
+        rid = str(row.get("id") or "").strip()
+        if not rid or rid in seen:
+            continue
+        labels = [
+            str(row.get("s_name") or "").strip(),
+            str(row.get("name") or "").strip(),
+            str(row.get("label") or "").strip(),
+        ]
+        keys = [_school_name_key(x) for x in labels if x]
+        if q in labels or (qk and qk in keys):
+            exact.append(row)
+            seen.add(rid)
+        elif qk and len(qk) >= 2 and any(qk in k for k in keys):
+            contains.append(row)
+            seen.add(rid)
+    if len(exact) == 1:
+        return exact[0], None
+    if len(exact) > 1:
+        return None, f"匹配到多所学校：{q}"
+    if len(contains) == 1:
+        return contains[0], None
+    if len(contains) > 1:
+        return None, f"匹配到多所学校：{q}"
+    return None, None
+
+
+def _rows_as_dicts(result: Any) -> list[dict[str, Any]]:
+    if not isinstance(result, dict):
+        return []
+    cols = [str(c).strip().lower() for c in (result.get("columns") or [])]
+    out: list[dict[str, Any]] = []
+    for row in result.get("rows") or []:
+        if isinstance(row, dict):
+            out.append({str(k).strip().lower(): v for k, v in row.items()})
+            continue
+        if isinstance(row, (list, tuple)):
+            item: dict[str, Any] = {}
+            for i, col in enumerate(cols):
+                if i < len(row):
+                    item[col] = row[i]
+            if item:
+                out.append(item)
+    return out
+
+
+def _catalog_datasource_ids(
+    session: Any,
+    workspace_oid: int | None,
+    requested: int | None,
+) -> list[int]:
+    from datasource.crud import crud_datasource
+
+    ids: list[int] = []
+    if requested is not None:
+        ids.append(int(requested))
+    oid = int(workspace_oid) if workspace_oid is not None else None
+    for ds in crud_datasource.get_datasources(session, skip=0, limit=100, oid=oid):
+        ds_id = int(ds.id)
+        if ds_id not in ids:
+            ids.append(ds_id)
+    return ids
+
+
+def _query_tb_school_catalog(datasource_id: int, workspace_oid: int | None) -> list[dict[str, str]]:
+    from src.agent.resource.tool.business import _load_datasource
+    from src.datasource.db.db import execute_sql
+
+    db_type, config, _name = _load_datasource(int(datasource_id), workspace_oid)
+    ok, _msg, result = execute_sql(
+        db_type,
+        config,
+        "SELECT id, name, s_name FROM tb_school "
+        f"ORDER BY COALESCE(NULLIF(s_name, ''), name, id) LIMIT {_SCHOOL_CATALOG_LIMIT}",
+    )
+    if not ok:
+        return []
+    items: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for row in _rows_as_dicts(result):
+        item = _catalog_item(
+            str(row.get("id") or ""),
+            str(row.get("name") or ""),
+            str(row.get("s_name") or ""),
+        )
+        sid = item["id"]
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        items.append(item)
+    return items
+
+
+def list_edu_school_catalog(
+    session: Any,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+) -> tuple[int | None, list[dict[str, str]]]:
+    """管理员权限页用的学校目录（id + 明文展示名）。不走行级权限过滤。"""
+    last_id: int | None = None
+    for ds_id in _catalog_datasource_ids(session, workspace_oid, datasource_id):
+        last_id = ds_id
+        try:
+            items = _query_tb_school_catalog(ds_id, workspace_oid)
+        except Exception:
+            continue
+        if items:
+            return ds_id, items
+    return last_id, []
+
+
+def lookup_school_display_name(
+    session: Any,
+    school_id: str,
+    workspace_oid: int | None = None,
+    datasource_id: int | None = None,
+) -> str:
+    """按密文 school_id 取 tb_school 明文展示名；找不到返回空串。"""
+    sid = str(school_id or "").strip()
+    if not sid or not looks_like_school_token(sid):
+        return ""
+    lit = sid.replace("'", "''")
+    for ds_id in _catalog_datasource_ids(session, workspace_oid, datasource_id):
+        try:
+            from src.agent.resource.tool.business import _load_datasource
+            from src.datasource.db.db import execute_sql
+
+            db_type, config, _name = _load_datasource(int(ds_id), workspace_oid)
+            ok, _msg, result = execute_sql(
+                db_type,
+                config,
+                "SELECT id, name, s_name FROM tb_school "
+                f"WHERE id = '{lit}' OR name = '{lit}' LIMIT 1",
+            )
+        except Exception:
+            continue
+        if not ok:
+            continue
+        rows = _rows_as_dicts(result)
+        if not rows:
+            continue
+        row = rows[0]
+        label = edu_school_display_label(
+            str(row.get("id") or sid),
+            str(row.get("name") or ""),
+            str(row.get("s_name") or ""),
+        )
+        if label and not looks_like_school_token(label):
+            return label
+    return ""
+
+
+def resolve_scope_school(
+    session: Any,
+    scope: EduScope,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+) -> str | None:
+    """写入前把明文校名解析为密文 school_id。"""
+    _ds_id, catalog = list_edu_school_catalog(session, datasource_id, workspace_oid)
+    return apply_school_catalog(scope, catalog)
+
+
 def resolve_template_value(template: Any, scope: EduScope) -> Any:
     """替换 ``${user.school_id}`` 等模板变量。"""
     if template is None:
@@ -260,14 +510,21 @@ def edu_scope_dict_for_user_id(user_id: int) -> dict[str, Any]:
 
 __all__ = [
     "EduScope",
+    "apply_school_catalog",
     "build_edu_row_predicates",
     "clear_edu_scope_from_variables",
+    "edu_school_display_label",
     "edu_scope_dict_for_user_id",
     "edu_scope_summary",
     "list_edu_roles",
+    "list_edu_school_catalog",
     "load_edu_permission_config",
+    "looks_like_school_token",
+    "lookup_school_display_name",
+    "match_edu_school",
     "merge_edu_scope_into_variables",
     "parse_edu_scope",
+    "resolve_scope_school",
     "resolve_template_value",
     "validate_edu_scope",
 ]

@@ -6,7 +6,7 @@ import csv
 import io
 from typing import Any
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from common.core.database import get_session
@@ -14,11 +14,12 @@ from common.exceptions.base import BadRequestException, ForbiddenException, NotF
 from common.schemas.response import success_response
 from datasource.service.edu_permission import (
     EduScope,
+    apply_school_catalog,
     build_edu_row_predicates,
     edu_scope_summary,
     list_edu_roles,
+    list_edu_school_catalog,
     merge_edu_scope_into_variables,
-    parse_edu_scope,
     validate_edu_scope,
 )
 from datasource.service.query_permission import apply_permissions_for_execute
@@ -27,6 +28,7 @@ from system.authz import can_manage_data_permissions
 from system.crud.crud_user import get_user_by_id
 from system.models.user import SysUser
 from system.schemas import EduBatchBindRow, EduEffectiveRequest, EduScopePayload
+from system.workspace_scope import get_workspace_oid
 
 router = APIRouter(prefix="/permission/edu", tags=["permission-edu"])
 
@@ -78,6 +80,19 @@ def get_edu_roles(current_user=Depends(get_current_user)):
     return success_response(data=list_edu_roles())
 
 
+@router.get("/schools")
+def get_edu_schools(
+    datasource_id: int | None = Query(None),
+    session: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+):
+    """权限页学校目录：密文 id + 明文展示名。仅管理员。"""
+    _require_manager(session, current_user)
+    ds_id, items = list_edu_school_catalog(session, datasource_id, workspace_oid)
+    return success_response(data={"datasource_id": ds_id, "items": items})
+
+
 @router.get("/template")
 def download_csv_template(current_user=Depends(get_current_user)):
     _ = current_user
@@ -93,6 +108,7 @@ def batch_bind_edu_scope(
     payload: dict[str, Any],
     session: Session = Depends(get_session),
     current_user=Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
 ):
     _require_manager(session, current_user)
     rows_raw = payload.get("rows")
@@ -119,6 +135,13 @@ def batch_bind_edu_scope(
     else:
         raise BadRequestException("需提供 rows 数组或 csv 文本")
 
+    raw_ds = payload.get("datasource_id")
+    try:
+        bind_ds = int(raw_ds) if raw_ds not in (None, "") else None
+    except (TypeError, ValueError):
+        bind_ds = None
+    _ds_id, catalog = list_edu_school_catalog(session, bind_ds, workspace_oid)
+
     success_count = 0
     failed: list[dict[str, Any]] = []
     for idx, row in enumerate(rows, start=1):
@@ -131,6 +154,10 @@ def batch_bind_edu_scope(
             failed.append({"row": idx, "account": account, "reason": "用户不存在"})
             continue
         scope = _scope_from_batch_row(row)
+        resolve_err = apply_school_catalog(scope, catalog)
+        if resolve_err:
+            failed.append({"row": idx, "account": account, "reason": resolve_err})
+            continue
         errors = validate_edu_scope(scope)
         if errors:
             failed.append({"row": idx, "account": account, "reason": "; ".join(errors)})
@@ -164,7 +191,12 @@ def preview_effective_permission(
         "edu_predicates": preds,
     }
     if req.sql and req.sql.strip():
-        ds_id = int(req.datasource_id or 1)
+        ds_id = int(req.datasource_id) if req.datasource_id else None
+        if ds_id is None:
+            from datasource.crud import crud_datasource
+
+            first = crud_datasource.get_datasources(session, skip=0, limit=1, oid=int(user.oid))
+            ds_id = int(first[0].id) if first else 1
         merged = apply_permissions_for_execute(session, user, ds_id, "pg", req.sql.strip())
         out["original_sql"] = req.sql.strip()
         out["merged_sql"] = merged

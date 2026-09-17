@@ -3,11 +3,12 @@ import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { ExecutionStep, Message, ReportPayload } from "@/hooks/useChat";
 import type { RunMetrics } from "@/utils/runMetrics";
 import type { ClarifyPayload } from "@/api/adapter/chatAdapter";
+import { getCurrentUser } from "@/api/auth";
 import {
   ASSISTANT_NAME,
-  ASSISTANT_SUGGESTIONS,
   ASSISTANT_WELCOME_DESC,
   ASSISTANT_WELCOME_TITLE,
+  getAssistantSuggestions,
   getFollowups
 } from "@/new-components/chat/assistant";
 import { ChatContentContext } from "@/new-components/chat/context";
@@ -47,6 +48,16 @@ function toText(value: unknown): string {
 }
 
 function WelcomePanel({ onPick }: { onPick: (text: string) => void }) {
+  const [eduRole, setEduRole] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    void getCurrentUser()
+      .then((user) => setEduRole(user.edu_scope?.edu_role || null))
+      .catch(() => setEduRole(null));
+  }, []);
+
+  const suggestions = eduRole === undefined ? [] : getAssistantSuggestions(eduRole);
+
   return (
     <div className="mx-auto flex w-[92%] max-w-xl flex-col gap-4 py-10">
       <div>
@@ -55,7 +66,7 @@ function WelcomePanel({ onPick }: { onPick: (text: string) => void }) {
         <p className="mt-0.5 text-xs text-[#94a3b8]">{ASSISTANT_NAME} 随时待命</p>
       </div>
       <div className="flex flex-col gap-2">
-        {ASSISTANT_SUGGESTIONS.map((item) => (
+        {suggestions.map((item) => (
           <button
             key={item}
             type="button"

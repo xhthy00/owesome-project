@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from audit.service.decorators import audit_operation
@@ -16,12 +16,14 @@ from datasource.service.edu_permission import (
     edu_scope_summary,
     merge_edu_scope_into_variables,
     parse_edu_scope,
+    resolve_scope_school,
     validate_edu_scope,
 )
 from system.api.auth_deps import get_current_user
 from system.authz import can_manage_data_permissions
 from system.models.user import SysUser
 from system.schemas import EduScopePayload
+from system.workspace_scope import get_workspace_oid
 
 router = APIRouter(prefix="/user", tags=["user"])
 
@@ -195,6 +197,8 @@ def update_user_edu_scope(
     payload: EduScopePayload,
     session: Session = Depends(get_session),
     current_user=Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+    datasource_id: int | None = Query(None),
 ):
     if not can_manage_data_permissions(session, current_user):
         raise ForbiddenException("仅系统管理员或工作空间管理员可管理教育权限")
@@ -208,6 +212,11 @@ def update_user_edu_scope(
         class_names=list(payload.class_names or []),
         student_id=str(payload.student_id or "").strip(),
     )
+    resolve_err = resolve_scope_school(
+        session, scope, datasource_id=datasource_id, workspace_oid=workspace_oid
+    )
+    if resolve_err:
+        raise BadRequestException(resolve_err)
     errors = validate_edu_scope(scope)
     if errors:
         raise BadRequestException("; ".join(errors))

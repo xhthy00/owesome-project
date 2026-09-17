@@ -480,6 +480,78 @@ def result_table_already_in_text(columns: list[Any], text: str) -> bool:
     return _result_headers_overlap_markdown(cols, text)
 
 
+def _md_row_closed(ln: str) -> bool:
+    s = (ln or "").strip()
+    return s.startswith("|") and s.endswith("|") and s.count("|") >= 2
+
+
+def _split_md_pipe_blocks(lines: list[str]) -> list[tuple[int, int]]:
+    """Consecutive lines that start with ``|`` (includes a truncated last row)."""
+    blocks: list[tuple[int, int]] = []
+    i = 0
+    n = len(lines)
+    while i < n:
+        if not (lines[i] or "").lstrip().startswith("|"):
+            i += 1
+            continue
+        start = i
+        while i < n and (lines[i] or "").lstrip().startswith("|"):
+            i += 1
+        blocks.append((start, i - 1))
+    return blocks
+
+
+def _md_block_shape(lines: list[str], start: int, end: int) -> tuple[int, int, bool]:
+    """Return (col_count, complete_body_rows, every_row_closed)."""
+    block = lines[start : end + 1]
+    if not block:
+        return 0, 0, False
+    header_cells = [c.strip() for c in block[0].strip().strip("|").split("|")]
+    col_count = len([c for c in header_cells if c or len(header_cells) > 1])
+    if not col_count:
+        col_count = len(header_cells)
+    complete = all(_md_row_closed(ln) for ln in block)
+    body_rows = 0
+    for j, ln in enumerate(block):
+        if j < 2:
+            continue
+        if _md_row_closed(ln):
+            body_rows += 1
+    return col_count, body_rows, complete
+
+
+def drop_truncated_or_short_result_tables(
+    text: str,
+    *,
+    expected_rows: int,
+    expected_cols: int,
+) -> str:
+    """Drop LLM-copied grids that were cut off or shorter than the SQL result."""
+    if not text or int(expected_rows or 0) <= 0:
+        return text or ""
+    lines = text.splitlines()
+    drop: set[int] = set()
+    for start, end in _split_md_pipe_blocks(lines):
+        cols, body, complete = _md_block_shape(lines, start, end)
+        short_wide = (
+            cols >= 4
+            and abs(cols - int(expected_cols or 0)) <= 2
+            and body < int(expected_rows)
+        )
+        if (not complete) or short_wide:
+            drop.update(range(start, end + 1))
+    if not drop:
+        return text
+    kept: list[str] = []
+    for i, ln in enumerate(lines):
+        if i in drop:
+            continue
+        if ln.strip() == "" and kept and kept[-1].strip() == "":
+            continue
+        kept.append(ln)
+    return "\n".join(kept).rstrip()
+
+
 def append_keepable_result_tables(
     text: str,
     exec_results: list[dict[str, Any]] | None,
@@ -501,6 +573,9 @@ def append_keepable_result_tables(
             columns, row_count=row_count, sql=sql, question=question
         ):
             continue
+        out = drop_truncated_or_short_result_tables(
+            out, expected_rows=row_count, expected_cols=len(columns)
+        )
         if result_table_already_in_text(columns, out):
             continue
         table_limit = sql_result_preview_limit(row_count, question=question)
@@ -510,7 +585,7 @@ def append_keepable_result_tables(
         seen.add(table)
         extras.append(table)
     if not extras:
-        return text or ""
+        return out or text or ""
     title = "### 查询结果"
     if title in out:
         return out + "\n\n" + "\n\n".join(extras)
@@ -1477,6 +1552,7 @@ def format_education_pipeline_footer(report_data: dict[str, Any] | None) -> str:
 __all__ = [
     "KpiClaimConflict",
     "append_keepable_result_tables",
+    "drop_truncated_or_short_result_tables",
     "display_column_label",
     "relabel_result_table_headers",
     "audit_summary_kpi_claims",

@@ -12,6 +12,21 @@ type LoginForm = {
   password: string;
 };
 
+function safeInternalRedirect(raw: unknown): string {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== "string") return "/";
+  let path = value.trim();
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    return "/";
+  }
+  if (!path.startsWith("/") || path.startsWith("//") || path.startsWith("/login")) {
+    return "/";
+  }
+  return path;
+}
+
 export default function LoginPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -36,9 +51,7 @@ export default function LoginPage() {
       });
       setAccessToken(result.access_token);
 
-      const rawRedirect = router.query.redirect;
-      const redirect = Array.isArray(rawRedirect) ? rawRedirect[0] : rawRedirect;
-      await router.replace(redirect || "/");
+      await router.replace(safeInternalRedirect(router.query.redirect));
     } catch (error) {
       const msg = error instanceof Error ? error.message : "登录失败，请重试";
       setErrorMessage(msg);

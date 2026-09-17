@@ -78,6 +78,13 @@ export interface EduPrivacySetting {
   anonymize_display: boolean;
 }
 
+export interface EduSchoolItem {
+  id: string;
+  name?: string;
+  s_name?: string;
+  label: string;
+}
+
 export const permissionApi = {
   listRoles: () => apiRequest<RoleItem[]>("/permission/roles"),
   listUserRoleGrants: () => apiRequest<UserRoleGrant[]>("/permission/grants/user-role"),
@@ -99,13 +106,20 @@ export const permissionApi = {
       method: "POST"
     }),
   listEduRoles: () => apiRequest<EduRoleItem[]>("/permission/edu/roles"),
+  listEduSchools: (datasourceId?: number) =>
+    apiRequest<{ datasource_id: number | null; items: EduSchoolItem[] }>(
+      `/permission/edu/schools${datasourceId ? `?datasource_id=${datasourceId}` : ""}`
+    ),
   getUserEduScope: (userId: number) =>
     apiRequest<EduScope & { user_id: number; account?: string }>(`/user/${userId}/edu-scope`),
-  updateUserEduScope: (userId: number, payload: EduScope & { edu_role: string }) =>
-    apiRequest<EduScope & { user_id: number }>(`/user/${userId}/edu-scope`, {
-      method: "PUT",
-      body: JSON.stringify(payload)
-    }),
+  updateUserEduScope: (userId: number, payload: EduScope & { edu_role: string }, datasourceId?: number) =>
+    apiRequest<EduScope & { user_id: number }>(
+      `/user/${userId}/edu-scope${datasourceId ? `?datasource_id=${datasourceId}` : ""}`,
+      {
+        method: "PUT",
+        body: JSON.stringify(payload)
+      }
+    ),
   deleteUserEduScope: (userId: number) =>
     apiRequest<{ user_id: number }>(`/user/${userId}/edu-scope`, {
       method: "DELETE"

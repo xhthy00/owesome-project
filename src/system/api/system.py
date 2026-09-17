@@ -130,10 +130,32 @@ def get_me(
     session: Session = Depends(get_session),
 ):
     """Get current user info."""
-    from datasource.service.edu_permission import edu_scope_summary
+    from datasource.service.edu_permission import (
+        edu_scope_summary,
+        looks_like_school_token,
+        lookup_school_display_name,
+    )
 
     db_user = get_user_by_id(session, current_user.id)
     edu_scope = edu_scope_summary(db_user) if db_user else {}
+    if edu_scope:
+        sid = str(edu_scope.get("school_id") or "").strip()
+        stored = str(edu_scope.get("school_name") or "").strip()
+        looked = ""
+        if sid:
+            try:
+                looked = lookup_school_display_name(
+                    session, sid, workspace_oid=int(current_user.oid)
+                )
+            except Exception:
+                looked = ""
+        plain = ""
+        for cand in (looked, stored):
+            if cand and not looks_like_school_token(cand):
+                plain = cand
+                break
+        if plain:
+            edu_scope["school_name"] = plain
     return success_response(
         data={
             "id": current_user.id,
