@@ -61,6 +61,7 @@ export interface EduScope {
   school_name?: string;
   class_names?: string[];
   student_id?: string;
+  edu_remark?: string;
 }
 
 export interface EduEffectiveResult {
@@ -124,7 +125,11 @@ export const permissionApi = {
     apiRequest<{ user_id: number }>(`/user/${userId}/edu-scope`, {
       method: "DELETE"
     }),
-  batchBindEduScope: (payload: { csv?: string; rows?: Array<Record<string, unknown>> }) =>
+  batchBindEduScope: (payload: {
+    csv?: string;
+    rows?: Array<Record<string, unknown>>;
+    datasource_id?: number;
+  }) =>
     apiRequest<{ success: number; failed: Array<{ row: number; account: string; reason: string }> }>(
       "/permission/edu/batch-bind",
       { method: "POST", body: JSON.stringify(payload) }

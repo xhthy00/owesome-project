@@ -33,11 +33,14 @@ from system.workspace_scope import get_workspace_oid
 router = APIRouter(prefix="/permission/edu", tags=["permission-edu"])
 
 _CSV_TEMPLATE = (
-    "account,edu_role,school_id,school_name,class_names,student_id\n"
-    "zhang_principal,school_admin,gz_2d2b5c7b,gz_2d2b5c7b,,\n"
-    "li_teacher,teacher,gz_2d2b5c7b,gz_2d2b5c7b,高一(1)班|高一(2)班,\n"
-    "wang_student,student,gz_2d2b5c7b,gz_2d2b5c7b,,STU20240002\n"
-    "bureau_user,bureau_admin,,,,\n"
+    "account,edu_role,school_id,school_name,class_names,student_id,remark\n"
+    "zhang_principal,school_admin,gz_2d2b5c7b,gz_2d2b5c7b,,,校长账号\n"
+    "li_teacher,teacher,gz_2d2b5c7b,gz_2d2b5c7b,高一(1)班|高一(2)班,,\n"
+    "wang_student,student,gz_2d2b5c7b,gz_2d2b5c7b,,STU20240002,\n"
+    "bureau_user,bureau_admin,,,,,市教研室\n"
+)
+_TEMPLATE_EXAMPLE_ACCOUNTS = frozenset(
+    {"zhang_principal", "li_teacher", "wang_student", "bureau_user"}
 )
 
 
@@ -54,7 +57,72 @@ def _scope_from_payload(payload: EduScopePayload) -> EduScope:
         school_name=str(payload.school_name or "").strip(),
         class_names=class_names,
         student_id=str(payload.student_id or "").strip(),
+        remark=str(payload.edu_remark or "").strip()[:80],
     )
+
+
+def _csv_delimiter(sample: str) -> str:
+    comma = sample.count(",")
+    semi = sample.count(";")
+    tab = sample.count("\t")
+    if tab > comma and tab >= semi:
+        return "\t"
+    if semi > comma:
+        return ";"
+    return ","
+
+
+def parse_edu_csv_text(csv_text: str) -> list[EduBatchBindRow]:
+    """Parse batch-bind CSV; tolerate Excel/Windows CRLF, BOM, tab/semicolon."""
+    text = (
+        csv_text.replace("\ufeff", "")
+        .replace("\r\n", "\n")
+        .replace("\r", "\n")
+        .strip()
+    )
+    if not text:
+        return []
+    if text.startswith("PK"):
+        raise BadRequestException("这是 Excel 工作簿，请另存为 CSV UTF-8 后再导入")
+    lines = [ln for ln in text.split("\n") if ln.strip() and not ln.lstrip().startswith("#")]
+    if lines and lines[0].lower().startswith("sep="):
+        lines = lines[1:]
+    text = "\n".join(lines).strip()
+    if not text:
+        return []
+    try:
+        reader = csv.DictReader(io.StringIO(text, newline=""), delimiter=_csv_delimiter(text[:2048]))
+        headers = {str(h or "").strip().lstrip("\ufeff") for h in (reader.fieldnames or [])}
+        if "account" not in headers or "edu_role" not in headers:
+            raise BadRequestException(
+                "CSV 表头必须包含 account,edu_role。请用「下载 CSV 模板」，不要改列名"
+            )
+        rows: list[EduBatchBindRow] = []
+        for r in reader:
+            if not r:
+                continue
+            norm = {
+                str(k or "").strip().lstrip("\ufeff"): ("" if v is None else str(v).strip())
+                for k, v in r.items()
+            }
+            if not any(norm.values()):
+                continue
+            rows.append(
+                EduBatchBindRow(
+                    account=norm.get("account") or "",
+                    edu_role=norm.get("edu_role") or "",
+                    school_id=norm.get("school_id") or None,
+                    school_name=norm.get("school_name") or None,
+                    class_names=norm.get("class_names") or None,
+                    student_id=norm.get("student_id") or None,
+                    remark=(norm.get("remark") or norm.get("edu_remark") or None),
+                )
+            )
+        return rows
+    except csv.Error as exc:
+        raise BadRequestException(
+            "CSV 解析失败，请使用 UTF-8 逗号分隔文件（Excel 请另存为 CSV UTF-8）"
+        ) from exc
 
 
 def _scope_from_batch_row(row: EduBatchBindRow) -> EduScope:
@@ -71,6 +139,7 @@ def _scope_from_batch_row(row: EduBatchBindRow) -> EduScope:
         school_name=str(row.school_name or "").strip(),
         class_names=class_names,
         student_id=str(row.student_id or "").strip(),
+        remark=str(row.remark or "").strip()[:80],
     )
 
 
@@ -116,18 +185,9 @@ def batch_bind_edu_scope(
     rows: list[EduBatchBindRow] = []
 
     if csv_text and isinstance(csv_text, str):
-        reader = csv.DictReader(io.StringIO(csv_text.strip()))
-        for r in reader:
-            rows.append(
-                EduBatchBindRow(
-                    account=(r.get("account") or "").strip(),
-                    edu_role=(r.get("edu_role") or "").strip(),
-                    school_id=(r.get("school_id") or "").strip() or None,
-                    school_name=(r.get("school_name") or "").strip() or None,
-                    class_names=(r.get("class_names") or "").strip() or None,
-                    student_id=(r.get("student_id") or "").strip() or None,
-                )
-            )
+        rows = parse_edu_csv_text(csv_text)
+        if not rows:
+            raise BadRequestException("CSV 没有有效数据行")
     elif isinstance(rows_raw, list):
         for item in rows_raw:
             if isinstance(item, dict):
@@ -149,9 +209,24 @@ def batch_bind_edu_scope(
         if not account:
             failed.append({"row": idx, "account": account, "reason": "account 为空"})
             continue
+        if account in _TEMPLATE_EXAMPLE_ACCOUNTS:
+            failed.append(
+                {
+                    "row": idx,
+                    "account": account,
+                    "reason": "这是模板示例账号，请改成「用户管理」里已有的登录账号；导入不会新建用户",
+                }
+            )
+            continue
         user = session.query(SysUser).filter(SysUser.account == account).first()
         if user is None:
-            failed.append({"row": idx, "account": account, "reason": "用户不存在"})
+            failed.append(
+                {
+                    "row": idx,
+                    "account": account,
+                    "reason": "用户不存在：请填写「用户管理」中已有的登录账号，导入不会新建用户",
+                }
+            )
             continue
         scope = _scope_from_batch_row(row)
         resolve_err = apply_school_catalog(scope, catalog)

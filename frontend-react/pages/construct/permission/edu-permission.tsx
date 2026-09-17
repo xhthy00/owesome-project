@@ -46,6 +46,7 @@ type ScopeForm = {
   school_name?: string;
   class_names?: string;
   student_id?: string;
+  edu_remark?: string;
 };
 
 function roleTagClass(code: string): string {
@@ -79,6 +80,7 @@ export default function EduPermissionPage() {
   const [anonymizeDisplay, setAnonymizeDisplay] = useState(true);
   const [schools, setSchools] = useState<EduSchoolItem[]>([]);
   const [schoolCatalogDsId, setSchoolCatalogDsId] = useState<number>(DEFAULT_DATASOURCE_ID);
+  const [keyword, setKeyword] = useState("");
 
   const selectedRole = Form.useWatch("edu_role", form);
   const watchedSchoolId = Form.useWatch("school_id", form);
@@ -123,10 +125,18 @@ export default function EduPermissionPage() {
       .map((r) => ({ value: r.code, label: r.label || r.code }));
   }, [roles, editingUser]);
 
-  const configuredUsers = useMemo(
-    () => users.filter((u) => u.edu_role),
-    [users]
-  );
+  const configuredUsers = useMemo(() => {
+    const list = users.filter((u) => u.edu_role);
+    const q = keyword.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter((u) => {
+      const hay = [u.account, u.name, u.edu_remark, u.edu_role_label, u.school_id, u.school_name]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [users, keyword]);
 
   const roleLabel = (code: string) =>
     roles.find((r) => r.code === code)?.label || code;
@@ -140,7 +150,8 @@ export default function EduPermissionPage() {
         : u.school_id
           ? ` · ${displaySchool(u)}`
           : "";
-    return `${u.account} (${u.name}) · ${role}${scopeHint}`;
+    const remarkHint = u.edu_remark ? ` · ${u.edu_remark}` : "";
+    return `${u.account} (${u.name}) · ${role}${scopeHint}${remarkHint}`;
   };
 
   const fillFormFromScope = (scope: Awaited<ReturnType<typeof permissionApi.getUserEduScope>>) => {
@@ -149,7 +160,8 @@ export default function EduPermissionPage() {
       school_id: scope.school_id,
       school_name: scope.school_name,
       class_names: (scope.class_names || []).join("|"),
-      student_id: scope.student_id
+      student_id: scope.student_id,
+      edu_remark: scope.edu_remark
     });
   };
 
@@ -239,7 +251,8 @@ export default function EduPermissionPage() {
         school_id: values.school_id,
         school_name: selectedSchool?.label || values.school_name,
         class_names: classNames.length ? classNames : undefined,
-        student_id: values.student_id
+        student_id: values.student_id,
+        edu_remark: (values.edu_remark || "").trim() || undefined
       };
       setLoading(true);
       await Promise.all(
@@ -334,10 +347,11 @@ export default function EduPermissionPage() {
     beforeUpload: (file) => {
       const reader = new FileReader();
       reader.onload = () => {
-        setCsvText(String(reader.result || ""));
+        const raw = String(reader.result || "");
+        setCsvText(raw.replace(/^\uFEFF/, "").replace(/\r\n/g, "\n").replace(/\r/g, "\n"));
         setBatchResult("");
       };
-      reader.readAsText(file);
+      reader.readAsText(file, "UTF-8");
       return false;
     }
   };
@@ -349,13 +363,23 @@ export default function EduPermissionPage() {
     }
     setLoading(true);
     try {
-      const res = await permissionApi.batchBindEduScope({ csv: csvText });
-      setBatchResult(
-        `成功 ${res.success} 条，失败 ${res.failed.length} 条\n` +
-          res.failed.map((f) => `行 ${f.row} ${f.account}: ${f.reason}`).join("\n")
-      );
-      message.success("批量绑定完成");
-      void loadMeta();
+      const res = await permissionApi.batchBindEduScope({
+        csv: csvText,
+        datasource_id: schoolCatalogDsId
+      });
+      const failLines = res.failed.map((f) => `行 ${f.row} ${f.account}: ${f.reason}`);
+      setBatchResult(`成功 ${res.success} 条，失败 ${res.failed.length} 条\n${failLines.join("\n")}`);
+      if (res.success === 0) {
+        message.error(
+          res.failed.length ? `没有导入成功（失败 ${res.failed.length} 条）` : "CSV 没有有效数据"
+        );
+      } else if (res.failed.length) {
+        message.warning(`成功 ${res.success} 条，失败 ${res.failed.length} 条`);
+        void loadMeta();
+      } else {
+        message.success(`成功导入 ${res.success} 条`);
+        void loadMeta();
+      }
     } catch (err) {
       message.error(err instanceof Error ? err.message : "批量绑定失败");
     } finally {
@@ -374,7 +398,7 @@ export default function EduPermissionPage() {
   };
 
   return (
-    <div className="dbgpt-ui-font p-6">
+    <div className="dbgpt-ui-font h-full min-h-0 overflow-y-auto p-6 pb-10">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <Typography.Title level={4} className="!mb-1">
@@ -385,6 +409,13 @@ export default function EduPermissionPage() {
           </Typography.Text>
         </div>
         <Space>
+          <Input.Search
+            allowClear
+            placeholder="搜索账号 / 名称 / 备注"
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            style={{ width: 220 }}
+          />
           <Button icon={<ReloadOutlined />} onClick={() => void loadMeta()} loading={loading}>
             刷新
           </Button>
@@ -412,7 +443,10 @@ export default function EduPermissionPage() {
       />
 
       {configuredUsers.length === 0 && !loading ? (
-        <Empty className="py-16" description="暂无已配置的教育权限" />
+        <Empty
+          className="py-16"
+          description={keyword.trim() ? "没有匹配的教育权限" : "暂无已配置的教育权限"}
+        />
       ) : (
         <Row gutter={[16, 16]}>
           {configuredUsers.map((user) => {
@@ -457,6 +491,11 @@ export default function EduPermissionPage() {
                       <span className="text-[11px] font-medium tracking-wide text-[#94a3b8] dark:text-[#64748b]">
                         用户 #{user.id} · {user.account}
                       </span>
+                      {user.edu_remark ? (
+                        <span className="text-[12px] font-medium text-[#7e22ce] dark:text-[#d8b4fe]">
+                          {user.edu_remark}
+                        </span>
+                      ) : null}
                     </div>
                   }
                   extra={
@@ -622,6 +661,14 @@ export default function EduPermissionPage() {
             <Select options={roleOptions} placeholder="选择角色" />
           </Form.Item>
 
+          <Form.Item
+            name="edu_remark"
+            label="备注"
+            extra="选填，用于区分同角色账号，如「市教研室」「邗江区」"
+          >
+            <Input placeholder="如 市教研室" maxLength={80} allowClear />
+          </Form.Item>
+
           {(requiredFields.includes("school_id") || selectedRole === "bureau_admin") && (
             <Form.Item
               name="school_id"
@@ -693,6 +740,12 @@ export default function EduPermissionPage() {
         }
         destroyOnClose
       >
+        <Alert
+          className="mb-3"
+          type="warning"
+          showIcon
+          message="请把模板里的 account 改成「用户管理」中已有的登录账号。导入只绑定权限，不会新建用户；示例账号 zhang_principal 等直接导入不会生效。"
+        />
         <Space className="mb-4">
           <Button icon={<DownloadOutlined />} onClick={() => void downloadTemplate()}>
             下载 CSV 模板

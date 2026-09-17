@@ -1,6 +1,5 @@
-import { ApartmentOutlined, LogoutOutlined, UserOutlined } from "@ant-design/icons";
-import { App as AntApp, ConfigProvider, Dropdown, Select, Watermark, theme } from "antd";
-import type { MenuProps } from "antd";
+import { ApartmentOutlined } from "@ant-design/icons";
+import { App as AntApp, ConfigProvider, Select, Watermark, theme } from "antd";
 import type { AppProps } from "next/app";
 import { useRouter } from "next/router";
 import { useContext, useEffect, useMemo, useState } from "react";
@@ -10,6 +9,7 @@ import { permissionApi } from "@/api/permission";
 import { systemApi } from "@/api/system";
 import { clearAccessToken, clearAuthSession, getAccessToken } from "@/auth/session";
 import SideBar from "@/components/layout/side-bar";
+import UserAvatarMenu from "@/components/layout/user-menu";
 import { setCachedWatermarkText, userWatermarkText } from "@/utils/userWatermark";
 import "../styles/globals.css";
 
@@ -51,16 +51,8 @@ function LayoutWrapper({
     pathname.startsWith("/mobile") ||
     pathname.startsWith("/share") ||
     pathname === "/construct/app/extra";
-  const userMenuItems: MenuProps["items"] = [
-    {
-      key: "logout",
-      icon: <LogoutOutlined />,
-      label: "退出登录"
-    }
-  ];
 
-  const onUserMenuClick: MenuProps["onClick"] = ({ key }) => {
-    if (key !== "logout") return;
+  const onLogout = () => {
     setLoginAccount("");
     setLoginName("");
     setHideWorkspaceSwitcher(false);
@@ -216,20 +208,15 @@ function LayoutWrapper({
                       />
                     </div>
                   ) : null}
-                  <Dropdown menu={{ items: userMenuItems, onClick: onUserMenuClick }} trigger={["click"]} placement="bottomRight">
-                    <button
-                      type="button"
-                      className="flex h-9 items-center gap-2 rounded-full border border-[#d9e2f0] bg-[#f7faff] pl-1.5 pr-3 text-[#3a465d] shadow-sm transition-colors hover:bg-[#eef4ff] dark:border-[#2f3a52] dark:bg-[#1a2130] dark:text-gray-200 dark:hover:bg-[#222b3d]"
-                      aria-label="用户菜单"
-                    >
-                      <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-500 text-[15px] text-white">
-                        <UserOutlined />
-                      </span>
-                      {loginAccount ? (
-                        <span className="max-w-[140px] truncate text-sm font-medium">{loginAccount}</span>
-                      ) : null}
-                    </button>
-                  </Dropdown>
+                  <UserAvatarMenu
+                    account={loginAccount}
+                    name={loginName}
+                    onNameChange={(nextName) => {
+                      setLoginName(nextName);
+                      setCachedWatermarkText(userWatermarkText(loginAccount, nextName));
+                    }}
+                    onLogout={onLogout}
+                  />
                 </div>
               </div>
               <div key={mainContentKey} className="min-h-0 flex-1 overflow-hidden">

@@ -5,8 +5,8 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
 
 from common.core.database import SessionLocal, get_session
-from common.core.security import create_access_token, verify_password
-from common.exceptions.base import BadRequestException, UnauthorizedException
+from common.core.security import create_access_token, get_password_hash, verify_password
+from common.exceptions.base import BadRequestException, NotFoundException, UnauthorizedException
 from common.schemas.response import success_response
 from system.api.auth_deps import get_current_user
 from system.authz import is_platform_admin
@@ -171,3 +171,49 @@ def get_me(
             "is_platform_admin": is_platform_admin(db_user) if db_user else False,
         }
     )
+
+
+@router.patch("/me")
+def update_me(
+    payload: dict,
+    session: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    """当前用户修改昵称。"""
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise BadRequestException("昵称不能为空")
+    if len(name) > 255:
+        raise BadRequestException("昵称过长")
+    user = get_user_by_id(session, current_user.id)
+    if user is None:
+        raise NotFoundException("User not found")
+    user.name = name
+    session.commit()
+    session.refresh(user)
+    return success_response(data={"id": user.id, "name": user.name}, message="昵称已更新")
+
+
+@router.patch("/me/password")
+def update_my_password(
+    payload: dict,
+    session: Session = Depends(get_session),
+    current_user=Depends(get_current_user),
+):
+    """当前用户修改密码，需校验原密码。"""
+    old_password = str(payload.get("old_password") or "")
+    new_password = str(payload.get("new_password") or "")
+    if not old_password or not new_password:
+        raise BadRequestException("请填写原密码和新密码")
+    if len(new_password) < 6:
+        raise BadRequestException("新密码至少 6 位")
+    if old_password == new_password:
+        raise BadRequestException("新密码不能与原密码相同")
+    user = get_user_by_id(session, current_user.id)
+    if user is None:
+        raise NotFoundException("User not found")
+    if not verify_password(old_password, user.password):
+        raise BadRequestException("原密码错误")
+    user.password = get_password_hash(new_password)
+    session.commit()
+    return success_response(data={"id": user.id}, message="密码已更新")

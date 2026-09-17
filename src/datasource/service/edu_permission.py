@@ -29,6 +29,7 @@ class EduScope:
     school_name: str = ""
     class_names: list[str] = field(default_factory=list)
     student_id: str = ""
+    remark: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -42,6 +43,8 @@ class EduScope:
             out["class_names"] = list(self.class_names)
         if self.student_id:
             out["student_id"] = self.student_id
+        if self.remark:
+            out["edu_remark"] = self.remark
         return out
 
     @classmethod
@@ -63,6 +66,7 @@ class EduScope:
             school_name=str(data.get("school_name") or "").strip(),
             class_names=class_names,
             student_id=str(data.get("student_id") or "").strip(),
+            remark=str(data.get("edu_remark") or data.get("remark") or "").strip()[:80],
         )
 
 
@@ -92,7 +96,7 @@ def merge_edu_scope_into_variables(
 ) -> dict[str, Any]:
     """将 EduScope 合并进 system_variables，保留非教育字段。"""
     base = dict(existing) if isinstance(existing, dict) else {}
-    edu_keys = {"edu_role", "school_id", "school_name", "class_names", "student_id"}
+    edu_keys = {"edu_role", "school_id", "school_name", "class_names", "student_id", "edu_remark", "remark"}
     for k in edu_keys:
         base.pop(k, None)
     base.update(scope.to_dict())
@@ -102,7 +106,7 @@ def merge_edu_scope_into_variables(
 def clear_edu_scope_from_variables(existing: dict[str, Any] | None) -> dict[str, Any]:
     """从 system_variables 移除教育权限字段，保留其他自定义变量。"""
     base = dict(existing) if isinstance(existing, dict) else {}
-    for k in ("edu_role", "school_id", "school_name", "class_names", "student_id"):
+    for k in ("edu_role", "school_id", "school_name", "class_names", "student_id", "edu_remark", "remark"):
         base.pop(k, None)
     return base
 
@@ -491,6 +495,7 @@ def edu_scope_summary(user: SysUser | None) -> dict[str, Any]:
         "school_name": scope.school_name or None,
         "class_names": scope.class_names or None,
         "student_id": scope.student_id or None,
+        "edu_remark": scope.remark or None,
     }
 
 

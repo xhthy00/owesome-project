@@ -67,3 +67,17 @@ export async function login(payload: LoginPayload) {
 export async function getCurrentUser() {
   return apiRequest<CurrentUser>("/system/me");
 }
+
+export async function updateMyNickname(name: string) {
+  return apiRequest<{ id: number; name: string }>("/system/me", {
+    method: "PATCH",
+    body: JSON.stringify({ name })
+  });
+}
+
+export async function updateMyPassword(payload: { old_password: string; new_password: string }) {
+  return apiRequest<{ id: number }>("/system/me/password", {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}

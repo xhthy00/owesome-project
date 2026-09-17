@@ -62,6 +62,7 @@ class EduScopePayload(BaseModel):
     school_name: Optional[str] = Field(None, description="学校名称")
     class_names: Optional[list[str]] = Field(None, description="班级列表（老师角色）")
     student_id: Optional[str] = Field(None, description="学号（学生角色）")
+    edu_remark: Optional[str] = Field(None, description="管理员备注，仅展示，不参与行级过滤")
 
 
 class EduBatchBindRow(BaseModel):
@@ -71,6 +72,7 @@ class EduBatchBindRow(BaseModel):
     school_name: Optional[str] = None
     class_names: Optional[str] = Field(None, description="多班级用 | 或 , 分隔")
     student_id: Optional[str] = None
+    remark: Optional[str] = Field(None, description="管理员备注")
 
 
 class EduEffectiveRequest(BaseModel):

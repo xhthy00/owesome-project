@@ -16,6 +16,7 @@ export interface SystemUser {
   school_name?: string | null;
   class_names?: string[] | null;
   student_id?: string | null;
+  edu_remark?: string | null;
 }
 
 export interface Workspace {
@@ -39,11 +40,17 @@ export const systemApi = {
     apiRequest<{ total: number; items: SystemUser[] }>(`/user/pager/${page}/${pageSize}`),
   createUser: (payload: Partial<SystemUser> & { account: string; name: string; password?: string }) =>
     apiRequest<{ id: number }>("/user", { method: "POST", body: JSON.stringify(payload) }),
+  batchCreateUsers: (payload: { csv: string }) =>
+    apiRequest<{ success: number; failed: Array<{ row: number; account: string; reason: string }> }>(
+      "/user/batch",
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
   updateUserStatus: (id: number, status: number) =>
     apiRequest<{ id: number; status: number }>("/user/status", {
       method: "PATCH",
       body: JSON.stringify({ id, status })
     }),
+  deleteUser: (id: number) => apiRequest<{ id: number }>(`/user/${id}`, { method: "DELETE" }),
   listWorkspaces: () => apiRequest<Workspace[]>("/system/workspace"),
   createWorkspace: (name: string) =>
     apiRequest<{ id: number; name: string }>("/system/workspace", {
