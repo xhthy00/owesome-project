@@ -525,6 +525,7 @@ def sanitize_llm_slots(slots: Mapping[str, Any] | None) -> dict[str, str]:
                 continue
         if slot == SLOT_SCHOOL:
             from src.agent.education.query_parse import (
+                _is_descriptive_school_phrase,
                 _is_exam_window_fragment,
                 _is_request_speech_school_name,
                 _strip_school_ask_fillers,
@@ -535,6 +536,7 @@ def sanitize_llm_slots(slots: Mapping[str, Any] | None) -> dict[str, str]:
             if (
                 not value
                 or _is_request_speech_school_name(value)
+                or _is_descriptive_school_phrase(value)
                 or is_interrogative_school_name(value)
                 or _is_exam_window_fragment(value)
             ):

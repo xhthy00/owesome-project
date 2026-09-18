@@ -33,8 +33,6 @@ export default function AnomalyRulesPage() {
     (cfg: ReportConfig) => {
       form.setFieldsValue({
         pass_percent: cfg.pass_percent ?? Math.round((cfg.pass_ratio ?? 0.6) * 1000) / 10,
-        excellent_percent:
-          cfg.excellent_percent ?? Math.round((cfg.excellent_ratio ?? 0.85) * 1000) / 10,
         default_full_score: cfg.default_full_score,
         critical_margin: cfg.critical_margin,
         regression_threshold: cfg.regression_threshold,
@@ -87,7 +85,6 @@ export default function AnomalyRulesPage() {
       setSaving(true);
       const cfg = await educationApi.updateReportConfig({
         pass_ratio: Number(values.pass_percent) / 100,
-        excellent_ratio: Number(values.excellent_percent) / 100,
         default_full_score: values.default_full_score,
         critical_margin: values.critical_margin,
         regression_threshold: values.regression_threshold,
@@ -135,7 +132,7 @@ export default function AnomalyRulesPage() {
       <Alert
         type="info"
         showIcon
-        message="及格/优秀按「你保存的百分比 × 卷面满分」计算（例如满分150、及格30%→45分）。无卷面满分时才用满分兜底换算绝对分。"
+        message="及格按「你保存的百分比 × 卷面满分」计算（例如满分150、及格30%→45分）。无卷面满分时才用满分兜底换算绝对分。"
       />
 
       <Card title="经典阈值" loading={loading}>
@@ -146,14 +143,6 @@ export default function AnomalyRulesPage() {
               label="及格线（%）"
               rules={[{ required: true, message: "必填" }]}
               tooltip="占卷面满分的比例。例：60% 在 100 分卷→60 分，150 分卷→90 分"
-            >
-              <InputNumber className="w-full" min={0} max={100} addonAfter="%" />
-            </Form.Item>
-            <Form.Item
-              name="excellent_percent"
-              label="优秀线（%）"
-              rules={[{ required: true, message: "必填" }]}
-              tooltip="占卷面满分的比例。例：85% 在 100 分卷→85 分，150 分卷→127.5 分"
             >
               <InputNumber className="w-full" min={0} max={100} addonAfter="%" />
             </Form.Item>

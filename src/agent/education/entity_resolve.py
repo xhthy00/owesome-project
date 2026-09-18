@@ -14,6 +14,7 @@ from src.agent.education.clarification import (
 )
 from src.agent.education.query_frame import EntitySource, EntityStatus, QueryFrame
 from src.agent.education.query_parse import (
+    _is_descriptive_school_phrase,
     _is_exam_window_fragment,
     extract_district_target,
     is_interrogative_school_name,
@@ -199,7 +200,9 @@ def resolve_entities(
 
     school_hint = bound.get(SLOT_SCHOOL) or ""
     if school_hint and (
-        is_interrogative_school_name(school_hint) or _is_exam_window_fragment(school_hint)
+        is_interrogative_school_name(school_hint)
+        or _is_descriptive_school_phrase(school_hint)
+        or _is_exam_window_fragment(school_hint)
     ):
         bound.pop(SLOT_SCHOOL, None)
         school_hint = ""

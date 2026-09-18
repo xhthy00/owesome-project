@@ -818,18 +818,6 @@ export default function AnalysisToolPage() {
                   <Button type="primary" htmlType="submit" loading={generating} block>
                     生成报告
                   </Button>
-                  {fieldFlags.class_name ? (
-                    <Button
-                      block
-                      onClick={() => {
-                        setBatchClasses([]);
-                        setBatchItems([]);
-                        setBatchOpen(true);
-                      }}
-                    >
-                      批量（多班级）
-                    </Button>
-                  ) : null}
                 </Space>
               </Form>
             </Card>

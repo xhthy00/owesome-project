@@ -85,10 +85,23 @@ def _add_slot_mentions(
             if not evidence:
                 actual_source = EntitySource.PERMISSION
         status = EntityStatus.RAW
+        school_reject_reason = ""
         if source is EntitySource.LLM and not evidence:
             status = EntityStatus.REJECTED
         if kind == "school" and _WINDOW_FRAGMENT_RE.fullmatch(value):
             status = EntityStatus.REJECTED
+            school_reject_reason = "考试窗口残片不是学校"
+        elif kind == "school":
+            from src.agent.education.query_parse import (
+                _is_descriptive_school_phrase,
+                is_interrogative_school_name,
+            )
+
+            if _is_descriptive_school_phrase(value) or is_interrogative_school_name(value):
+                status = EntityStatus.REJECTED
+                school_reject_reason = "描述性学校短语不是校名"
+        if status is EntityStatus.REJECTED and not school_reject_reason:
+            school_reject_reason = "LLM 值无原文证据"
         frame.add_mention(
             EntityMention(
                 kind=kind,
@@ -97,13 +110,7 @@ def _add_slot_mentions(
                 evidence=evidence,
                 confidence=confidence,
                 status=status,
-                reason=(
-                    "考试窗口残片不是学校"
-                    if kind == "school" and _WINDOW_FRAGMENT_RE.fullmatch(value)
-                    else "LLM 值无原文证据"
-                    if status is EntityStatus.REJECTED
-                    else ""
-                ),
+                reason=school_reject_reason if status is EntityStatus.REJECTED else "",
             )
         )
 
@@ -180,6 +187,10 @@ def _credible_same_dimension_filter(mention: EntityMention, frame: QueryFrame) -
         return mention.has_evidence
     if mention.kind == "school":
         if _INTERROGATIVE_RE.search(value):
+            return False
+        from src.agent.education.query_parse import _is_descriptive_school_phrase
+
+        if _is_descriptive_school_phrase(value):
             return False
         if frame.scope == "全市" and value.startswith(("全市", "各校", "各学校")):
             return False

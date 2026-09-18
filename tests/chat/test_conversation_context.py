@@ -47,6 +47,33 @@ def test_merge_inherited_slots_honors_reset() -> None:
     assert result["class_name"] == "高三(1)班"
 
 
+def test_merge_and_history_drop_descriptive_school() -> None:
+    inherited = {"school_name": "下降的学校", "exam_name": "2026届高三5月模拟"}
+    merged = context.merge_inherited_slots({}, inherited, "再看语文均分")
+    assert "school_name" not in merged
+    assert merged["exam_name"] == "2026届高三5月模拟"
+
+    records = [
+        SimpleNamespace(
+            id=9,
+            question="列出5月比3月下降的学校",
+            resolved_question="列出5月比3月下降的学校",
+            context_summary="",
+            summary="",
+            sql_answer=None,
+            reasoning=None,
+            exec_result={
+                "pending_clarify": True,
+                "filled": {"school_name": "下降的学校", "exam_name": "2026届高三5月模拟"},
+            },
+            is_success=True,
+        )
+    ]
+    loaded = context.context_from_records(records)
+    assert loaded.inherited.get("school_name") != "下降的学校"
+    assert "school_name" not in loaded.inherited
+
+
 def test_standalone_question_does_not_load_history(monkeypatch) -> None:
     def fail_if_loaded(*args, **kwargs):
         raise AssertionError("完整新问题不应加载历史")

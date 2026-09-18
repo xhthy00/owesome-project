@@ -589,6 +589,11 @@ _GENERIC_SCHOOL_LABELS = frozenset(
         "该学校",
         "本学校",
         "此学校",
+        "这些学校",
+        "那些学校",
+        "其他学校",
+        "部分学校",
+        "相关学校",
         "所有学校",
         "每所学校",
         "各所学校",
@@ -597,6 +602,31 @@ _GENERIC_SCHOOL_LABELS = frozenset(
         "该中学",
         "各高中",
         "某高中",
+    }
+)
+#: 「下降的学校」是定语描述，不是校名。真校名几乎不含「的」。
+_EVALUATIVE_SCHOOL_STEMS = frozenset(
+    {
+        "下降",
+        "下滑",
+        "退步",
+        "进步",
+        "上升",
+        "落后",
+        "领先",
+        "薄弱",
+        "优势",
+        "较差",
+        "较好",
+        "偏弱",
+        "偏强",
+        "这些",
+        "那些",
+        "其他",
+        "部分",
+        "相关",
+        "同类",
+        "对比",
     }
 )
 #: 「哪几所学校」是要找的答案，不是校名。用包含判断，才能丢掉「扬州市哪几所学校」。
@@ -770,15 +800,17 @@ def _peel_interrogative_school_tail(name: str) -> str:
 
 
 def is_which_school_lookup_query(question: str) -> bool:
-    """学校是要找的答案（哪几所在涨），不是已知筛选范围。"""
+    """学校是要找的答案（哪几所在涨 / 列出下降的学校），不是已知筛选范围。"""
     q = (question or "").strip()
     if not q:
         return False
-    if not any(tok in q for tok in _INTERROGATIVE_SCHOOL_LABELS):
-        return False
     if extract_class_target(q) or has_class_alias(q):
         return False
-    return extract_school_target(q) is None
+    if extract_school_target(q) is not None:
+        return False
+    if any(tok in q for tok in _INTERROGATIVE_SCHOOL_LABELS):
+        return True
+    return bool(re.search(r"(?:列出|找出|筛出|给出).{0,24}学校", q))
 
 
 _ASKED_RANK_NUM = {
@@ -2085,6 +2117,16 @@ def _strip_exam_tokens_from_school_name(name: str) -> str:
     return _strip_exam_window_prefix(n)
 
 
+def _is_descriptive_school_phrase(name: str) -> bool:
+    """「下降的学校」「薄弱学校」是描述，不是专名。"""
+    n = re.sub(r"\s+", "", str(name or ""))
+    if not n:
+        return False
+    if "的" in n:
+        return True
+    return _school_name_stem(n) in _EVALUATIVE_SCHOOL_STEMS
+
+
 def _is_request_speech_school_name(name: str) -> bool:
     """「请分析一下学校」挖空请求语后只剩校名后缀，不是真校名。"""
     stem = _school_name_stem(_strip_school_ask_fillers(name))
@@ -2155,6 +2197,7 @@ def extract_school_targets(question: str) -> list[str]:
                     not name
                     or not _school_name_stem(name)
                     or _is_request_speech_school_name(name)
+                    or _is_descriptive_school_phrase(name)
                     or _is_regional_exam_label(name)
                     or _is_exam_window_fragment(name)
                     or name in _GENERIC_SCHOOL_LABELS
@@ -2166,6 +2209,7 @@ def extract_school_targets(question: str) -> list[str]:
                         not piece
                         or not _school_name_stem(piece)
                         or _is_request_speech_school_name(piece)
+                        or _is_descriptive_school_phrase(piece)
                         or _is_regional_exam_label(piece)
                         or _is_exam_window_fragment(piece)
                         or piece in _GENERIC_SCHOOL_LABELS

@@ -166,17 +166,25 @@ def _recent_history(
 
 
 def _canonicalize_filled_slots(filled: dict[str, str]) -> dict[str, str]:
-    """合并后兜底：剥口语「学校」尾巴，避免拉选项时 LIKE 命中 0 行。"""
-    from src.agent.education.query_parse import peel_rhetorical_school_suffix
-
+    """合并后兜底：剥口语「学校」尾巴，丢掉「下降的学校」这类描述。"""
     out = dict(filled or {})
     school = str(out.get(SLOT_SCHOOL) or "").strip()
     if school:
+        from src.agent.education.query_parse import (
+            _is_descriptive_school_phrase,
+            is_interrogative_school_name,
+            peel_rhetorical_school_suffix,
+        )
+
         peeled = peel_rhetorical_school_suffix(school)
-        if peeled:
-            out[SLOT_SCHOOL] = peeled
-        else:
+        if (
+            not peeled
+            or _is_descriptive_school_phrase(peeled)
+            or is_interrogative_school_name(peeled)
+        ):
             out.pop(SLOT_SCHOOL, None)
+        else:
+            out[SLOT_SCHOOL] = peeled
     return out
 
 

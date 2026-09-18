@@ -145,6 +145,15 @@ def merge_inherited_slots(
         if key in reset and _value_is_reset_fragment(key, val):
             continue
         out[key] = val
+    school = str(out.get(SLOT_SCHOOL) or "").strip()
+    if school:
+        from src.agent.education.query_parse import (
+            _is_descriptive_school_phrase,
+            is_interrogative_school_name,
+        )
+
+        if _is_descriptive_school_phrase(school) or is_interrogative_school_name(school):
+            out.pop(SLOT_SCHOOL, None)
     # 本句点名另一所学校且未点名班级时，上一所学校的班级不能跟着走
     cur_school = str((current or {}).get(SLOT_SCHOOL) or "").strip()
     cur_class = str((current or {}).get(SLOT_CLASS) or "").strip()
@@ -262,8 +271,17 @@ def slots_from_record(question: str, exec_result: Any, edu_scope: Mapping[str, A
             if not val:
                 continue
             if str(key) == SLOT_SCHOOL:
+                from src.agent.education.query_parse import (
+                    _is_descriptive_school_phrase,
+                    is_interrogative_school_name,
+                )
+
                 val = peel_rhetorical_school_suffix(val)
-                if not val:
+                if (
+                    not val
+                    or _is_descriptive_school_phrase(val)
+                    or is_interrogative_school_name(val)
+                ):
                     continue
             slots[str(key)] = val
     return {k: v for k, v in slots.items() if str(v or "").strip()}

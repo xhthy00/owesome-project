@@ -28,6 +28,35 @@ def test_extract_rejects_which_schools_phrase() -> None:
     assert extract_school_target("扬州中学本科达线人数") == "扬州中学"
     assert extract_school_target("扬州市第一中学达线人数") == "扬州市第一中学"
     assert extract_school_target("请帮我分析扬州大学附属中学") == "扬州大学附属中学"
+    assert extract_school_target("实验学校均分") == "实验学校"
+
+
+def test_extract_rejects_descriptive_school_phrase() -> None:
+    q = (
+        "对比2026届高三3月和2026届高三5月模拟各学校语文均分，"
+        "列出5月比3月下降的学校，给出两场均分和分差"
+    )
+    assert extract_school_target(q) is None
+    assert extract_school_targets(q) == []
+    assert extract_school_target("找出退步的学校") is None
+    assert extract_school_target("薄弱学校语文均分") is None
+    filled = extract_filled_slots(q, _EDU)
+    assert SLOT_SCHOOL not in filled
+    missing = candidate_missing_slots(None, q, filled, _EDU)
+    assert SLOT_SCHOOL not in missing
+    assert is_which_school_lookup_query(q)
+    assert sanitize_llm_slots({SLOT_SCHOOL: "下降的学校"}) == {}
+    catalog = {
+        "exams": ["2026届高三3月", "2026届高三5月模拟"],
+        "schools": ["A01扬州中学", "B01新华中学"],
+    }
+    dropped = resolve_entities(
+        {SLOT_SCHOOL: "下降的学校", SLOT_EXAM: "2026届高三5月模拟"},
+        catalog,
+        edu_scope=_EDU,
+    )
+    assert dropped.clarify_slot is None
+    assert SLOT_SCHOOL not in dropped.bound
 
 
 def test_which_school_lookup_skips_named_school() -> None:

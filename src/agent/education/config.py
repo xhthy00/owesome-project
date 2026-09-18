@@ -153,7 +153,7 @@ class EducationConfig:
         return sorted(segs)
 
 
-#: 全局优秀率（满分 × excellent_ratio）口径不合理，问答/报告先不展示；配置页仍保留。
+#: 全局优秀率（满分 × excellent_ratio）口径不合理，问答/报告/配置页先不展示。
 SHOW_EXCELLENT_RATE = False
 
 
