@@ -816,7 +816,9 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     from src.agent.education.query_parse import (
         extract_class_target,
         extract_district_target,
+        extract_exam_name_hints,
         extract_school_type_target,
+        is_all_schools_scope_query,
         is_citywide_nth_class_lookup_query,
         is_class_city_rank_query,
         is_class_subject_city_rank_query,
@@ -854,10 +856,12 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
 
     filled = extract_filled_slots(q)
     spec = resolve_metric(q)
+    exam_hints = extract_exam_name_hints(q)
     if (
         spec
         and spec.id == "score_kpi"
         and filled.get("exam_name")
+        and len(exam_hints) < 2
         and not is_line_reach_query(q)
         and not is_overview_total_query(q)
         and not is_subject_strength_query(q)
@@ -878,6 +882,7 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
     class_name = _extract_class_name(q) or filled.get("class_name") or ""
     subject = _plan_subject_name(q) or (_extract_subject(q) or "") or filled.get("subject_name") or ""
     exam = _plan_exam_name(q) or filled.get("exam_name") or ""
+    exam_lock = list(exam_hints) if len(exam_hints) >= 2 else ([exam] if exam else [])
     if is_contribution_weak_query(q):
         from src.agent.education.contribution_weak import is_school_id_token
 
@@ -922,18 +927,31 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
         scope_bits.append("选科【物理类】")
     elif any(h in q for h in ("历史类", "历史方向", "文科")):
         scope_bits.append("选科【历史类】")
+    if len(exam_hints) >= 2:
+        exam = "、".join(exam_hints)
     if exam:
         scope_bits.append(f"考试【{exam}】")
     scope = "、".join(scope_bits) if scope_bits else "已确认范围"
     bound_lock = ""
     st_lock = f"{school_type}校" if school_type else ""
-    if any((exam, school, class_name, spec_district, st_lock)):
-        lock_bits = [b for b in (exam, school, class_name, spec_district, st_lock) if b]
+    if any((exam_lock, school, class_name, spec_district, st_lock)):
+        lock_bits = [b for b in (*exam_lock, school, class_name, spec_district, st_lock) if b]
         bound_lock = (
             "WHERE 字面量必须等于已绑定："
             + "、".join(lock_bits)
             + "；禁止改写、省略或另选默认考试。"
         )
+    multi_exam_hint = ""
+    if len(exam_hints) >= 2:
+        multi_exam_hint = (
+            f"本题对比两场考试（{'、'.join(exam_hints)}）："
+            "必须两场都查，禁止只取其中一场；"
+            "禁止 query_certified_metric_tool。"
+        )
+        if is_all_schools_scope_query(q):
+            multi_exam_hint += (
+                "各校均分查 tb_score_overview，按 xx+exam_name 分组，再算分差排序。"
+            )
     line_reach_hint = ""
     if is_line_reach_query(q):
         line_reach_hint = _line_reach_fact_hint(
@@ -999,6 +1017,7 @@ def build_fact_query_plan_items(question: str) -> list[dict[str, str]]:
         {
             "sub_task": (
                 f"用 SQL 直接回答用户问题（范围：{scope}）。"
+                f"{multi_exam_hint}"
                 f"{line_reach_hint}"
                 f"{score_band_hint}"
                 f"{school_type_avg_hint}"

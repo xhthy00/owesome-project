@@ -207,11 +207,18 @@ export default function SideBar() {
   const visibleRoutes = useMemo(() => {
     const eduRole = currentUser?.edu_scope?.edu_role || "";
     const hideAnomalyAlerts = eduRole === "bureau_admin" || eduRole === "student";
+    const canSeeScoreImport =
+      isPlatformAdmin ||
+      Boolean(currentUser?.is_super_admin) ||
+      eduRole === "bureau_admin";
     let list = routes;
     if (!isPlatformAdmin) {
       list = routes.filter(
         (item) => item.key !== "anomaly-rules" && menuVisibility[item.key] !== false
       );
+    }
+    if (!canSeeScoreImport) {
+      list = list.filter((item) => item.key !== "raw-score-import");
     }
     if (hideAnomalyAlerts) {
       list = list.filter((item) => item.key !== "anomaly-alerts");
@@ -220,7 +227,12 @@ export default function SideBar() {
       list = list.filter((item) => item.key !== "line-reach" && item.key !== "fraction-bar");
     }
     return list;
-  }, [isPlatformAdmin, menuVisibility, currentUser?.edu_scope?.edu_role]);
+  }, [
+    isPlatformAdmin,
+    menuVisibility,
+    currentUser?.edu_scope?.edu_role,
+    currentUser?.is_super_admin
+  ]);
 
   if (!isMenuExpand) {
     return (

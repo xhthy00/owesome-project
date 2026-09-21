@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     # JWT
     jwt_secret_key: str = "your-secret-key-change-in-production"
     jwt_algorithm: str = "HS256"
-    jwt_access_token_expire_minutes: int = 30
+    jwt_access_token_expire_minutes: int = 1440
 
     # LLM
     llm_base_url: Optional[str] = None

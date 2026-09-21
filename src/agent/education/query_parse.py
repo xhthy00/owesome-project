@@ -260,16 +260,30 @@ def text_has_exam_kind_token(text: str, token: str) -> bool:
     return token in q
 
 
+_BATCH_EXAM_NAME_RE = re.compile(
+    r"(\d{4}届(?:高[一二三]|初[一二三])\d{1,2}月(?:期末|期中|模拟|月考|摸底)?)"
+)
+
+
+def extract_exam_name_hints(question: str) -> list[str]:
+    """问句里所有「2026届高三3月」类批次名，保序去重。"""
+    q = normalize_fullwidth_parentheses((question or "").strip())
+    if not q:
+        return []
+    seen: list[str] = []
+    for name in _BATCH_EXAM_NAME_RE.findall(q):
+        if name not in seen:
+            seen.append(name)
+    return seen
+
+
 def extract_exam_name_hint(question: str) -> str | None:
     """从问题中抽取考试名线索（如「XX联考」「区域名+考试」等任意简称）。"""
     q = normalize_fullwidth_parentheses((question or "").strip())
     if not q:
         return None
     # 「2026届高三3月」类批次简称（可无期末/模拟后缀）
-    m = re.search(
-        r"(\d{4}届(?:高[一二三]|初[一二三])\d{1,2}月(?:期末|期中|模拟|月考|摸底)?)",
-        q,
-    )
+    m = _BATCH_EXAM_NAME_RE.search(q)
     if m:
         return m.group(1)
     # 完整/半正式考试名（清洗班级/科目误吞，避免「班数学期末考试」）
@@ -1693,8 +1707,12 @@ def is_school_class_comparison_query(question: str) -> bool:
     # 「群体特征」口径独立路由，不占用班级横向对比
     if is_group_feature_query(q):
         return False
+    # 「本校/我校」抽不出真校名，但仍是校级范围；只认明确横向/各班对比口径，
+    # 避免「对比本校各班成绩」从事实问被抬成报告。
     if not extract_school_target(q):
-        return False
+        own_school = "本校" in q or "我校" in q
+        if not own_school or not any(h in q for h in _CLASS_COMPARISON_HINTS):
+            return False
     # 否定语境：「无各班 / 不要各班级」≠ 要做各班对比
     if re.search(r"(?:无|不要|别看|别对|非|不是).{0,8}(?:各个班级|各班级|各班)", q):
         return False
@@ -3327,6 +3345,7 @@ __all__ = [
     "build_edu_aware_constraints",
     "extract_district_target",
     "extract_exam_name_hint",
+    "extract_exam_name_hints",
     "extract_school_target",
     "extract_school_targets",
     "split_conjoined_school_names",

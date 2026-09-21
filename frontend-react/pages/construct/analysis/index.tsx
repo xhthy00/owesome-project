@@ -34,6 +34,7 @@ import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
+import { getCurrentUser } from "@/api/auth";
 import { datasourceApi, type DatasourceItem } from "@/api/datasource";
 import {
   educationApi,
@@ -68,6 +69,21 @@ const OPEN_REPORT_TYPES = new Set([
   "elite_roster",
   "score_band"
 ]);
+
+/** 校长/老师可见：本校/本班口径，不含全市局端报告 */
+const SCHOOL_TEACHER_REPORT_TYPES = new Set([
+  "class_overview",
+  "grade_comparison",
+  "subject_diagnosis",
+  "student_profile",
+  "trend_tracking",
+  "tier_alert",
+  "comprehensive"
+]);
+
+function isSchoolOrTeacherRole(eduRole: string): boolean {
+  return eduRole === "school_admin" || eduRole === "teacher";
+}
 
 const AUDIENCE_OPTIONS = [
   { value: "default", label: "默认" },
@@ -206,6 +222,7 @@ export default function AnalysisToolPage() {
   const router = useRouter();
   const [skills, setSkills] = useState<SkillItem[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(true);
+  const [eduRole, setEduRole] = useState<string | null>(null);
   const [selected, setSelected] = useState<SkillItem | null>(null);
   const [datasources, setDatasources] = useState<DatasourceItem[]>([]);
   const [generating, setGenerating] = useState(false);
@@ -249,6 +266,20 @@ export default function AnalysisToolPage() {
       })
       .finally(() => {
         if (!cancelled) setSkillsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getCurrentUser()
+      .then((user) => {
+        if (!cancelled) setEduRole(String(user.edu_scope?.edu_role || "").trim());
+      })
+      .catch(() => {
+        if (!cancelled) setEduRole("");
       });
     return () => {
       cancelled = true;
@@ -331,9 +362,26 @@ export default function AnalysisToolPage() {
     [selected]
   );
 
+  const visibleSkills = useMemo(() => {
+    if (eduRole != null && isSchoolOrTeacherRole(eduRole)) {
+      return skills.filter((s) => SCHOOL_TEACHER_REPORT_TYPES.has(s.report_type));
+    }
+    return skills;
+  }, [skills, eduRole]);
+
+  const cardsLoading = skillsLoading || eduRole == null;
+
   const selectSkill = (skill: SkillItem) => {
     if (!OPEN_REPORT_TYPES.has(skill.report_type)) {
       message.info("该报告类型暂未开放");
+      return;
+    }
+    if (
+      eduRole != null &&
+      isSchoolOrTeacherRole(eduRole) &&
+      !SCHOOL_TEACHER_REPORT_TYPES.has(skill.report_type)
+    ) {
+      message.info("当前角色不提供该报告");
       return;
     }
     setSelected(skill);
@@ -353,15 +401,15 @@ export default function AnalysisToolPage() {
 
   // 技能页「一键生成」：?report_type=xxx 自动进入对应表单
   useEffect(() => {
-    if (deepLinkApplied.current || skillsLoading || skills.length === 0) return;
+    if (deepLinkApplied.current || cardsLoading || visibleSkills.length === 0) return;
     const raw = router.query.report_type;
     const rt = typeof raw === "string" ? raw.trim() : Array.isArray(raw) ? raw[0] : "";
     if (!rt) return;
-    const skill = skills.find((s) => s.report_type === rt);
-    if (!skill) return;
+    const skill = visibleSkills.find((s) => s.report_type === rt);
     deepLinkApplied.current = true;
+    if (!skill) return;
     selectSkill(skill);
-  }, [skills, skillsLoading, router.query.report_type]);
+  }, [visibleSkills, cardsLoading, router.query.report_type]);
 
   const onGenerate = async (values: FormValues) => {
     if (!selected) return;
@@ -592,9 +640,9 @@ export default function AnalysisToolPage() {
 
       {!selected ? (
         <div className="grid flex-1 grid-cols-1 content-start gap-3 overflow-y-auto px-1 pb-2 pt-1 sm:grid-cols-2 lg:grid-cols-3">
-          {skillsLoading
+          {cardsLoading
             ? null
-            : skills.map((skill) => {
+            : visibleSkills.map((skill) => {
                 const enabled = OPEN_REPORT_TYPES.has(skill.report_type);
                 return (
                   <Card
