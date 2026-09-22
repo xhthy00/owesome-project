@@ -85,15 +85,6 @@ function isSchoolOrTeacherRole(eduRole: string): boolean {
   return eduRole === "school_admin" || eduRole === "teacher";
 }
 
-const AUDIENCE_OPTIONS = [
-  { value: "default", label: "默认" },
-  { value: "principal", label: "校长/教务" },
-  { value: "grade_head", label: "年级主任" },
-  { value: "head_teacher", label: "班主任" },
-  { value: "subject_teacher", label: "任课教师" },
-  { value: "parent", label: "家长" }
-];
-
 interface SkillItem {
   id: string;
   name: string;
@@ -744,8 +735,8 @@ export default function AnalysisToolPage() {
                     }}
                   />
                 </Form.Item>
-                <Form.Item name="audience" label="报告受众" rules={[{ required: true }]}>
-                  <Select options={AUDIENCE_OPTIONS} />
+                <Form.Item name="audience" hidden>
+                  <Input />
                 </Form.Item>
                 {fieldFlags.school_name ? (
                   <Form.Item name="school_name" label="学校">
@@ -1018,7 +1009,7 @@ export default function AnalysisToolPage() {
             destroyOnClose={false}
           >
             <Typography.Paragraph type="secondary" style={{ marginBottom: 12 }}>
-              选择多个班级，将按当前表单中的考试/科目/受众等条件逐班生成（不含 HTML
+              选择多个班级，将按当前表单中的考试/科目等条件逐班生成（不含 HTML
               预览，仅返回摘要）。
             </Typography.Paragraph>
             <Select

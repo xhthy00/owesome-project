@@ -219,13 +219,29 @@
     <section class="edu-card">
       <h2>知识点掌握诊断</h2>
       <p class="edu-sub">班级横向对比时按班级展示知识点得分率；科目诊断时为整体掌握水平（「需加强」应优先复习）。</p>
-      <div id="knowledgeChart" class="edu-chart"></div>
-      <script type="application/json" id="knowledgeChartData">{{KNOWLEDGE_CHART}}</script>
+      <div id="knowledgeCharts">{{KNOWLEDGE_CHART}}</div>
       <script>
         (function () {
-          var raw = (document.getElementById('knowledgeChartData').textContent || '').trim();
+          var host = document.getElementById('knowledgeCharts');
+          if (!host) { return; }
+          var scripts = host.querySelectorAll('script[data-edu-echart]');
+          if (scripts.length) {
+            scripts.forEach(function (el) {
+              var target = el.getAttribute('data-edu-echart');
+              var raw = (el.textContent || '').trim();
+              var node = target ? document.getElementById(target) : null;
+              if (!node || !raw) { return; }
+              try { echarts.init(node).setOption(JSON.parse(raw)); } catch (e) {}
+            });
+            return;
+          }
+          var raw = (host.textContent || '').trim();
           if (!raw) { return; }
-          try { echarts.init(document.getElementById('knowledgeChart')).setOption(JSON.parse(raw)); } catch (e) {}
+          var box = document.createElement('div');
+          box.className = 'edu-chart';
+          host.textContent = '';
+          host.appendChild(box);
+          try { echarts.init(box).setOption(JSON.parse(raw)); } catch (e) {}
         })();
       </script>
       <h3>知识点得分率明细</h3>
@@ -249,13 +265,30 @@
 
     <section class="edu-card" id="questionTypeSection">
       <h2>题型分布</h2>
-      <div id="questionTypeChart" class="edu-chart"></div>
-      <script type="application/json" id="questionTypeChartData">{{QUESTION_TYPE_CHART}}</script>
+      <div id="questionTypeCharts">{{QUESTION_TYPE_CHART}}</div>
       <script>
         (function () {
-          var raw = (document.getElementById('questionTypeChartData').textContent || '').trim();
-          if (!raw) { document.getElementById('questionTypeSection').style.display = 'none'; return; }
-          try { echarts.init(document.getElementById('questionTypeChart')).setOption(JSON.parse(raw)); } catch (e) {}
+          var host = document.getElementById('questionTypeCharts');
+          var section = document.getElementById('questionTypeSection');
+          if (!host) { return; }
+          var scripts = host.querySelectorAll('script[data-edu-echart]');
+          if (scripts.length) {
+            scripts.forEach(function (el) {
+              var target = el.getAttribute('data-edu-echart');
+              var raw = (el.textContent || '').trim();
+              var node = target ? document.getElementById(target) : null;
+              if (!node || !raw) { return; }
+              try { echarts.init(node).setOption(JSON.parse(raw)); } catch (e) {}
+            });
+            return;
+          }
+          var raw = (host.textContent || '').trim();
+          if (!raw) { if (section) { section.style.display = 'none'; } return; }
+          var box = document.createElement('div');
+          box.className = 'edu-chart';
+          host.textContent = '';
+          host.appendChild(box);
+          try { echarts.init(box).setOption(JSON.parse(raw)); } catch (e) {}
         })();
       </script>
       <div>{{QUESTION_TYPE_TABLE}}</div>

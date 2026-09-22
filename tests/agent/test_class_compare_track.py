@@ -155,3 +155,64 @@ def test_own_school_horizontal_compare_skips_report_type_question() -> None:
     assert not is_school_class_comparison_query("2026届高三1月各区县总分10分段统计")
     _assert_own_school_class_compare_plan("本校各班数学横向分析")
     _assert_own_school_class_compare_plan("我校高三班级横向对比")
+
+
+def test_both_tracks_keep_each_chart_json_valid() -> None:
+    """文理都有班时，知识点/题型各出两张可解析的图，不能拼成一段非法 JSON。"""
+    import json
+    import re
+
+    from src.agent.education.class_track import TRACK_HIS, TRACK_PHY
+    from src.agent.education.tools import _apply_grade_compare_section_tables
+
+    classes = {
+        "1班": TRACK_PHY,
+        "2班": TRACK_PHY,
+        "10班": TRACK_HIS,
+        "11班": TRACK_HIS,
+    }
+    items = []
+    knowledge = []
+    for cls in classes:
+        items.append(
+            {
+                "class_name": cls,
+                "question_no": 1,
+                "question_type": "单选题",
+                "score_rate": 80,
+                "knowledge_name": "函数",
+            }
+        )
+        items.append(
+            {
+                "class_name": cls,
+                "question_no": 2,
+                "question_type": "解答题",
+                "score_rate": 60,
+                "knowledge_name": "函数",
+            }
+        )
+        knowledge.append(
+            {"class_name": cls, "knowledge_name": "函数", "score_rate": 70}
+        )
+    data: dict = {}
+    _apply_grade_compare_section_tables(
+        data,
+        items=[],
+        knowledge=[],
+        item_class_rows=items,
+        knowledge_class_rows=knowledge,
+        is_grade_compare=True,
+        class_tracks=classes,
+    )
+    for key, title_a, title_b in (
+        ("QUESTION_TYPE_CHART", "物理方向题型得分率对比", "历史方向题型得分率对比"),
+        ("KNOWLEDGE_CHART", "物理方向知识点得分率对比", "历史方向知识点得分率对比"),
+    ):
+        raw = str(data.get(key) or "")
+        bodies = re.findall(r'data-edu-echart="[^"]+">(.*?)</script>', raw)
+        assert len(bodies) == 2, key
+        for body in bodies:
+            json.loads(body)
+        assert title_a in raw
+        assert title_b in raw

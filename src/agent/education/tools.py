@@ -2827,6 +2827,23 @@ def _class_compare_table_from_insights(
     return ""
 
 
+def _pack_chart_options(options: list[str], prefix: str) -> str:
+    """一张图保持 JSON；两张及以上各占一个容器，避免拼成非法 JSON。"""
+    cleaned = [str(opt) for opt in options if str(opt or "").strip()]
+    if not cleaned:
+        return ""
+    if len(cleaned) == 1:
+        return cleaned[0]
+    parts: list[str] = []
+    for i, option in enumerate(cleaned):
+        cid = f"{prefix}_{i}"
+        parts.append(
+            f'<div id="{cid}" class="edu-chart"></div>'
+            f'<script type="application/json" data-edu-echart="{cid}">{option}</script>'
+        )
+    return "".join(parts)
+
+
 def _apply_grade_compare_section_tables(
     data: dict[str, Any],
     *,
@@ -2893,7 +2910,7 @@ def _apply_grade_compare_section_tables(
                     )
                 )
         data["KNOWLEDGE_TABLE"] = "".join(tables)
-        data["KNOWLEDGE_CHART"] = "".join(charts)
+        data["KNOWLEDGE_CHART"] = _pack_chart_options(charts, "knowledgeChart")
     elif use_know_cmp:
         data["KNOWLEDGE_TABLE"] = build_knowledge_table_html(know_cmp)
         chart_payload = build_knowledge_compare_chart_payload(know_cmp)
@@ -2937,8 +2954,7 @@ def _apply_grade_compare_section_tables(
                 )
         if q_parts:
             data["QUESTION_TYPE_TABLE"] = "".join(q_parts)
-        if q_charts:
-            data["QUESTION_TYPE_CHART"] = "".join(q_charts)
+        data["QUESTION_TYPE_CHART"] = _pack_chart_options(q_charts, "questionTypeChart")
         return
 
     qtype_source = item_cmp if use_item_cmp else _compute_item_metrics(items)
