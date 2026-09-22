@@ -88,6 +88,129 @@ def build_dedupe_key(
     )
 
 
+_STUDENT_BUCKETS = (ANOMALY_CRITICAL, ANOMALY_REGRESSION, ANOMALY_IMBALANCED)
+
+
+def collect_alert_student_ids(payload: dict[str, Any] | None) -> list[str]:
+    """明细里的学生编码，保序去重。"""
+    if not isinstance(payload, dict):
+        return []
+    seen: list[str] = []
+    for key in _STUDENT_BUCKETS:
+        items = payload.get(key)
+        if not isinstance(items, list):
+            continue
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            sid = str(it.get("student_id") or it.get("name") or "").strip()
+            if sid and sid not in seen:
+                seen.append(sid)
+    return seen
+
+
+def apply_alert_student_names(
+    payload: dict[str, Any] | None,
+    names: dict[str, str],
+) -> dict[str, Any]:
+    """关闭脱敏时给明细补 display_name，不改库里的 student_id。"""
+    if not isinstance(payload, dict):
+        return {}
+    if not names:
+        return payload
+    out = dict(payload)
+    for key in _STUDENT_BUCKETS:
+        items = out.get(key)
+        if not isinstance(items, list):
+            continue
+        rewritten: list[Any] = []
+        for it in items:
+            if not isinstance(it, dict):
+                rewritten.append(it)
+                continue
+            row = dict(it)
+            sid = str(row.get("student_id") or row.get("name") or "").strip()
+            xm = str(names.get(sid) or "").strip()
+            if xm:
+                row["display_name"] = xm
+            rewritten.append(row)
+        out[key] = rewritten
+    return out
+
+
+def lookup_overview_student_names(
+    *,
+    user_id: int,
+    datasource_id: int,
+    workspace_oid: int,
+    student_ids: list[str],
+) -> dict[str, str]:
+    """anon_stu_id → tb_score_overview.xm。查不到或失败返回空。"""
+    ids = [str(x).strip() for x in student_ids if str(x or "").strip()]
+    if not ids or not datasource_id:
+        return {}
+    from datasource.service.execute_with_permission import execute_sql_with_permission_by_user_id
+
+    names: dict[str, str] = {}
+    for start in range(0, len(ids), 200):
+        chunk = ids[start : start + 200]
+        literals = ", ".join("'" + x.replace("'", "''") + "'" for x in chunk)
+        sql = (
+            "SELECT anon_stu_id, xm FROM tb_score_overview "
+            f"WHERE anon_stu_id IN ({literals}) "
+            "AND xm IS NOT NULL AND TRIM(CAST(xm AS TEXT)) <> ''"
+        )
+        try:
+            ok, _msg, result, _sql = execute_sql_with_permission_by_user_id(
+                user_id, int(datasource_id), int(workspace_oid), sql
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("anomaly student name lookup failed: %s", exc)
+            return names
+        if not ok or not isinstance(result, dict):
+            continue
+        columns = [str(c) for c in (result.get("columns") or [])]
+        for row in result.get("rows") or []:
+            if isinstance(row, dict):
+                sid = str(row.get("anon_stu_id") or "").strip()
+                xm = str(row.get("xm") or "").strip()
+            elif isinstance(row, (list, tuple)) and row:
+                idx_id = columns.index("anon_stu_id") if "anon_stu_id" in columns else 0
+                idx_xm = columns.index("xm") if "xm" in columns else 1
+                sid = str(row[idx_id] if idx_id < len(row) else "").strip()
+                xm = str(row[idx_xm] if idx_xm < len(row) else "").strip()
+            else:
+                continue
+            if sid and xm and sid not in names:
+                names[sid] = xm
+    return names
+
+
+def payload_for_student_display(
+    payload: dict[str, Any] | None,
+    *,
+    user_id: int,
+    datasource_id: int,
+    workspace_oid: int,
+) -> dict[str, Any]:
+    """脱敏开启时原样返回编码；关闭时用总览姓名覆盖展示名。"""
+    from src.agent.education.privacy_mode import is_anonymize_display_enabled
+
+    raw = payload if isinstance(payload, dict) else {}
+    if is_anonymize_display_enabled():
+        return raw
+    ids = collect_alert_student_ids(raw)
+    if not ids:
+        return raw
+    names = lookup_overview_student_names(
+        user_id=user_id,
+        datasource_id=datasource_id,
+        workspace_oid=workspace_oid,
+        student_ids=ids,
+    )
+    return apply_alert_student_names(raw, names)
+
+
 def alert_to_dict(row: EduAnomalyAlert) -> dict[str, Any]:
     payload = row.payload_json or {}
     counts = payload.get("counts") if isinstance(payload, dict) else None

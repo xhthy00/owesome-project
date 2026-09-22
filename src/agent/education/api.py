@@ -1519,7 +1519,16 @@ async def get_anomaly_alert(
         )
         if row is None:
             return error_response(code=404, message="异常提醒不存在或无权查看")
-        return success_response(alert_to_dict(row))
+        data = alert_to_dict(row)
+        from src.agent.education.alert_service import payload_for_student_display
+
+        data["payload"] = payload_for_student_display(
+            data.get("payload"),
+            user_id=int(current_user.id),
+            datasource_id=int(row.datasource_id or 0),
+            workspace_oid=int(workspace_oid),
+        )
+        return success_response(data)
 
 
 @router.post("/anomaly-alerts/{alert_id}/confirm")
@@ -1554,7 +1563,16 @@ async def confirm_anomaly_alert(
         )
         if row is None:
             return error_response(code=404, message="异常提醒不存在或无权确认")
-        return success_response(alert_to_dict(row), message="已确认处理")
+        data = alert_to_dict(row)
+        from src.agent.education.alert_service import payload_for_student_display
+
+        data["payload"] = payload_for_student_display(
+            data.get("payload"),
+            user_id=int(current_user.id),
+            datasource_id=int(row.datasource_id or 0),
+            workspace_oid=int(workspace_oid),
+        )
+        return success_response(data, message="已确认处理")
 
 
 def _prepare_raw_import(current_user: UserResponse, workspace_oid: int):

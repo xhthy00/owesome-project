@@ -37,9 +37,15 @@ function asList(payload: Record<string, unknown> | undefined, key: string): Reco
   return Array.isArray(raw) ? (raw as Record<string, unknown>[]) : [];
 }
 
+function studentLabel(it: Record<string, unknown>): string {
+  const display = String(it.display_name || "").trim();
+  if (display) return display;
+  return String(it.student_id || it.name || "—");
+}
+
 function toStudentRows(items: Record<string, unknown>[], prefix: string): StudentRow[] {
   return items.map((it, idx) => {
-    const studentId = String(it.student_id || it.name || "—");
+    const studentId = studentLabel(it);
     const subject = String(it.subject || it.low_subject || it.subject_name || "—");
     let score = "—";
     if (it.score != null && it.prev_score != null) {
