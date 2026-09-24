@@ -20,7 +20,8 @@ services:
       TZ: Asia/Shanghai
     ports:
       # 仅暴露前端端口。外部 Nginx 反代到 :3001，/api 由 Next 内部转给后端。
-      - "3001:3001"
+#      - "3001:3001"
+      - "127.0.0.1:3001:3001"
     # healthcheck 直接打后端根路由 /health（main.py 中定义，不经 /api/v1 前缀，
     # 也无需经 Next 转发），能最快确认后端与外部 PG 链路已就绪。
     healthcheck:
