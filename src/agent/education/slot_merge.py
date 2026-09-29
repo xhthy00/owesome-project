@@ -65,6 +65,18 @@ def _evidence_in_question(evidence: str, question: str) -> bool:
     return bool(compact) and compact in compact_q
 
 
+def _mark_district_school(mention: EntityMention) -> None:
+    """白名单区县说法被标成学校时丢掉，后面仍按区县走。"""
+    if mention.kind != "school" or mention.role is not EntityRole.FILTER:
+        return
+    from src.agent.education.query_parse import is_district_phrase
+
+    if not is_district_phrase(mention.value):
+        return
+    mention.status = EntityStatus.REJECTED
+    mention.reason = "区县说法不是校名"
+
+
 def _add_slot_mentions(
     frame: QueryFrame,
     slots: Mapping[str, Any] | None,
@@ -102,17 +114,17 @@ def _add_slot_mentions(
                 school_reject_reason = "描述性学校短语不是校名"
         if status is EntityStatus.REJECTED and not school_reject_reason:
             school_reject_reason = "LLM 值无原文证据"
-        frame.add_mention(
-            EntityMention(
-                kind=kind,
-                value=value,
-                source=actual_source,
-                evidence=evidence,
-                confidence=confidence,
-                status=status,
-                reason=school_reject_reason if status is EntityStatus.REJECTED else "",
-            )
+        mention = EntityMention(
+            kind=kind,
+            value=value,
+            source=actual_source,
+            evidence=evidence,
+            confidence=confidence,
+            status=status,
+            reason=school_reject_reason if status is EntityStatus.REJECTED else "",
         )
+        _mark_district_school(mention)
+        frame.add_mention(mention)
 
 
 def _add_llm_mentions(
@@ -132,6 +144,7 @@ def _add_llm_mentions(
         elif mention.role is EntityRole.FILTER and not mention.evidence:
             mention.status = EntityStatus.REJECTED
             mention.reason = "LLM filter 无原文证据"
+        _mark_district_school(mention)
         frame.add_mention(mention)
         if mention.role is EntityRole.LOOKUP and mention.kind not in frame.answer_dimensions:
             frame.answer_dimensions.append(mention.kind)

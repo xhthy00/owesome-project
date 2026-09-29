@@ -559,6 +559,17 @@ _DISTRICT_BARE_REJECT = frozenset(
     }
 )
 _GENERIC_DISTRICT_LABELS = frozenset({"各区", "各县", "各区县", "全区县", "各地区"})
+_DISTRICT_PHRASE_RE = re.compile(
+    r"(?:" + "|".join(_KNOWN_DISTRICT_STEMS) + r")(?:地区|区|县)"
+)
+
+
+def is_district_phrase(name: str) -> bool:
+    """「高邮地区」「邗江区」整段是区县，不是校名。光杆「高邮」不算。"""
+    n = re.sub(r"\s+", "", str(name or ""))
+    if not n or re.search(_SCHOOL_SUFFIX + r"$", n):
+        return False
+    return bool(_DISTRICT_PHRASE_RE.fullmatch(n))
 
 
 def extract_district_target(question: str) -> str | None:
@@ -3344,6 +3355,7 @@ def report_matches_student(title: str, html: str, target: str) -> bool:
 __all__ = [
     "build_edu_aware_constraints",
     "extract_district_target",
+    "is_district_phrase",
     "extract_exam_name_hint",
     "extract_exam_name_hints",
     "extract_school_target",
