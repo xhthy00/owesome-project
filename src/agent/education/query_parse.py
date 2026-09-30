@@ -186,6 +186,23 @@ def normalize_fullwidth_parentheses(text: str) -> str:
     return _INFORMAL_CLASS_RE.sub(_paren, out)
 
 
+# 只动「高三（1）班」这类班名。校名「扬大附中（淮海路）」里的括号保持原样。
+_CLASS_PAREN_SPAN_RE = re.compile(
+    r"(初[一二三]|高[一二三]|[三四五六七八九]年级)\s*[（(]\s*([0-9]{1,2})\s*[）)]\s*班"
+)
+
+
+def normalize_class_spans(text: str) -> str:
+    """把班名括号收成库内写法「高三(1)班」（含补零），不改其它括号。"""
+    if not text:
+        return text
+
+    def _paren(m: re.Match[str]) -> str:
+        return f"{m.group(1)}({int(m.group(2))})班"
+
+    return _CLASS_PAREN_SPAN_RE.sub(_paren, text)
+
+
 def extract_student_id_target(question: str) -> str | None:
     """从问题中抽取学号（不限定 STU/年份前缀；优先学生/学号语境）。"""
     q = (question or "").strip()
@@ -3433,6 +3450,7 @@ __all__ = [
     "is_class_overview_query",
     "infer_group_feature_dimension",
     "resolve_group_feature_score_rows",
+    "normalize_class_spans",
     "normalize_fullwidth_parentheses",
     "text_has_exam_kind_token",
     "normalize_student_key",

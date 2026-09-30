@@ -1976,6 +1976,7 @@ def execute_sql(
         sql: 要执行的 SELECT 语句；非只读会被拒绝。
     """
     from src.agent.education.privacy_mode import apply_result_privacy, apply_sql_privacy
+    from src.agent.education.query_parse import normalize_class_spans
     from src.datasource.service.execute_with_permission import execute_sql_with_permission_by_user_id
     from src.datasource.service.sql_auto_fix import format_auto_fix_note, run_sql_with_auto_fix
 
@@ -2002,6 +2003,8 @@ def execute_sql(
                 )
     except Exception:  # noqa: BLE001
         pass
+    # 库内班名是半角「高三(1)班」。模型常把问句里的中文括号原样写进 bj/class。
+    sql = normalize_class_spans(sql or "")
     bound = ctx.get("bound_literals") or []
     q = str(
         ctx.get("user_question")

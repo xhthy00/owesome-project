@@ -517,6 +517,10 @@ def sanitize_llm_slots(slots: Mapping[str, Any] | None) -> dict[str, str]:
             continue
         if slot == SLOT_CLASS and has_class_alias(value) and not extract_class_target(value):
             continue
+        if slot == SLOT_CLASS:
+            from src.agent.education.query_parse import normalize_class_spans
+
+            value = normalize_class_spans(value)
         if slot == SLOT_SUBJECT and not _extract_subject(value):
             continue
         if slot == SLOT_SCOPE and value not in _SCOPE_OPTIONS:

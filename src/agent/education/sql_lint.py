@@ -685,6 +685,23 @@ def looks_like_cross_subject_mixed_pool(
     return p >= max(80, n * 15)
 
 
+def _literal_matches_bound(val: str, allowed: str) -> bool:
+    """班名全半角括号视为同一字面量；其它字面量仍按原文包含关系。"""
+    if val == allowed or val in allowed or allowed in val:
+        return True
+    from src.agent.education.query_parse import normalize_class_spans
+
+    folded_val = normalize_class_spans(val)
+    folded_allowed = normalize_class_spans(allowed)
+    if not folded_val or (folded_val == val and folded_allowed == allowed):
+        return False
+    return (
+        folded_val == folded_allowed
+        or folded_val in folded_allowed
+        or folded_allowed in folded_val
+    )
+
+
 def _unbound_literals(sql: str, bound: Sequence[str] | None) -> list[str]:
     allowed = [str(x).strip() for x in (bound or []) if str(x).strip()]
     if not allowed:
@@ -694,7 +711,7 @@ def _unbound_literals(sql: str, bound: Sequence[str] | None) -> list[str]:
         val = str(lit).strip()
         if not val:
             continue
-        if any(val == a or val in a or a in val for a in allowed):
+        if any(_literal_matches_bound(val, a) for a in allowed):
             continue
         if val not in bad:
             bad.append(val)

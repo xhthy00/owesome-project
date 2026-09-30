@@ -47,10 +47,21 @@ def _permission_values(edu_scope: Mapping[str, Any] | None) -> dict[str, set[str
     return {key: {value for value in values if value} for key, values in out.items()}
 
 
+def _fold_class_spans(text: str) -> str:
+    from src.agent.education.query_parse import normalize_class_spans
+
+    return normalize_class_spans("".join(str(text or "").split()))
+
+
 def _evidence_for(value: str, question: str) -> str:
     compact = "".join(str(value or "").split())
     compact_q = "".join(str(question or "").split())
-    return compact if compact and compact in compact_q else ""
+    if compact and compact in compact_q:
+        return compact
+    folded = _fold_class_spans(compact)
+    if folded and folded in _fold_class_spans(compact_q):
+        return compact
+    return ""
 
 
 def _evidence_in_question(evidence: str, question: str) -> bool:
@@ -62,7 +73,10 @@ def _evidence_in_question(evidence: str, question: str) -> bool:
         return True
     compact = "".join(raw.split())
     compact_q = "".join(q.split())
-    return bool(compact) and compact in compact_q
+    if compact and compact in compact_q:
+        return True
+    folded = _fold_class_spans(compact)
+    return bool(folded) and folded in _fold_class_spans(compact_q)
 
 
 def _mark_district_school(mention: EntityMention) -> None:
@@ -91,6 +105,10 @@ def _add_slot_mentions(
         kind = slot_kind(str(slot))
         if not kind or not value:
             continue
+        if kind == "class":
+            from src.agent.education.query_parse import normalize_class_spans
+
+            value = normalize_class_spans(value)
         evidence = _evidence_for(value, question)
         actual_source = source
         if source is EntitySource.RULE and value in permission_values.get(str(slot), set()):
@@ -136,6 +154,10 @@ def _add_llm_mentions(
     for raw in mentions or []:
         mention = EntityMention.from_dict(raw)
         mention.source = EntitySource.LLM
+        if mention.kind == "class" and mention.value:
+            from src.agent.education.query_parse import normalize_class_spans
+
+            mention.value = normalize_class_spans(mention.value)
         if mention.value and not mention.evidence:
             mention.evidence = _evidence_for(mention.value, question)
         if mention.evidence and not _evidence_in_question(mention.evidence, question):
@@ -209,7 +231,10 @@ def _credible_same_dimension_filter(mention: EntityMention, frame: QueryFrame) -
             return False
         return bool(_SCHOOL_SUFFIX_RE.search(value))
     if mention.kind == "class":
-        return bool(re.search(r"(?:高|初)[一二三]\s*\(?\d+\)?班", value))
+        from src.agent.education.query_parse import normalize_class_spans
+
+        folded = normalize_class_spans(value)
+        return bool(re.search(r"(?:高|初)[一二三]\s*\(?[0-9]+\)?班", folded))
     if mention.kind == "student":
         return bool(re.search(r"(?:学生\s*\d+|STU[A-Za-z0-9_-]+)", value, re.I))
     if mention.kind == "exam":

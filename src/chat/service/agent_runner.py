@@ -2382,7 +2382,7 @@ def _reconcile_summary_with_sub_phases(
                 f"{c.field}:{c.claimed}->{c.authority}" for c in conflicts[:20]
             ),
         )
-    return apply_contribution_weak_verdict(
+    reconciled = apply_contribution_weak_verdict(
         apply_subject_strength_verdict(
             relabel_result_table_headers(
                 scrub_implementation_details(
@@ -2395,6 +2395,7 @@ def _reconcile_summary_with_sub_phases(
         question,
         tool_calls,
     )
+    return _prefer_certified_when_summary_denies(reconciled, sub_phases)
 
 
 def _reconcile_phase_answer(
@@ -2432,6 +2433,62 @@ def _phase_has_education_tools(phase: "_DataAnalystPhase") -> bool:
         if tool == edu_fetch or tool.startswith("build_"):
             return True
     return bool(phase.state.reports)
+
+
+_CERTIFIED_DENIAL_RE = re.compile(
+    r"未能完成|未取得数据|未获取到权威|查询未完成|没有执行 SQL|本轮没有执行"
+)
+
+
+def _certified_metric_answer(tool_calls: list[dict[str, Any]] | None) -> str:
+    """认证指标已出数时的结论原文。失败或空结果返回空串。"""
+    for rec in reversed(list(tool_calls or [])):
+        if str(rec.get("tool") or "") != "query_certified_metric_tool":
+            continue
+        data = rec.get("data") if isinstance(rec.get("data"), dict) else {}
+        if str(data.get("error") or "").strip():
+            continue
+        content = str(rec.get("content") or "").strip()
+        if "查询失败" in content:
+            continue
+        if "均分" not in content and "已出数" not in content:
+            continue
+        return content
+    return ""
+
+
+def _prefer_certified_when_summary_denies(
+    text: str,
+    sub_phases: list[tuple[str, "_DataAnalystPhase"]],
+) -> str:
+    """仅在「只有认证指标、结论却写成未完成」时改回数字。
+
+    已写出均分、或同时有 SQL / 报告时保持原结论。
+    """
+    if not _CERTIFIED_DENIAL_RE.search(text or ""):
+        return text or ""
+    metric = ""
+    reply = ""
+    for _goal, phase in sub_phases:
+        state = phase.state
+        if getattr(state, "reports", None) or getattr(state, "last_sql", None):
+            return text or ""
+        found = _certified_metric_answer(getattr(state, "tool_calls", None))
+        if found:
+            metric = found
+        msg = getattr(phase, "reply", None)
+        cand = str(getattr(msg, "content", "") or "").strip()
+        if cand:
+            reply = cand
+    if not metric:
+        return text or ""
+    avg = re.search(r"均分\s*([0-9]+(?:\.[0-9]+)?)", metric)
+    if avg and avg.group(1) in (text or ""):
+        return text or ""
+    if reply and avg and avg.group(1) in reply:
+        return reply
+    cleaned = metric.split("面向用户")[0].strip()
+    return cleaned or text or ""
 
 
 def _format_sub_tasks_block(
@@ -2482,6 +2539,22 @@ def _format_sub_tasks_block(
         sql_text = phase.state.last_sql or ""
         last_exec = phase.state.last_exec_result
         if fact_answer and last_exec is None and not sql_text:
+            metric = _certified_metric_answer(phase.state.tool_calls)
+            if metric:
+                final_ans = (phase.reply.content if phase.reply else "") or ""
+                block = (
+                    f"{header}\n"
+                    "查询结论（认证指标已出数，须原样照抄均分、参考人数和及格率；"
+                    "禁止写成未完成、未取得数据或未查到）：\n"
+                    f"{metric.split('面向用户')[0].strip()}\n"
+                )
+                if final_ans.strip():
+                    block += (
+                        "\n分析员结论（与认证指标数字冲突时以认证指标为准）：\n"
+                        + truncate_keeping_kpi_lines(final_ans.strip(), limit=1200)
+                    )
+                blocks.append(block)
+                continue
             blocks.append(
                 f"{header}\n"
                 "查询结论：本轮没有执行 SQL，查询未完成，不是库中无数据。"

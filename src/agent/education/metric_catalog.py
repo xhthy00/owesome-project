@@ -107,13 +107,12 @@ def build_metric_where(bound: Mapping[str, str], *, enrolled: bool = True) -> st
             f"(sch.s_name LIKE '%{_sql_quote(school)}%' OR sch.name LIKE '%{_sql_quote(school)}%')"
         )
     if cls:
-        parts.append(
-            f"(sc.class_name = '{_sql_quote(cls)}' OR sc.bj = '{_sql_quote(cls)}')"
-        )
+        from src.agent.education.query_parse import normalize_class_spans
+
+        cls = normalize_class_spans(cls)
+        parts.append(f"sc.class = '{_sql_quote(cls)}'")
     if subject:
-        parts.append(
-            f"(e.subject_name LIKE '%{_sql_quote(subject)}%' OR e.subject LIKE '%{_sql_quote(subject)}%')"
-        )
+        parts.append(f"e.subject LIKE '%{_sql_quote(subject)}%'")
     if district:
         parts.append(
             f"(sc.district LIKE '%{_sql_quote(district)}%' OR sch.district LIKE '%{_sql_quote(district)}%')"
@@ -145,11 +144,13 @@ def compile_metric_sql(
 
     cfg = config if isinstance(config, EducationConfig) else EducationConfig()
     where = build_metric_where(bound)
+    # tb_score 没有 xsxz；在籍状态在已连接的 tb_score_overview.ov 上。
+    score_where = where.replace("sc.xsxz", "ov.xsxz")
     if spec.id == METRIC_SCORE_KPI:
-        return build_kpi_aggregate_sql(where, cfg)
+        return build_kpi_aggregate_sql(score_where, cfg)
     if spec.id == METRIC_OVERVIEW_TOTAL:
         col = overview_score_column(question)
-        where_ov = where.replace("sc.class_name", "bj").replace("sc.bj", "bj")
+        where_ov = where.replace("sc.class", "bj")
         where_ov = where_ov.replace("sc.xsxz", "xsxz").replace("sc.district", "dq")
         return (
             "SELECT "
@@ -178,11 +179,11 @@ def compile_metric_sql(
         )
     # 优势/薄弱：各科均分全市排名骨架，供工具执行
     return (
-        "SELECT e.subject_name AS subject, "
+        "SELECT e.subject AS subject, "
         f"ROUND(AVG({DISPLAY_SCORE_SQL}) FILTER (WHERE ({DISPLAY_SCORE_SQL}) > 0)::numeric, 2) AS avg, "
         f"COUNT(*) FILTER (WHERE ({DISPLAY_SCORE_SQL}) > 0) AS n "
-        f"{SCORE_JOIN_FROM}\n{where}\n"
-        "GROUP BY e.subject_name"
+        f"{SCORE_JOIN_FROM}\n{score_where}\n"
+        "GROUP BY e.subject"
     )
 
 
