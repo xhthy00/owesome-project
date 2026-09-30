@@ -236,6 +236,53 @@ def _reject_structural_false_filters(frame: QueryFrame) -> None:
             mention.reason = "答案维度被旧规则误抽为筛选槽"
 
 
+def _norm_school_name(value: str) -> str:
+    from src.agent.education.query_parse import normalize_fullwidth_parentheses
+
+    return normalize_fullwidth_parentheses(re.sub(r"\s+", "", value))
+
+
+def _collapse_less_specific_schools(frame: QueryFrame) -> None:
+    """「扬大附中」被「扬大附中（淮海路）」盖住；全半角同一校名只留一条。"""
+    schools = [
+        item
+        for item in frame.mentions
+        if item.kind == "school"
+        and item.role is EntityRole.FILTER
+        and item.status is not EntityStatus.REJECTED
+        and item.value
+    ]
+    norms = [(item, _norm_school_name(item.value)) for item in schools]
+    for item, name in norms:
+        if any(
+            other is not item and other_name.startswith(name) and len(other_name) > len(name)
+            for other, other_name in norms
+        ):
+            item.status = EntityStatus.REJECTED
+            item.reason = "被更具体的校名覆盖"
+    priority = {
+        EntitySource.HISTORY: 10,
+        EntitySource.PERMISSION: 20,
+        EntitySource.RULE: 30,
+        EntitySource.LLM: 40,
+    }
+    kept: dict[str, EntityMention] = {}
+    for item, name in norms:
+        if item.status is EntityStatus.REJECTED or not name:
+            continue
+        previous = kept.get(name)
+        if previous is None:
+            kept[name] = item
+            continue
+        if priority.get(item.source, 0) > priority.get(previous.source, 0):
+            previous.status = EntityStatus.REJECTED
+            previous.reason = "与同名校名重复"
+            kept[name] = item
+        else:
+            item.status = EntityStatus.REJECTED
+            item.reason = "与同名校名重复"
+
+
 def _mark_conflicts(frame: QueryFrame) -> None:
     for kind in {item.kind for item in frame.filter_mentions()}:
         current = [
@@ -333,6 +380,8 @@ def merge_turn_slots(
         ):
             mention.status = EntityStatus.REJECTED
             mention.reason = "被本轮显式实体替换"
+
+    _collapse_less_specific_schools(frame)
 
     # lookup 是答案维度。只有当前问句确实存在可信 filter 时，才允许二者并存。
     for dimension in list(frame.answer_dimensions):

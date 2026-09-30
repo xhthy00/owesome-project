@@ -947,6 +947,20 @@ async def judge_clarification(
     )
 
 
+def _matched_option(text: str, slot_opts: list[str]) -> str:
+    """用户回复对齐候选项。括号全半角不同仍算同一项，并返回目录里的原文字。"""
+    cleaned = [str(opt).strip() for opt in slot_opts if str(opt).strip()]
+    if text in cleaned:
+        return text
+    from src.agent.education.query_parse import normalize_fullwidth_parentheses
+
+    norm_text = normalize_fullwidth_parentheses(text)
+    hits = [opt for opt in cleaned if normalize_fullwidth_parentheses(opt) == norm_text]
+    if len(hits) == 1:
+        return hits[0]
+    return ""
+
+
 def _fills_missing(pending: Mapping[str, Any], user_text: str) -> str:
     missing = ""
     raw_missing = pending.get("missing") or []
@@ -955,8 +969,9 @@ def _fills_missing(pending: Mapping[str, Any], user_text: str) -> str:
     text = (user_text or "").strip()
     options = pending.get("options") if isinstance(pending.get("options"), dict) else {}
     slot_opts = list(options.get(missing) or []) if missing else []
-    if text in slot_opts:
-        return text
+    matched = _matched_option(text, slot_opts)
+    if matched:
+        return matched
     extracted = extract_filled_slots(text, None)
     if missing == SLOT_SCOPE:
         return _scope_from_text(text) or (text if text in _SCOPE_OPTIONS else "")
