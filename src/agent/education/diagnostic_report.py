@@ -204,7 +204,7 @@ def build_diagnostic_data(
     wl_avg = _avg([r for r in students if r.get("track") == "物理类"], "zf6m")
     ls_avg = _avg([r for r in students if r.get("track") == "历史类"], "zf6m")
     insight = (
-        f'<p class="edu-insight-line">{exam} 全市参考 <strong>{len(students)}</strong> 人'
+        f'<p class="edu-insight-line">{exam} {scope}参考 <strong>{len(students)}</strong> 人'
         f'（物理类 {n_wl}、历史类 {n_ls}）；'
         f'六门均分物理类 <strong>{_fmt(wl_avg)}</strong>、历史类 <strong>{_fmt(ls_avg)}</strong>。</p>'
     )

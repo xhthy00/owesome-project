@@ -357,6 +357,8 @@ class ReportOrchestrator:
         config_edu 单场 KPI：权威统计来自无 LIMIT 的库内聚合；行级拉取可截断，
         但不得覆盖聚合 KPI。
         """
+        if spec.report_type == ReportType.DIAGNOSTIC_REPORT:
+            return await self._gather_diagnostic(spec)
         if spec.report_type == ReportType.LINE_REACH:
             return await self._gather_line_reach(spec)
         if spec.report_type == ReportType.DIFFICULTY_CURVE:
@@ -523,9 +525,6 @@ class ReportOrchestrator:
                 stats=stats,
                 dispersion_tip=tip,
             )
-        if spec.report_type == ReportType.DIAGNOSTIC_REPORT:
-            self._fill_diagnostic(data, rows, cfg, spec, scope_label, exam_name, subject, school_name, class_name)
-            return data
         if spec.report_type == ReportType.GRADE_COMPARISON:
             self._fill_grade_comparison(data, rows, stats, cfg, spec)
         if spec.report_type == ReportType.STUDENT_PROFILE:
@@ -1258,31 +1257,111 @@ class ReportOrchestrator:
         data["REPORT_TIME"] = _now_str()
         return data
 
-    def _fill_diagnostic(
-        self,
-        data: dict[str, Any],
-        rows: list[dict[str, Any]],
-        cfg: EducationConfig,
-        spec: ReportSpec,
-        scope_label: str,
-        exam_name: str,
-        subject: str,
-        school_name: str,
-        class_name: str,
-    ) -> None:
-        del cfg, school_name, class_name
-        from src.agent.education.diagnostic_report import build_diagnostic_data
+    async def _gather_diagnostic(self, spec: ReportSpec) -> dict[str, Any]:
+        """文理达线 + 六门总分。
 
-        diag = build_diagnostic_data(
-            overview_rows=rows,
-            indicator_rows=[],
-            exam_name=exam_name or "",
-            scope_label=scope_label or "全市",
-            question=str(spec.filters.get("question") or ""),
-            subject_name=subject or "",
+        人数、选科和六门均分读 ``tb_score_overview``（``xkkm`` / ``zf6m``），
+        达线率读 ``tb_score_indicator``。``tb_score`` 单科行没有这两列，
+        用它会把物理类/历史类和六门均分算成 0。
+        选了学校则只统计该校；未选学校则为全市。科目不改这条口径。
+        """
+        from src.agent.education.bureau_analysis import (
+            overview_select_sql,
+            school_codes_from_lookup,
+            school_lookup_sql,
         )
-        diag["REPORT_TIME"] = _now_str()
-        data.update(diag)
+        from src.agent.education.diagnostic_report import build_diagnostic_data
+        from src.agent.education.line_reach_report import (
+            exam_batch_select_sql,
+            indicator_select_sql,
+            ordered_exam_names,
+            pick_exam_for_question,
+            pick_previous_exam,
+            sql_result_to_dicts,
+        )
+
+        exam_hint = str(spec.filters.get("exam_name") or "").strip()
+        exam_parts = _split_exam_filter(exam_hint)
+        hint = exam_parts[0] if exam_parts else ""
+        question = str(spec.filters.get("question") or "").strip() or exam_hint.replace(";;", " ")
+        names: list[str] = []
+        try:
+            names = ordered_exam_names(
+                sql_result_to_dicts(await self._execute_sql(exam_batch_select_sql()))
+            )
+        except Exception:
+            logger.exception("结构化诊断：读取考试批次失败")
+        exam_name = pick_exam_for_question(names, question=question, hint=hint) or hint
+        prev_exam = pick_previous_exam(names, exam_name) if exam_name else None
+
+        overview: list[dict[str, Any]] = []
+        curr: list[dict[str, Any]] = []
+        prev_rows: list[dict[str, Any]] = []
+        if exam_name:
+            try:
+                overview = sql_result_to_dicts(
+                    await self._execute_sql(overview_select_sql(exam_name))
+                )
+            except Exception:
+                logger.exception("结构化诊断：读取 tb_score_overview 失败")
+            try:
+                curr = sql_result_to_dicts(
+                    await self._execute_sql(indicator_select_sql(exam_name))
+                )
+            except Exception:
+                logger.exception("结构化诊断：读取 tb_score_indicator 失败")
+        if prev_exam:
+            try:
+                prev_rows = sql_result_to_dicts(
+                    await self._execute_sql(indicator_select_sql(prev_exam))
+                )
+            except Exception:
+                logger.exception("结构化诊断：读取上场 tb_score_indicator 失败")
+
+        school_name = str(spec.filters.get("school_name") or "").strip()
+        scope = school_name or "全市"
+        if school_name:
+            codes: set[str] = set()
+            try:
+                looked = sql_result_to_dicts(
+                    await self._execute_sql(school_lookup_sql(school_name))
+                )
+            except Exception:
+                logger.exception("结构化诊断：对齐学校失败")
+                looked = []
+            codes.update(school_codes_from_lookup(looked))
+            for row in looked:
+                for key in ("id", "name", "s_name"):
+                    val = str(row.get(key) or "").strip()
+                    if val:
+                        codes.add(val)
+            overview = [
+                r for r in overview if _row_names_school(r, school_name, codes, "xx")
+            ]
+            curr = [
+                r
+                for r in curr
+                if _row_names_school(r, school_name, codes, "school_name", "school_id")
+            ]
+            prev_rows = [
+                r
+                for r in prev_rows
+                if _row_names_school(r, school_name, codes, "school_name", "school_id")
+            ]
+
+        data = build_diagnostic_data(
+            overview_rows=overview,
+            indicator_rows=curr,
+            prev_indicator_rows=prev_rows,
+            exam_name=exam_name,
+            prev_exam_name=prev_exam or "",
+            scope_label=scope,
+            question=question,
+            subject_name="",
+        )
+        data["REPORT_TIME"] = _now_str()
+        data["_stats"] = {"count": len(overview)}
+        return data
 
     async def _fill_student_profile(
         self,
@@ -2026,6 +2105,23 @@ def _config_edu_where_sql(spec: ReportSpec, mapping: ScoreSchemaMapping) -> str:
             filters.pop("exam_name", None)
     where = _filters_to_where(filters, school_expr, class_expr, subject_expr, exam_expr)
     return f"WHERE {where}" if where else ""
+
+
+def _row_names_school(
+    row: dict[str, Any],
+    needle: str,
+    codes: set[str],
+    *keys: str,
+) -> bool:
+    """overview.xx 常为 ``A07邗江中学``，下拉值是去掉校码后的中文名。"""
+    needle = needle.strip()
+    for key in keys:
+        text = str(row.get(key) or "").strip()
+        if not text:
+            continue
+        if text in codes or (needle and needle in text):
+            return True
+    return False
 
 
 def _split_exam_filter(raw: str) -> list[str]:

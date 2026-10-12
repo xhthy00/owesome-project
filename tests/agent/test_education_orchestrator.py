@@ -718,3 +718,78 @@ def test_filters_to_where_includes_jc_and_plain_school():
     assert "sch.s_name LIKE '%扬州中学%'" in where
     assert "2026届" in where
     assert "COALESCE(eb.batch_name, e.exam_name) LIKE '%2026届%'" in where
+
+
+def test_diagnostic_report_uses_overview_tracks_not_subject_rows():
+    """区域诊断的物理类/历史类和六门均分必须来自 overview，不能用单科成绩行。"""
+    from src.agent.education.report_types import ReportSpec
+
+    sqls: list[str] = []
+
+    async def fake_execute(sql):
+        sqls.append(sql)
+        if "tb_exam_batch" in sql:
+            return {
+                "columns": ["id", "batch_name", "exam_time"],
+                "rows": [[4, "2026届高三5月模拟", "2026-05-01"]],
+                "row_count": 1,
+            }
+        if "tb_score_overview" in sql:
+            assert "数学" not in sql
+            assert "邗江" not in sql
+            return {
+                "columns": [
+                    "exam_name", "anon_stu_id", "xx", "dq", "bj", "xkkm", "zf6m",
+                ],
+                "rows": [
+                    ["2026届高三5月模拟", "s1", "A07邗江中学", "邗江区", "1", "物化生", 600],
+                    ["2026届高三5月模拟", "s2", "A02扬大附中", "广陵区", "2", "史政地", 500],
+                ],
+                "row_count": 2,
+            }
+        if "tb_score_indicator" in sql:
+            return {
+                "columns": [
+                    "exam_name", "track", "district", "school_id", "school_name",
+                    "line_code", "line_name", "threshold", "candidates",
+                    "reached_count", "reach_rate",
+                ],
+                "rows": [
+                    ["2026届高三5月模拟", "物理类", "邗江区", "A07", "邗江中学", "tk", "特控线", 500, 10, 4, 40],
+                    ["2026届高三5月模拟", "历史类", "广陵区", "A02", "扬大附中", "bk", "本科线", 400, 8, 2, 25],
+                ],
+                "row_count": 2,
+            }
+        if "tb_school" in sql:
+            return {
+                "columns": ["id", "name", "s_name"],
+                "rows": [["A07", "A07邗江中学", "邗江中学"]],
+                "row_count": 1,
+            }
+        raise AssertionError(f"unexpected sql: {sql}")
+
+    async def fake_schema():
+        return _normalized_mapping()
+
+    orch = ReportOrchestrator(execute_sql=fake_execute, resolve_schema=fake_schema)
+    spec = ReportSpec(
+        report_type=ReportType.DIAGNOSTIC_REPORT,
+        audience=Audience.DEFAULT,
+        filters={
+            "school_name": "邗江中学",
+            "subject": "数学",
+            "exam_name": "2026届高三5月模拟",
+            "jc": "2026届",
+        },
+        include_charts=False,
+    )
+    res = _run(orch.run_spec(spec))
+    assert res.error is None, res.error
+    assert "邗江中学2026届高三5月模拟考试分析" in res.html
+    assert "邗江中学参考 <strong>1</strong> 人" in res.html
+    assert "物理类 1、历史类 0" in res.html
+    assert "物理类 <strong>600.00</strong>" in res.html
+    assert "全市参考" not in res.html
+    assert res.stats.get("count") == 1
+    assert any("tb_score_overview" in s for s in sqls)
+    assert not any("tb_score sc" in s for s in sqls)
