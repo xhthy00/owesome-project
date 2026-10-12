@@ -23,6 +23,7 @@ import {
   message
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
+import { getCurrentUser } from "@/api/auth";
 import {
   knowledgeApi,
   type KnowledgeItem,
@@ -124,6 +125,15 @@ export default function ConstructKnowledgePage() {
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [versions, setVersions] = useState<KnowledgeVersion[]>([]);
   const [versionTitle, setVersionTitle] = useState("");
+  const [canMaintain, setCanMaintain] = useState(false);
+
+  useEffect(() => {
+    void getCurrentUser()
+      .then((user) => {
+        setCanMaintain(user.account === "admin" && Boolean(user.is_super_admin));
+      })
+      .catch(() => setCanMaintain(false));
+  }, []);
 
   const loadList = useCallback(async (query: Filters, nextPage: number, nextSize: number) => {
     setLoading(true);
@@ -309,21 +319,25 @@ export default function ConstructKnowledgePage() {
     {
       title: "操作",
       key: "actions",
-      width: 176,
+      width: canMaintain ? 176 : 88,
       align: "right",
       onCell: () => ({ style: { whiteSpace: "nowrap", paddingInline: 8 } }),
       onHeaderCell: () => ({ style: { paddingInline: 8 } }),
       render: (_, row) => (
         <div className="inline-flex flex-nowrap items-center">
-          <Button type="link" size="small" className="!px-1" onClick={() => openEdit(row)}>
-            编辑
-          </Button>
+          {canMaintain ? (
+            <Button type="link" size="small" className="!px-1" onClick={() => openEdit(row)}>
+              编辑
+            </Button>
+          ) : null}
           <Button type="link" size="small" className="!px-1" onClick={() => void openVersions(row)}>
             历史版本
           </Button>
-          <Button type="link" size="small" danger className="!px-1" onClick={() => remove(row)}>
-            删除
-          </Button>
+          {canMaintain ? (
+            <Button type="link" size="small" danger className="!px-1" onClick={() => remove(row)}>
+              删除
+            </Button>
+          ) : null}
         </div>
       )
     }
@@ -344,22 +358,26 @@ export default function ConstructKnowledgePage() {
           <Button icon={<ReloadOutlined />} onClick={() => void loadList(applied, page, pageSize)} loading={loading}>
             刷新
           </Button>
-          <Button
-            icon={<DownloadOutlined />}
-            onClick={() =>
-              void knowledgeApi.downloadTemplate().catch((err: unknown) =>
-                message.error(err instanceof Error ? err.message : "下载模板失败")
-              )
-            }
-          >
-            下载模板
-          </Button>
-          <Upload accept=".xlsx" showUploadList={false} beforeUpload={onImport}>
-            <Button icon={<UploadOutlined />}>导入</Button>
-          </Upload>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            新增
-          </Button>
+          {canMaintain ? (
+            <>
+              <Button
+                icon={<DownloadOutlined />}
+                onClick={() =>
+                  void knowledgeApi.downloadTemplate().catch((err: unknown) =>
+                    message.error(err instanceof Error ? err.message : "下载模板失败")
+                  )
+                }
+              >
+                下载模板
+              </Button>
+              <Upload accept=".xlsx" showUploadList={false} beforeUpload={onImport}>
+                <Button icon={<UploadOutlined />}>导入</Button>
+              </Upload>
+              <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+                新增
+              </Button>
+            </>
+          ) : null}
         </Space>
       </div>
 

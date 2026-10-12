@@ -227,7 +227,7 @@ export default function SideBar() {
     }
     if (eduRole === "student") {
       list = list.filter(
-        (item) => item.key !== "line-reach" && item.key !== "fraction-bar" && item.key !== "knowledge"
+        (item) => item.key !== "line-reach" && item.key !== "fraction-bar"
       );
     }
     return list;

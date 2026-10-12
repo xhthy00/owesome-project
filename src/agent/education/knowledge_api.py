@@ -14,11 +14,11 @@ from common.exceptions.base import BadRequestException, ForbiddenException, NotF
 from common.schemas.response import success_response
 from datasource.db.db import WriteDbSession
 from src.agent.education.knowledge_admin import (
+    can_maintain_knowledge,
     cascade_options,
     create_knowledge,
     delete_knowledge,
     import_knowledge_rows,
-    knowledge_access_error,
     list_knowledge,
     list_versions,
     parse_edu_database_url,
@@ -26,7 +26,7 @@ from src.agent.education.knowledge_admin import (
     update_knowledge,
 )
 from system.api.auth_deps import get_current_user
-from system.authz import is_platform_admin
+from system.authz import is_super_admin
 from system.schemas import UserResponse
 
 router = APIRouter(prefix="/education/knowledge", tags=["education-knowledge"])
@@ -73,30 +73,29 @@ class _EduWriter:
         return int((data or {}).get("row_count") or 0)
 
 
-def _prepare(current_user: UserResponse) -> tuple[str, dict, str]:
+def _edu_connection() -> tuple[str, dict]:
     from common.core.config import get_settings
-    from common.core.database import get_db_session
-    from datasource.service.edu_permission import parse_edu_scope
-    from system.crud.crud_user import get_user_by_id
 
     url = (get_settings().database_edu_url or "").strip()
     if not url:
         raise BadRequestException("未配置 DATABASE_EDU_URL")
     try:
-        db_type, config = parse_edu_database_url(url)
+        return parse_edu_database_url(url)
     except ValueError as exc:
         raise BadRequestException(str(exc)) from exc
 
+
+def _require_maintainer(current_user: UserResponse) -> str:
+    """写操作仅超级管理员账号 admin。查看接口不调用本函数。"""
+    from common.core.database import get_db_session
+    from system.crud.crud_user import get_user_by_id
+
     with get_db_session() as session:
         user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
-        err = knowledge_access_error(
-            scope.edu_role, is_platform_admin=is_platform_admin(user)
-        )
-        if err:
-            raise ForbiddenException(err)
         account = str(getattr(user, "account", "") or current_user.account or "").strip()
-    return db_type, config, account or "system"
+        if not can_maintain_knowledge(account=account, is_super_admin=is_super_admin(user)):
+            raise ForbiddenException("仅超级管理员 admin 可维护知识点")
+    return account or "admin"
 
 
 def _run(db_type: str, config: dict, fn):
@@ -139,7 +138,8 @@ async def get_knowledge_list(
     current_user: UserResponse = Depends(get_current_user),
 ) -> dict:
     _ = request
-    db_type, config, _operator = _prepare(current_user)
+    _ = current_user
+    db_type, config = _edu_connection()
     data = _run(
         db_type,
         config,
@@ -169,7 +169,8 @@ async def get_knowledge_cascade(
     chapter: str = "",
     current_user: UserResponse = Depends(get_current_user),
 ) -> dict:
-    db_type, config, _operator = _prepare(current_user)
+    _ = current_user
+    db_type, config = _edu_connection()
     options = _run(
         db_type,
         config,
@@ -192,7 +193,7 @@ async def get_knowledge_cascade(
 async def download_knowledge_template(
     current_user: UserResponse = Depends(get_current_user),
 ) -> FileResponse:
-    _prepare(current_user)
+    _require_maintainer(current_user)
     if not _TEMPLATE.is_file():
         raise BadRequestException("模板文件不存在")
     return FileResponse(
@@ -220,7 +221,8 @@ async def import_knowledge_file(
         rows, errors = parse_knowledge_xlsx(data)
     except ValueError as exc:
         raise BadRequestException(str(exc)) from exc
-    db_type, config, operator = _prepare(current_user)
+    operator = _require_maintainer(current_user)
+    db_type, config = _edu_connection()
     inserted, updated = _run(
         db_type, config, lambda db: import_knowledge_rows(db, rows, operator)
     )
@@ -241,7 +243,8 @@ async def create_knowledge_item(
     current_user: UserResponse = Depends(get_current_user),
 ) -> dict:
     _ = request
-    db_type, config, operator = _prepare(current_user)
+    operator = _require_maintainer(current_user)
+    db_type, config = _edu_connection()
     row = _run(db_type, config, lambda db: create_knowledge(db, payload.model_dump(), operator))
     return success_response(row, message="保存成功")
 
@@ -255,7 +258,8 @@ async def update_knowledge_item(
     current_user: UserResponse = Depends(get_current_user),
 ) -> dict:
     _ = request
-    db_type, config, operator = _prepare(current_user)
+    operator = _require_maintainer(current_user)
+    db_type, config = _edu_connection()
     row = _run(
         db_type,
         config,
@@ -272,7 +276,8 @@ async def delete_knowledge_item(
     current_user: UserResponse = Depends(get_current_user),
 ) -> dict:
     _ = request
-    db_type, config, operator = _prepare(current_user)
+    operator = _require_maintainer(current_user)
+    db_type, config = _edu_connection()
 
     def _delete(db) -> None:
         delete_knowledge(db, knowledge_id, operator)
@@ -286,7 +291,8 @@ async def get_knowledge_versions(
     knowledge_id: int,
     current_user: UserResponse = Depends(get_current_user),
 ) -> dict:
-    db_type, config, _operator = _prepare(current_user)
+    _ = current_user
+    db_type, config = _edu_connection()
     versions = _run(db_type, config, lambda db: list_versions(db, knowledge_id))
     return success_response({"versions": versions})
 

@@ -62,7 +62,7 @@ OPTIONAL_FIELDS = ("secondary", "secondary_no")
 
 CASCADE_LEVELS = ("stage", "grade", "subject", "module", "chapter", "secondary")
 
-_ALLOWED_ROLES = frozenset({"bureau_admin", "school_admin", "teacher"})
+_MAINTAINER_ACCOUNT = "admin"
 
 _LIST_COLUMNS = (
     "id",
@@ -147,16 +147,9 @@ def parse_edu_database_url(url: str) -> tuple[str, dict[str, Any]]:
     }
 
 
-def knowledge_access_error(edu_role: str, *, is_platform_admin: bool) -> str | None:
-    """平台管理员、局端、校管理员和教师可维护知识点。"""
-    if is_platform_admin:
-        return None
-    role = (edu_role or "").strip()
-    if role in _ALLOWED_ROLES:
-        return None
-    if role == "student":
-        return "学生无权管理知识点"
-    return "未配置教育角色，无法管理知识点"
+def can_maintain_knowledge(*, account: str, is_super_admin: bool) -> bool:
+    """下载模板、导入、新增、编辑、删除仅开放给超级管理员账号 admin。"""
+    return bool(is_super_admin) and (account or "").strip() == _MAINTAINER_ACCOUNT
 
 
 def cell_text(value: Any) -> str:
@@ -507,7 +500,7 @@ __all__ = [
     "create_knowledge",
     "delete_knowledge",
     "import_knowledge_rows",
-    "knowledge_access_error",
+    "can_maintain_knowledge",
     "list_knowledge",
     "list_versions",
     "normalize_fields",
