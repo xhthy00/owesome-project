@@ -1,3 +1,11 @@
+import {
+  DownloadOutlined,
+  PlusOutlined,
+  ReadOutlined,
+  ReloadOutlined,
+  SearchOutlined,
+  UploadOutlined
+} from "@ant-design/icons";
 import { useCallback, useEffect, useState } from "react";
 import {
   Button,
@@ -76,6 +84,12 @@ const EMPTY_FORM: KnowledgePayload = {
   knowledge_name: "",
   knowledge_no: ""
 };
+
+const PANEL_CARD =
+  "overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white shadow-sm dark:border-[#334155] dark:bg-[#141923]";
+
+const TABLE_CLASS =
+  "[&_.ant-table]:!text-[13px] [&_.ant-table-thead>tr>th]:!bg-[#f8fafc] [&_.ant-table-thead>tr>th]:!font-semibold [&_.ant-table-thead>tr>th]:!text-[#334155] dark:[&_.ant-table-thead>tr>th]:!bg-[#1b2433] dark:[&_.ant-table-thead>tr>th]:!text-[#cbd5e1]";
 
 function parentsBefore(level: Level, filters: Filters): Record<string, string> {
   const parents: Record<string, string> = {};
@@ -284,73 +298,54 @@ export default function ConstructKnowledgePage() {
   };
 
   const columns: ColumnsType<KnowledgeItem> = [
-    { title: "编号", dataIndex: "knowledge_no", width: 130 },
-    { title: "学段", dataIndex: "stage", width: 80 },
-    { title: "年级", dataIndex: "grade", width: 80 },
-    { title: "学科", dataIndex: "subject", width: 80 },
+    { title: "编号", dataIndex: "knowledge_no", width: 118, ellipsis: true },
+    { title: "学段", dataIndex: "stage", width: 72 },
+    { title: "年级", dataIndex: "grade", width: 72 },
+    { title: "学科", dataIndex: "subject", width: 72 },
     { title: "大概念", dataIndex: "module", ellipsis: true },
     { title: "重要概念", dataIndex: "chapter", ellipsis: true },
     { title: "次位概念", dataIndex: "secondary", ellipsis: true },
     { title: "知识点名称", dataIndex: "knowledge_name", ellipsis: true },
     {
       title: "操作",
-      width: 200,
+      key: "actions",
+      width: 176,
       align: "right",
+      onCell: () => ({ style: { whiteSpace: "nowrap", paddingInline: 8 } }),
+      onHeaderCell: () => ({ style: { paddingInline: 8 } }),
       render: (_, row) => (
-        <Space size={0}>
-          <Button type="link" onClick={() => openEdit(row)}>
+        <div className="inline-flex flex-nowrap items-center">
+          <Button type="link" size="small" className="!px-1" onClick={() => openEdit(row)}>
             编辑
           </Button>
-          <Button type="link" onClick={() => void openVersions(row)}>
+          <Button type="link" size="small" className="!px-1" onClick={() => void openVersions(row)}>
             历史版本
           </Button>
-          <Button type="link" danger onClick={() => remove(row)}>
+          <Button type="link" size="small" danger className="!px-1" onClick={() => remove(row)}>
             删除
           </Button>
-        </Space>
+        </div>
       )
     }
   ];
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto">
-      <div className="mx-auto max-w-[1200px] space-y-4 p-6 pb-10">
-        <div>
-          <Typography.Title level={4} style={{ marginBottom: 0 }}>
+    <div className="dbgpt-ui-font h-full min-h-0 overflow-y-auto p-6 pb-10">
+      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#eff6ff] text-[16px] text-[#2563eb] dark:bg-[#1e3a5f] dark:text-[#93c5fd]">
+            <ReadOutlined />
+          </span>
+          <Typography.Title level={4} className="!mb-0">
             知识点
           </Typography.Title>
         </div>
-
         <Space wrap>
-          {LEVELS.map((level, index) => (
-            <Select
-              key={level}
-              allowClear
-              showSearch
-              placeholder={LEVEL_LABEL[level]}
-              style={{ width: level === "module" || level === "chapter" || level === "secondary" ? 160 : 110 }}
-              value={filters[level] || undefined}
-              disabled={index > 0 && !filters[LEVELS[index - 1]]}
-              options={options[level].map((item) => ({ label: item, value: item }))}
-              onChange={(value) => onFilterChange(level, value || "")}
-            />
-          ))}
-          <Input
-            allowClear
-            placeholder="搜索知识点名称"
-            style={{ width: 180 }}
-            value={filters.keyword}
-            onChange={(event) => setFilters((prev) => ({ ...prev, keyword: event.target.value }))}
-            onPressEnter={search}
-          />
-          <Button type="primary" onClick={search}>
-            查询
-          </Button>
-          <Button onClick={reset}>重置</Button>
-          <Button type="primary" ghost onClick={openCreate}>
-            新增
+          <Button icon={<ReloadOutlined />} onClick={() => void loadList(applied, page, pageSize)} loading={loading}>
+            刷新
           </Button>
           <Button
+            icon={<DownloadOutlined />}
             onClick={() =>
               void knowledgeApi.downloadTemplate().catch((err: unknown) =>
                 message.error(err instanceof Error ? err.message : "下载模板失败")
@@ -360,16 +355,54 @@ export default function ConstructKnowledgePage() {
             下载模板
           </Button>
           <Upload accept=".xlsx" showUploadList={false} beforeUpload={onImport}>
-            <Button>导入</Button>
+            <Button icon={<UploadOutlined />}>导入</Button>
           </Upload>
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            新增
+          </Button>
         </Space>
+      </div>
 
+      <div className={`${PANEL_CARD} mb-4 px-4 py-3`}>
+        <div className="flex flex-wrap items-center gap-2">
+          {LEVELS.map((level, index) => (
+            <Select
+              key={level}
+              allowClear
+              showSearch
+              placeholder={LEVEL_LABEL[level]}
+              style={{ width: level === "module" || level === "chapter" || level === "secondary" ? 168 : 108 }}
+              value={filters[level] || undefined}
+              disabled={index > 0 && !filters[LEVELS[index - 1]]}
+              options={options[level].map((item) => ({ label: item, value: item }))}
+              onChange={(value) => onFilterChange(level, value || "")}
+            />
+          ))}
+          <Input
+            allowClear
+            placeholder="搜索知识点名称"
+            className="w-[200px]"
+            value={filters.keyword}
+            onChange={(event) => setFilters((prev) => ({ ...prev, keyword: event.target.value }))}
+            onPressEnter={search}
+          />
+          <Button type="primary" icon={<SearchOutlined />} onClick={search}>
+            查询
+          </Button>
+          <Button onClick={reset}>重置</Button>
+        </div>
+      </div>
+
+      <div className={PANEL_CARD}>
         <Table
           rowKey="id"
           loading={loading}
           columns={columns}
           dataSource={items}
-          scroll={{ x: 1100 }}
+          tableLayout="fixed"
+          size="middle"
+          className={TABLE_CLASS}
+          locale={{ emptyText: "暂无知识点" }}
           pagination={{
             current: page,
             pageSize,

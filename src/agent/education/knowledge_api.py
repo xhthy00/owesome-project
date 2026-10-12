@@ -1,4 +1,4 @@
-"""知识点管理 API。数据写在当前工作空间登记的 edu 业务库。"""
+"""知识点管理 API。学情库连接来自配置 ``DATABASE_EDU_URL``。"""
 
 from __future__ import annotations
 
@@ -21,13 +21,13 @@ from src.agent.education.knowledge_admin import (
     knowledge_access_error,
     list_knowledge,
     list_versions,
+    parse_edu_database_url,
     parse_knowledge_xlsx,
     update_knowledge,
 )
 from system.api.auth_deps import get_current_user
 from system.authz import is_platform_admin
 from system.schemas import UserResponse
-from system.workspace_scope import assert_datasource_accessible, get_workspace_oid
 
 router = APIRouter(prefix="/education/knowledge", tags=["education-knowledge"])
 
@@ -73,18 +73,21 @@ class _EduWriter:
         return int((data or {}).get("row_count") or 0)
 
 
-def _prepare(current_user: UserResponse, workspace_oid: int) -> tuple[str, dict, str]:
+def _prepare(current_user: UserResponse) -> tuple[str, dict, str]:
+    from common.core.config import get_settings
     from common.core.database import get_db_session
     from datasource.service.edu_permission import parse_edu_scope
-    from src.agent.education.raw_import import resolve_edu_datasource_id
-    from src.agent.resource.tool.business import _load_datasource
     from system.crud.crud_user import get_user_by_id
 
+    url = (get_settings().database_edu_url or "").strip()
+    if not url:
+        raise BadRequestException("未配置 DATABASE_EDU_URL")
+    try:
+        db_type, config = parse_edu_database_url(url)
+    except ValueError as exc:
+        raise BadRequestException(str(exc)) from exc
+
     with get_db_session() as session:
-        ds_id = resolve_edu_datasource_id(session, workspace_oid)
-        if not ds_id:
-            raise BadRequestException("当前工作空间未登记 edu 业务库")
-        assert_datasource_accessible(session, current_user, ds_id, workspace_oid)
         user = get_user_by_id(session, int(current_user.id))
         scope = parse_edu_scope(user)
         err = knowledge_access_error(
@@ -93,7 +96,6 @@ def _prepare(current_user: UserResponse, workspace_oid: int) -> tuple[str, dict,
         if err:
             raise ForbiddenException(err)
         account = str(getattr(user, "account", "") or current_user.account or "").strip()
-    db_type, config, _ = _load_datasource(ds_id, workspace_oid)
     return db_type, config, account or "system"
 
 
@@ -135,10 +137,9 @@ async def get_knowledge_list(
     secondary: str = "",
     keyword: str = "",
     current_user: UserResponse = Depends(get_current_user),
-    workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     _ = request
-    db_type, config, _operator = _prepare(current_user, workspace_oid)
+    db_type, config, _operator = _prepare(current_user)
     data = _run(
         db_type,
         config,
@@ -167,9 +168,8 @@ async def get_knowledge_cascade(
     module: str = "",
     chapter: str = "",
     current_user: UserResponse = Depends(get_current_user),
-    workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    db_type, config, _operator = _prepare(current_user, workspace_oid)
+    db_type, config, _operator = _prepare(current_user)
     options = _run(
         db_type,
         config,
@@ -191,9 +191,8 @@ async def get_knowledge_cascade(
 @router.get("/template")
 async def download_knowledge_template(
     current_user: UserResponse = Depends(get_current_user),
-    workspace_oid: int = Depends(get_workspace_oid),
 ) -> FileResponse:
-    _prepare(current_user, workspace_oid)
+    _prepare(current_user)
     if not _TEMPLATE.is_file():
         raise BadRequestException("模板文件不存在")
     return FileResponse(
@@ -209,7 +208,6 @@ async def import_knowledge_file(
     request: Request,
     file: UploadFile = File(...),
     current_user: UserResponse = Depends(get_current_user),
-    workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     _ = request
     name = (file.filename or "").lower()
@@ -222,7 +220,7 @@ async def import_knowledge_file(
         rows, errors = parse_knowledge_xlsx(data)
     except ValueError as exc:
         raise BadRequestException(str(exc)) from exc
-    db_type, config, operator = _prepare(current_user, workspace_oid)
+    db_type, config, operator = _prepare(current_user)
     inserted, updated = _run(
         db_type, config, lambda db: import_knowledge_rows(db, rows, operator)
     )
@@ -241,10 +239,9 @@ async def create_knowledge_item(
     request: Request,
     payload: KnowledgePayload,
     current_user: UserResponse = Depends(get_current_user),
-    workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     _ = request
-    db_type, config, operator = _prepare(current_user, workspace_oid)
+    db_type, config, operator = _prepare(current_user)
     row = _run(db_type, config, lambda db: create_knowledge(db, payload.model_dump(), operator))
     return success_response(row, message="保存成功")
 
@@ -256,10 +253,9 @@ async def update_knowledge_item(
     knowledge_id: int,
     payload: KnowledgePayload,
     current_user: UserResponse = Depends(get_current_user),
-    workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     _ = request
-    db_type, config, operator = _prepare(current_user, workspace_oid)
+    db_type, config, operator = _prepare(current_user)
     row = _run(
         db_type,
         config,
@@ -274,10 +270,9 @@ async def delete_knowledge_item(
     request: Request,
     knowledge_id: int,
     current_user: UserResponse = Depends(get_current_user),
-    workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     _ = request
-    db_type, config, operator = _prepare(current_user, workspace_oid)
+    db_type, config, operator = _prepare(current_user)
 
     def _delete(db) -> None:
         delete_knowledge(db, knowledge_id, operator)
@@ -290,9 +285,8 @@ async def delete_knowledge_item(
 async def get_knowledge_versions(
     knowledge_id: int,
     current_user: UserResponse = Depends(get_current_user),
-    workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    db_type, config, _operator = _prepare(current_user, workspace_oid)
+    db_type, config, _operator = _prepare(current_user)
     versions = _run(db_type, config, lambda db: list_versions(db, knowledge_id))
     return success_response({"versions": versions})
 

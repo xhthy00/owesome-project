@@ -26,6 +26,8 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql://postgres:postgres@localhost:5432/awesome"
+    # 学情业务库。知识点管理只读这一条，不使用数据源表里的连接。
+    database_edu_url: str = ""
 
     # JWT
     jwt_secret_key: str = "your-secret-key-change-in-production"

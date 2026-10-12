@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from io import BytesIO
 from typing import Any, Protocol
+from urllib.parse import unquote, urlsplit
 
 import openpyxl
 
@@ -120,6 +121,30 @@ class KnowledgeRow:
     @property
     def knowledge_no(self) -> str:
         return str(self.values["knowledge_no"] or "")
+
+
+def parse_edu_database_url(url: str) -> tuple[str, dict[str, Any]]:
+    """把 ``DATABASE_EDU_URL`` 解析成写库会话需要的类型和连接参数。"""
+    parsed = urlsplit((url or "").strip())
+    scheme = (parsed.scheme or "").split("+", 1)[0].lower()
+    if scheme in {"postgresql", "postgres"}:
+        db_type = "pg"
+        default_port = 5432
+    elif scheme == "mysql":
+        db_type = "mysql"
+        default_port = 3306
+    else:
+        raise ValueError("DATABASE_EDU_URL 仅支持 postgresql")
+    database = parsed.path.lstrip("/").split("/", 1)[0]
+    if not parsed.hostname or not database:
+        raise ValueError("DATABASE_EDU_URL 缺少主机或库名")
+    return db_type, {
+        "host": parsed.hostname,
+        "port": parsed.port or default_port,
+        "username": unquote(parsed.username or ""),
+        "password": unquote(parsed.password or ""),
+        "database": database,
+    }
 
 
 def knowledge_access_error(edu_role: str, *, is_platform_admin: bool) -> str | None:
@@ -486,6 +511,7 @@ __all__ = [
     "list_knowledge",
     "list_versions",
     "normalize_fields",
+    "parse_edu_database_url",
     "parse_knowledge_xlsx",
     "update_knowledge",
 ]
