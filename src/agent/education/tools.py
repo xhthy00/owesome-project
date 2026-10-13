@@ -1848,11 +1848,15 @@ def _diagnosis_sql_bundle(
         + "\nGROUP BY COALESCE(k.knowledge_name, '未关联知识点'), k.ability_level\n"
         "ORDER BY score_rate ASC\nLIMIT 1000"
     )
+    from src.agent.education.privacy_mode import is_anonymize_display_enabled
+
+    name_sql = "" if is_anonymize_display_enabled() else "       ov.xm AS student_name,\n"
     score_sql = (
         "SELECT (" + DISPLAY_SCORE_SQL + ") AS score, sc.exam_score AS exam_score, sc.exam_id AS exam_id,\n"
         "       " + EXAM_NAME_SQL + " AS exam_name, e.exam_time AS exam_time,\n"
         "       sc.class AS class, sc.class AS class_name, sc.student_id AS student_id,\n"
-        "       sc.subject_name AS subject, sch.name AS school_name,\n"
+        + name_sql
+        + "       sc.subject_name AS subject, sch.name AS school_name,\n"
         "       sch.district AS district\n"
         "FROM tb_score sc\n"
         "JOIN tb_school sch ON sc.school_id = sch.id\n"
@@ -2001,9 +2005,13 @@ def _overview_class_score_sql(
     exam = _esc((exam_name or "").strip())
     fs = float(full_score) if full_score and full_score > 0 else 150.0
     exam_pred = f" AND exam_name LIKE '%{exam}%'" if exam else ""
+    from src.agent.education.privacy_mode import is_anonymize_display_enabled
+
+    name_sql = "" if is_anonymize_display_enabled() else "       xm AS student_name,\n"
     return (
         f"SELECT bj AS class, bj AS class_name, xx AS school_name, exam_name,\n"
         f"       anon_stu_id AS student_id, dq AS district, xkkm,\n"
+        f"{name_sql}"
         f"       {col} AS score, {fs:g} AS exam_score\n"
         f"FROM tb_score_overview\n"
         f"WHERE xx LIKE '%{school}%'\n"

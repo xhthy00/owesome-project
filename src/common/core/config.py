@@ -60,6 +60,11 @@ class Settings(BaseSettings):
     # on=ReAct 中用 question 工具让用户选择。
     edu_da_question_mode: Literal["off", "shadow", "on"] = "shadow"
 
+    # 侧边栏「系统文档」。留空则用代码内默认地址，修改后重启服务生效。
+    edu_doc_commitment_url: str = ""
+    edu_doc_training_url: str = ""
+    edu_doc_manual_url: str = ""
+
 
 
 @lru_cache

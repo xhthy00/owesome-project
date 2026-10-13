@@ -116,6 +116,29 @@ def install_trace_log_factory() -> None:
     _FACTORY_INSTALLED = True
 
 
+class TraceIdMiddleware:
+    """绑定请求 trace_id。用纯 ASGI，避免把下载流整段读进内存。"""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        tid = new_trace_id()
+
+        async def send_with_trace(message):
+            if message["type"] == "http.response.start":
+                headers = list(message.get("headers") or [])
+                headers.append((b"x-trace-id", tid.encode("ascii")))
+                message = {**message, "headers": headers}
+            await send(message)
+
+        with trace_scope(tid):
+            await self.app(scope, receive, send_with_trace)
+
+
 def _reset_factory_for_testing() -> None:
     """仅供测试：允许重跑 install 以观察幂等性。生产代码别调。"""
     global _FACTORY_INSTALLED

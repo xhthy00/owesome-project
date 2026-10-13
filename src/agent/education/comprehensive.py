@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import html
 from typing import Any
 
 from src.agent.education.charts import build_chart_option
@@ -309,6 +310,7 @@ def _build_student_archive_html(
     level_full: float,
     student_item_insights: dict[str, dict[str, Any]] | None = None,
     single_subject: bool = False,
+    labels: dict[str, str] | None = None,
 ) -> str:
     """卡片式学生档案：短考试标签 + 小题驱动建议，避免宽表空白。"""
     insights = student_item_insights or {}
@@ -434,7 +436,7 @@ def _build_student_archive_html(
         cards.append(
             f'<article class="archive-card">'
             f'<header class="archive-head">'
-            f'<div class="archive-name"><strong>{name}</strong>'
+            f'<div class="archive-name"><strong>{html.escape((labels or {}).get(name) or name)}</strong>'
             f'<span class="level-pill" style="background:{level_color}">{level_label}</span></div>'
             f'<div class="archive-meta">{"".join(meta_bits)}</div></header>'
             f'<div class="score-row">{"".join(score_chips)}</div>'
@@ -493,20 +495,23 @@ def build_student_archive_from_score_rows(
             "（勿仅查班级 KPI 聚合）。</p>"
         )
 
+    from src.agent.education.privacy_mode import is_anonymize_display_enabled
+
+    reveal_name = not is_anonymize_display_enabled()
+    labels: dict[str, str] = {}
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     for r in rows:
         if not isinstance(r, dict):
             continue
-        sid = str(
-            r.get("student_name")
-            or r.get("name")
-            or r.get("xm")
-            or r.get("student")
-            or r.get("student_id")
-            or ""
-        ).strip()
+        raw_id = str(r.get("student_id") or "").strip()
+        legacy = str(r.get("student") or r.get("name") or "").strip()
+        named = str(r.get("student_name") or r.get("xm") or "").strip()
+        # 对齐键仍用学号，逐人小题建议按 student_id 挂上；姓名只用于展示。
+        sid = raw_id or legacy or named
         if not sid:
             continue
+        if reveal_name and named and named != sid:
+            labels[sid] = named
         exam = str(
             r.get("exam") or r.get("exam_name") or exam_name or "本次考试"
         ).strip() or "本次考试"
@@ -609,6 +614,7 @@ def build_student_archive_from_score_rows(
         level_full=level_full,
         student_item_insights=student_item_insights,
         single_subject=single_subject,
+        labels=labels,
     )
 
 

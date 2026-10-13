@@ -7,6 +7,7 @@ from datasource.api.datasource import router as datasource_router
 from datasource.api.permission import router as ds_permission_router
 from src.agent.education.api import router as education_router
 from src.agent.education.knowledge_api import router as knowledge_router
+from system.api.docs import router as system_docs_router
 from system.api.edu_permission import router as edu_permission_router
 from system.api.permission import router as permission_router
 from system.api.system import router as system_router
@@ -18,6 +19,7 @@ def get_all_routers() -> list:
     """Get all API routers."""
     return [
         system_router,
+        system_docs_router,
         user_router,
         permission_router,
         edu_permission_router,

@@ -44,8 +44,8 @@ const FOLLOWUPS_BY_TYPE: Record<string, string[]> = {
   line_reach: ["对比各区本科线", "查看特控线人数变化", "生成区域诊断报告"]
 };
 
-const DEFAULT_FOLLOWUPS = ["换一个角度继续分析", "生成综合分析报告", "导出当前结论"];
-
+// const DEFAULT_FOLLOWUPS = ["换一个角度继续分析", "生成综合分析报告", "导出当前结论"];
+const DEFAULT_FOLLOWUPS = ["换一个角度继续分析", "生成综合分析报告"];
 export function getFollowups(reportType?: string): string[] {
   if (!reportType) return DEFAULT_FOLLOWUPS;
   return FOLLOWUPS_BY_TYPE[reportType] ?? DEFAULT_FOLLOWUPS;

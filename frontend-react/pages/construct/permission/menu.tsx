@@ -13,7 +13,8 @@ const routes = [
   { key: "knowledge", label: "知识点" },
   { key: "fraction-bar", label: "预测分数线" },
   { key: "permission", label: "权限管理" },
-  { key: "system", label: "日志管理" }
+  { key: "system", label: "日志管理" },
+  { key: "docs", label: "系统文档" }
 ];
 
 const permissionSubRoutes = [

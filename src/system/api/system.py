@@ -82,7 +82,7 @@ def login(
             ip=ip,
             user_agent=ua,
         )
-        raise UnauthorizedException("Incorrect account or password")
+        raise UnauthorizedException("账号或密码错误")
     if user.status != 1:
         log_login(
             session_factory=SessionLocal,
@@ -94,7 +94,7 @@ def login(
             ip=ip,
             user_agent=ua,
         )
-        raise UnauthorizedException("Account disabled")
+        raise UnauthorizedException("账号已禁用")
     if not verify_password(form_data.password, user.password):
         log_login(
             session_factory=SessionLocal,
@@ -106,7 +106,7 @@ def login(
             ip=ip,
             user_agent=ua,
         )
-        raise UnauthorizedException("Incorrect account or password")
+        raise UnauthorizedException("账号或密码错误")
 
     log_login(
         session_factory=SessionLocal,

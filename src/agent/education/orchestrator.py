@@ -585,7 +585,8 @@ class ReportOrchestrator:
         knowledge_rows: list[dict[str, Any]] = []
         score_rows_for_archive: list[dict[str, Any]] = [
             {
-                "student_id": r.get("student_id") or r.get("student_name"),
+                "student_id": r.get("student_id"),
+                "student_name": r.get("student_name") or r.get("xm"),
                 "subject": r.get("subject") or subject,
                 "score": r.get("score"),
                 "exam_name": r.get("exam_name") or exam_name,

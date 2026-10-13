@@ -6,6 +6,7 @@ import {
   DatabaseOutlined,
   FundViewOutlined,
   GlobalOutlined,
+  FileTextOutlined,
   HistoryOutlined,
   LineChartOutlined,
   ReadOutlined,
@@ -43,6 +44,7 @@ const routes = [
   { key: "anomaly-rules", path: "/construct/education/anomaly-rules", label: "异常规则", icon: <ControlOutlined /> },
   { key: "permission", path: "/construct/permission", label: "权限管理", icon: <SafetyCertificateOutlined /> },
   { key: "system", path: "/system", label: "日志管理", icon: <SettingOutlined /> },
+  { key: "docs", path: "/construct/docs", label: "系统文档", icon: <FileTextOutlined /> },
 ];
 
 const permissionSubRoutes = [
