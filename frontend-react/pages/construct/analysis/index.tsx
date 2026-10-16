@@ -67,7 +67,10 @@ const OPEN_REPORT_TYPES = new Set([
   "contribution",
   "combo_reach",
   "elite_roster",
-  "score_band"
+  "score_band",
+  "line_shift",
+  "absence",
+  "class_line_reach"
 ]);
 
 /** 校长/老师可见：本校/本班口径，不含全市局端报告 */
@@ -78,7 +81,10 @@ const SCHOOL_TEACHER_REPORT_TYPES = new Set([
   "student_profile",
   "trend_tracking",
   "tier_alert",
-  "comprehensive"
+  "comprehensive",
+  "line_shift",
+  "absence",
+  "class_line_reach"
 ]);
 
 function isSchoolOrTeacherRole(eduRole: string): boolean {
@@ -117,6 +123,8 @@ type FormValues = {
   class_name?: string;
   /** 单选为 string；区域诊断等多场为 string[] */
   exam_name?: string | string[];
+  /** 班级达线率与贡献分对照报告的对比考试：不选自动上一场，可选「不对比」 */
+  compare_exam?: string;
   subject?: string;
   school_name?: string;
   student_name?: string;
@@ -130,6 +138,8 @@ function fieldsForType(reportType: string): {
   exam_name?: boolean;
   /** 考试可多选（区域结构化诊断等） */
   exam_multi?: boolean;
+  /** 对比考试（班级达线率与贡献分对照报告） */
+  compare_exam?: boolean;
   subject?: boolean;
   school_name?: boolean;
   student_name?: boolean;
@@ -139,6 +149,7 @@ function fieldsForType(reportType: string): {
     class_name?: boolean;
     exam_name?: boolean;
     exam_multi?: boolean;
+    compare_exam?: boolean;
     subject?: boolean;
     school_name?: boolean;
     student_name?: boolean;
@@ -189,6 +200,15 @@ function fieldsForType(reportType: string): {
     case "elite_roster":
     case "score_band":
       flags = { exam_name: true };
+      break;
+    case "line_shift":
+      flags = { school_name: true, class_name: true, exam_name: true, exam_multi: true };
+      break;
+    case "absence":
+      flags = { school_name: true, class_name: true, exam_name: true };
+      break;
+    case "class_line_reach":
+      flags = { school_name: true, class_name: true, exam_name: true, compare_exam: true };
       break;
     default:
       flags = { class_name: true, exam_name: true };
@@ -411,6 +431,7 @@ export default function AnalysisToolPage() {
       if (values.class_name?.trim()) filters.class_name = values.class_name.trim();
       const examFilter = serializeExamFilter(values.exam_name);
       if (examFilter) filters.exam_name = examFilter;
+      if (values.compare_exam?.trim()) filters.compare_exam = values.compare_exam.trim();
       if (values.subject?.trim()) filters.subject = values.subject.trim();
       if (values.school_name?.trim()) filters.school_name = values.school_name.trim();
       if (values.student_name?.trim()) filters.student_name = values.student_name.trim();
@@ -447,6 +468,7 @@ export default function AnalysisToolPage() {
     if (values.class_name?.trim()) filters.class_name = values.class_name.trim();
     const examFilter = serializeExamFilter(values.exam_name);
     if (examFilter) filters.exam_name = examFilter;
+    if (values.compare_exam?.trim()) filters.compare_exam = values.compare_exam.trim();
     if (values.subject?.trim()) filters.subject = values.subject.trim();
     if (values.school_name?.trim()) filters.school_name = values.school_name.trim();
     if (values.student_name?.trim()) filters.student_name = values.student_name.trim();
@@ -739,7 +761,19 @@ export default function AnalysisToolPage() {
                   <Input />
                 </Form.Item>
                 {fieldFlags.school_name ? (
-                  <Form.Item name="school_name" label="学校">
+                  <Form.Item
+                    name="school_name"
+                    label="学校"
+                    rules={
+                      (selected.report_type === "line_shift" ||
+                        selected.report_type === "absence" ||
+                        selected.report_type === "class_line_reach") &&
+                      eduRole !== "school_admin" &&
+                      eduRole !== "teacher"
+                        ? [{ required: true, message: "请选择学校" }]
+                        : undefined
+                    }
+                  >
                     <Select
                       allowClear
                       showSearch
@@ -784,7 +818,12 @@ export default function AnalysisToolPage() {
                     rules={
                       selected.report_type === "class_overview"
                         ? [{ required: true, message: "请选择班级" }]
-                        : undefined
+                        : (selected.report_type === "line_shift" ||
+                            selected.report_type === "absence" ||
+                            selected.report_type === "class_line_reach") &&
+                            eduRole === "teacher"
+                          ? [{ required: true, message: "请选择班级" }]
+                          : undefined
                     }
                   >
                     <Select
@@ -792,7 +831,13 @@ export default function AnalysisToolPage() {
                       showSearch
                       loading={metaLoading}
                       options={toSelectOptions(meta.classes)}
-                      placeholder="选择班级"
+                      placeholder={
+                        selected.report_type === "line_shift" ||
+                        selected.report_type === "absence" ||
+                        selected.report_type === "class_line_reach"
+                          ? "不选则统计全校；老师必须选择班级"
+                          : "选择班级"
+                      }
                       optionFilterProp="label"
                     />
                   </Form.Item>
@@ -802,22 +847,73 @@ export default function AnalysisToolPage() {
                     name="exam_name"
                     label="考试"
                     extra={
-                      fieldFlags.exam_multi
-                        ? "可多选；不选则包含全部考试（用于动态性对比）"
-                        : undefined
+                      selected.report_type === "line_shift"
+                        ? "必须选择两场。有考试时间时，较早的一场是上次。"
+                        : selected.report_type === "absence"
+                          ? "选一场考试。上一场取考试时间更早、最近的一场，用于识别整场缺考。"
+                          : selected.report_type === "class_line_reach"
+                            ? "选一场考试。达线率按各自的线分计算，跨场可比。"
+                            : fieldFlags.exam_multi
+                              ? "可多选；不选则包含全部考试（用于动态性对比）"
+                              : undefined
+                    }
+                    rules={
+                      selected.report_type === "line_shift"
+                        ? [
+                            {
+                              validator: (_, value) => {
+                                const picked = Array.isArray(value)
+                                  ? value.map((item) => String(item || "").trim()).filter(Boolean)
+                                  : String(value || "").trim()
+                                    ? [String(value).trim()]
+                                    : [];
+                                if (picked.length !== 2 || picked[0] === picked[1]) {
+                                  return Promise.reject(new Error("请选择两场不同的考试"));
+                                }
+                                return Promise.resolve();
+                              }
+                            }
+                          ]
+                        : selected.report_type === "class_line_reach"
+                          ? [{ required: true, message: "请选择考试" }]
+                          : undefined
                     }
                   >
                     <Select
                       mode={fieldFlags.exam_multi ? "multiple" : undefined}
+                      maxCount={selected.report_type === "line_shift" ? 2 : undefined}
                       allowClear
                       showSearch
                       loading={metaLoading}
                       options={toSelectOptions(meta.exams)}
                       placeholder={
-                        fieldFlags.exam_multi ? "选择一场或多场考试" : "选择考试"
+                        selected.report_type === "line_shift"
+                          ? "选择两场考试"
+                          : fieldFlags.exam_multi
+                            ? "选择一场或多场考试"
+                            : "选择考试"
                       }
                       optionFilterProp="label"
                       maxTagCount="responsive"
+                    />
+                  </Form.Item>
+                ) : null}
+                {fieldFlags.compare_exam ? (
+                  <Form.Item
+                    name="compare_exam"
+                    label="对比考试"
+                    extra="不选则自动对比上一场（考试时间早于本次、最近的一场）。只想看本次考试请选「不对比」。"
+                  >
+                    <Select
+                      allowClear
+                      showSearch
+                      loading={metaLoading}
+                      options={[
+                        { value: "不对比", label: "不对比（只看本次考试）" },
+                        ...toSelectOptions(meta.exams)
+                      ]}
+                      placeholder="自动对比上一场"
+                      optionFilterProp="label"
                     />
                   </Form.Item>
                 ) : null}

@@ -190,6 +190,9 @@ class EduIntent:
 def render_intent_definitions(candidates: list[ReportType] | None = None) -> str:
     """把 ReportType + 必填槽矩阵渲染成 DB-GPT 式意图定义块。"""
     types = list(candidates) if candidates else list(ReportType)
+    # 临界生/缺考/班级达线率与贡献分对照报告只在分析工具里生成，不进入对话意图。
+    analysis_only = (ReportType.LINE_SHIFT, ReportType.ABSENCE, ReportType.CLASS_LINE_REACH)
+    types = [rt for rt in types if rt not in analysis_only]
     lines: list[str] = []
     for rt in types:
         label = REPORT_TYPE_LABELS.get(rt, rt.value)
@@ -306,12 +309,20 @@ def _coerce_report_type(raw: Any) -> str | None:
     if not value or value.lower() in {"null", "none"}:
         return None
     try:
-        return ReportType(value).value
+        rt = ReportType(value)
     except ValueError:
-        pass
-    for rt, label in REPORT_TYPE_LABELS.items():
-        if value == label:
-            return rt.value
+        rt = None
+    if rt in (ReportType.LINE_SHIFT, ReportType.ABSENCE, ReportType.CLASS_LINE_REACH):
+        return None
+    if rt is not None:
+        return rt.value
+    for item, label in REPORT_TYPE_LABELS.items():
+        if value == label and item not in (
+            ReportType.LINE_SHIFT,
+            ReportType.ABSENCE,
+            ReportType.CLASS_LINE_REACH,
+        ):
+            return item.value
     return None
 
 

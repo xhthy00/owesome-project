@@ -57,6 +57,9 @@ function iconOf(key: string): ReactNode {
   return ICON_MAP[key] ?? <ThunderboltOutlined />;
 }
 
+/** 只在分析工具中生成、不走对话的报告类型 */
+const analysisOnlyTypes = new Set(["line_shift", "absence", "class_line_reach"]);
+
 export default function ConstructSkillsPage() {
   const router = useRouter();
   const [skills, setSkills] = useState<SkillItem[]>([]);
@@ -278,15 +281,26 @@ export default function ConstructSkillsPage() {
                 borderTop: "1px solid var(--oc-border)"
               }}
             >
-              <Button icon={<CopyOutlined />} onClick={handleCopy} style={btnSecondaryStyle}>
-                {copied ? "已复制" : "复制到剪贴板"}
-              </Button>
-              <Button icon={<ThunderboltOutlined />} onClick={handleOpenInAnalysis} style={btnSecondaryStyle}>
+              {!analysisOnlyTypes.has(active.report_type) ? (
+                <Button icon={<CopyOutlined />} onClick={handleCopy} style={btnSecondaryStyle}>
+                  {copied ? "已复制" : "复制到剪贴板"}
+                </Button>
+              ) : null}
+              <Button
+                type={analysisOnlyTypes.has(active.report_type) ? "primary" : "default"}
+                icon={<ThunderboltOutlined />}
+                onClick={handleOpenInAnalysis}
+                style={
+                  analysisOnlyTypes.has(active.report_type) ? btnPrimaryStyle : btnSecondaryStyle
+                }
+              >
                 一键生成报告
               </Button>
-              <Button type="primary" icon={<ExportOutlined />} onClick={handleOpenInExplore} style={btnPrimaryStyle}>
-                在探索广场打开
-              </Button>
+              {!analysisOnlyTypes.has(active.report_type) ? (
+                <Button type="primary" icon={<ExportOutlined />} onClick={handleOpenInExplore} style={btnPrimaryStyle}>
+                  在探索广场打开
+                </Button>
+              ) : null}
             </div>
           </div>
         )}

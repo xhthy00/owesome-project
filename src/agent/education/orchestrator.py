@@ -18,7 +18,6 @@ Orchestrator 擅长**结构已知**的报告：报告类型一旦识别，后续
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -51,7 +50,12 @@ from src.agent.education.schema_mapping import (
     load_schema_from_config,
     normalize_jc_label,
 )
-from src.agent.education.stats import compute_item_metrics, compute_rankings, compute_score_stats, identify_at_risk_students
+from src.agent.education.stats import (
+    compute_item_metrics,
+    compute_rankings,
+    compute_score_stats,
+    identify_at_risk_students,
+)
 from src.agent.education.subject_diagnosis import (
     build_diagnosis_recommendations,
     build_diagnosis_summary,
@@ -62,6 +66,7 @@ from src.agent.education.subject_diagnosis import (
     knowledge_weighted_join,
 )
 from src.agent.education.templates import select_report_template
+
 logger = logging.getLogger(__name__)
 
 #: 执行 SQL 的回调签名：(sql) -> {"columns": [...], "rows": [[...], ...], "row_count": int}
@@ -121,7 +126,6 @@ class ReportIntentResolver:
             ReportRoute,
             classify_report_intent_sync,
         )
-        from src.agent.education.query_parse import is_citywide_analysis_query
 
         q = (question or "").strip()
         if isinstance(route, ReportRoute):
@@ -365,6 +369,12 @@ class ReportOrchestrator:
             return await self._gather_difficulty_curve(spec)
         if spec.report_type == ReportType.SUBJECT_RESEARCH:
             return await self._gather_subject_research(spec)
+        if spec.report_type == ReportType.LINE_SHIFT:
+            return await self._gather_line_shift(spec)
+        if spec.report_type == ReportType.ABSENCE:
+            return await self._gather_absence(spec)
+        if spec.report_type == ReportType.CLASS_LINE_REACH:
+            return await self._gather_class_line_reach(spec)
         if spec.report_type in _BUREAU_TYPES:
             return await self._gather_bureau_analysis(spec)
 
@@ -1083,6 +1093,250 @@ class ReportOrchestrator:
                 report_time=_now_str(),
             )
         return data
+
+    async def _gather_line_shift(self, spec: ReportSpec) -> dict[str, Any]:
+        """两场考试的临界生分析。不走通用成绩行，避免把缺考当成未达线。"""
+        from src.agent.education.bureau_analysis import fraction_bar_select_sql
+        from src.agent.education.line_reach import normalize_fraction_bars
+        from src.agent.education.line_reach_report import (
+            exam_batch_select_sql,
+            sql_result_to_dicts,
+        )
+        from src.agent.education.line_shift import (
+            build_line_shift_report,
+            exam_date_text,
+            order_two_exams,
+            overview_enrolled_sql,
+            parse_exam_pair,
+            select_line_shift_schools,
+            xx_literals,
+        )
+        from src.agent.education.privacy_mode import is_anonymize_display_enabled
+        from src.agent.education.subject_research import school_select_sql
+
+        school_query = str(spec.filters.get("school_name") or "").strip()
+        class_name = str(spec.filters.get("class_name") or "").strip()
+        first, second = parse_exam_pair(str(spec.filters.get("exam_name") or ""))
+        schools = sql_result_to_dicts(await self._execute_sql(school_select_sql()))
+        matched = select_line_shift_schools(schools, school_query)
+        if not matched:
+            raise ValueError(f"未找到学校「{school_query}」。请从列表里选择库内学校名称。")
+        batches = sql_result_to_dicts(await self._execute_sql(exam_batch_select_sql()))
+        prev_exam, curr_exam, order_note = order_two_exams(first, second, batches)
+        names = xx_literals(matched)
+        prev_rows = sql_result_to_dicts(
+            await self._execute_sql(overview_enrolled_sql(prev_exam, names))
+        )
+        curr_rows = sql_result_to_dicts(
+            await self._execute_sql(overview_enrolled_sql(curr_exam, names))
+        )
+        if not prev_rows and not curr_rows:
+            raise ValueError(
+                f"「{school_query}」在这两场考试中没有在籍生成绩。请核对学校名称是否与成绩库一致。"
+            )
+        bar_rows = []
+        for exam in (prev_exam, curr_exam):
+            fetched = sql_result_to_dicts(
+                await self._execute_sql(fraction_bar_select_sql(exam))
+            )
+            for row in fetched:
+                if not str(row.get("exam_name") or "").strip():
+                    row["exam_name"] = exam
+            bar_rows.extend(fetched)
+        return build_line_shift_report(
+            prev_exam=prev_exam,
+            curr_exam=curr_exam,
+            prev_rows=prev_rows,
+            curr_rows=curr_rows,
+            bars=normalize_fraction_bars(bar_rows),
+            schools=matched,
+            class_name=class_name,
+            order_note=order_note,
+            prev_date=exam_date_text(prev_exam, batches),
+            curr_date=exam_date_text(curr_exam, batches),
+            anonymize=is_anonymize_display_enabled(),
+            report_time=_now_str(),
+        )
+
+    async def _gather_absence(self, spec: ReportSpec) -> dict[str, Any]:
+        """一场考试的缺考分析。整场缺考靠上一场名单对照出来。"""
+        from src.agent.education.absence import (
+            build_absence_report,
+            existing_sids_sql,
+            overview_subjects_sql,
+            pick_prev_exam_or_none,
+        )
+        from src.agent.education.line_reach_report import (
+            exam_batch_select_sql,
+            sql_result_to_dicts,
+        )
+        from src.agent.education.line_shift import select_line_shift_schools, xx_literals
+        from src.agent.education.privacy_mode import is_anonymize_display_enabled
+        from src.agent.education.subject_research import school_select_sql
+
+        school_query = str(spec.filters.get("school_name") or "").strip()
+        class_name = str(spec.filters.get("class_name") or "").strip()
+        exam_name = str(spec.filters.get("exam_name") or "").strip().split(";;")[0].strip()
+        schools = sql_result_to_dicts(await self._execute_sql(school_select_sql()))
+        matched = select_line_shift_schools(schools, school_query)
+        if not matched:
+            raise ValueError(f"未找到学校「{school_query}」。请从列表里选择库内学校名称。")
+        batches = sql_result_to_dicts(await self._execute_sql(exam_batch_select_sql()))
+        prev_exam = pick_prev_exam_or_none(batches, exam_name) or ""
+        names = xx_literals(matched)
+        curr_rows = sql_result_to_dicts(
+            await self._execute_sql(overview_subjects_sql(exam_name, names))
+        )
+        prev_rows: list[dict[str, Any]] = []
+        existing: set[str] = set()
+        if prev_exam:
+            prev_rows = sql_result_to_dicts(
+                await self._execute_sql(overview_subjects_sql(prev_exam, names))
+            )
+            from src.agent.education.line_shift import row_in_schools
+
+            prev_sids = {
+                str(r.get("anon_stu_id") or "").strip()
+                for r in prev_rows
+                if isinstance(r, dict)
+                and str(r.get("xsxz") or "").strip() == "在籍生"
+                and row_in_schools(str(r.get("xx") or ""), matched)
+            }
+            curr_sids = {
+                str(r.get("anon_stu_id") or "").strip()
+                for r in curr_rows
+                if isinstance(r, dict)
+            }
+            missing = sorted(sid for sid in prev_sids if sid and sid not in curr_sids)
+            for i in range(0, len(missing), 500):
+                chunk = missing[i : i + 500]
+                found = sql_result_to_dicts(
+                    await self._execute_sql(existing_sids_sql(exam_name, chunk))
+                )
+                existing.update(
+                    str(r.get("anon_stu_id") or "").strip()
+                    for r in found
+                    if str(r.get("anon_stu_id") or "").strip()
+                )
+        if not curr_rows and not prev_rows:
+            raise ValueError(
+                f"「{school_query}」在「{exam_name}」没有在籍生成绩。请核对学校与考试名称是否与库内一致。"
+            )
+        return build_absence_report(
+            exam_name=exam_name,
+            prev_exam=prev_exam,
+            curr_rows=curr_rows,
+            prev_rows=prev_rows,
+            existing_sids=existing,
+            schools=matched,
+            class_name=class_name,
+            anonymize=is_anonymize_display_enabled(),
+            report_time=_now_str(),
+        )
+
+    async def _gather_class_line_reach(self, spec: ReportSpec) -> dict[str, Any]:
+        """一场考试的班级达线率与贡献分对照。对比场默认上一场。"""
+        from src.agent.education.bureau_analysis import fraction_bar_select_sql
+        from src.agent.education.class_line_reach import (
+            build_class_line_reach_report,
+            overview_full_sql,
+            pick_compare_exam_or_none,
+        )
+        from src.agent.education.contribution_weak import contribution_select_sql
+        from src.agent.education.line_reach import normalize_fraction_bars
+        from src.agent.education.line_reach_report import (
+            exam_batch_select_sql,
+            sql_result_to_dicts,
+        )
+        from src.agent.education.line_shift import (
+            exam_date_text,
+            select_line_shift_schools,
+            xx_literals,
+        )
+        from src.agent.education.subject_research import school_select_sql
+
+        school_query = str(spec.filters.get("school_name") or "").strip()
+        class_name = str(spec.filters.get("class_name") or "").strip()
+        exam_name = str(spec.filters.get("exam_name") or "").split(";;")[0].strip()
+        compare_query = str(spec.filters.get("compare_exam") or "").strip()
+        schools = sql_result_to_dicts(await self._execute_sql(school_select_sql()))
+        matched = select_line_shift_schools(schools, school_query)
+        if not matched:
+            raise ValueError(f"未找到学校「{school_query}」。请从列表里选择库内学校名称。")
+        batches = sql_result_to_dicts(await self._execute_sql(exam_batch_select_sql()))
+        compare_exam, compare_note = pick_compare_exam_or_none(batches, exam_name, compare_query)
+        names = xx_literals(matched)
+        # 历场走势：本届全部场次（按考试时间排序），本次与对比场必然包含在内。
+        from src.agent.education.line_reach_report import ordered_exam_names
+        from src.agent.education.schema_mapping import normalize_jc_label
+
+        jc = normalize_jc_label(exam_name)
+        trend_exams = [
+            e for e in ordered_exam_names(batches) if jc and normalize_jc_label(e) == jc
+        ]
+        if exam_name not in trend_exams:
+            trend_exams = [exam_name]
+        fetch_exams: list[str] = []
+        for exam in (*trend_exams, exam_name, compare_exam):
+            if exam and exam not in fetch_exams:
+                fetch_exams.append(exam)
+        overview_by_exam: dict[str, list[dict[str, Any]]] = {}
+        for exam in fetch_exams:
+            overview_by_exam[exam] = sql_result_to_dicts(
+                await self._execute_sql(overview_full_sql(exam, names))
+            )
+        curr_rows = overview_by_exam.get(exam_name) or []
+        prev_rows = overview_by_exam.get(compare_exam) or [] if compare_exam else []
+        if not curr_rows and not prev_rows:
+            raise ValueError(
+                f"「{school_query}」在「{exam_name}」没有在籍生成绩。"
+                "请核对学校与考试名称是否与库内一致。"
+            )
+        bar_rows: list[dict[str, Any]] = []
+        for exam in fetch_exams:
+            fetched = sql_result_to_dicts(
+                await self._execute_sql(fraction_bar_select_sql(exam))
+            )
+            for row in fetched:
+                if not str(row.get("exam_name") or "").strip():
+                    row["exam_name"] = exam
+            bar_rows.extend(fetched)
+        contrib_rows = sql_result_to_dicts(
+            await self._execute_sql(contribution_select_sql(exam_name))
+        )
+        prev_contrib_rows: list[dict[str, Any]] = []
+        if compare_exam:
+            prev_contrib_rows = sql_result_to_dicts(
+                await self._execute_sql(contribution_select_sql(compare_exam))
+            )
+        # 老师的行级权限在 SQL 层把成绩限制在所带班级，算不出全校年级对照——
+        # 传开关让年级对照列显示「—」，不用所带班级冒充全校。
+        grade_rates_hidden = False
+        if self._user_id:
+            from src.datasource.service.edu_permission import edu_scope_dict_for_user_id
+
+            grade_rates_hidden = (
+                str(edu_scope_dict_for_user_id(self._user_id).get("edu_role") or "")
+                == "teacher"
+            )
+        return build_class_line_reach_report(
+            exam_name=exam_name,
+            compare_exam=compare_exam,
+            curr_rows=curr_rows,
+            prev_rows=prev_rows,
+            bars=normalize_fraction_bars(bar_rows),
+            contribution_rows=contrib_rows,
+            prev_contribution_rows=prev_contrib_rows,
+            schools=matched,
+            class_name=class_name,
+            compare_note=compare_note,
+            curr_date=exam_date_text(exam_name, batches),
+            compare_date=exam_date_text(compare_exam, batches),
+            report_time=_now_str(),
+            grade_rates_hidden=grade_rates_hidden,
+            trend_exams=trend_exams,
+            trend_rows=overview_by_exam,
+        )
 
     async def _gather_subject_research(self, spec: ReportSpec) -> dict[str, Any]:
         """一校一场学科教研分析：tb_score 均分 + type 层级 + 明细卷别。"""
@@ -2022,9 +2276,12 @@ class ReportOrchestrator:
 
     @staticmethod
     def _title(spec: ReportSpec) -> str:
-        from src.agent.education.report_types import report_type_label
+        from src.agent.education.report_types import ReportType, report_type_label
 
         label = report_type_label(spec.report_type)
+        if spec.report_type in (ReportType.LINE_SHIFT, ReportType.ABSENCE, ReportType.CLASS_LINE_REACH):
+            scope = spec.filters.get("class_name") or spec.filters.get("school_name") or ""
+            return f"{scope}{label}".strip()
         prefix = spec.filters.get("class_name") or spec.filters.get("subject") or ""
         return f"{prefix}{label}".strip()
 

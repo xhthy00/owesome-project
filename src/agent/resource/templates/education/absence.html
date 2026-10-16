@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ REPORT_TITLE }}</title>
+  <style>
+    :root {
+      --edu-primary: #1677ff; --edu-primary-bg: #e6f4ff;
+      --edu-text: rgba(0,0,0,0.88); --edu-text-2: rgba(0,0,0,0.65); --edu-text-3: rgba(0,0,0,0.45);
+      --edu-border: #f0f0f0; --edu-err: #ff4d4f;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #f0f2f5; color: var(--edu-text); line-height: 1.7; }
+    .edu-container { max-width: 1080px; margin: 24px auto; padding: 0 16px 32px; }
+    .edu-card { background: #fff; border: 1px solid var(--edu-border); border-radius: 10px; padding: 22px 26px; margin-bottom: 16px; }
+    h1 { margin: 0 0 8px; font-size: 22px; font-weight: 600; }
+    h2 { margin: 0 0 12px; font-size: 17px; font-weight: 600; padding-bottom: 8px; border-bottom: 1px solid var(--edu-border); }
+    h3 { margin: 18px 0 8px; font-size: 15px; }
+    p { margin: 6px 0; }
+    .edu-sub { color: var(--edu-text-3); font-size: 13px; }
+    .edu-badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; background: var(--edu-primary-bg); color: var(--edu-primary); margin-right: 6px; }
+    .edu-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 12px 0; }
+    .edu-kpi { border: 1px solid var(--edu-border); border-radius: 8px; padding: 12px 14px; background: #fafafa; }
+    .edu-kpi .label { font-size: 12px; color: var(--edu-text-3); }
+    .edu-kpi .value { margin-top: 4px; font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .edu-kpi.err .value { color: var(--edu-err); }
+    .edu-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .edu-table th, .edu-table td { border-bottom: 1px solid var(--edu-border); padding: 8px 10px; text-align: left; }
+    .edu-table th { background: var(--edu-primary-bg); color: var(--edu-text-2); font-weight: 600; }
+    .edu-note { background: #fafafa; border-left: 3px solid var(--edu-primary); padding: 8px 12px; margin: 8px 0; }
+    ul { margin: 8px 0; padding-left: 20px; }
+    .edu-footer { color: var(--edu-text-3); font-size: 12px; text-align: right; }
+  </style>
+</head>
+<body>
+  <div class="edu-container">
+    <div class="edu-card">
+      <span class="edu-badge">{{ REPORT_TYPE }}</span>
+      <h1>{{ REPORT_TITLE }}</h1>
+      <p class="edu-sub">{{ SCHOOL_LABEL }} · {{ CLASS_LABEL }}</p>
+      <p>这次考试：{{ EXAM_NAME }}</p>
+      <p>{{ NOTE }}</p>
+      <p class="edu-sub">本次统计到：这次有成绩的在籍生 {{ CURR_COUNT }} 人{% if PREV_EXAM %}，上一场在本校有成绩的在籍生 {{ PREV_COUNT }} 人{% endif %}。同一场次学号重复、无法区分的成绩行 {{ DUP_COUNT }} 行已排除。</p>
+      <p class="edu-footer">{{ REPORT_TIME }}</p>
+    </div>
+
+    <div class="edu-card">
+      <h2>计算口径</h2>
+      <ul>
+        <li>只统计在籍生。该考的科目是语文、数学、英语，加上首选科目（物理或历史），加上两门再选科目，都从这次考试的选科组合里读。组合里没有的科目不计缺考，所以未选考科目的 0 分不会算成缺考。</li>
+        <li>该考科目里有一门是 0 分或没有分，就算该门缺考，这个人进入名单。该门 0 分与缺考记法相同。</li>
+        <li>整场缺考：这场在本校没有成绩行，且全市任何学校都没有这个人的成绩行。这样的人按上一场的选科组合，六门都记缺考。在别的学校有这场成绩行的，不算本校缺考。</li>
+        <li>上一场取考试时间早于这次、且最近的一场。选了班级时，这次有成绩的按这次班级，整场缺考的按上一场班级。</li>
+        <li>选科组合看不清的，单独列出，不猜，也不算进缺考人数。</li>
+        <li>名单里的姓名是否显示，跟随系统的匿名开关。开启时只显示学号。</li>
+      </ul>
+    </div>
+
+    <div class="edu-card">
+      <h2>人数</h2>
+      <div class="edu-grid">
+        <div class="edu-kpi err"><div class="label">整场缺考</div><div class="value">{{ FULL_COUNT }} 人</div></div>
+        <div class="edu-kpi"><div class="label">部分科目缺考</div><div class="value">{{ PARTIAL_COUNT }} 人</div></div>
+        <div class="edu-kpi"><div class="label">选科不明</div><div class="value">{{ UNKNOWN_COUNT }} 人</div></div>
+      </div>
+    </div>
+
+    {% if PREV_EXAM %}
+    <div class="edu-card">
+      <h2>整场缺考名单（{{ FULL_LIST | length }} 人）</h2>
+      <p class="edu-sub">{{ EXAM_NAME }} 全市都没有这个人的成绩行。缺考科目按上一场选科组合，六门都算缺考。</p>
+      {% if FULL_LIST %}
+      <table class="edu-table">
+        <thead><tr><th>学生</th><th>班级</th><th>选科</th><th>缺考科目</th><th>说明</th></tr></thead>
+        <tbody>
+        {% for stu in FULL_LIST %}
+          <tr><td>{{ stu.name }}</td><td>{{ stu.class }}</td><td>{{ stu.combo }}</td><td>{{ stu.missing }}</td><td>本场无成绩</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p>无</p>{% endif %}
+    </div>
+    {% endif %}
+
+    <div class="edu-card">
+      <h2>部分科目缺考名单（{{ PARTIAL_LIST | length }} 人）</h2>
+      <p class="edu-sub">这次有成绩行，但该考的六门里至少一门是 0 分或没有分。已考科目列出分数。</p>
+      {% if PARTIAL_LIST %}
+      <table class="edu-table">
+        <thead><tr><th>学生</th><th>班级</th><th>选科</th><th>缺考科目</th><th>已考科目与分数</th></tr></thead>
+        <tbody>
+        {% for stu in PARTIAL_LIST %}
+          <tr><td>{{ stu.name }}</td><td>{{ stu.class }}</td><td>{{ stu.combo }}</td><td>{{ stu.missing }}</td><td>{{ stu.taken }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p>无</p>{% endif %}
+    </div>
+
+    {% if UNKNOWN_LIST %}
+    <div class="edu-card">
+      <h2>选科不明（{{ UNKNOWN_LIST | length }} 人）</h2>
+      <p class="edu-sub">选科组合不完整或无法识别，无法判断该考哪六门，未算进缺考人数。</p>
+      <table class="edu-table">
+        <thead><tr><th>学生</th><th>班级</th><th>选科组合原文</th></tr></thead>
+        <tbody>
+        {% for stu in UNKNOWN_LIST %}
+          <tr><td>{{ stu.name }}</td><td>{{ stu.class }}</td><td>{{ stu.combo }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+  </div>
+</body>
+</html>

@@ -39,6 +39,9 @@ class ReportType(str, Enum):
     SCORE_BAND = "score_band"                # 总分十分段 / 学科五分段
     SUBJECT_RESEARCH = "subject_research"    # 学科教研分析报告（一校×一场）
     DIFFICULTY_CURVE = "difficulty_curve"    # 全卷/小题难度曲线（得分率）
+    LINE_SHIFT = "line_shift"                # 临界生分析（两场达线变化，仅分析工具）
+    ABSENCE = "absence"                      # 缺考分析（一场缺考学生，仅分析工具）
+    CLASS_LINE_REACH = "class_line_reach"    # 班级达线率与贡献分对照（各班对标线达线率，仅分析工具）
 
 
 class Audience(str, Enum):
@@ -73,6 +76,9 @@ REPORT_TYPE_LABELS: dict[ReportType, str] = {
     ReportType.SCORE_BAND: "分段统计",
     ReportType.SUBJECT_RESEARCH: "学科教研分析报告",
     ReportType.DIFFICULTY_CURVE: "难度曲线",
+    ReportType.LINE_SHIFT: "临界生分析报告",
+    ReportType.ABSENCE: "缺考分析报告",
+    ReportType.CLASS_LINE_REACH: "班级达线率与贡献分对照分析报告",
 }
 
 _KNOWN_TYPE_MARKERS: frozenset[str] = frozenset(

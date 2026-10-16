@@ -275,13 +275,16 @@ def _trend_line(data: dict[str, Any], title: str) -> dict[str, Any]:
                 "data": [{"yAxis": data.get("pass_line", 60), "name": "及格线"}]
             } if data.get("pass_line") is not None else [],
         })
+    y_axis: dict[str, Any] = {"type": "value", "name": data.get("y_name") or "分数"}
+    if data.get("y_max") is not None:
+        y_axis["max"] = data.get("y_max")
     return {
         "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
         "tooltip": {"trigger": "axis"},
         "legend": {"top": 24},
         "grid": {"left": "8%", "right": "8%", "bottom": "12%", "containLabel": True},
         "xAxis": {"type": "category", "data": x_labels, "name": "考试"},
-        "yAxis": {"type": "value", "name": "分数"},
+        "yAxis": y_axis,
         "series": series,
     }
 

@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ REPORT_TITLE }}</title>
+  <style>
+    :root {
+      --edu-primary: #1677ff; --edu-primary-bg: #e6f4ff;
+      --edu-text: rgba(0,0,0,0.88); --edu-text-2: rgba(0,0,0,0.65); --edu-text-3: rgba(0,0,0,0.45);
+      --edu-border: #f0f0f0; --edu-ok: #52c41a; --edu-warn: #faad14; --edu-err: #ff4d4f;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #f0f2f5; color: var(--edu-text); line-height: 1.7; }
+    .edu-container { max-width: 1080px; margin: 24px auto; padding: 0 16px 32px; }
+    .edu-card { background: #fff; border: 1px solid var(--edu-border); border-radius: 10px; padding: 22px 26px; margin-bottom: 16px; }
+    h1 { margin: 0 0 8px; font-size: 22px; font-weight: 600; }
+    h2 { margin: 0 0 12px; font-size: 17px; font-weight: 600; padding-bottom: 8px; border-bottom: 1px solid var(--edu-border); }
+    h3 { margin: 18px 0 8px; font-size: 15px; }
+    p { margin: 6px 0; }
+    .edu-sub { color: var(--edu-text-3); font-size: 13px; }
+    .edu-badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; background: var(--edu-primary-bg); color: var(--edu-primary); margin-right: 6px; }
+    .edu-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 12px 0; }
+    .edu-kpi { border: 1px solid var(--edu-border); border-radius: 8px; padding: 12px 14px; background: #fafafa; }
+    .edu-kpi .label { font-size: 12px; color: var(--edu-text-3); }
+    .edu-kpi .value { margin-top: 4px; font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+    .edu-kpi.ok .value { color: var(--edu-ok); }
+    .edu-kpi.err .value { color: var(--edu-err); }
+    .edu-kpi.warn .value { color: var(--edu-warn); }
+    .edu-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .edu-table th, .edu-table td { border-bottom: 1px solid var(--edu-border); padding: 8px 10px; text-align: left; }
+    .edu-table th { background: var(--edu-primary-bg); color: var(--edu-text-2); font-weight: 600; }
+    .edu-table td.num, .edu-table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .edu-note { background: #fafafa; border-left: 3px solid var(--edu-primary); padding: 8px 12px; margin: 8px 0; }
+    details.edu-fold { margin: 10px 0 4px; }
+    details.edu-fold summary { cursor: pointer; font-weight: 600; font-size: 15px; }
+    ul { margin: 8px 0; padding-left: 20px; }
+    .edu-footer { color: var(--edu-text-3); font-size: 12px; text-align: right; }
+  </style>
+</head>
+<body>
+  <div class="edu-container">
+    <div class="edu-card">
+      <span class="edu-badge">{{ REPORT_TYPE }}</span>
+      <h1>{{ REPORT_TITLE }}</h1>
+      <p class="edu-sub">{{ SCHOOL_LABEL }} · {{ CLASS_LABEL }} · {{ TIER }} · 对比线：{{ LINE_NAMES }}</p>
+      <p>上次：{{ PREV_EXAM }}{% if PREV_DATE %}（{{ PREV_DATE }}）{% endif %}</p>
+      <p>这次：{{ CURR_EXAM }}{% if CURR_DATE %}（{{ CURR_DATE }}）{% endif %}</p>
+      {% if ORDER_NOTE %}<p class="edu-note">{{ ORDER_NOTE }}</p>{% endif %}
+      <p>{{ COHORT_NOTE }}</p>
+      <p class="edu-footer">{{ REPORT_TIME }}</p>
+    </div>
+
+    <div class="edu-card">
+      <h2>本次使用的分数线</h2>
+      <p class="edu-sub">达线比较的是六门总分。上次用上次这场考试的线，这次用这次这场考试的线。某一侧写「—」表示这场没有这条线，该方向不计算。</p>
+      <table class="edu-table">
+        <thead>
+          <tr>
+            <th>分数线</th><th>方向</th>
+            <th class="num">上次（分）</th><th class="num">这次（分）</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in LINE_SCORES %}
+          <tr>
+            <td>{{ row.line_name }}</td>
+            <td>{{ row.track }}</td>
+            <td class="num">{{ row.prev_line }}</td>
+            <td class="num">{{ row.curr_line }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="edu-card">
+      <h2>总表</h2>
+      <p class="edu-sub">分子是人数，分母是基数。掉线名单在各线明细里排在最前。</p>
+      <table class="edu-table">
+        <thead>
+          <tr>
+            <th>分数线</th><th>方向</th>
+            <th class="num">巩固率</th><th class="num">掉线率</th><th class="num">转化率</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for line in LINES %}
+          {% for track in line.tracks %}
+          <tr>
+            <td>{{ line.line_name }}</td>
+            <td>{{ track.track }}{% if track.available and track.headcount == 0 %}（0 人）{% endif %}</td>
+            <td class="num">{{ track.keep_text }}</td>
+            <td class="num">{{ track.drop_text }}</td>
+            <td class="num">{{ track.conv_text }}</td>
+          </tr>
+          {% endfor %}
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="edu-card">
+      <h2>计算口径</h2>
+      <ul>
+        <li>只统计在籍生。同一个人按学号对齐。两次考试都有六门总分，并且两次方向一致，才进入计算。只考一场、缺考、没有六门总分、两次方向不一致的人，不进入分子，也不进入分母。</li>
+        <li>达线是指该场六门总分大于或等于该场、该方向的这条线。上次用上次的分数线，这次用这次的分数线。特招线与特控线按同一条线计算。</li>
+        <li>巩固率和掉线率共用一个基数：上次已经达线，并且这次有六门总分的人数。上次高出分数线多少都算进这个基数，不限于 15 分。巩固率 = 这次仍然达线的人数 / 该基数。掉线率 = 这次没有达线的人数 / 该基数。两个率相加为 100%。</li>
+        <li>转化率的基数：上次没有达线，且上次总分在该线线下 15 分以内（含正好低 15 分，不含刚好达线），并且这次有六门总分的人数。比这条线低过 15 分的人不进入这个基数。转化率 = 其中这次达线的人数 / 该基数。</li>
+        <li>物理类和历史类分开计算，每一条线分开计算。选择了班级时，以这次考试所在班级为准。</li>
+        <li>名单里的姓名是否显示，跟随系统的匿名开关。开启时只显示学号。</li>
+      </ul>
+    </div>
+
+    {% for line in LINES %}
+    <div class="edu-card">
+      <h2>{{ line.line_name }}</h2>
+      {% for track in line.tracks %}
+      {% if not track.available %}
+      <h3>{{ track.track }}</h3>
+      <p class="edu-note">{{ track.missing_reason }}</p>
+      {% elif track.headcount == 0 %}
+      <h3>{{ track.track }} 0 人</h3>
+      {% else %}
+      <h3>{{ track.track }}</h3>
+      <p class="edu-sub">巩固 {{ track.keep_text }}，掉线 {{ track.drop_text }}，转化 {{ track.conv_text }}。上次分数线 {{ track.prev_line }} 分，这次分数线 {{ track.curr_line }} 分。</p>
+      <h3>掉线名单（{{ track.drop_list | length }} 人）</h3>
+      <p class="edu-sub">上次已达线，这次未达线。上次距线 = 上次总分 − 上次分数线；这次距线 = 这次总分 − 这次分数线。负数表示在线下。</p>
+      {% if track.drop_list %}
+      <table class="edu-table">
+        <thead><tr><th>学生</th><th>方向</th><th class="num">上次总分</th><th class="num">这次总分</th><th class="num">上次距线</th><th class="num">这次距线</th></tr></thead>
+        <tbody>
+        {% for stu in track.drop_list %}
+          <tr><td>{{ stu.name }}</td><td>{{ stu.track }}</td><td class="num">{{ stu.prev_score }}</td><td class="num">{{ stu.curr_score }}</td><td class="num">{{ stu.prev_gap }}</td><td class="num">{{ stu.gap }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p>无</p>{% endif %}
+      <h3>新上线名单（{{ track.new_list | length }} 人）</h3>
+      <p class="edu-sub">上次在线下 15 分以内，这次达线。上次远低于 15 分、这次才达线的人，不在这张名单里。</p>
+      {% if track.new_list %}
+      <table class="edu-table">
+        <thead><tr><th>学生</th><th>方向</th><th class="num">上次总分</th><th class="num">这次总分</th><th class="num">这次距线</th></tr></thead>
+        <tbody>
+        {% for stu in track.new_list %}
+          <tr><td>{{ stu.name }}</td><td>{{ stu.track }}</td><td class="num">{{ stu.prev_score }}</td><td class="num">{{ stu.curr_score }}</td><td class="num">{{ stu.gap }}</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}<p>无</p>{% endif %}
+      {% if track.keep_list %}
+      <details class="edu-fold" {% if not track.keep_folded %}open{% endif %}>
+        <summary>巩固名单（{{ track.keep_list | length }} 人），点击展开</summary>
+        <p class="edu-sub">上次已达线，这次仍达线。</p>
+        <table class="edu-table">
+          <thead><tr><th>学生</th><th>方向</th><th class="num">上次总分</th><th class="num">这次总分</th><th class="num">这次距线</th></tr></thead>
+          <tbody>
+          {% for stu in track.keep_list %}
+            <tr><td>{{ stu.name }}</td><td>{{ stu.track }}</td><td class="num">{{ stu.prev_score }}</td><td class="num">{{ stu.curr_score }}</td><td class="num">{{ stu.gap }}</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </details>
+      {% else %}<p>巩固名单（0 人）：无</p>{% endif %}
+      {% endif %}
+      {% endfor %}
+    </div>
+    {% endfor %}
+
+    {% if SPRINT %}
+    <div class="edu-card">
+      <h2>985线、清北线、南大线</h2>
+      {% for line in SPRINT %}
+      <h3>{{ line.line_name }}</h3>
+      {% for track in line.tracks %}
+        {% if not track.available %}
+        <p>{{ track.track }}：{{ track.missing_reason }}</p>
+        {% elif track.headcount == 0 %}
+        <p>{{ track.track }} 0 人</p>
+        {% else %}
+        <p>{{ track.track }}：掉线 {{ track.drop_text }}，新上线 {{ track.conv_text }}。</p>
+        {% endif %}
+      {% endfor %}
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</body>
+</html>

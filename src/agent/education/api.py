@@ -365,6 +365,9 @@ _GENERATE_REPORT_ALLOWED_TYPES = frozenset(
         "elite_roster",
         "score_band",
         "difficulty_curve",
+        "line_shift",
+        "absence",
+        "class_line_reach",
     }
 )
 
@@ -415,6 +418,55 @@ async def generate_report(
             raise BadRequestException(f"无效的受众: {req.audience}") from exc
 
     filters = {str(k): str(v) for k, v in (req.filters or {}).items() if v is not None and str(v).strip()}
+    if report_type in (
+        ReportType.LINE_SHIFT,
+        ReportType.ABSENCE,
+        ReportType.CLASS_LINE_REACH,
+    ):
+        from datasource.service.edu_permission import edu_scope_dict_for_user_id
+
+        scope = edu_scope_dict_for_user_id(int(current_user.id))
+        role = str(scope.get("edu_role") or "").strip()
+        if role in ("school_admin", "teacher") and not filters.get("school_name"):
+            bound = str(scope.get("school_name") or scope.get("school_id") or "").strip()
+            if not bound:
+                raise BadRequestException("当前账号未绑定学校，无法生成该报告")
+            filters["school_name"] = bound
+        if report_type == ReportType.LINE_SHIFT:
+            from src.agent.education.line_shift import line_shift_request_error
+
+            checked = line_shift_request_error(
+                role,
+                filters.get("school_name") or "",
+                filters.get("class_name") or "",
+                filters.get("exam_name") or "",
+            )
+        elif report_type == ReportType.ABSENCE:
+            from src.agent.education.absence import absence_request_error
+
+            exam_raw = str(filters.get("exam_name") or "").split(";;")[0].strip()
+            checked = absence_request_error(
+                role,
+                filters.get("school_name") or "",
+                filters.get("class_name") or "",
+                exam_raw,
+            )
+        else:
+            from src.agent.education.class_line_reach import class_line_reach_request_error
+
+            exam_raw = str(filters.get("exam_name") or "").split(";;")[0].strip()
+            checked = class_line_reach_request_error(
+                role,
+                filters.get("school_name") or "",
+                filters.get("class_name") or "",
+                exam_raw,
+                filters.get("compare_exam") or "",
+            )
+        if checked:
+            kind, msg = checked
+            if kind == "forbidden":
+                raise ForbiddenException(msg)
+            raise BadRequestException(msg)
     _raise_if_out_of_scope(
         int(current_user.id),
         filters.get("class_name") or filters.get("class"),
@@ -437,7 +489,12 @@ async def generate_report(
     title = orch._title(spec)
     err = res.error
     # 查无成绩时给出可操作提示，避免前端只看到全 0 / 「-」的空壳报告
-    if not err and int((res.stats or {}).get("count") or 0) == 0:
+    produced = (
+        report_type
+        in (ReportType.LINE_SHIFT, ReportType.ABSENCE, ReportType.CLASS_LINE_REACH)
+        and bool((res.html or "").strip())
+    )
+    if not err and not produced and int((res.stats or {}).get("count") or 0) == 0:
         bits = [f"{k}={v}" for k, v in sorted(filters.items())]
         hint = "、".join(bits) if bits else "（未填写筛选条件）"
         err = (

@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ REPORT_TITLE }}</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    :root {
+      --edu-primary: #1677ff; --edu-primary-bg: #e6f4ff;
+      --edu-text: rgba(0,0,0,0.88); --edu-text-2: rgba(0,0,0,0.65); --edu-text-3: rgba(0,0,0,0.45);
+      --edu-border: #f0f0f0; --edu-ok: #52c41a; --edu-warn: #faad14; --edu-err: #ff4d4f;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #f0f2f5; color: var(--edu-text); line-height: 1.7; }
+    .edu-container { max-width: 1080px; margin: 24px auto; padding: 0 16px 32px; }
+    .edu-card { background: #fff; border: 1px solid var(--edu-border); border-radius: 10px; padding: 22px 26px; margin-bottom: 16px; }
+    h1 { margin: 0 0 8px; font-size: 22px; font-weight: 600; }
+    h2 { margin: 0 0 12px; font-size: 17px; font-weight: 600; padding-bottom: 8px; border-bottom: 1px solid var(--edu-border); }
+    p { margin: 6px 0; }
+    .edu-sub { color: var(--edu-text-3); font-size: 13px; }
+    .edu-badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; background: var(--edu-primary-bg); color: var(--edu-primary); margin-right: 6px; }
+    .edu-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .edu-table th, .edu-table td { border-bottom: 1px solid var(--edu-border); padding: 8px 10px; text-align: left; }
+    .edu-table th { background: var(--edu-primary-bg); color: var(--edu-text-2); font-weight: 600; }
+    .edu-table td.num, .edu-table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .edu-table td.neg { color: var(--edu-err); font-weight: 600; }
+    .edu-table td.pos { color: var(--edu-ok); font-weight: 600; }
+    .edu-table td.note { color: var(--edu-text-3); font-size: 12px; }
+    .edu-note { background: #fafafa; border-left: 3px solid var(--edu-primary); padding: 8px 12px; margin: 8px 0; }
+    .edu-chart { width: 100%; height: 360px; }
+    .edu-footer { color: var(--edu-text-3); font-size: 12px; text-align: right; }
+    ul { margin: 8px 0; padding-left: 20px; }
+  </style>
+</head>
+<body>
+  <div class="edu-container">
+    <div class="edu-card">
+      <span class="edu-badge">{{ REPORT_TYPE }}</span>
+      <h1>{{ REPORT_TITLE }}</h1>
+      <p class="edu-sub">{{ SCHOOL_LABEL }} · {{ CLASS_LABEL }} · {{ TIER }} · 对标线：{{ LINE_NAMES }}</p>
+      <p>本次考试：{{ EXAM_NAME }}{% if EXAM_DATE %}（{{ EXAM_DATE }}）{% endif %}</p>
+      {% if COMPARE_ON %}
+      <p>对比考试：{{ COMPARE_EXAM }}{% if COMPARE_DATE %}（{{ COMPARE_DATE }}）{% endif %}</p>
+      {% endif %}
+      {% if COMPARE_NOTE %}<p class="edu-note">{{ COMPARE_NOTE }}</p>{% endif %}
+      <p>{{ COHORT_NOTE }}</p>
+      <p class="edu-footer">{{ REPORT_TIME }}</p>
+    </div>
+
+    <div class="edu-card">
+      <h2>本次使用的分数线</h2>
+      <p class="edu-sub">达线比较的是六门总分，物理类与历史类分开取线。写「—」表示这场没有这条线的线分，该方向不计算。</p>
+      <table class="edu-table">
+        <thead>
+          <tr>
+            <th>分数线</th><th>方向</th>
+            <th class="num">本次（分）</th>
+            {% if COMPARE_ON %}<th class="num">对比（分）</th>{% endif %}
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in LINE_SCORES %}
+          <tr>
+            <td>{{ row.line_name }}</td>
+            <td>{{ row.track }}</td>
+            <td class="num">{{ row.curr_line }}</td>
+            {% if COMPARE_ON %}<td class="num">{{ row.prev_line }}</td>{% endif %}
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="edu-card">
+      <h2>各班达线率</h2>
+      <p class="edu-sub">分子是达线人数，分母是参考人数（在籍、方向明确、有六门总分）。年级对照按全校同口径合计后重算。某方向无线分时，该方向学生不进分母。</p>
+      <div id="reachChart" class="edu-chart"></div>
+      <script type="application/json" id="reachChartData">{{ REACH_CHART }}</script>
+      <script>
+        (function () {
+          var el = document.getElementById('reachChart');
+          var raw = (document.getElementById('reachChartData').textContent || '').trim();
+          if (!raw || raw === '{}' || raw === 'null') { if (el) el.style.display = 'none'; return; }
+          try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) { if (el) el.style.display = 'none'; }
+        })();
+      </script>
+      {% if GRADE_NOTE %}<p class="edu-note">{{ GRADE_NOTE }}</p>{% endif %}
+      <table class="edu-table">
+        <thead>
+          <tr>
+            <th>班级</th><th>对标线</th>
+            <th class="num">参考人数</th><th class="num">达线人数</th>
+            <th class="num">达线率</th><th class="num">年级对照</th>
+            {% if COMPARE_ON %}
+            <th class="num">对比达线率</th><th class="num">变化（百分点）</th>
+            {% endif %}
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in REACH_ROWS %}
+          <tr>
+            <td>{{ row.class }}</td>
+            <td>{{ row.line_name }}</td>
+            <td class="num">{{ row.count }}</td>
+            <td class="num">{{ row.reached }}</td>
+            <td class="num{% if row.below %} neg{% endif %}" title="低于年级对照">{{ row.rate }}</td>
+            <td class="num">{{ row.grade_rate }}</td>
+            {% if COMPARE_ON %}
+            <td class="num">{{ row.prev_rate }}</td>
+            <td class="num{% if row.delta.startswith('+') %} pos{% elif row.delta.startswith('-') %} neg{% endif %}">{{ row.delta }}</td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if TREND_CHART %}
+    <div class="edu-card">
+      <h2>历场达线率走势</h2>
+      <p class="edu-sub">{{ TREND_NOTE }}</p>
+      <div id="trendChart" class="edu-chart"></div>
+      <script type="application/json" id="trendChartData">{{ TREND_CHART }}</script>
+      <script>
+        (function () {
+          var el = document.getElementById('trendChart');
+          var raw = (document.getElementById('trendChartData').textContent || '').trim();
+          if (!raw || raw === '{}' || raw === 'null') { if (el) el.style.display = 'none'; return; }
+          try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) { if (el) el.style.display = 'none'; }
+        })();
+      </script>
+    </div>
+    {% endif %}
+
+    {% for sec in WEAK_SECTIONS %}
+    <div class="edu-card">
+      <h2>薄弱学科总览（{{ sec.line_name }}）</h2>
+      {% if sec.summary %}<p class="edu-note">{{ sec.summary }}</p>{% endif %}
+      {% if sec.class_view %}
+      <p class="edu-sub">本班薄弱科目按差值升序排列（差值 = 本班均分 − 贡献分，低于 −{{ GAP_MIN }} 即薄弱）；均分达标但贡献分达线率低即两极分化。明细见下方贡献分对照。</p>
+      {% if sec.rows %}
+      <table class="edu-table">
+        <thead>
+          <tr>
+            <th>方向</th><th>科目</th>
+            <th class="num">班级均分</th><th class="num">贡献分</th>
+            <th class="num">差值</th><th class="num">贡献分达线率</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for item in sec.rows %}
+          <tr>
+            <td>{{ item.track }}</td>
+            <td>{{ item.subject }}</td>
+            <td class="num">{{ item.avg }}</td>
+            <td class="num">{{ item.contrib }}</td>
+            <td class="num neg">{{ item.gap }}</td>
+            <td class="num">{{ item.rate }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+      {% else %}
+      <p class="edu-sub">按薄弱班级数降序。x/y 表示 y 个班中 x 个班该科均分低于画像 {{ GAP_MIN }} 分以上；校均差值 = 全校均分 − 贡献分；最低班贡献分达线率带班名。先看本表结论，明细见下方贡献分对照。</p>
+      {% if sec.rows %}
+      <div id="weakChart{{ loop.index0 }}" class="edu-chart"></div>
+      <script type="application/json" id="weakChartData{{ loop.index0 }}">{{ sec.chart }}</script>
+      <script>
+        (function () {
+          var el = document.getElementById('weakChart{{ loop.index0 }}');
+          var raw = (document.getElementById('weakChartData{{ loop.index0 }}').textContent || '').trim();
+          if (!raw || raw === '{}' || raw === 'null') { if (el) el.style.display = 'none'; return; }
+          try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) { if (el) el.style.display = 'none'; }
+        })();
+      </script>
+      <table class="edu-table">
+        <thead>
+          <tr>
+            <th>方向</th><th>科目</th>
+            <th class="num">薄弱班级数</th><th class="num">校均差值</th>
+            <th class="num">最低班贡献分达线率</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for item in sec.rows %}
+          <tr>
+            <td>{{ item.track }}</td>
+            <td>{{ item.subject }}</td>
+            <td class="num">{{ item.flagged }}</td>
+            <td class="num">{{ item.school_gap }}</td>
+            <td class="num">{{ item.min_rate }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+      {% endif %}
+    </div>
+    {% endfor %}
+
+    {% for sec in GAP_SECTIONS %}
+    <div class="edu-card">
+      <h2>贡献分对照（{{ sec.line_name }}）</h2>
+      <p class="edu-sub">贡献分是全市{{ sec.line_name }}边缘学生的各科画像。差值 = 班级均分 − 贡献分；差值 ≤ −{{ GAP_MIN }} 标红。贡献分达线率 = 选该科的学生中该科 ≥ 贡献分 的人数占比，均分达标但达线率低即两极分化。每科只统计该班该方向选考该科的学生；再选科目用赋分（转换分）。</p>
+      {% if not GAP_TABLE_SHOW_ALL and sec.rows %}
+      <p class="edu-sub">全校共 {{ sec.rows|length }} 项班级×科目对照，下表仅列差值 ≤ −{{ GAP_MIN }} 的 {{ sec.flagged }} 项。</p>
+      {% endif %}
+      <div id="gapChart{{ loop.index0 }}" class="edu-chart"></div>
+      <script type="application/json" id="gapChartData{{ loop.index0 }}">{{ sec.chart }}</script>
+      <script>
+        (function () {
+          var el = document.getElementById('gapChart{{ loop.index0 }}');
+          var raw = (document.getElementById('gapChartData{{ loop.index0 }}').textContent || '').trim();
+          if (!raw || raw === '{}' || raw === 'null') { if (el) el.style.display = 'none'; return; }
+          try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) { if (el) el.style.display = 'none'; }
+        })();
+      </script>
+      {% if sec.rows %}
+      {% set shown = sec.rows if GAP_TABLE_SHOW_ALL else (sec.rows | selectattr("flag") | list) %}
+      {% if shown %}
+      <table class="edu-table">
+        <thead>
+          <tr>
+            <th>班级</th><th>方向</th><th>科目</th>
+            <th class="num">班级均分</th><th class="num">贡献分</th><th class="num">差值</th>
+            <th class="num">贡献分达线率</th>
+            {% if COMPARE_ON %}<th class="num">对比差值</th><th class="num">差值变化</th>{% endif %}
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in shown %}
+          <tr>
+            <td>{{ row.class }}</td>
+            <td>{{ row.track }}</td>
+            <td>{{ row.subject }}</td>
+            <td class="num">{{ row.avg }}</td>
+            <td class="num">{{ row.contrib }}</td>
+            <td class="num{% if row.flag %} neg{% endif %}">{{ row.gap }}</td>
+            <td class="num">{{ row.rate }}</td>
+            {% if COMPARE_ON %}
+            <td class="num">{{ row.prev_gap }}</td>
+            <td class="num">{{ row.gap_delta }}</td>
+            {% endif %}
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+        <p>各班各科均分距{{ sec.line_name }}画像的差值均未低于 −{{ GAP_MIN }}，无薄弱科目。</p>
+      {% endif %}
+      {% else %}
+      <p>本场考试没有导入{{ sec.line_name }}贡献分，无法对照班级均分。</p>
+      {% endif %}
+    </div>
+    {% endfor %}
+
+    <div class="edu-card">
+      <h2>重点关注与建议</h2>
+      <ul>
+        {% for rec in RECOMMENDATIONS %}
+        <li>{{ rec }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    <div class="edu-card">
+      <h2>计算口径</h2>
+      <ul>
+        <li>只统计在籍生。达线指该场六门总分大于或等于该场、该方向这条线的线分。缺六门总分、方向无法识别、同一场学号重复的学生，不进入分子，也不进入分母。</li>
+        <li>对标线按校类确定：引领校对比 211 线与特控线，支撑校对比特控线与本科线，发展校与其他校对比本科线。特招线与特控线按同一条线计算。</li>
+        <li>年级对照按全校同口径人数合计后重算（按全校而非所选班级合计），不做各班达线率的平均。某方向本场没有线分时，该方向学生不进入该线的分子和分母，该方向单元格显示「—」。</li>
+        <li>对比考试默认上一场（考试时间早于本次、最近的一场）。线分逐场浮动，达线率按各自的线分计算，因此跨场可比。对比场没有该线的线分或没有该班成绩时，对比列显示「—」。</li>
+        <li>达线率低于年级对照的单元格标红；全校视图下贡献分对照表仅列标红项（单班视图全量展示），重点关注按与年级对照差距排序、差距达 15 个百分点起前缀「重点关注」，并表扬各线达线率最高且高于年级对照的班级。</li>
+        <li>贡献分对照按每条对标线各出一节（引领校=211线与特控线，支撑校=特控线与本科线，发展校=本科线）。差值 = 班级均分 − 贡献分，差值 ≤ −{{ GAP_MIN }} 标红，与学校级贡献分薄弱学科工具同一门槛；重点关注建议按最低对标线（{{ EDGE_LINE }}）那节点名科目。</li>
+        <li>「贡献分达线率」= 选该科的学生中该科成绩不低于该科{{ EDGE_LINE }}贡献分的人数占比（分母只含该科有分的学生）。差值仍是薄弱学科的主判定；达线率照出分布——均分达标但达线率低即两极分化，建议按各科横向比较点名最低科目。</li>
+        <li>薄弱学科总览按薄弱班级数降序排列（全校视图），x/y 表示 y 个班中 x 个班该科均分低于画像 1.5 分以上；过半班级薄弱的科目给出年级层面统筹建议。单班视图总览即本班薄弱科目按差值升序。</li>
+        <li>历场达线率走势覆盖本届全部场次（含本次之后的场次），各场按各自线分同口径计算，标「·本次」为本次考试，某场缺该校数据则该点断线；与趋势跟踪报告的均分走势分工不同，本图只看达线率。</li>
+        <li>本报告只出班级汇总，不展示学生个人名单，不涉及匿名开关。</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>
