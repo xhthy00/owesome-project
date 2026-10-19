@@ -28,6 +28,10 @@ COMMENT ON COLUMN tb_exam.exam_batch_id IS '考试批次ID，关联 tb_exam_batc
 
 CREATE INDEX IF NOT EXISTS idx_exam_batch_id ON tb_exam (exam_batch_id);
 
+-- 一场批次下一科只有一份试卷。exam_batch_id 为空的历史行不参与冲突（PostgreSQL 中 NULL 互不相等）。
+CREATE UNIQUE INDEX IF NOT EXISTS uk_exam_batch_subject
+    ON tb_exam (exam_batch_id, subject);
+
 ALTER TABLE tb_school
     ADD COLUMN IF NOT EXISTS district VARCHAR(64);
 

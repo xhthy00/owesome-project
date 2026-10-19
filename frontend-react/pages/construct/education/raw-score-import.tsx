@@ -92,6 +92,20 @@ function asWarnings(result: RawImportResult | null): RawImportWarning[] {
   );
 }
 
+const DETAIL_SUBJECT_ORDER = ["语文", "数学", "英语", "物理", "化学", "生物", "历史", "政治", "地理"];
+
+function sortDetailPapers(list: RawPaperOption[]): RawPaperOption[] {
+  const rank = (subject: string) => {
+    const index = DETAIL_SUBJECT_ORDER.indexOf(subject);
+    return index === -1 ? DETAIL_SUBJECT_ORDER.length : index;
+  };
+  return [...list].sort((a, b) => {
+    const importedDelta = Number(Boolean(a.detail?.imported)) - Number(Boolean(b.detail?.imported));
+    if (importedDelta !== 0) return importedDelta;
+    return rank(a.subject) - rank(b.subject);
+  });
+}
+
 function paperLabel(paper: RawPaperOption): string {
   const score = paper.exam_score != null ? ` · ${paper.exam_score}分` : "";
   const imported = paper.detail?.imported ? " · 已导入" : "";
@@ -102,6 +116,17 @@ function detailImportedHint(paper: RawPaperOption): string {
   const d = paper.detail;
   if (!d?.imported) return "";
   return `${paper.subject}小题分已导入 ${d.student_count} 人 / ${d.row_count} 条。再次导入会覆盖原数据。`;
+}
+
+function detailWrittenMessage(students: number, detailRows: number): string {
+  if (students > 0 && detailRows > 0 && detailRows % students === 0) {
+    const perStudent = detailRows / students;
+    return `导入成功：${students} 名学生，写入 ${detailRows} 条小题分（每人 ${perStudent} 题）`;
+  }
+  if (students > 0 && detailRows > 0) {
+    return `导入成功：${students} 名学生，写入 ${detailRows} 条小题分`;
+  }
+  return `导入成功：已写入 ${detailRows} 条小题分`;
 }
 
 function overviewImportedHint(status: RawOverviewStatus): string {
@@ -209,7 +234,8 @@ export default function RawScoreImportPage() {
       setDbOverview(res.overview ?? { imported: false, row_count: 0, school_count: 0, last_write_time: null });
       setPapersStatus("ok");
       setDetailTemplateExamId((prev) => {
-        const ids = res.papers.map((p) => p.exam_id);
+        const ordered = sortDetailPapers(res.papers);
+        const ids = ordered.map((p) => p.exam_id);
         if (prev != null && ids.includes(prev)) return prev;
         return ids[0] ?? null;
       });
@@ -410,10 +436,11 @@ export default function RawScoreImportPage() {
       if (endpoint === "detail-execute") {
         const upserted = Number(res.data?.summary?.detail_upserted || 0);
         const students = Number(res.data?.valid_rows || res.data?.summary?.students_matched || 0);
+        const written = detailWrittenMessage(students, upserted);
         patchDetail(item.uid, {
           status: "imported",
           preview: res.data,
-          message: `导入成功：已写入 ${upserted} 条小题分`
+          message: written
         });
         setPapers((prev) =>
           prev.map((p) =>
@@ -429,7 +456,9 @@ export default function RawScoreImportPage() {
               : p
           )
         );
-        message.success(`${detected || "该科"}小题分导入成功，已写入 ${upserted} 条`);
+        message.success(
+          `${detected || "该科"}${written.replace(/^导入成功/, "小题分导入成功")}`
+        );
         return true;
       }
       patchDetail(item.uid, {
@@ -535,7 +564,7 @@ export default function RawScoreImportPage() {
 
   const renderPreviewTables = (
     result: RawImportResult | null,
-    opts?: { imported?: boolean; importedHint?: string }
+    opts?: { imported?: boolean; importedHint?: string; countUnit?: string }
   ) => {
     if (!result) return null;
     const warns = asWarnings(result);
@@ -603,7 +632,7 @@ export default function RawScoreImportPage() {
               pageSize: 10,
               showSizeChanger: true,
               pageSizeOptions: [10, 20, 50, 100],
-              showTotal: (total) => `共 ${total} 条`
+              showTotal: (total) => `共 ${total} ${opts?.countUnit || "条"}`
             }}
             scroll={{ x: "max-content" }}
           />
@@ -711,7 +740,7 @@ export default function RawScoreImportPage() {
                       {missingSubjects.length > 0 ? (
                         <div>
                           缺科：{missingSubjects.join("、")}。
-                          <Link href="/construct/education/paper-import">去试卷导入</Link>
+                          <Link href="/construct/education/exam-library/import">去试卷库导入</Link>
                         </div>
                       ) : null}
                       {duplicateSubjects.length > 0 ? (
@@ -886,7 +915,7 @@ export default function RawScoreImportPage() {
                 placeholder="选择科目生成模板"
                 value={detailTemplateExamId ?? undefined}
                 onChange={(v) => setDetailTemplateExamId(v)}
-                options={papers.map((p) => ({ value: p.exam_id, label: paperLabel(p) }))}
+                options={sortDetailPapers(papers).map((p) => ({ value: p.exam_id, label: paperLabel(p) }))}
               />
               <Button
                 icon={<DownloadOutlined />}
@@ -981,7 +1010,7 @@ export default function RawScoreImportPage() {
                               message: ""
                             })
                           }
-                          options={papers.map((p) => ({ value: p.exam_id, label: paperLabel(p) }))}
+                          options={sortDetailPapers(papers).map((p) => ({ value: p.exam_id, label: paperLabel(p) }))}
                         />
                         <Button
                           disabled={!overviewReady || item.examId == null}
@@ -1040,7 +1069,8 @@ export default function RawScoreImportPage() {
                       <div className="mt-3">
                         {renderPreviewTables(item.preview, {
                           imported: item.status === "imported",
-                          importedHint: item.message
+                          importedHint: item.message,
+                          countUnit: "名学生"
                         })}
                       </div>
                     ) : null}

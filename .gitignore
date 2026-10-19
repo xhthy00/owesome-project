@@ -38,3 +38,6 @@ tests/agent/*
 !tests/agent/test_contribution_weak.py
 !tests/agent/test_class_city_rank_detect.py
 !tests/agent/test_edu_school_catalog.py
+!tests/agent/test_paper_import_save.py
+!tests/agent/test_paper_text_layer.py
+!tests/agent/test_exam_library.py

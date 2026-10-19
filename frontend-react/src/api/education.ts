@@ -817,6 +817,26 @@ export const educationApi = {
     };
   },
 
+  async paperHasTextLayer(file: File): Promise<boolean> {
+    const fd = new FormData();
+    fd.append("file", file);
+    const resp = await fetch(`${getApiBaseUrl()}/education/paper-import/text-layer`, {
+      method: "POST",
+      headers: await authHeaders(),
+      body: fd
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json().catch(() => null)) as {
+      code?: number;
+      message?: string;
+      data?: { has_text?: boolean };
+    } | null;
+    if (!resp.ok || (body?.code ?? 200) !== 200) {
+      throw new Error(body?.message || "无法判断文字层");
+    }
+    return Boolean(body?.data?.has_text);
+  },
+
   async previewPaperImport(
     subject: string,
     file: File,
@@ -1046,6 +1066,9 @@ export interface PaperImportSaved {
   exam_name: string;
   subject: string;
   question_count: number;
+  updated?: boolean;
+  cleared_score_count?: number;
+  cleared_detail_count?: number;
 }
 
 export interface FractionBarListResult {

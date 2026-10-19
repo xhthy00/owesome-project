@@ -2049,6 +2049,26 @@ class PaperImportExecutePayload(BaseModel):
     questions: list[PaperQuestionPayload]
 
 
+@router.post("/paper-import/text-layer")
+async def paper_import_text_layer(
+    file: UploadFile = File(...),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    """选择 PDF 时判断有没有可复制文字，供界面决定是否默认打开图像识别。"""
+    from src.agent.education.paper_import import pdf_has_text_layer
+
+    _prepare_raw_import(current_user, workspace_oid)
+    name = (file.filename or "").lower()
+    if not name.endswith(".pdf"):
+        raise BadRequestException("请上传 PDF")
+    data = file.file.read()
+    if not data:
+        raise BadRequestException("上传文件为空")
+    has_text = await asyncio.to_thread(pdf_has_text_layer, data)
+    return success_response(data={"has_text": has_text})
+
+
 @router.post("/paper-import/preview")
 @audit_access(query_arg="subject")
 async def preview_paper_import(

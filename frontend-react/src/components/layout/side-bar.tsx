@@ -3,13 +3,12 @@ import {
   DownOutlined,
   BarChartOutlined,
   ControlOutlined,
-  DatabaseOutlined,
+  FolderOutlined,
   FundViewOutlined,
   GlobalOutlined,
   FileTextOutlined,
   HistoryOutlined,
   LineChartOutlined,
-  ReadOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MessageOutlined,
@@ -17,8 +16,7 @@ import {
   PlusOutlined,
   RightOutlined,
   SafetyCertificateOutlined,
-  SettingOutlined,
-  UploadOutlined
+  SettingOutlined
 } from "@ant-design/icons";
 import { permissionApi } from "@/api/permission";
 import { getCurrentUser, type CurrentUser } from "@/api/auth";
@@ -36,16 +34,20 @@ const routes = [
   { key: "analysis", path: "/construct/analysis", label: "分析工具", icon: <BarChartOutlined /> },
   { key: "line-reach", path: "/construct/education/line-reach", label: "达线看板", icon: <FundViewOutlined /> },
   { key: "report-history", path: "/construct/analysis/history", label: "报告历史", icon: <HistoryOutlined /> },
-  { key: "datasource", path: "/construct/database", label: "数据源", icon: <DatabaseOutlined /> },
-  { key: "paper-import", path: "/construct/education/paper-import", label: "试卷导入", icon: <FileTextOutlined /> },
-  { key: "raw-score-import", path: "/construct/education/raw-score-import", label: "成绩导入", icon: <UploadOutlined /> },
-  { key: "knowledge", path: "/construct/knowledge", label: "知识点", icon: <ReadOutlined /> },
+  { key: "resource", path: "/construct/database", label: "资源管理", icon: <FolderOutlined /> },
   { key: "fraction-bar", path: "/construct/education/fraction-bar", label: "预测分数线", icon: <LineChartOutlined /> },
   { key: "anomaly-alerts", path: "/construct/education/anomaly-alerts", label: "异常提醒", icon: <AlertOutlined /> },
   { key: "anomaly-rules", path: "/construct/education/anomaly-rules", label: "异常规则", icon: <ControlOutlined /> },
   { key: "permission", path: "/construct/permission", label: "权限管理", icon: <SafetyCertificateOutlined /> },
   { key: "system", path: "/system", label: "日志管理", icon: <SettingOutlined /> },
   { key: "docs", path: "/construct/docs", label: "系统文档", icon: <FileTextOutlined /> },
+];
+
+const resourceSubRoutes = [
+  { key: "datasource", path: "/construct/database", label: "数据源" },
+  { key: "exam-library", path: "/construct/education/exam-library", label: "试卷库" },
+  { key: "raw-score-import", path: "/construct/education/raw-score-import", label: "成绩导入" },
+  { key: "knowledge", path: "/construct/knowledge", label: "知识点" }
 ];
 
 const permissionSubRoutes = [
@@ -71,6 +73,7 @@ export default function SideBar() {
   const [historyList, setHistoryList] = useState<Conversation[]>([]);
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [permissionExpanded, setPermissionExpanded] = useState(false);
+  const [resourceExpanded, setResourceExpanded] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [systemExpanded, setSystemExpanded] = useState(false);
   const [menuVisibility, setMenuVisibility] = useState<Record<string, boolean>>({});
@@ -209,21 +212,37 @@ export default function SideBar() {
     });
   }, [groupedHistory]);
 
-  const visibleRoutes = useMemo(() => {
+  const visibleResourceRoutes = useMemo(() => {
     const eduRole = currentUser?.edu_scope?.edu_role || "";
-    const hideAnomalyAlerts = eduRole === "bureau_admin" || eduRole === "student";
     const canSeeScoreImport =
       isPlatformAdmin ||
       Boolean(currentUser?.is_super_admin) ||
       eduRole === "bureau_admin";
+    if (!isPlatformAdmin && menuVisibility.resource === false) return [];
+    return resourceSubRoutes.filter((item) => {
+      if (!isPlatformAdmin && menuVisibility[item.key] === false) return false;
+      if (!canSeeScoreImport && item.key === "raw-score-import") return false;
+      if (eduRole === "student" && item.key === "exam-library") return false;
+      return true;
+    });
+  }, [
+    isPlatformAdmin,
+    menuVisibility,
+    currentUser?.edu_scope?.edu_role,
+    currentUser?.is_super_admin
+  ]);
+
+  const visibleRoutes = useMemo(() => {
+    const eduRole = currentUser?.edu_scope?.edu_role || "";
+    const hideAnomalyAlerts = eduRole === "bureau_admin" || eduRole === "student";
     let list = routes;
     if (!isPlatformAdmin) {
       list = routes.filter(
         (item) => item.key !== "anomaly-rules" && menuVisibility[item.key] !== false
       );
     }
-    if (!canSeeScoreImport) {
-      list = list.filter((item) => item.key !== "raw-score-import" && item.key !== "paper-import");
+    if (visibleResourceRoutes.length === 0) {
+      list = list.filter((item) => item.key !== "resource");
     }
     if (hideAnomalyAlerts) {
       list = list.filter((item) => item.key !== "anomaly-alerts");
@@ -238,8 +257,16 @@ export default function SideBar() {
     isPlatformAdmin,
     menuVisibility,
     currentUser?.edu_scope?.edu_role,
-    currentUser?.is_super_admin
+    visibleResourceRoutes.length
   ]);
+
+  const resourceActive = visibleResourceRoutes.some(
+    (item) => pathname === item.path || pathname.startsWith(item.path + "/")
+  );
+
+  useEffect(() => {
+    if (resourceActive) setResourceExpanded(true);
+  }, [resourceActive]);
 
   if (!isMenuExpand) {
     return (
@@ -262,11 +289,14 @@ export default function SideBar() {
         <div className="mt-2 flex min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto overscroll-contain px-1 pb-2 [scrollbar-gutter:stable] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[#9aa8c0]/70 [&::-webkit-scrollbar-track]:bg-transparent">
           {visibleRoutes.map((item) => {
             const active =
-              item.key === "analysis"
-                ? pathname === "/construct/analysis"
-                : pathname === item.path || pathname.startsWith(item.path + "/");
+              item.key === "resource"
+                ? resourceActive
+                : item.key === "analysis"
+                  ? pathname === "/construct/analysis"
+                  : pathname === item.path || pathname.startsWith(item.path + "/");
+            const href = item.key === "resource" ? visibleResourceRoutes[0]?.path || item.path : item.path;
             return (
-              <Link key={item.key} href={item.path} className="flex h-12 shrink-0 items-center">
+              <Link key={item.key} href={href} className="flex h-12 shrink-0 items-center">
                 <Tooltip title={item.label} placement="right">
                   <div
                     className={`mx-auto flex h-12 w-12 items-center justify-center rounded-xl text-xl transition-colors ${
@@ -330,18 +360,28 @@ export default function SideBar() {
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain [scrollbar-gutter:stable] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[#9aa8c0]/70 dark:[&::-webkit-scrollbar-thumb]:bg-[#5a6578] [&::-webkit-scrollbar-track]:bg-transparent">
         <div className="flex flex-col gap-1">
           {visibleRoutes.map((item) => {
+            const isResourceRoot = item.key === "resource";
             const active =
-              item.key === "analysis"
-                ? pathname === "/construct/analysis"
-                : pathname === item.path || pathname.startsWith(item.path + "/");
+              isResourceRoot
+                ? resourceActive
+                : item.key === "analysis"
+                  ? pathname === "/construct/analysis"
+                  : pathname === item.path || pathname.startsWith(item.path + "/");
             const isPermissionRoot = item.key === "permission";
             const isSystemRoot = item.key === "system";
+            const expanded = isResourceRoot
+              ? resourceExpanded
+              : isPermissionRoot
+                ? permissionExpanded
+                : systemExpanded;
             return (
               <div key={item.key}>
                 <button
                   type="button"
                   onClick={() => {
-                    if (isPermissionRoot) {
+                    if (isResourceRoot) {
+                      setResourceExpanded((prev) => !prev);
+                    } else if (isPermissionRoot) {
                       setPermissionExpanded((prev) => !prev);
                     } else if (isSystemRoot) {
                       setSystemExpanded((prev) => !prev);
@@ -355,14 +395,32 @@ export default function SideBar() {
                 >
                   <div className="mr-3">{item.icon}</div>
                   <span className="dbgpt-ui-font text-sm">{item.label}</span>
-                  {isPermissionRoot || isSystemRoot ? (
+                  {isResourceRoot || isPermissionRoot || isSystemRoot ? (
                     <DownOutlined
-                      className={`ml-auto text-xs transition-transform ${
-                        (isPermissionRoot ? permissionExpanded : systemExpanded) ? "rotate-0" : "-rotate-90"
-                      }`}
+                      className={`ml-auto text-xs transition-transform ${expanded ? "rotate-0" : "-rotate-90"}`}
                     />
                   ) : null}
                 </button>
+                {isResourceRoot && resourceExpanded ? (
+                  <div className="ml-11 mt-1 flex flex-col gap-1">
+                    {visibleResourceRoutes.map((sub) => {
+                      const subActive = pathname === sub.path || pathname.startsWith(sub.path + "/");
+                      return (
+                        <Link
+                          key={sub.key}
+                          href={sub.path}
+                          className={`flex h-10 items-center rounded-lg px-3 text-sm transition-colors ${
+                            subActive
+                              ? "bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400"
+                              : "text-[#3d4a64] hover:bg-blue-50/50 dark:text-gray-400 dark:hover:bg-blue-900/10"
+                          }`}
+                        >
+                          {sub.label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+                ) : null}
                 {isPermissionRoot && permissionExpanded ? (
                   <div className="ml-11 mt-1 flex flex-col gap-1">
                     {permissionSubRoutes.map((sub) => {

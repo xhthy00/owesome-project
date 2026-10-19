@@ -37,6 +37,13 @@ _configure_logging()
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup/shutdown events."""
     init_db()
+    # 试卷唯一索引在 edu 库，不随应用库迁移，也不在重启时自动执行 docs DDL。
+    try:
+        from src.agent.education.paper_import import ensure_exam_batch_subject_index
+
+        ensure_exam_batch_subject_index()
+    except Exception:
+        logging.getLogger(__name__).exception("启动时建立 tb_exam 唯一索引失败")
     # 幂等注册 Agent ToolPack 模板。放在 lifespan 里有两点好处：
     # (1) 测试场景可以 import main 而不触发工具注册，方便单独测 ResourceManager；
     # (2) 万一将来注册涉及 I/O（比如从配置加载自定义 pack），也不会阻塞模块导入。

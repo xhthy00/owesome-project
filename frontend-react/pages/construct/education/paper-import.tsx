@@ -1,9 +1,10 @@
-import { CloseOutlined, FileTextOutlined } from "@ant-design/icons";
+import { ArrowLeftOutlined, CloseOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
   Input,
   InputNumber,
+  Modal,
   Progress,
   Select,
   Space,
@@ -14,7 +15,9 @@ import {
   message
 } from "antd";
 import type { ColumnsType } from "antd/es/table";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   educationApi,
   type ExamBatchOption,
@@ -200,7 +203,38 @@ function scoredQuestionSum(rows: PaperQuestionDraft[]): number {
   return Math.round(total * 100) / 100;
 }
 
-export default function PaperImportPage() {
+function confirmPaperWrite(): Promise<boolean> {
+  return new Promise((resolve) => {
+    Modal.confirm({
+      title: "确认写入试卷",
+      width: 560,
+      okText: "确认写入",
+      cancelText: "取消",
+      okButtonProps: { danger: true },
+      content: (
+        <Alert
+          type="warning"
+          showIcon
+          message="写入会改动已有试卷和成绩"
+          description={
+            <div className="space-y-2">
+              <p>若该批次已有此科试卷，本次会替换全部题目，并删除该科的单科成绩和小题分。</p>
+              <p>
+                成绩宽表不会自动清理。宽表同一行包含多科成绩和总分，写入后这些分数可能和已删除的成绩对不上。
+              </p>
+              <p>写入后请重新导入成绩宽表，并重新导入该科小题分。</p>
+            </div>
+          }
+        />
+      ),
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false)
+    });
+  });
+}
+
+export function PaperImportPage() {
+  const router = useRouter();
   const [batches, setBatches] = useState<ExamBatchOption[]>([]);
   const [batchId, setBatchId] = useState<number | null>(null);
   const [subject, setSubject] = useState<string>("数学");
@@ -213,6 +247,26 @@ export default function PaperImportPage() {
   const [reader, setReader] = useState<"code" | "model">("code");
   const [progress, setProgress] = useState({ current: 0, total: 1, message: "正在读取试卷" });
   const [saving, setSaving] = useState(false);
+  const readerTicket = useRef(0);
+  const presetApplied = useRef(false);
+
+  function chooseFile(next: File) {
+    setFile(next);
+    const ticket = ++readerTicket.current;
+    if (!next.name.toLowerCase().endsWith(".pdf")) {
+      setReader(readerForFile(next));
+      return;
+    }
+    setReader("code");
+    void educationApi.paperHasTextLayer(next).then(
+      (hasText) => {
+        if (ticket === readerTicket.current) setReader(hasText ? "code" : "model");
+      },
+      () => {
+        if (ticket === readerTicket.current) setReader("code");
+      }
+    );
+  }
 
   const loadBatches = useCallback(async () => {
     try {
@@ -225,6 +279,21 @@ export default function PaperImportPage() {
   useEffect(() => {
     void loadBatches();
   }, [loadBatches]);
+
+  useEffect(() => {
+    if (!router.isReady || presetApplied.current) return;
+    const rawBatch = router.query.batchId;
+    const batchText = Array.isArray(rawBatch) ? rawBatch[0] : rawBatch;
+    if (batchText && batches.length === 0) return;
+    const batch = Number(batchText);
+    if (Number.isFinite(batch) && batches.some((item) => item.id === batch)) {
+      setBatchId(batch);
+    }
+    const rawSubject = router.query.subject;
+    const subjectName = Array.isArray(rawSubject) ? rawSubject[0] : rawSubject;
+    if (subjectName && SUBJECTS.includes(subjectName)) setSubject(subjectName);
+    presetApplied.current = true;
+  }, [router.isReady, router.query.batchId, router.query.subject, batches]);
 
   useEffect(() => {
     setExamScore(SUBJECT_FULL_SCORE[subject] ?? 100);
@@ -281,6 +350,8 @@ export default function PaperImportPage() {
       message.warning("请先识别题目");
       return;
     }
+    const confirmed = await confirmPaperWrite();
+    if (!confirmed) return;
     setSaving(true);
     try {
       const saved = await educationApi.executePaperImport({
@@ -289,7 +360,16 @@ export default function PaperImportPage() {
         exam_score: examScore,
         questions
       });
-      message.success(`已写入 ${saved.exam_name}，共 ${saved.question_count} 题`);
+      const clearedScore = saved.cleared_score_count || 0;
+      const clearedDetail = saved.cleared_detail_count || 0;
+      if (saved.updated) {
+        message.success(
+          `已覆盖 ${saved.exam_name}，共 ${saved.question_count} 题，已删除该科成绩 ${clearedScore} 条、小题分 ${clearedDetail} 条。请重新导入成绩宽表和该科小题分。`
+        );
+      } else {
+        message.success(`已写入 ${saved.exam_name}，共 ${saved.question_count} 题`);
+      }
+      void router.push(`/construct/education/exam-library/${saved.exam_id}`);
     } catch (err) {
       message.error(err instanceof Error ? err.message : "写入试卷失败");
     } finally {
@@ -361,15 +441,17 @@ export default function PaperImportPage() {
     <div className="dbgpt-ui-font h-full min-h-0 overflow-y-auto p-6 pb-10">
     <div className="mx-auto max-w-6xl">
       <div className="mb-4 flex items-center gap-2">
-        <FileTextOutlined />
+        <Link href="/construct/education/exam-library" className="text-[#0C75FC]">
+          <ArrowLeftOutlined />
+        </Link>
         <Typography.Title level={4} className="!mb-0">
-          试卷导入
+          导入试卷
         </Typography.Title>
       </div>
 
       <div className={`${PANEL} mb-4`}>
         <Typography.Paragraph type="secondary" className="!mb-3">
-          上传 Word、PDF 或图片。题号按卷面生成：选择题写成单选/多选加印刷题号，解答题按小问拆开。物理实验、化学和生物的细目请在下表里改到与阅卷表一致。已有成绩的科目不能覆盖。
+          上传 Word、PDF 或图片。题号按卷面生成：选择题写成单选/多选加印刷题号，解答题按小问拆开。物理实验、化学和生物的细目请在下表里改到与阅卷表一致。同一批次、同一科目再次导入会覆盖题目，并删除该科单科成绩和小题分。成绩宽表不会自动清理。
         </Typography.Paragraph>
         <div className="flex flex-wrap items-center gap-3">
           <Select
@@ -392,8 +474,7 @@ export default function PaperImportPage() {
             maxCount={1}
             showUploadList={false}
             beforeUpload={(next) => {
-              setFile(next);
-              setReader(readerForFile(next));
+              chooseFile(next);
               return false;
             }}
           >
@@ -422,7 +503,10 @@ export default function PaperImportPage() {
                 checked={reader === "model"}
                 disabled={recognizing}
                 aria-label="AI识别"
-                onChange={(checked) => setReader(checked ? "model" : "code")}
+                onChange={(checked) => {
+                  readerTicket.current += 1;
+                  setReader(checked ? "model" : "code");
+                }}
               />
               <span className="text-sm text-[#64748b]">AI识别</span>
             </span>
@@ -468,7 +552,7 @@ export default function PaperImportPage() {
               添加题目
             </Button>
             <Button type="primary" loading={saving} onClick={() => void save()}>
-              写入试卷
+              写入并打开题目
             </Button>
           </Space>
         </div>
@@ -484,4 +568,19 @@ export default function PaperImportPage() {
     </div>
     </div>
   );
+}
+
+export default function PaperImportRedirect() {
+  const router = useRouter();
+  useEffect(() => {
+    if (!router.isReady) return;
+    const params = new URLSearchParams();
+    const batchId = router.query.batchId;
+    const subject = router.query.subject;
+    if (typeof batchId === "string") params.set("batchId", batchId);
+    if (typeof subject === "string") params.set("subject", subject);
+    const query = params.toString();
+    void router.replace(`/construct/education/exam-library/import${query ? `?${query}` : ""}`);
+  }, [router]);
+  return null;
 }

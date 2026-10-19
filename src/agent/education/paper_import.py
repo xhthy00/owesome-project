@@ -2,20 +2,27 @@
 
 接受 PDF、Word、图片。有文字层时直接切题；没有文字层时尝试图片识别。
 确认后的题目以预览里改过的题号为准，写入 tb_exam / tb_exam_question。
+同一批次、同一科目只保留一份试卷。再次导入会覆盖题目，并清除该科成绩和小题分。
+成绩宽表不在这里清理。
 """
 
 from __future__ import annotations
 
 import base64
 import io
+import logging
 import re
 import unicodedata
 from typing import Any
 
 from src.agent.education.paper_outline import SUBJECTS, _tidy_math, build_paper_outline
 
+logger = logging.getLogger(__name__)
+
 __all__ = [
+    "ensure_exam_batch_subject_index",
     "extract_paper_text",
+    "pdf_has_text_layer",
     "preview_paper_file",
     "save_paper_outline",
 ]
@@ -98,7 +105,7 @@ def save_paper_outline(
     exam_score: float,
     questions: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """按批次和科目写入试卷。该科已有成绩时拒绝覆盖。"""
+    """按批次和科目写入试卷。已有同一科目时覆盖题目，并清除该科成绩和小题分。"""
     from datasource.db.db import WriteDbSession
 
     name = (subject or "").strip()
@@ -109,6 +116,7 @@ def save_paper_outline(
         raise ValueError("卷面满分必须大于 0")
 
     with WriteDbSession(db_type, config) as session:
+        _ensure_exam_unique(session)
         batch = _one(
             session,
             "SELECT id, batch_name, exam_time FROM tb_exam_batch WHERE id = %s",
@@ -118,7 +126,7 @@ def save_paper_outline(
             raise ValueError("考试批次不存在")
         batch_name = str(batch[1] or "").strip()
         exam_time = batch[2]
-        exam_name = f"{batch_name}{name}试卷"
+        exam_name = batch_name
         existing = _all(
             session,
             "SELECT id FROM tb_exam WHERE exam_batch_id = %s AND subject = %s",
@@ -127,8 +135,9 @@ def save_paper_outline(
         if len(existing) > 1:
             raise ValueError(f"批次中已有多份{name}试卷，请先整理后再导入")
         exam_id = int(existing[0][0]) if existing else None
-        if exam_id is not None and _has_scores(session, exam_id):
-            raise ValueError(f"「{exam_name}」已有成绩，不能覆盖题目")
+        updated = exam_id is not None
+        cleared_score_count = 0
+        cleared_detail_count = 0
         if exam_id is None:
             created = _one(
                 session,
@@ -141,6 +150,12 @@ def save_paper_outline(
                 raise ValueError("创建试卷失败")
             exam_id = int(created[0])
         else:
+            cleared_detail_count = _delete_count(
+                session, "DELETE FROM tb_score_detail WHERE exam_id = %s", (exam_id,)
+            )
+            cleared_score_count = _delete_count(
+                session, "DELETE FROM tb_score WHERE exam_id = %s", (exam_id,)
+            )
             _must_write(
                 session,
                 "UPDATE tb_exam SET exam_name = %s, exam_time = %s, exam_score = %s WHERE id = %s",
@@ -168,6 +183,9 @@ def save_paper_outline(
         "exam_name": exam_name,
         "subject": name,
         "question_count": len(rows),
+        "updated": updated,
+        "cleared_score_count": cleared_score_count,
+        "cleared_detail_count": cleared_detail_count,
     }
 
 
@@ -203,20 +221,154 @@ def _normalize_questions(questions: list[dict[str, Any]]) -> list[dict[str, Any]
     return rows
 
 
-def _has_scores(session: Any, exam_id: int) -> bool:
-    for table in ("tb_score_detail", "tb_score"):
+_EXAM_UNIQUE_INDEX = "uk_exam_batch_subject"
+
+
+def ensure_exam_batch_subject_index() -> list[str]:
+    """服务启动时给 edu 库的 tb_exam 补上批次+科目唯一索引，并单独提交。
+
+    重启不会执行 docs 里的 DDL，也不会进入试卷写入。索引必须在这里自己提交，
+    否则写在试卷事务里时，后续失败会把建索引一起回滚。
+    """
+    from datasource.db.db import WriteDbSession
+
+    notes: list[str] = []
+    try:
+        targets = _edu_write_targets()
+    except Exception as exc:
+        logger.exception("读取 edu 连接失败，跳过试卷唯一索引")
+        return [f"读取 edu 连接失败: {exc}"]
+    if not targets:
+        message = "未找到 edu 数据源，未建立 tb_exam 唯一索引"
+        logger.warning(message)
+        return [message]
+    for db_type, config in targets:
+        label = f"{config.get('host')}:{config.get('port')}/{config.get('database')}"
         try:
-            row = _one(
+            with WriteDbSession(db_type, config) as session:
+                if db_type != "pg":
+                    notes.append(f"{label} 不是 PostgreSQL，跳过")
+                    continue
+                if not _exam_table_schemas(session):
+                    notes.append(f"{label} 没有 tb_exam，跳过")
+                    continue
+                _ensure_exam_unique(session)
+            message = f"{label} 已确认唯一索引 {_EXAM_UNIQUE_INDEX}"
+            logger.info(message)
+            notes.append(message)
+        except Exception as exc:
+            logger.exception("建立 tb_exam 唯一索引失败: %s", label)
+            notes.append(f"{label} 建立唯一索引失败: {exc}")
+    return notes
+
+
+def _edu_write_targets() -> list[tuple[str, dict[str, Any]]]:
+    from common.core.config import get_settings
+    from common.core.database import get_db_session
+    from common.utils.aes import decrypt_conf
+    from datasource.crud import crud_datasource
+    from src.agent.education.knowledge_admin import parse_edu_database_url
+
+    targets: list[tuple[str, dict[str, Any]]] = []
+    seen: set[tuple[str, str, int, str]] = set()
+
+    def add(db_type: str, config: dict[str, Any]) -> None:
+        database = str(config.get("database") or "").strip()
+        key = (
+            db_type,
+            str(config.get("host") or ""),
+            int(config.get("port") or 0),
+            database.lower(),
+        )
+        if not database or key in seen:
+            return
+        seen.add(key)
+        targets.append((db_type, config))
+
+    url = (get_settings().database_edu_url or "").strip()
+    if url:
+        db_type, config = parse_edu_database_url(url)
+        add(db_type, config)
+    pending: list[tuple[str, dict[str, Any]]] = []
+    with get_db_session() as session:
+        for ds in crud_datasource.get_datasources(session, skip=0, limit=500):
+            raw = getattr(ds, "configuration", None)
+            conf = decrypt_conf(raw) if raw else {}
+            if str((conf or {}).get("database") or "").strip().lower() != "edu":
+                continue
+            pending.append((str(getattr(ds, "type", None) or "pg"), dict(conf or {})))
+    for db_type, config in pending:
+        add(db_type, config)
+    return targets
+
+
+def _exam_table_schemas(session: Any) -> list[str]:
+    rows = _all(
+        session,
+        "SELECT n.nspname FROM pg_class c "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE c.relname = %s AND c.relkind = 'r' "
+        "AND n.nspname NOT IN ('pg_catalog', 'information_schema') "
+        "ORDER BY n.nspname",
+        ("tb_exam",),
+    )
+    schemas: list[str] = []
+    for row in rows:
+        name = str(row[0] or "")
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+            schemas.append(name)
+    return schemas
+
+
+def _ensure_exam_unique(session: Any) -> None:
+    """同一批次、同一科目只能有一份试卷。建索引后立即提交，避免被后续写入回滚。"""
+    if getattr(session, "db_type", "pg") != "pg":
+        return
+    schemas = _exam_table_schemas(session) or [""]
+    for schema in schemas:
+        table = f'"{schema}".tb_exam' if schema else "tb_exam"
+        if schema:
+            found = _one(
                 session,
-                f"SELECT COUNT(*) FROM {table} WHERE exam_id = %s",
-                (exam_id,),
+                "SELECT 1 FROM pg_indexes WHERE schemaname = %s AND tablename = %s "
+                "AND indexname = %s",
+                (schema, "tb_exam", _EXAM_UNIQUE_INDEX),
             )
-        except Exception:  # noqa: BLE001
-            session.rollback()
+        else:
+            found = _one(
+                session,
+                "SELECT 1 FROM pg_indexes WHERE tablename = %s AND indexname = %s",
+                ("tb_exam", _EXAM_UNIQUE_INDEX),
+            )
+        if found:
             continue
-        if row and int(row[0] or 0) > 0:
-            return True
-    return False
+        duplicates = _all(
+            session,
+            f"SELECT exam_batch_id, subject, COUNT(*) FROM {table} "
+            "WHERE exam_batch_id IS NOT NULL "
+            "GROUP BY exam_batch_id, subject HAVING COUNT(*) > 1",
+            (),
+        )
+        if duplicates:
+            sample = "、".join(f"{row[1]}(批次{row[0]}×{row[2]})" for row in duplicates[:5])
+            raise ValueError(f"同一批次、同一科目存在多份试卷（{sample}），请先整理重复试卷后再导入")
+        ok, msg, _data = session.execute_write(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS {_EXAM_UNIQUE_INDEX} "
+            f"ON {table} (exam_batch_id, subject)",
+            None,
+        )
+        if not ok:
+            if "duplicat" in (msg or "").lower():
+                raise ValueError("同一批次、同一科目存在多份试卷，请先整理重复试卷后再导入")
+            raise ValueError(msg or "建立试卷唯一索引失败")
+        session.commit()
+
+
+def _delete_count(session: Any, sql: str, params: tuple) -> int:
+    ok, msg, data = session.execute_write(sql, params)
+    if not ok:
+        raise ValueError(msg or "清除已有成绩失败")
+    return int((data or {}).get("row_count") or 0)
 
 
 def _must_write(session: Any, sql: str, params: tuple) -> None:
@@ -360,6 +512,19 @@ def _pdf_text_layer(data: bytes) -> str:
         for page in doc:
             parts.append(_page_reading_order(page))
     return "\n".join(parts)
+
+
+def pdf_has_text_layer(data: bytes) -> bool:
+    """文字层是否够直接切题。不够时选择 PDF 应默认打开图像识别。"""
+    import fitz
+
+    collected = 0
+    with fitz.open(stream=data, filetype="pdf") as doc:
+        for page in doc:
+            collected += len(_page_reading_order(page).strip())
+            if collected >= _MIN_TEXT:
+                return True
+    return False
 
 
 def _page_reading_order(page) -> str:
