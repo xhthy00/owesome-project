@@ -815,6 +815,96 @@ export const educationApi = {
       message: payload.message || "",
       data: payload.data ?? null
     };
+  },
+
+  async previewPaperImport(
+    subject: string,
+    file: File,
+    onProgress?: (progress: PaperRecognizeProgress) => void,
+    mode: "code" | "model" = "code"
+  ): Promise<PaperOutline> {
+    const fd = new FormData();
+    fd.append("subject", subject);
+    fd.append("file", file);
+    fd.append("reader", mode);
+    const resp = await fetch(`${getApiBaseUrl()}/education/paper-import/preview-stream`, {
+      method: "POST",
+      headers: {
+        ...(await authHeaders()),
+        Accept: "text/event-stream"
+      },
+      body: fd
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const contentType = resp.headers.get("content-type") || "";
+    if (!resp.ok || !resp.body || !contentType.includes("text/event-stream")) {
+      const body = (await resp.json().catch(() => null)) as {
+        code?: number;
+        message?: string;
+      } | null;
+      if ((body?.code ?? resp.status) === 403) {
+        throw new Error(body?.message || "无权导入试卷");
+      }
+      throw new Error(body?.message || "识别试卷失败");
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    let outline: PaperOutline | null = null;
+    let failure = "";
+    const take = (frame: string) => {
+      if (!frame.trim()) return;
+      let event = "message";
+      const dataLines: string[] = [];
+      for (const line of frame.split(/\r?\n/)) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+      }
+      if (!dataLines.length) return;
+      const data = JSON.parse(dataLines.join("\n")) as PaperRecognizeProgress & {
+        message?: string;
+        questions?: PaperQuestionDraft[];
+      };
+      if (event === "progress") onProgress?.(data);
+      else if (event === "error") failure = data.message || "识别试卷失败";
+      else if (event === "done") outline = data as PaperOutline;
+    };
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split(/\r?\n\r?\n/);
+      buffer = parts.pop() ?? "";
+      for (const part of parts) take(part);
+    }
+    if (buffer.trim()) take(buffer);
+    if (failure) throw new Error(failure);
+    if (!outline) throw new Error("识别试卷失败");
+    return outline;
+  },
+
+  async executePaperImport(payload: PaperImportExecutePayload): Promise<PaperImportSaved> {
+    const resp = await fetch(`${getApiBaseUrl()}/education/paper-import/execute`, {
+      method: "POST",
+      headers: {
+        ...(await authHeaders()),
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: PaperImportSaved;
+    };
+    if ((body.code ?? 200) === 403) {
+      throw new Error(body.message || "无权导入试卷");
+    }
+    if ((body.code ?? 200) !== 200 || !body.data) {
+      throw new Error(body.message || "写入试卷失败");
+    }
+    return body.data;
   }
 };
 
@@ -920,6 +1010,42 @@ export interface ExamBatchOption {
   id: number;
   batch_name: string;
   exam_time?: string | null;
+}
+
+export interface PaperQuestionDraft {
+  question_no: string;
+  question_type: string;
+  question_score: number;
+  content: string;
+}
+
+export interface PaperOutline {
+  subject: string;
+  exam_score: number;
+  leaf_score_sum: number;
+  warnings: string[];
+  text_source: "text" | "ocr";
+  questions: PaperQuestionDraft[];
+}
+
+export interface PaperRecognizeProgress {
+  current: number;
+  total: number;
+  message: string;
+}
+
+export interface PaperImportExecutePayload {
+  exam_batch_id: number;
+  subject: string;
+  exam_score: number;
+  questions: PaperQuestionDraft[];
+}
+
+export interface PaperImportSaved {
+  exam_id: number;
+  exam_name: string;
+  subject: string;
+  question_count: number;
 }
 
 export interface FractionBarListResult {

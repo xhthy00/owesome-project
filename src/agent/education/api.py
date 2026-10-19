@@ -17,7 +17,7 @@ import re
 from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, Request, UploadFile
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from audit.service.decorators import audit_access
@@ -2033,4 +2033,135 @@ async def execute_raw_detail(
     if result.error_rows:
         return _raw_execute_error(result, payload)
     return success_response(data=payload)
+
+
+class PaperQuestionPayload(BaseModel):
+    question_no: str
+    question_type: str = ""
+    question_score: float = 0
+    content: str = ""
+
+
+class PaperImportExecutePayload(BaseModel):
+    exam_batch_id: int
+    subject: str
+    exam_score: float
+    questions: list[PaperQuestionPayload]
+
+
+@router.post("/paper-import/preview")
+@audit_access(query_arg="subject")
+async def preview_paper_import(
+    request: Request,
+    subject: str = Form(...),
+    file: UploadFile = File(...),
+    reader: str = Form("auto"),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from src.agent.education.paper_import import preview_paper_file
+
+    _prepare_raw_import(current_user, workspace_oid)
+    name = (file.filename or "").lower()
+    if not name.endswith((".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp", ".bmp")):
+        raise BadRequestException("请上传 PDF、Word（.docx）或图片")
+    data = file.file.read()
+    if not data:
+        raise BadRequestException("上传文件为空")
+    try:
+        payload = await asyncio.to_thread(
+            preview_paper_file, data, file.filename or "", subject, None, reader
+        )
+    except ValueError as exc:
+        raise BadRequestException(str(exc)) from exc
+    return success_response(data=payload)
+
+
+def _sse(event: str, payload: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@router.post("/paper-import/preview-stream")
+@audit_access(query_arg="subject")
+async def preview_paper_import_stream(
+    request: Request,
+    subject: str = Form(...),
+    file: UploadFile = File(...),
+    reader: str = Form("auto"),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> StreamingResponse:
+    from src.agent.education.paper_import import preview_paper_file
+
+    _prepare_raw_import(current_user, workspace_oid)
+    name = (file.filename or "").lower()
+    if not name.endswith((".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp", ".bmp")):
+        raise BadRequestException("请上传 PDF、Word（.docx）或图片")
+    data = file.file.read()
+    if not data:
+        raise BadRequestException("上传文件为空")
+    filename = file.filename or ""
+
+    async def events():
+        queue: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+
+        def on_progress(current: int, total: int, message: str) -> None:
+            loop.call_soon_threadsafe(
+                queue.put_nowait,
+                _sse("progress", {"current": current, "total": total, "message": message}),
+            )
+
+        async def work() -> None:
+            try:
+                payload = await asyncio.to_thread(
+                    preview_paper_file, data, filename, subject, on_progress, reader
+                )
+                await queue.put(_sse("done", payload))
+            except ValueError as exc:
+                await queue.put(_sse("error", {"message": str(exc)}))
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(work())
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield item
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/paper-import/execute")
+@audit_access(query_arg="body.subject")
+async def execute_paper_import(
+    request: Request,
+    body: PaperImportExecutePayload,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from src.agent.education.paper_import import save_paper_outline
+
+    _ds_id, _scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    try:
+        saved = save_paper_outline(
+            db_type,
+            config,
+            exam_batch_id=body.exam_batch_id,
+            subject=body.subject,
+            exam_score=body.exam_score,
+            questions=[item.model_dump() for item in body.questions],
+        )
+    except ValueError as exc:
+        raise BadRequestException(str(exc)) from exc
+    return success_response(data=saved, message="试卷已写入")
 

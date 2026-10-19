@@ -708,7 +708,12 @@ export default function RawScoreImportPage() {
                   message="试卷不齐或存在同科多卷，无法进入宽表导入"
                   description={
                     <div>
-                      {missingSubjects.length > 0 ? <div>缺科：{missingSubjects.join("、")}</div> : null}
+                      {missingSubjects.length > 0 ? (
+                        <div>
+                          缺科：{missingSubjects.join("、")}。
+                          <Link href="/construct/education/paper-import">去试卷导入</Link>
+                        </div>
+                      ) : null}
                       {duplicateSubjects.length > 0 ? (
                         <div>同科多卷：{duplicateSubjects.join("、")}</div>
                       ) : null}

@@ -37,6 +37,7 @@ const routes = [
   { key: "line-reach", path: "/construct/education/line-reach", label: "达线看板", icon: <FundViewOutlined /> },
   { key: "report-history", path: "/construct/analysis/history", label: "报告历史", icon: <HistoryOutlined /> },
   { key: "datasource", path: "/construct/database", label: "数据源", icon: <DatabaseOutlined /> },
+  { key: "paper-import", path: "/construct/education/paper-import", label: "试卷导入", icon: <FileTextOutlined /> },
   { key: "raw-score-import", path: "/construct/education/raw-score-import", label: "成绩导入", icon: <UploadOutlined /> },
   { key: "knowledge", path: "/construct/knowledge", label: "知识点", icon: <ReadOutlined /> },
   { key: "fraction-bar", path: "/construct/education/fraction-bar", label: "预测分数线", icon: <LineChartOutlined /> },
@@ -222,7 +223,7 @@ export default function SideBar() {
       );
     }
     if (!canSeeScoreImport) {
-      list = list.filter((item) => item.key !== "raw-score-import");
+      list = list.filter((item) => item.key !== "raw-score-import" && item.key !== "paper-import");
     }
     if (hideAnomalyAlerts) {
       list = list.filter((item) => item.key !== "anomaly-alerts");
