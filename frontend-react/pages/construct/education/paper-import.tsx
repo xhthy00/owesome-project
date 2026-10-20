@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined, CloseOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowLeftOutlined, ArrowUpOutlined, CloseOutlined, HolderOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -37,6 +37,14 @@ const SUBJECT_FULL_SCORE: Record<string, number> = {
   地理: 100
 };
 const QUESTION_TYPES = ["单选题", "多选题", "填空题", "解答题", "写作"];
+
+function reorderQuestions<T>(rows: T[], from: number, to: number): T[] {
+  if (from === to || from < 0 || to < 0 || from >= rows.length || to >= rows.length) return rows;
+  const next = rows.slice();
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
+}
 
 const PANEL =
   "rounded-2xl border border-[#e5e7eb] bg-white p-4 shadow-sm dark:border-[#334155] dark:bg-[#141923]";
@@ -249,6 +257,7 @@ export function PaperImportPage() {
   const [saving, setSaving] = useState(false);
   const readerTicket = useRef(0);
   const presetApplied = useRef(false);
+  const dragFrom = useRef<number | null>(null);
 
   function chooseFile(next: File) {
     setFile(next);
@@ -428,11 +437,41 @@ export function PaperImportPage() {
     },
     {
       title: "",
-      width: 72,
+      width: 148,
       render: (_value, _row, index) => (
-        <Button type="link" danger onClick={() => setQuestions((rows) => rows.filter((_, i) => i !== index))}>
-          删除
-        </Button>
+        <Space size={0}>
+          <span
+            draggable
+            aria-label="拖动调整顺序"
+            className="inline-flex cursor-grab items-center px-1 text-[#94a3b8] active:cursor-grabbing"
+            onDragStart={(event) => {
+              dragFrom.current = index;
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("text/plain", String(index));
+            }}
+          >
+            <HolderOutlined />
+          </span>
+          <Button
+            type="text"
+            size="small"
+            aria-label="上移"
+            disabled={index === 0}
+            icon={<ArrowUpOutlined />}
+            onClick={() => setQuestions((rows) => reorderQuestions(rows, index, index - 1))}
+          />
+          <Button
+            type="text"
+            size="small"
+            aria-label="下移"
+            disabled={index >= questions.length - 1}
+            icon={<ArrowDownOutlined />}
+            onClick={() => setQuestions((rows) => reorderQuestions(rows, index, index + 1))}
+          />
+          <Button type="link" danger onClick={() => setQuestions((rows) => rows.filter((_, i) => i !== index))}>
+            删除
+          </Button>
+        </Space>
       )
     }
   ];
@@ -562,7 +601,16 @@ export function PaperImportPage() {
           columns={columns}
           dataSource={questions}
           pagination={false}
-          locale={{ emptyText: "识别后在这里改题号、分值和题干" }}
+          locale={{ emptyText: "识别后在这里改题号、分值、题干和顺序" }}
+          onRow={(_row, index) => ({
+            onDragOver: (event) => event.preventDefault(),
+            onDrop: () => {
+              if (index == null || dragFrom.current == null) return;
+              const from = dragFrom.current;
+              dragFrom.current = null;
+              setQuestions((rows) => reorderQuestions(rows, from, index));
+            }
+          })}
         />
       </div>
     </div>

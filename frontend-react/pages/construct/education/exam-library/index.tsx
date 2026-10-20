@@ -1,10 +1,10 @@
-import { DownOutlined, FileTextOutlined, PlusOutlined } from "@ant-design/icons";
-import { Button, Dropdown, Form, Input, InputNumber, Modal, Select, Space, Table, Typography, message } from "antd";
+import { DownOutlined, FileTextOutlined, PlusOutlined, WarningOutlined } from "@ant-design/icons";
+import { Button, Drawer, Dropdown, Form, Input, InputNumber, Modal, Select, Space, Table, Tooltip, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useState } from "react";
 import { getCurrentUser, type CurrentUser } from "@/api/auth";
-import { canImportExamPapers, examLibraryApi, type ExamLibraryItem, type ExamPayload } from "@/api/examLibrary";
+import { canImportExamPapers, examLibraryApi, type ExamBatchItem, type ExamLibraryItem, type ExamPayload } from "@/api/examLibrary";
 
 const SUBJECTS = ["语文", "数学", "英语", "物理", "化学", "生物", "政治", "历史", "地理"];
 const SUBJECT_SCORE: Record<string, number> = {
@@ -27,6 +27,20 @@ const EXAM_TYPES = [
 const PANEL =
   "rounded-2xl border border-[#e5e7eb] bg-white p-4 shadow-sm dark:border-[#334155] dark:bg-[#141923]";
 
+function examAnomaly(row: ExamLibraryItem): string | null {
+  if (row.question_count === 0) return "未关联题目";
+  if ((row.score_count ?? 0) === 0) return "未关联成绩";
+  return null;
+}
+
+function AnomalyMark({ title }: { title: string }) {
+  return (
+    <Tooltip title={title} getPopupContainer={() => document.body}>
+      <WarningOutlined className="shrink-0 text-[14px] text-[#e09a3e]" aria-label={title} />
+    </Tooltip>
+  );
+}
+
 export default function ExamLibraryPage() {
   const router = useRouter();
   const [form] = Form.useForm<ExamPayload>();
@@ -40,6 +54,12 @@ export default function ExamLibraryPage() {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [batches, setBatches] = useState<ExamBatchItem[]>([]);
+  const [batchOpen, setBatchOpen] = useState(false);
+  const [batchFormOpen, setBatchFormOpen] = useState(false);
+  const [batchEditing, setBatchEditing] = useState<ExamBatchItem | null>(null);
+  const [batchSaving, setBatchSaving] = useState(false);
+  const [batchForm] = Form.useForm<{ batch_name: string; exam_time: string }>();
   const examTypeValue = Form.useWatch("exam_type", form);
   const canImport = canImportExamPapers(currentUser);
 
@@ -64,18 +84,81 @@ export default function ExamLibraryPage() {
     void getCurrentUser()
       .then(setCurrentUser)
       .catch(() => setCurrentUser(null));
+    void examLibraryApi
+      .listBatches()
+      .then(setBatches)
+      .catch((error) => message.error(error instanceof Error ? error.message : "加载考试批次失败"));
   }, []);
+
+  const reloadBatches = async () => {
+    const data = await examLibraryApi.listBatches();
+    setBatches(data);
+  };
+
+  const openBatchCreate = () => {
+    setBatchEditing(null);
+    batchForm.setFieldsValue({ batch_name: "", exam_time: "" });
+    setBatchFormOpen(true);
+  };
+
+  const openBatchEdit = (row: ExamBatchItem) => {
+    setBatchEditing(row);
+    batchForm.setFieldsValue({ batch_name: row.batch_name, exam_time: row.exam_time || "" });
+    setBatchFormOpen(true);
+  };
+
+  const submitBatch = async () => {
+    const values = await batchForm.validateFields();
+    const payload = { batch_name: values.batch_name.trim(), exam_time: values.exam_time };
+    setBatchSaving(true);
+    try {
+      if (batchEditing) {
+        await examLibraryApi.updateBatch(batchEditing.id, payload);
+        message.success("批次已更新");
+      } else {
+        const created = await examLibraryApi.createBatch(payload);
+        message.success("批次已创建");
+        if (open) form.setFieldValue("exam_batch_id", created.id);
+      }
+      setBatchFormOpen(false);
+      await reloadBatches();
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "保存批次失败");
+    } finally {
+      setBatchSaving(false);
+    }
+  };
+
+  const removeBatch = (row: ExamBatchItem) => {
+    Modal.confirm({
+      zIndex: 1300,
+      title: `删除批次「${row.batch_name}」？`,
+      content: "已关联试卷、成绩宽表或分数线的批次不能删除。",
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        await examLibraryApi.removeBatch(row.id);
+        if (form.getFieldValue("exam_batch_id") === row.id) {
+          form.setFieldValue("exam_batch_id", null);
+        }
+        message.success("批次已删除");
+        await reloadBatches();
+      }
+    });
+  };
 
   const openCreate = () => {
     setEditing(null);
     form.setFieldsValue({
       exam_name: "",
-      exam_type: "teacher",
+      exam_type: "city",
       subject: "语文",
       exam_score: 150,
       exam_time: "",
       school_id: "",
-      owner_id: ""
+      owner_id: "",
+      exam_batch_id: null
     });
     setOpen(true);
   };
@@ -89,7 +172,8 @@ export default function ExamLibraryPage() {
       exam_score: row.exam_score ?? SUBJECT_SCORE[row.subject] ?? 100,
       exam_time: row.exam_time || "",
       school_id: row.school_id || "",
-      owner_id: row.owner_id || ""
+      owner_id: row.owner_id || "",
+      exam_batch_id: row.exam_batch_id
     });
     setOpen(true);
   };
@@ -100,7 +184,8 @@ export default function ExamLibraryPage() {
       ...values,
       exam_time: values.exam_time || null,
       school_id: values.school_id || null,
-      owner_id: values.owner_id || null
+      owner_id: values.owner_id || null,
+      exam_batch_id: values.exam_batch_id || null
     };
     setSaving(true);
     try {
@@ -136,27 +221,55 @@ export default function ExamLibraryPage() {
   };
 
   const columns: ColumnsType<ExamLibraryItem> = [
-    { title: "试卷名称", dataIndex: "exam_name", ellipsis: true },
-    { title: "科目", dataIndex: "subject", width: 80 },
-    { title: "类型", dataIndex: "exam_type_label", width: 110 },
-    { title: "考试时间", dataIndex: "exam_time", width: 120, render: (value) => value || "-" },
-    { title: "满分", dataIndex: "exam_score", width: 80 },
-    { title: "题目", dataIndex: "question_count", width: 70 },
     {
-      title: "范围",
-      width: 160,
-      render: (_, row) => row.school_id || row.owner_id || "全市"
+      title: "试卷名称",
+      dataIndex: "exam_name",
+      ellipsis: true,
+      render: (value: string, row) => {
+        const anomaly = examAnomaly(row);
+        return (
+          <span className="inline-flex min-w-0 max-w-full items-center gap-1">
+            {anomaly ? <AnomalyMark title={anomaly} /> : null}
+            <span className="truncate">{value}</span>
+          </span>
+        );
+      }
+    },
+    { title: "科目", dataIndex: "subject", width: 80, align: "center" },
+    {
+      title: "类型",
+      width: 120,
+      render: (_, row) => (
+        <div className="min-w-0">
+          <div>{row.exam_type_label}</div>
+          {row.exam_type !== "city" && (row.school_id || row.owner_id) ? (
+            <div className="truncate text-xs text-slate-400">
+              {[row.school_id, row.owner_id].filter(Boolean).join(" · ")}
+            </div>
+          ) : null}
+        </div>
+      )
     },
     {
+      title: "考试批次",
+      dataIndex: "exam_batch_name",
+      ellipsis: true,
+      render: (value) => value || "-"
+    },
+    { title: "考试时间", dataIndex: "exam_time", width: 120, render: (value) => value || "-" },
+    { title: "满分", dataIndex: "exam_score", width: 72, align: "center" },
+    { title: "题目", dataIndex: "question_count", width: 72, align: "center" },
+    {
       title: "操作",
-      width: 300,
+      width: 340,
+      fixed: "right",
       render: (_, row) => {
         const params = new URLSearchParams();
         if (row.exam_batch_id) params.set("batchId", String(row.exam_batch_id));
         if (row.subject) params.set("subject", row.subject);
         const query = params.toString();
         return (
-          <Space size={0}>
+          <Space size={0} className="whitespace-nowrap">
             <Button type="link" size="small" onClick={() => router.push(`/construct/education/exam-library/${row.id}`)}>
               详情
             </Button>
@@ -208,7 +321,7 @@ export default function ExamLibraryPage() {
 
   return (
     <div className="dbgpt-ui-font h-full min-h-0 overflow-y-auto p-6 pb-10">
-      <div className="mx-auto max-w-6xl">
+      <div className="w-full">
         <div className="mb-4 flex items-center gap-2">
           <FileTextOutlined />
           <Typography.Title level={4} className="!mb-0">
@@ -216,34 +329,39 @@ export default function ExamLibraryPage() {
           </Typography.Title>
         </div>
         <div className={PANEL}>
-          <div className="mb-4 flex flex-wrap items-center gap-3">
-            <Input.Search
-              allowClear
-              className="w-64"
-              placeholder="按试卷名称搜索"
-              onSearch={(value) => {
-                setPage(1);
-                setKeyword(value.trim());
-              }}
-            />
-            <Select
-              allowClear
-              className="w-36"
-              placeholder="试卷类型"
-              value={examType || undefined}
-              options={EXAM_TYPES}
-              onChange={(value) => {
-                setPage(1);
-                setExamType(value || "");
-              }}
-            />
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-              新增试卷
-            </Button>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <Input.Search
+                allowClear
+                className="w-64"
+                placeholder="按试卷名称搜索"
+                onSearch={(value) => {
+                  setPage(1);
+                  setKeyword(value.trim());
+                }}
+              />
+              <Select
+                allowClear
+                className="w-36"
+                placeholder="试卷类型"
+                value={examType || undefined}
+                options={EXAM_TYPES}
+                onChange={(value) => {
+                  setPage(1);
+                  setExamType(value || "");
+                }}
+              />
+              <Typography.Text type="secondary">
+                可见范围：全市统考、本校学校自建、本人教师自建。
+              </Typography.Text>
+            </div>
+            <Space>
+              <Button onClick={() => setBatchOpen(true)}>批次管理</Button>
+              <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+                新增试卷
+              </Button>
+            </Space>
           </div>
-          <Typography.Paragraph type="secondary" className="!mb-3">
-            可见范围：全市统考、本校学校自建、本人教师自建。
-          </Typography.Paragraph>
           <Table
             rowKey="id"
             size="middle"
@@ -256,6 +374,7 @@ export default function ExamLibraryPage() {
               pageSize: 20,
               total,
               showSizeChanger: false,
+              showTotal: (count) => `共 ${count} 条`,
               onChange: (next) => setPage(next)
             }}
           />
@@ -278,6 +397,39 @@ export default function ExamLibraryPage() {
           <Form.Item name="exam_type" label="试卷类型" rules={[{ required: true }]}>
             <Select options={EXAM_TYPES} />
           </Form.Item>
+          <Form.Item
+            name="exam_batch_id"
+            label="考试批次"
+            extra={
+              <span>
+                成绩导入按批次和科目找到这张试卷。同一批次下同一科目只能有一张。
+                <Button type="link" size="small" className="!px-1" onClick={() => setBatchOpen(true)}>
+                  管理批次
+                </Button>
+              </span>
+            }
+            rules={[{ required: true, message: "请关联考试批次" }]}
+          >
+            <Select
+              showSearch
+              optionFilterProp="label"
+              placeholder="选择考试批次"
+              options={batches.map((item) => ({
+                value: item.id,
+                label: item.batch_name
+              }))}
+              onChange={(batchId) => {
+                const batch = batches.find((item) => item.id === batchId);
+                if (!batch) return;
+                if (!String(form.getFieldValue("exam_name") || "").trim()) {
+                  form.setFieldValue("exam_name", batch.batch_name);
+                }
+                if (!String(form.getFieldValue("exam_time") || "").trim() && batch.exam_time) {
+                  form.setFieldValue("exam_time", String(batch.exam_time).slice(0, 10));
+                }
+              }}
+            />
+          </Form.Item>
           {examTypeValue !== "city" ? (
             <Form.Item name="school_id" label="学校" extra="留空时使用当前账号所属学校">
               <Input />
@@ -298,6 +450,69 @@ export default function ExamLibraryPage() {
             <InputNumber className="w-full" min={0.5} step={0.5} />
           </Form.Item>
           <Form.Item name="exam_time" label="考试时间">
+            <Input placeholder="YYYY-MM-DD" />
+          </Form.Item>
+        </Form>
+      </Modal>
+      <Drawer
+        title="考试批次"
+        width={640}
+        zIndex={1100}
+        open={batchOpen}
+        onClose={() => setBatchOpen(false)}
+        extra={
+          <Button type="primary" icon={<PlusOutlined />} onClick={openBatchCreate}>
+            新建批次
+          </Button>
+        }
+      >
+        <Table<ExamBatchItem>
+          rowKey="id"
+          size="middle"
+          dataSource={batches}
+          pagination={{ pageSize: 8, showSizeChanger: false }}
+          columns={[
+            { title: "批次名称", dataIndex: "batch_name", ellipsis: true },
+            { title: "考试时间", dataIndex: "exam_time", width: 120, render: (value) => value || "-" },
+            { title: "试卷", dataIndex: "exam_count", width: 70 },
+            {
+              title: "操作",
+              width: 120,
+              render: (_, row) => (
+                <Space size={0}>
+                  <Button type="link" size="small" onClick={() => openBatchEdit(row)}>
+                    编辑
+                  </Button>
+                  <Button type="link" size="small" danger onClick={() => removeBatch(row)}>
+                    删除
+                  </Button>
+                </Space>
+              )
+            }
+          ]}
+        />
+      </Drawer>
+      <Modal
+        title={batchEditing ? "编辑批次" : "新建批次"}
+        zIndex={1200}
+        open={batchFormOpen}
+        confirmLoading={batchSaving}
+        okText="保存"
+        cancelText="取消"
+        onOk={() => void submitBatch()}
+        onCancel={() => setBatchFormOpen(false)}
+        destroyOnClose
+      >
+        <Form form={batchForm} layout="vertical" className="mt-4">
+          <Form.Item name="batch_name" label="批次名称" rules={[{ required: true, message: "请填写批次名称" }]}>
+            <Input maxLength={255} placeholder="如 2027届高二6月期末" />
+          </Form.Item>
+          <Form.Item
+            name="exam_time"
+            label="考试时间"
+            extra="修改名称会同步仍使用原批次名称的试卷、成绩宽表和分数线。"
+            rules={[{ required: true, message: "请填写考试时间" }]}
+          >
             <Input placeholder="YYYY-MM-DD" />
           </Form.Item>
         </Form>

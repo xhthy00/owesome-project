@@ -647,6 +647,9 @@ export default function RawScoreImportPage() {
       <div>
       <div className="mb-4 flex items-center justify-between">
         <div>
+          <Link href="/construct/education/score-library" className="mb-1 inline-block text-sm text-[#2563eb]">
+            返回成绩库
+          </Link>
           <Typography.Title level={4} className="!mb-1">
             <UploadOutlined className="mr-2" />
             成绩导入

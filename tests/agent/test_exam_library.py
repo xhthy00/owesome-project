@@ -4,7 +4,9 @@ import json
 
 from src.agent.education.exam_library import (
     ExamActor,
+    _exam_payload,
     exam_visible,
+    normalize_batch_fields,
     normalize_ownership,
     normalize_question_rows,
 )
@@ -39,6 +41,46 @@ def test_city_exam_clears_school_and_owner():
     assert normalize_ownership("全市统考", "A01", "teacher1", actor) == ("city", None, None)
     assert normalize_ownership("school", "", "", actor) == ("school", "A01", None)
     assert normalize_ownership("teacher", None, None, actor) == ("teacher", "A01", "teacher1")
+
+
+def test_batch_fields_require_name_and_date():
+    assert normalize_batch_fields("  2027届高二6月期末  ", "2026-06-18") == (
+        "2027届高二6月期末",
+        "2026-06-18",
+    )
+    try:
+        normalize_batch_fields("", "2026-06-18")
+    except ValueError as exc:
+        assert "批次名称" in str(exc)
+    else:
+        raise AssertionError("empty batch name should fail")
+    try:
+        normalize_batch_fields("期末", "")
+    except ValueError as exc:
+        assert "考试时间" in str(exc)
+    else:
+        raise AssertionError("empty exam time should fail")
+
+
+def test_every_exam_requires_a_batch():
+    actor = _actor()
+    base = {"exam_name": "练习卷", "subject": "语文", "exam_score": 150, "exam_type": "teacher"}
+    assert _exam_payload({**base, "exam_batch_id": "3"}, actor)["exam_batch_id"] == 3
+    assert _exam_payload({**base, "exam_type": "city", "exam_batch_id": 3}, actor)["exam_batch_id"] == 3
+
+    try:
+        _exam_payload(base, actor)
+    except ValueError as exc:
+        assert "考试批次" in str(exc)
+    else:
+        raise AssertionError("exam without batch should fail")
+
+    try:
+        _exam_payload({**base, "exam_batch_id": 0}, actor)
+    except ValueError as exc:
+        assert "考试批次" in str(exc)
+    else:
+        raise AssertionError("invalid batch id should fail")
 
 
 def test_question_rows_reject_duplicate_numbers_and_normalize_weights():

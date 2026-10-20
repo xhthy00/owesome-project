@@ -418,9 +418,14 @@ export default function ExamQuestionPage() {
             <Link href="/construct/education/exam-library" className="text-[#0C75FC]">
               <ArrowLeftOutlined />
             </Link>
-            <Typography.Title level={4} className="!mb-0">
-              {detail ? `${detail.exam.exam_name} · ${detail.exam.subject}` : "题目明细"}
-            </Typography.Title>
+            <div>
+              <Typography.Title level={4} className="!mb-0">
+                {detail ? `${detail.exam.exam_name} · ${detail.exam.subject}` : "题目明细"}
+              </Typography.Title>
+              {detail?.exam.exam_batch_name ? (
+                <Typography.Text type="secondary">考试批次：{detail.exam.exam_batch_name}</Typography.Text>
+              ) : null}
+            </div>
           </div>
           <Space>
             {canImportExamPapers(currentUser) && detail?.exam.exam_batch_id ? (

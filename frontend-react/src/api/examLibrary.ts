@@ -15,6 +15,7 @@ export interface ExamLibraryItem {
   school_id: string | null;
   owner_id: string | null;
   exam_batch_id: number | null;
+  exam_batch_name?: string | null;
   question_count: number;
   score_count?: number;
   detail_count?: number;
@@ -46,6 +47,13 @@ export interface ExamDetail {
   knowledge_options: KnowledgeOption[];
 }
 
+export interface ExamBatchItem {
+  id: number;
+  batch_name: string;
+  exam_time: string | null;
+  exam_count: number;
+}
+
 export interface ExamPayload {
   exam_name: string;
   exam_type: string;
@@ -54,6 +62,7 @@ export interface ExamPayload {
   exam_time?: string | null;
   school_id?: string | null;
   owner_id?: string | null;
+  exam_batch_id?: number | null;
 }
 
 export interface MatchSuggestion {
@@ -128,6 +137,18 @@ async function send<T>(path: string, init: RequestInit, fallback: string): Promi
 }
 
 export const examLibraryApi = {
+  listBatches() {
+    return send<ExamBatchItem[]>("/batches", { method: "GET" }, "加载考试批次失败");
+  },
+  createBatch(payload: { batch_name: string; exam_time: string }) {
+    return send<ExamBatchItem>("/batches", { method: "POST", body: JSON.stringify(payload) }, "创建批次失败");
+  },
+  updateBatch(id: number, payload: { batch_name: string; exam_time: string }) {
+    return send<ExamBatchItem>(`/batches/${id}`, { method: "PUT", body: JSON.stringify(payload) }, "更新批次失败");
+  },
+  removeBatch(id: number) {
+    return send<{ id: number }>(`/batches/${id}`, { method: "DELETE" }, "删除批次失败");
+  },
   list(query: { keyword?: string; examType?: string; page: number; pageSize: number }) {
     const params = new URLSearchParams();
     params.set("page", String(query.page));

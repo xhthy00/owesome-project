@@ -28,14 +28,19 @@ __all__ = [
     "ExamActor",
     "build_actor",
     "create_exam",
+    "create_exam_batch",
     "delete_exam",
+    "delete_exam_batch",
     "exam_visible",
     "get_exam",
+    "list_exam_batches",
     "list_exams",
+    "normalize_batch_fields",
     "normalize_ownership",
     "normalize_question_rows",
     "save_questions",
     "set_question_links",
+    "update_exam_batch",
 ]
 
 
@@ -176,10 +181,19 @@ def normalize_question_rows(rows: list[dict[str, Any]] | None) -> list[dict[str,
     return out
 
 
+def _raise_db(msg: str | None, fallback: str) -> None:
+    text = msg or fallback
+    if "uk_exam_batch_subject" in text:
+        raise ValueError("同一考试批次下该科目试卷已存在")
+    if "uk_exam_batch_batch_name" in text:
+        raise ValueError("批次名称已存在")
+    raise ValueError(text)
+
+
 def _one(session: Any, sql: str, params: tuple) -> tuple | None:
     ok, msg, data = session.execute_query(sql, params)
     if not ok:
-        raise ValueError(msg or "查询失败")
+        _raise_db(msg, "查询失败")
     rows = (data or {}).get("rows") or []
     if not rows:
         return None
@@ -200,10 +214,7 @@ def _all(session: Any, sql: str, params: tuple) -> list[tuple]:
 def _must_write(session: Any, sql: str, params: tuple) -> int:
     ok, msg, data = session.execute_write(sql, params)
     if not ok:
-        text = msg or "写入失败"
-        if "uk_exam_batch_subject" in text:
-            raise ValueError("同一考试批次下该科目试卷已存在")
-        raise ValueError(text)
+        _raise_db(msg, "写入失败")
     return int((data or {}).get("row_count") or 0)
 
 
@@ -236,6 +247,26 @@ def _parse_time(value: str | None) -> str | None:
         raise ValueError("考试时间格式应为 YYYY-MM-DD") from None
 
 
+def _parse_batch_id(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        batch_id = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("考试批次无效") from None
+    if batch_id <= 0:
+        raise ValueError("考试批次无效")
+    return batch_id
+
+
+def _require_batch(session: Any, batch_id: int | None) -> None:
+    if batch_id is None:
+        return
+    row = _one(session, "SELECT id FROM tb_exam_batch WHERE id = %s", (batch_id,))
+    if row is None:
+        raise ValueError("考试批次不存在")
+
+
 def _exam_payload(data: dict[str, Any], actor: ExamActor) -> dict[str, Any]:
     name = str(data.get("exam_name") or "").strip()
     if not name:
@@ -257,6 +288,9 @@ def _exam_payload(data: dict[str, Any], actor: ExamActor) -> dict[str, Any]:
         data.get("owner_id"),
         actor,
     )
+    batch_id = _parse_batch_id(data.get("exam_batch_id"))
+    if batch_id is None:
+        raise ValueError("请关联考试批次")
     return {
         "exam_name": name,
         "exam_time": _parse_time(data.get("exam_time")),
@@ -265,6 +299,7 @@ def _exam_payload(data: dict[str, Any], actor: ExamActor) -> dict[str, Any]:
         "exam_type": kind,
         "school_id": school_id,
         "owner_id": owner_id,
+        "exam_batch_id": batch_id,
     }
 
 
@@ -294,14 +329,20 @@ def _exam_dict(row: tuple) -> dict[str, Any]:
         "school_id": _text(row[6]),
         "owner_id": _text(row[7]),
         "exam_batch_id": None if row[8] is None else int(row[8]),
-        "question_count": int(row[9] or 0),
+        "exam_batch_name": _text(row[9]),
+        "question_count": int(row[10] or 0),
+        "score_count": int(row[11] or 0),
+        "detail_count": int(row[12] or 0),
     }
 
 
 _EXAM_COLUMNS = (
     "e.id, e.exam_name, e.exam_time, e.subject, e.exam_score, e.exam_type, "
     "e.school_id, e.owner_id, e.exam_batch_id, "
-    "(SELECT COUNT(*) FROM tb_exam_question q WHERE q.exam_id = e.id)"
+    "(SELECT b.batch_name FROM tb_exam_batch b WHERE b.id = e.exam_batch_id), "
+    "(SELECT COUNT(*) FROM tb_exam_question q WHERE q.exam_id = e.id), "
+    "(SELECT COUNT(*) FROM tb_score s WHERE s.exam_id = e.id), "
+    "(SELECT COUNT(*) FROM tb_score_detail d WHERE d.exam_id = e.id)"
 )
 
 
@@ -437,11 +478,13 @@ def create_exam(
 ) -> dict[str, Any]:
     payload = _exam_payload(data, actor)
     with WriteDbSession(db_type, config) as session:
+        _require_batch(session, payload["exam_batch_id"])
         created = _one(
             session,
             "INSERT INTO tb_exam "
-            "(exam_name, exam_time, subject, exam_score, exam_type, school_id, owner_id) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            "(exam_name, exam_time, subject, exam_score, exam_type, school_id, owner_id, "
+            "exam_batch_id) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (
                 payload["exam_name"],
                 payload["exam_time"],
@@ -450,6 +493,7 @@ def create_exam(
                 payload["exam_type"],
                 payload["school_id"],
                 payload["owner_id"],
+                payload["exam_batch_id"],
             ),
         )
         if created is None:
@@ -473,10 +517,12 @@ def update_exam(
         current = _load_exam(session, int(exam_id))
         if current is None or not exam_visible(current, actor):
             return None
+        _require_batch(session, payload["exam_batch_id"])
         _must_write(
             session,
             "UPDATE tb_exam SET exam_name = %s, exam_time = %s, subject = %s, "
-            "exam_score = %s, exam_type = %s, school_id = %s, owner_id = %s WHERE id = %s",
+            "exam_score = %s, exam_type = %s, school_id = %s, owner_id = %s, "
+            "exam_batch_id = %s WHERE id = %s",
             (
                 payload["exam_name"],
                 payload["exam_time"],
@@ -485,6 +531,7 @@ def update_exam(
                 payload["exam_type"],
                 payload["school_id"],
                 payload["owner_id"],
+                payload["exam_batch_id"],
                 int(exam_id),
             ),
         )
@@ -523,6 +570,185 @@ def delete_exam(
         )
         _must_write(session, "DELETE FROM tb_exam_question WHERE exam_id = %s", (int(exam_id),))
         _must_write(session, "DELETE FROM tb_exam WHERE id = %s", (int(exam_id),))
+        session.commit()
+    return True
+
+
+_BATCH_NAME_TABLES = {
+    "tb_score_overview": "成绩宽表",
+    "tb_fraction_bar": "分数线",
+    "tb_score_indicator": "达线指标",
+    "tb_score_contribution": "贡献度",
+}
+
+
+def normalize_batch_fields(name: Any, exam_time: Any) -> tuple[str, str]:
+    text = str(name or "").strip()
+    if not text:
+        raise ValueError("批次名称不能为空")
+    if len(text) > 255:
+        raise ValueError("批次名称过长")
+    when = _parse_time(exam_time)
+    if when is None:
+        raise ValueError("请填写考试时间")
+    return text, when
+
+
+def _columns(session: Any, table: str) -> set[str]:
+    rows = _all(
+        session,
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = %s",
+        (table,),
+    )
+    return {str(row[0]) for row in rows}
+
+
+def _batch_dict(row: tuple) -> dict[str, Any]:
+    return {
+        "id": int(row[0]),
+        "batch_name": row[1] or "",
+        "exam_time": _date_text(row[2]),
+        "exam_count": int(row[3] or 0),
+    }
+
+
+def list_exam_batches(db_type: str, config: dict[str, Any]) -> list[dict[str, Any]]:
+    with WriteDbSession(db_type, config) as session:
+        rows = _all(
+            session,
+            "SELECT b.id, b.batch_name, b.exam_time, "
+            "(SELECT COUNT(*) FROM tb_exam e WHERE e.exam_batch_id = b.id) "
+            "FROM tb_exam_batch b ORDER BY b.exam_time DESC NULLS LAST, b.id DESC",
+            (),
+        )
+    return [_batch_dict(row) for row in rows]
+
+
+def create_exam_batch(db_type: str, config: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+    name, when = normalize_batch_fields(data.get("batch_name"), data.get("exam_time"))
+    with WriteDbSession(db_type, config) as session:
+        created = _one(
+            session,
+            "INSERT INTO tb_exam_batch (batch_name, exam_time) VALUES (%s, %s) "
+            "RETURNING id, batch_name, exam_time",
+            (name, when),
+        )
+        if created is None:
+            raise ValueError("创建批次失败")
+        session.commit()
+    return {
+        "id": int(created[0]),
+        "batch_name": created[1] or "",
+        "exam_time": _date_text(created[2]),
+        "exam_count": 0,
+    }
+
+
+def _rename_batch_refs(session: Any, batch_id: int, old_name: str, new_name: str) -> None:
+    if not old_name or old_name == new_name:
+        return
+    _must_write(
+        session,
+        "UPDATE tb_exam_question q SET exam_name = %s "
+        "FROM tb_exam e "
+        "WHERE q.exam_id = e.id AND e.exam_batch_id = %s "
+        "AND e.exam_name = %s AND q.exam_name = %s",
+        (new_name, batch_id, old_name, old_name),
+    )
+    _must_write(
+        session,
+        "UPDATE tb_exam SET exam_name = %s WHERE exam_batch_id = %s AND exam_name = %s",
+        (new_name, batch_id, old_name),
+    )
+    for table in _BATCH_NAME_TABLES:
+        cols = _columns(session, table)
+        if "exam_name" not in cols:
+            continue
+        if "exam_batch_id" in cols:
+            _must_write(
+                session,
+                f"UPDATE {table} SET exam_name = %s WHERE exam_batch_id = %s OR exam_name = %s",
+                (new_name, batch_id, old_name),
+            )
+        else:
+            _must_write(
+                session,
+                f"UPDATE {table} SET exam_name = %s WHERE exam_name = %s",
+                (new_name, old_name),
+            )
+
+
+def _batch_usage(session: Any, batch_id: int, name: str) -> list[str]:
+    blocks: list[str] = []
+    exam = _one(session, "SELECT COUNT(*) FROM tb_exam WHERE exam_batch_id = %s", (batch_id,))
+    if exam and int(exam[0]):
+        blocks.append(f"{int(exam[0])} 张试卷")
+    for table, label in _BATCH_NAME_TABLES.items():
+        cols = _columns(session, table)
+        if "exam_batch_id" in cols:
+            row = _one(
+                session,
+                f"SELECT COUNT(*) FROM {table} WHERE exam_batch_id = %s",
+                (batch_id,),
+            )
+        elif "exam_name" in cols:
+            row = _one(session, f"SELECT COUNT(*) FROM {table} WHERE exam_name = %s", (name,))
+        else:
+            continue
+        count = int(row[0]) if row else 0
+        if count:
+            blocks.append(f"{count} 条{label}")
+    return blocks
+
+
+def update_exam_batch(
+    db_type: str,
+    config: dict[str, Any],
+    batch_id: int,
+    data: dict[str, Any],
+) -> dict[str, Any] | None:
+    name, when = normalize_batch_fields(data.get("batch_name"), data.get("exam_time"))
+    with WriteDbSession(db_type, config) as session:
+        current = _one(
+            session,
+            "SELECT id, batch_name FROM tb_exam_batch WHERE id = %s",
+            (int(batch_id),),
+        )
+        if current is None:
+            return None
+        _must_write(
+            session,
+            "UPDATE tb_exam_batch SET batch_name = %s, exam_time = %s WHERE id = %s",
+            (name, when, int(batch_id)),
+        )
+        _rename_batch_refs(session, int(batch_id), str(current[1] or ""), name)
+        row = _one(
+            session,
+            "SELECT b.id, b.batch_name, b.exam_time, "
+            "(SELECT COUNT(*) FROM tb_exam e WHERE e.exam_batch_id = b.id) "
+            "FROM tb_exam_batch b WHERE b.id = %s",
+            (int(batch_id),),
+        )
+        session.commit()
+    if row is None:
+        raise ValueError("更新批次失败")
+    return _batch_dict(row)
+
+
+def delete_exam_batch(db_type: str, config: dict[str, Any], batch_id: int) -> bool:
+    with WriteDbSession(db_type, config) as session:
+        current = _one(
+            session,
+            "SELECT id, batch_name FROM tb_exam_batch WHERE id = %s",
+            (int(batch_id),),
+        )
+        if current is None:
+            return False
+        blocks = _batch_usage(session, int(batch_id), str(current[1] or ""))
+        if blocks:
+            raise ValueError(f"该批次已有{'、'.join(blocks)}，无法删除")
+        _must_write(session, "DELETE FROM tb_exam_batch WHERE id = %s", (int(batch_id),))
         session.commit()
     return True
 

@@ -123,6 +123,32 @@ def build_paper_outline(subject: str, text: str) -> PaperOutline:
             score = _section_score(header, chunk) or (15.0 if label == "应用文写作" else 25.0)
             outline.questions.append(OutlineQuestion(label, "写作", score, _clip(chunk)))
             continue
+        seven = _seven_choose_five(header, chunk)
+        if seven:
+            pairs, suffix = seven
+            taken = {qno for qno, _text in pairs}
+            prefix = _strip_seven_block(chunk)
+            if prefix and len(prefix) < len(chunk.strip()):
+                earlier_per = _per_score(header + "\n" + prefix[:120])
+                for qno, qtext in _split_questions(
+                    prefix, allow_bare=kind in {"single", "multi"}
+                ):
+                    if qno in taken:
+                        continue
+                    outline.questions.extend(
+                        _emit_question(name, kind, qno, qtext, earlier_per)
+                    )
+            per = _per_score(header + "\n" + chunk[:160])
+            for qno, qtext in pairs:
+                outline.questions.extend(_emit_question(name, "single", qno, qtext, per))
+            if suffix:
+                for qno, qtext in _split_questions(
+                    suffix, allow_bare=kind in {"single", "multi"}
+                ):
+                    if qno in taken:
+                        continue
+                    outline.questions.extend(_emit_question(name, kind, qno, qtext, per))
+            continue
         per = _per_score(header + "\n" + chunk[:120])
         found = _split_questions(chunk, allow_bare=kind in {"single", "multi"})
         found = _with_leading_passage(header, chunk, found)
@@ -136,6 +162,7 @@ def build_paper_outline(subject: str, text: str) -> PaperOutline:
             outline.questions.extend(
                 _emit_question(name, kind, qno, qtext, per)
             )
+    outline.questions = _lift_embedded_seven(outline.questions)
     if not outline.questions:
         outline.warnings.append("没有识别到题目")
     return outline
@@ -593,10 +620,23 @@ def _trim_following_passage(text: str) -> str:
             break
     if option_at is None:
         return text
-    tail = "\n".join(lines[option_at + 1 :]).strip()
-    if len(tail) < 80:
+    rest = lines[option_at + 1 :]
+    extra_options: list[str] = []
+    index = 0
+    while index < len(rest):
+        line = rest[index]
+        if re.match(r"\s*[E-G][.．、]", line):
+            extra_options.append(line)
+            index += 1
+            continue
+        if not line.strip():
+            index += 1
+            continue
+        break
+    tail = "\n".join(rest[index:]).strip()
+    if len(tail) < 80 or _SEVEN_CUE_RE.search(tail):
         return text
-    return "\n".join(lines[: option_at + 1]).strip()
+    return "\n".join([*lines[: option_at + 1], *extra_options]).strip()
 
 
 _GROUP_LEAD_RE = re.compile(r"据此\s*回答\s*(\d+)\s*[～~\-－到至]\s*(\d+)\s*题")
@@ -604,6 +644,153 @@ _STUCK_SECTION_RE = re.compile(
     r"[（(][一二三四五六七八九十]+[）)]\s*(?:阅读|名篇名句默写|语言文字运用)"
 )
 _RANGE_CUE_RE = re.compile(r"完成\s*(\d+)\s*[～~\-－到至]\s*(\d+)\s*题")
+
+
+_SEVEN_CUE_RE = re.compile(r"多余选项|七选五")
+_BLANK_MARK_RE = re.compile(
+    r"(?:_{2,}|—{2,}|–{2,}|－{2,})\s*(\d{1,2})\s*(?:_{2,}|—{2,}|–{2,}|－{2,})"
+)
+_LOOSE_NO_RE = re.compile(r"(?<!\d)(\d{2})(?!\d|\.)")
+_OPTION_HEAD_RE = re.compile(r"(?m)^([A-G])[.．、]\s*")
+
+
+def _seven_choose_five(
+    header: str, chunk: str
+) -> tuple[list[tuple[str, str]], str] | None:
+    """七选五的题号在空格里，选项 A–G 共用，不能按「36.」逐题去拆。"""
+    if _SEVEN_CUE_RE.search(f"{header}\n{chunk}") is None:
+        return None
+    split = _split_shared_options(chunk)
+    if split is None:
+        return None
+    passage, options, suffix = split
+    numbers = _blank_number_run(passage)
+    if len(numbers) < 3:
+        return None
+    pairs = [
+        (str(number), _blank_snippet(passage, number, options))
+        for number in numbers
+    ]
+    return pairs, suffix
+
+
+def _split_shared_options(text: str) -> tuple[str, str, str] | None:
+    matches = list(_OPTION_HEAD_RE.finditer(text))
+    start = None
+    letters: list[str] = []
+    g_at = None
+    for match in matches:
+        letter = match.group(1)
+        if start is None or letter <= letters[-1]:
+            if g_at is not None:
+                break
+            start = match if letter == "A" else None
+            letters = [letter] if letter == "A" else []
+            g_at = None
+            continue
+        letters.append(letter)
+        if letter == "G":
+            g_at = match
+            break
+    if start is None or g_at is None:
+        return None
+    rest = text[g_at.end() :]
+    next_question = _QUESTION_RE.search(rest)
+    stop = g_at.end() + next_question.start() if next_question else len(text)
+    options = _PAGE_MARK_RE.sub("", text[start.start() : stop]).strip()
+    passage = text[: start.start()].strip()
+    suffix = text[stop:].strip()
+    if not passage or not options:
+        return None
+    return passage, options, suffix
+
+
+def _blank_number_run(passage: str) -> list[int]:
+    marked = [int(item) for item in _BLANK_MARK_RE.findall(passage)]
+    for numbers in (
+        marked,
+        [int(item) for item in _BARE_QUESTION_RE.findall(passage)],
+        [int(item) for item in _QUESTION_RE.findall(passage)],
+        [int(item) for item in _LOOSE_NO_RE.findall(passage)],
+    ):
+        run = _consecutive_run(numbers)
+        if len(run) >= 3:
+            return run
+    return []
+
+
+def _consecutive_run(numbers: list[int]) -> list[int]:
+    best: list[int] = []
+    current: list[int] = []
+    for number in numbers:
+        if not current or number == current[-1] + 1:
+            current.append(number)
+        elif number == current[-1]:
+            continue
+        else:
+            if len(current) > len(best):
+                best = current
+            current = [number]
+    if len(current) > len(best):
+        best = current
+    return best
+
+
+def _blank_snippet(passage: str, number: int, options: str) -> str:
+    match = re.search(rf"(?<!\d){number}(?!\d)", passage)
+    if match is None:
+        return options
+    start = max(0, match.start() - 160)
+    end = min(len(passage), match.end() + 80)
+    return f"{passage[start:end].strip()}\n{options}".strip()
+
+
+def _strip_seven_block(text: str) -> str:
+    match = re.search(r"(?m)^.*多余选项.*$", text)
+    if match is None:
+        return text
+    start = match.start()
+    head = text[:start]
+    for token in ("第二节", "阅读下面短文"):
+        pos = head.rfind(token)
+        if pos >= 0:
+            start = pos
+            break
+    return text[:start].strip()
+
+
+def _lift_embedded_seven(questions: list[OutlineQuestion]) -> list[OutlineQuestion]:
+    """上一题把七选五整段吞进去时，按空格题号拆出来。"""
+    result: list[OutlineQuestion] = []
+    existing = {question.question_no for question in questions}
+    for question in questions:
+        located = _seven_choose_five("", question.content)
+        if not located:
+            result.append(question)
+            continue
+        piece = located[0]
+        labels = [f"单选{qno}" for qno, _text in piece]
+        if all(label in existing for label in labels):
+            result.append(question)
+            continue
+        kept = _strip_seven_block(question.content)
+        if kept:
+            result.append(
+                OutlineQuestion(
+                    question.question_no,
+                    question.question_type,
+                    question.question_score,
+                    kept,
+                )
+            )
+        per = _per_score(question.content[:200])
+        for qno, qtext in piece:
+            label = f"单选{qno}"
+            if label in existing:
+                continue
+            result.extend(_emit_question("英语", "single", qno, qtext, per))
+            existing.add(label)
+    return result
 
 
 def _with_leading_passage(

@@ -22,6 +22,7 @@ class ExamBody(BaseModel):
     exam_time: str | None = None
     school_id: str | None = None
     owner_id: str | None = None
+    exam_batch_id: int | None = None
 
 
 class KnowledgeLinkBody(BaseModel):
@@ -119,6 +120,67 @@ async def create_exam_library(
 
     data = _call(lambda: create_exam(db_type, config, actor, body.model_dump()))
     return success_response(data, message="试卷已创建")
+
+
+class BatchBody(BaseModel):
+    batch_name: str
+    exam_time: str | None = None
+
+
+@router.get("/batches")
+async def list_exam_batches(
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    db_type, config, _actor = _db(current_user, workspace_oid)
+    from src.agent.education.exam_library import list_exam_batches as load_batches
+
+    data = _call(lambda: load_batches(db_type, config))
+    return success_response(data)
+
+
+@router.post("/batches")
+async def create_exam_batch(
+    body: BatchBody,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    db_type, config, _actor = _db(current_user, workspace_oid)
+    from src.agent.education.exam_library import create_exam_batch as add_batch
+
+    data = _call(lambda: add_batch(db_type, config, body.model_dump()))
+    return success_response(data, message="批次已创建")
+
+
+@router.put("/batches/{batch_id}")
+async def update_exam_batch(
+    batch_id: int,
+    body: BatchBody,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    db_type, config, _actor = _db(current_user, workspace_oid)
+    from src.agent.education.exam_library import update_exam_batch as save_batch
+
+    data = _call(lambda: save_batch(db_type, config, batch_id, body.model_dump()))
+    if data is None:
+        raise NotFoundException("考试批次不存在")
+    return success_response(data, message="批次已更新")
+
+
+@router.delete("/batches/{batch_id}")
+async def delete_exam_batch(
+    batch_id: int,
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    db_type, config, _actor = _db(current_user, workspace_oid)
+    from src.agent.education.exam_library import delete_exam_batch as remove_batch
+
+    deleted = _call(lambda: remove_batch(db_type, config, batch_id))
+    if not deleted:
+        raise NotFoundException("考试批次不存在")
+    return success_response({"id": batch_id}, message="批次已删除")
 
 
 @router.get("/match/{task_id}")

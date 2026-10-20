@@ -8,7 +8,7 @@ const routes = [
   { key: "analysis", label: "分析工具" },
   { key: "line-reach", label: "达线看板" },
   { key: "report-history", label: "报告历史" },
-  { key: "resource", label: "资源管理" },
+  { key: "resource", label: "数据管理" },
   { key: "fraction-bar", label: "预测分数线" },
   { key: "permission", label: "权限管理" },
   { key: "system", label: "日志管理" },
@@ -18,7 +18,7 @@ const routes = [
 const resourceSubRoutes = [
   { key: "datasource", label: "数据源" },
   { key: "exam-library", label: "试卷库" },
-  { key: "raw-score-import", label: "成绩导入" },
+  { key: "raw-score-import", label: "成绩库" },
   { key: "knowledge", label: "知识点" }
 ];
 
