@@ -58,7 +58,7 @@ function iconOf(key: string): ReactNode {
 }
 
 /** 只在分析工具中生成、不走对话的报告类型 */
-const analysisOnlyTypes = new Set(["line_shift", "absence", "class_line_reach"]);
+const analysisOnlyTypes = new Set(["line_shift", "absence", "class_line_reach", "elite_rank_shift"]);
 
 export default function ConstructSkillsPage() {
   const router = useRouter();

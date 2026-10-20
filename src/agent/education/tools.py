@@ -3074,6 +3074,8 @@ def _subject_diagnosis_student_archive(
         full_score=fs,
         student_item_insights=insights,
         single_subject=True,
+        # 未选班级：全校人太多，按班折叠 + 需关注优先
+        group_by_class=not bool(str(class_name or "").strip()),
     )
 
 

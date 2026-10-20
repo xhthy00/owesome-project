@@ -278,6 +278,9 @@ def _trend_line(data: dict[str, Any], title: str) -> dict[str, Any]:
     y_axis: dict[str, Any] = {"type": "value", "name": data.get("y_name") or "分数"}
     if data.get("y_max") is not None:
         y_axis["max"] = data.get("y_max")
+    if data.get("y_inverse"):
+        y_axis["inverse"] = True
+        y_axis["name"] = data.get("y_name") or y_axis.get("name")
     return {
         "title": {"text": title, "left": "center", "textStyle": {"fontSize": 14}},
         "tooltip": {"trigger": "axis"},

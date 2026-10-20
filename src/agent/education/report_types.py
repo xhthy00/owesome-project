@@ -42,6 +42,7 @@ class ReportType(str, Enum):
     LINE_SHIFT = "line_shift"                # 临界生分析（两场达线变化，仅分析工具）
     ABSENCE = "absence"                      # 缺考分析（一场缺考学生，仅分析工具）
     CLASS_LINE_REACH = "class_line_reach"    # 班级达线率与贡献分对照（各班对标线达线率，仅分析工具）
+    ELITE_RANK_SHIFT = "elite_rank_shift"    # 尖子生排名变化（历场全市排名追踪，仅分析工具）
 
 
 class Audience(str, Enum):
@@ -79,6 +80,7 @@ REPORT_TYPE_LABELS: dict[ReportType, str] = {
     ReportType.LINE_SHIFT: "临界生分析报告",
     ReportType.ABSENCE: "缺考分析报告",
     ReportType.CLASS_LINE_REACH: "班级达线率与贡献分对照分析报告",
+    ReportType.ELITE_RANK_SHIFT: "尖子生排名变化分析报告",
 }
 
 _KNOWN_TYPE_MARKERS: frozenset[str] = frozenset(

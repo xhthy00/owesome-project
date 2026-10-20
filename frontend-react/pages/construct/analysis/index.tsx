@@ -70,7 +70,8 @@ const OPEN_REPORT_TYPES = new Set([
   "score_band",
   "line_shift",
   "absence",
-  "class_line_reach"
+  "class_line_reach",
+  "elite_rank_shift"
 ]);
 
 /** 校长/老师可见：本校/本班口径，不含全市局端报告 */
@@ -84,7 +85,8 @@ const SCHOOL_TEACHER_REPORT_TYPES = new Set([
   "comprehensive",
   "line_shift",
   "absence",
-  "class_line_reach"
+  "class_line_reach",
+  "elite_rank_shift"
 ]);
 
 function isSchoolOrTeacherRole(eduRole: string): boolean {
@@ -123,8 +125,10 @@ type FormValues = {
   class_name?: string;
   /** 单选为 string；区域诊断等多场为 string[] */
   exam_name?: string | string[];
-  /** 班级达线率与贡献分对照报告的对比考试：不选自动上一场，可选「不对比」 */
+  /** 班级达线率与贡献分对照 / 尖子生排名变化报告的对比考试：不选自动上一场，可选「不对比」 */
   compare_exam?: string;
+  /** 尖子生排名变化报告的名次范围：10/30/50/100，默认 30 */
+  top_n?: number;
   subject?: string;
   school_name?: string;
   student_name?: string;
@@ -138,8 +142,10 @@ function fieldsForType(reportType: string): {
   exam_name?: boolean;
   /** 考试可多选（区域结构化诊断等） */
   exam_multi?: boolean;
-  /** 对比考试（班级达线率与贡献分对照报告） */
+  /** 对比考试（班级达线率与贡献分对照 / 尖子生排名变化报告） */
   compare_exam?: boolean;
+  /** 名次范围（尖子生排名变化报告） */
+  top_n?: boolean;
   subject?: boolean;
   school_name?: boolean;
   student_name?: boolean;
@@ -150,6 +156,7 @@ function fieldsForType(reportType: string): {
     exam_name?: boolean;
     exam_multi?: boolean;
     compare_exam?: boolean;
+    top_n?: boolean;
     subject?: boolean;
     school_name?: boolean;
     student_name?: boolean;
@@ -209,6 +216,15 @@ function fieldsForType(reportType: string): {
       break;
     case "class_line_reach":
       flags = { school_name: true, class_name: true, exam_name: true, compare_exam: true };
+      break;
+    case "elite_rank_shift":
+      flags = {
+        school_name: true,
+        class_name: true,
+        exam_name: true,
+        compare_exam: true,
+        top_n: true
+      };
       break;
     default:
       flags = { class_name: true, exam_name: true };
@@ -432,6 +448,7 @@ export default function AnalysisToolPage() {
       const examFilter = serializeExamFilter(values.exam_name);
       if (examFilter) filters.exam_name = examFilter;
       if (values.compare_exam?.trim()) filters.compare_exam = values.compare_exam.trim();
+      if (values.top_n) filters.top_n = String(values.top_n);
       if (values.subject?.trim()) filters.subject = values.subject.trim();
       if (values.school_name?.trim()) filters.school_name = values.school_name.trim();
       if (values.student_name?.trim()) filters.student_name = values.student_name.trim();
@@ -469,6 +486,7 @@ export default function AnalysisToolPage() {
     const examFilter = serializeExamFilter(values.exam_name);
     if (examFilter) filters.exam_name = examFilter;
     if (values.compare_exam?.trim()) filters.compare_exam = values.compare_exam.trim();
+    if (values.top_n) filters.top_n = String(values.top_n);
     if (values.subject?.trim()) filters.subject = values.subject.trim();
     if (values.school_name?.trim()) filters.school_name = values.school_name.trim();
     if (values.student_name?.trim()) filters.student_name = values.student_name.trim();
@@ -764,6 +782,11 @@ export default function AnalysisToolPage() {
                   <Form.Item
                     name="school_name"
                     label="学校"
+                    extra={
+                      selected.report_type === "elite_rank_shift"
+                        ? "教育局可不选（看全市前 N）；选一所学校则下钻该校。校长自动统计本校。"
+                        : undefined
+                    }
                     rules={
                       (selected.report_type === "line_shift" ||
                         selected.report_type === "absence" ||
@@ -779,7 +802,11 @@ export default function AnalysisToolPage() {
                       showSearch
                       loading={metaLoading}
                       options={toSelectOptions(meta.schools)}
-                      placeholder="选择学校"
+                      placeholder={
+                        selected.report_type === "elite_rank_shift"
+                          ? "不选则全市；下钻可选学校"
+                          : "选择学校"
+                      }
                       optionFilterProp="label"
                     />
                   </Form.Item>
@@ -820,7 +847,8 @@ export default function AnalysisToolPage() {
                         ? [{ required: true, message: "请选择班级" }]
                         : (selected.report_type === "line_shift" ||
                             selected.report_type === "absence" ||
-                            selected.report_type === "class_line_reach") &&
+                            selected.report_type === "class_line_reach" ||
+                            selected.report_type === "elite_rank_shift") &&
                             eduRole === "teacher"
                           ? [{ required: true, message: "请选择班级" }]
                           : undefined
@@ -834,7 +862,8 @@ export default function AnalysisToolPage() {
                       placeholder={
                         selected.report_type === "line_shift" ||
                         selected.report_type === "absence" ||
-                        selected.report_type === "class_line_reach"
+                        selected.report_type === "class_line_reach" ||
+                        selected.report_type === "elite_rank_shift"
                           ? "不选则统计全校；老师必须选择班级"
                           : "选择班级"
                       }
@@ -853,9 +882,15 @@ export default function AnalysisToolPage() {
                           ? "选一场考试。上一场取考试时间更早、最近的一场，用于识别整场缺考。"
                           : selected.report_type === "class_line_reach"
                             ? "选一场考试。达线率按各自的线分计算，跨场可比。"
-                            : fieldFlags.exam_multi
-                              ? "可多选；不选则包含全部考试（用于动态性对比）"
-                              : undefined
+                            : selected.report_type === "elite_rank_shift"
+                              ? "选一场考试。排名是全市在籍生排名，历场同口径可比。"
+                              : selected.report_type === "class_overview"
+                                ? "必须选择一场考试。本报告只分析单次考试的班级成绩。"
+                                : selected.report_type === "subject_diagnosis"
+                                  ? "必须选择一场考试。逐题与知识点诊断只针对单次考试，避免混场。"
+                                  : fieldFlags.exam_multi
+                                    ? "可多选；不选则包含全部考试（用于动态性对比）"
+                                    : undefined
                     }
                     rules={
                       selected.report_type === "line_shift"
@@ -874,7 +909,10 @@ export default function AnalysisToolPage() {
                               }
                             }
                           ]
-                        : selected.report_type === "class_line_reach"
+                        : selected.report_type === "class_line_reach" ||
+                            selected.report_type === "elite_rank_shift" ||
+                            selected.report_type === "class_overview" ||
+                            selected.report_type === "subject_diagnosis"
                           ? [{ required: true, message: "请选择考试" }]
                           : undefined
                     }
@@ -917,10 +955,33 @@ export default function AnalysisToolPage() {
                     />
                   </Form.Item>
                 ) : null}
+                {fieldFlags.top_n ? (
+                  <Form.Item
+                    name="top_n"
+                    label="名次范围"
+                    initialValue={30}
+                    extra="教育局=全市前 N；校长/教育局选校=本校前 N（按全市排名取前 N，含并列）；老师=本班前 N。"
+                  >
+                    <Select
+                      options={[
+                        { value: 100, label: "前 100 名" },
+                        { value: 50, label: "前 50 名" },
+                        { value: 30, label: "前 30 名" },
+                        { value: 10, label: "前 10 名" }
+                      ]}
+                      placeholder="前 30 名"
+                    />
+                  </Form.Item>
+                ) : null}
                 {fieldFlags.subject ? (
                   <Form.Item
                     name="subject"
                     label="科目"
+                    extra={
+                      selected.report_type === "grade_comparison"
+                        ? "不选则按各科得分合计（每名学生一份总分）对比各班；选了科目则比该科单科。"
+                        : undefined
+                    }
                     rules={
                       selected.report_type === "subject_diagnosis"
                         ? [{ required: true, message: "请选择科目" }]
@@ -932,7 +993,11 @@ export default function AnalysisToolPage() {
                       showSearch
                       loading={metaLoading}
                       options={toSelectOptions(meta.subjects)}
-                      placeholder="选择科目"
+                      placeholder={
+                        selected.report_type === "grade_comparison"
+                          ? "不选=各科合计；选了=单科对比"
+                          : "选择科目"
+                      }
                       optionFilterProp="label"
                     />
                   </Form.Item>

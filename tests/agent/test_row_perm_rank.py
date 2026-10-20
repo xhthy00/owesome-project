@@ -59,3 +59,25 @@ def test_student_list_cte_injects_on_fact_leaf_not_outer() -> None:
     compact = " ".join(merged.split())
     assert 'FROM s WHERE tb_score_overview' not in compact
     assert 'FROM "s" WHERE tb_score_overview' not in compact
+
+
+def test_student_rank_pool_keeps_citywide_window_but_scopes_outer() -> None:
+    """尖子生排名池：RANK 子查询保持全市口径（不注入本校），外层照常收窄。"""
+    sql = (
+        "SELECT o.exam_name, o.xm, o.anon_stu_id, o.xx, o.bj, o.zf6m, r.rk "
+        "FROM tb_score_overview o "
+        "JOIN ("
+        "SELECT anon_stu_id, RANK() OVER (ORDER BY zf6m DESC NULLS LAST) AS rk "
+        "FROM tb_score_overview "
+        "WHERE exam_name='2026届高三1月期末' AND xsxz='在籍生'"
+        ") r ON r.anon_stu_id = o.anon_stu_id "
+        "WHERE o.exam_name='2026届高三1月期末' AND o.xsxz='在籍生' "
+        "ORDER BY r.rk LIMIT 5000"
+    )
+    merged = merge_row_predicates_into_sql(sql, "pg", _SCHOOL_PRED)
+    compact = " ".join(merged.split())
+    # 谓词只出现一次，且出现在 ON 连接条件之后 = 注入外层 WHERE（不是 JOIN 内层）
+    assert merged.count("GZ_19D9D68D") == 1
+    idx_pred = compact.find("GZ_19D9D68D")
+    idx_on = compact.find("r.anon_stu_id = o.anon_stu_id")
+    assert idx_pred != -1 and idx_on != -1 and idx_pred > idx_on

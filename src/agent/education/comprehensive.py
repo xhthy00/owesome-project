@@ -298,7 +298,36 @@ def _advice(
     )
 
 
-def _build_student_archive_html(
+def _archive_insight_for(
+    name: str, insights: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    insight = insights.get(name) or insights.get(_normalize_student_key(name)) or {}
+    if insight:
+        return insight
+    for k, v in insights.items():
+        if _normalize_student_key(k) == _normalize_student_key(name):
+            return v
+    return {}
+
+
+def _is_attention_student(
+    name: str,
+    *,
+    insights: dict[str, dict[str, Any]],
+    student_last_total: dict[str, float],
+    level_full: float,
+) -> bool:
+    """需关注：有薄弱知识点/小题，或得分低于满分 60%。"""
+    insight = _archive_insight_for(name, insights)
+    if insight.get("weak_knowledge") or insight.get("weak_items"):
+        return True
+    score = student_last_total.get(name)
+    if score is not None and level_full > 0 and float(score) < float(level_full) * 0.6:
+        return True
+    return False
+
+
+def _build_student_archive_cards(
     *,
     students: list[str],
     exams: list[str],
@@ -311,19 +340,13 @@ def _build_student_archive_html(
     student_item_insights: dict[str, dict[str, Any]] | None = None,
     single_subject: bool = False,
     labels: dict[str, str] | None = None,
-) -> str:
-    """卡片式学生档案：短考试标签 + 小题驱动建议，避免宽表空白。"""
+) -> tuple[str, dict[str, str]]:
+    """卡片式学生档案。返回 ``(说明文案, {学号: 卡片HTML})``。"""
     insights = student_item_insights or {}
     exam_labels = [_short_exam_label(e) for e in exams]
-    cards: list[str] = []
+    cards_map: dict[str, str] = {}
     for name in students:
-        insight = insights.get(name) or insights.get(_normalize_student_key(name)) or {}
-        # 兼容 student_id 与脱敏姓名键
-        if not insight:
-            for k, v in insights.items():
-                if _normalize_student_key(k) == _normalize_student_key(name):
-                    insight = v
-                    break
+        insight = _archive_insight_for(name, insights)
 
         subs_avg = {
             sub: round(sum(v) / len(v), 1)
@@ -433,7 +456,7 @@ def _build_student_archive_html(
             single_subject=single_subject,
             avg_score=avg_total if per_exam_vals else None,
         )
-        cards.append(
+        cards_map[name] = (
             f'<article class="archive-card">'
             f'<header class="archive-head">'
             f'<div class="archive-name"><strong>{html.escape((labels or {}).get(name) or name)}</strong>'
@@ -446,12 +469,13 @@ def _build_student_archive_html(
             f"</article>"
         )
 
-    if not cards:
+    if not cards_map:
         return (
             '<p class="insight warning">暂无学生明细：请确认 SQL 已返回 '
-            "student_id/姓名、exam、score 等逐人成绩行（勿仅查班级 KPI 聚合）。</p>"
+            "student_id/姓名、exam、score 等逐人成绩行（勿仅查班级 KPI 聚合）。</p>",
+            {},
         )
-    if any(insights.get(s) or insights.get(_normalize_student_key(s)) for s in students):
+    if any(_archive_insight_for(s, insights) for s in students):
         if single_subject:
             note = (
                 '<p class="archive-note">个性化建议已结合<strong>本场考试</strong>该科小题得分率与知识点掌握情况；'
@@ -472,7 +496,125 @@ def _build_student_archive_html(
             '<p class="archive-note">未加载到小题明细时，建议基于总分趋势生成；'
             "导入 tb_score_detail 后可自动融入历次考试薄弱小题与知识点。</p>"
         )
-    return note + f'<div class="archive-grid">{"".join(cards)}</div>'
+    return note, cards_map
+
+
+def _build_student_archive_html(
+    *,
+    students: list[str],
+    exams: list[str],
+    by_exam: dict[str, list[dict[str, Any]]],
+    student_first_total: dict[str, float],
+    student_last_total: dict[str, float],
+    student_subject_avgs: dict[str, dict[str, list[float]]],
+    imbalance: list[dict[str, Any]],
+    level_full: float,
+    student_item_insights: dict[str, dict[str, Any]] | None = None,
+    single_subject: bool = False,
+    labels: dict[str, str] | None = None,
+    group_by_class: bool = False,
+    student_class: dict[str, str] | None = None,
+) -> str:
+    """卡片式学生档案：短考试标签 + 小题驱动建议，避免宽表空白。
+
+    ``group_by_class=True``（未选班级的全校视图）：各班一览 + 按班折叠；
+    班内默认只展开需关注学生，其余点开「展开其余」。
+    """
+    note, cards_map = _build_student_archive_cards(
+        students=students,
+        exams=exams,
+        by_exam=by_exam,
+        student_first_total=student_first_total,
+        student_last_total=student_last_total,
+        student_subject_avgs=student_subject_avgs,
+        imbalance=imbalance,
+        level_full=level_full,
+        student_item_insights=student_item_insights,
+        single_subject=single_subject,
+        labels=labels,
+    )
+    if not cards_map:
+        return note
+
+    insights = student_item_insights or {}
+    if not group_by_class:
+        ordered = [s for s in students if s in cards_map]
+        return note + f'<div class="archive-grid">{"".join(cards_map[s] for s in ordered)}</div>'
+
+    # ---- 按班折叠 ----
+    cls_map = student_class or {}
+    by_cls: dict[str, list[str]] = {}
+    for sid in students:
+        if sid not in cards_map:
+            continue
+        cls = str(cls_map.get(sid) or "").strip() or "未分班"
+        by_cls.setdefault(cls, []).append(sid)
+
+    def _cls_avg(sids: list[str]) -> float | None:
+        vals = [float(student_last_total[s]) for s in sids if s in student_last_total]
+        return round(sum(vals) / len(vals), 1) if vals else None
+
+    overview_rows: list[str] = []
+    class_blocks: list[str] = []
+    for cls in sorted(by_cls.keys(), key=lambda c: (c == "未分班", c)):
+        sids = by_cls[cls]
+        attn = [
+            s
+            for s in sids
+            if _is_attention_student(
+                s,
+                insights=insights,
+                student_last_total=student_last_total,
+                level_full=level_full,
+            )
+        ]
+        rest = [s for s in sids if s not in set(attn)]
+        avg = _cls_avg(sids)
+        overview_rows.append(
+            "<tr>"
+            f"<td>{html.escape(cls)}</td>"
+            f"<td class='num'>{len(sids)}</td>"
+            f"<td class='num'>{_fmt(avg) if avg is not None else '—'}</td>"
+            f"<td class='num'>{len(attn)}</td>"
+            "</tr>"
+        )
+        attn_grid = (
+            f'<div class="archive-grid">{"".join(cards_map[s] for s in attn)}</div>'
+            if attn
+            else '<p class="edu-sub">本班暂无「需关注」学生（低分或薄弱知识点）。</p>'
+        )
+        rest_block = ""
+        if rest:
+            rest_block = (
+                f'<details class="archive-rest">'
+                f"<summary>展开其余 {len(rest)} 人</summary>"
+                f'<div class="archive-grid">{"".join(cards_map[s] for s in rest)}</div>'
+                f"</details>"
+            )
+        class_blocks.append(
+            f'<details class="archive-class">'
+            f"<summary><strong>{html.escape(cls)}</strong>"
+            f" · {len(sids)} 人"
+            f"{f' · 均分 {_fmt(avg)}' if avg is not None else ''}"
+            f" · 需关注 <b class='bad'>{len(attn)}</b> 人"
+            f"</summary>"
+            f"{attn_grid}{rest_block}"
+            f"</details>"
+        )
+
+    overview = (
+        '<div class="edu-table-wrap" style="margin-bottom:14px">'
+        "<table class='edu-table'><thead><tr>"
+        "<th>班级</th><th class='num'>人数</th><th class='num'>均分</th>"
+        "<th class='num'>需关注人数</th></tr></thead>"
+        f"<tbody>{''.join(overview_rows)}</tbody></table></div>"
+    )
+    group_note = (
+        '<p class="archive-note">未选班级：先看各班一览，再按班展开。'
+        "班内默认只列<strong>需关注</strong>学生（得分低于满分 60%，或有薄弱知识点/小题）；"
+        "其余学生点「展开其余」查看。要看某一班全员档案，请在表单选择班级。</p>"
+    )
+    return group_note + note + overview + "".join(class_blocks)
 
 
 def build_student_archive_from_score_rows(
@@ -482,12 +624,15 @@ def build_student_archive_from_score_rows(
     full_score: float | None = None,
     student_item_insights: dict[str, dict[str, Any]] | None = None,
     single_subject: bool = False,
+    group_by_class: bool = False,
 ) -> str:
     """从成绩明细行组装「每位学生详细档案与个性化建议」HTML。
 
     供 ``class_overview`` / 综合报告 / ``subject_diagnosis``（``single_subject=True``）共用。
     行字段兼容：``student`` / ``student_id`` / ``name``、``score``、
     ``subject`` / ``subject_name``、``exam`` / ``exam_name``。
+
+    ``group_by_class=True``：未选班级时按班折叠（各班一览 + 需关注优先）。
     """
     if not rows:
         return (
@@ -499,6 +644,7 @@ def build_student_archive_from_score_rows(
 
     reveal_name = not is_anonymize_display_enabled()
     labels: dict[str, str] = {}
+    student_class: dict[str, str] = {}
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
     for r in rows:
         if not isinstance(r, dict):
@@ -512,6 +658,9 @@ def build_student_archive_from_score_rows(
             continue
         if reveal_name and named and named != sid:
             labels[sid] = named
+        cls = str(r.get("class") or r.get("class_name") or r.get("bj") or "").strip()
+        if cls and sid not in student_class:
+            student_class[sid] = cls
         exam = str(
             r.get("exam") or r.get("exam_name") or exam_name or "本次考试"
         ).strip() or "本次考试"
@@ -615,6 +764,8 @@ def build_student_archive_from_score_rows(
         student_item_insights=student_item_insights,
         single_subject=single_subject,
         labels=labels,
+        group_by_class=group_by_class,
+        student_class=student_class,
     )
 
 

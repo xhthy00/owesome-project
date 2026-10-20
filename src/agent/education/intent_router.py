@@ -468,6 +468,7 @@ def _candidate_pool(question: str) -> list[ReportType]:
         ReportType.LINE_SHIFT,
         ReportType.ABSENCE,
         ReportType.CLASS_LINE_REACH,
+        ReportType.ELITE_RANK_SHIFT,
     ):
         candidates.discard(rt)
 

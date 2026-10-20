@@ -368,6 +368,7 @@ _GENERATE_REPORT_ALLOWED_TYPES = frozenset(
         "line_shift",
         "absence",
         "class_line_reach",
+        "elite_rank_shift",
     }
 )
 
@@ -422,6 +423,7 @@ async def generate_report(
         ReportType.LINE_SHIFT,
         ReportType.ABSENCE,
         ReportType.CLASS_LINE_REACH,
+        ReportType.ELITE_RANK_SHIFT,
     ):
         from datasource.service.edu_permission import edu_scope_dict_for_user_id
 
@@ -451,11 +453,22 @@ async def generate_report(
                 filters.get("class_name") or "",
                 exam_raw,
             )
-        else:
+        elif report_type == ReportType.CLASS_LINE_REACH:
             from src.agent.education.class_line_reach import class_line_reach_request_error
 
             exam_raw = str(filters.get("exam_name") or "").split(";;")[0].strip()
             checked = class_line_reach_request_error(
+                role,
+                filters.get("school_name") or "",
+                filters.get("class_name") or "",
+                exam_raw,
+                filters.get("compare_exam") or "",
+            )
+        else:
+            from src.agent.education.elite_rank_shift import elite_rank_shift_request_error
+
+            exam_raw = str(filters.get("exam_name") or "").split(";;")[0].strip()
+            checked = elite_rank_shift_request_error(
                 role,
                 filters.get("school_name") or "",
                 filters.get("class_name") or "",
@@ -491,7 +504,12 @@ async def generate_report(
     # 查无成绩时给出可操作提示，避免前端只看到全 0 / 「-」的空壳报告
     produced = (
         report_type
-        in (ReportType.LINE_SHIFT, ReportType.ABSENCE, ReportType.CLASS_LINE_REACH)
+        in (
+            ReportType.LINE_SHIFT,
+            ReportType.ABSENCE,
+            ReportType.CLASS_LINE_REACH,
+            ReportType.ELITE_RANK_SHIFT,
+        )
         and bool((res.html or "").strip())
     )
     if not err and not produced and int((res.stats or {}).get("count") or 0) == 0:

@@ -40,6 +40,7 @@ _TEMPLATE_PATH: dict[ReportType, str] = {
     ReportType.LINE_SHIFT: "education/line_shift.html",
     ReportType.ABSENCE: "education/absence.html",
     ReportType.CLASS_LINE_REACH: "education/class_line_reach.html",
+    ReportType.ELITE_RANK_SHIFT: "education/elite_rank_shift.html",
 }
 
 #: 额外模板文件名 → ReportType（非主路径，但仍属上述标准类型）

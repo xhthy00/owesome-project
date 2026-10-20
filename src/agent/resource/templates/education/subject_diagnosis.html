@@ -137,10 +137,22 @@
     .archive-advice { background: #fff; border-radius: 8px; padding: 8px 12px; border: 1px solid var(--edu-border); }
     .advice-list { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--edu-text-lv2); line-height: 1.55; }
     .advice-list li { margin: 4px 0; }
+    .archive-class { border: 1px solid var(--edu-border); border-radius: 10px; padding: 0 14px 12px; margin-bottom: 12px; background: #fff; }
+    .archive-class > summary { cursor: pointer; list-style: none; padding: 12px 0; font-size: 14px; color: var(--edu-text-lv1); }
+    .archive-class > summary::-webkit-details-marker { display: none; }
+    .archive-class > summary::before { content: "▸ "; color: var(--edu-primary); }
+    .archive-class[open] > summary::before { content: "▾ "; }
+    .archive-class .bad { color: var(--edu-error); }
+    .archive-rest { margin-top: 10px; border-top: 1px dashed var(--edu-border); padding-top: 8px; }
+    .archive-rest > summary { cursor: pointer; font-size: 13px; color: var(--edu-primary); padding: 6px 0; }
     @media (min-width: 900px) {
       .archive-grid { grid-template-columns: 1fr 1fr; }
     }
-    @media print { body { background: #fff; } .edu-card { border: none; } }
+    @media print {
+      body { background: #fff; } .edu-card { border: none; }
+      .archive-class, .archive-rest { border: none; }
+      .archive-class[open] > summary, .archive-rest > summary { display: none; }
+    }
   </style>
 </head>
 <body>
@@ -308,7 +320,7 @@
 
     <section class="edu-card" id="studentArchiveSection">
       <h2>每位学生详细档案与个性化建议</h2>
-      <p class="edu-sub">按本报告范围内参考学生逐人展示本场得分；个性化建议依据该生小题/知识点得分率生成（不展示跨科优势、待提升与偏科度），便于任课教师与班主任跟进。</p>
+      <p class="edu-sub">选了班级：展示该班全员档案。未选班级：先出各班一览，再按班折叠（默认只展开需关注学生）。个性化建议依据该生小题/知识点得分率生成。</p>
       <div id="studentArchiveBody">{{STUDENT_ARCHIVE_TABLE}}</div>
     </section>
     <script>

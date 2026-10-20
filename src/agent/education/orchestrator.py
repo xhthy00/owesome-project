@@ -375,6 +375,8 @@ class ReportOrchestrator:
             return await self._gather_absence(spec)
         if spec.report_type == ReportType.CLASS_LINE_REACH:
             return await self._gather_class_line_reach(spec)
+        if spec.report_type == ReportType.ELITE_RANK_SHIFT:
+            return await self._gather_elite_rank_shift(spec)
         if spec.report_type in _BUREAU_TYPES:
             return await self._gather_bureau_analysis(spec)
 
@@ -805,6 +807,7 @@ class ReportOrchestrator:
                     exam_name=exam_name,
                     full_score=full_score,
                     single_subject=True,
+                    group_by_class=not bool(str(class_name or "").strip()),
                 )
             if archive:
                 data["STUDENT_ARCHIVE_TABLE"] = archive
@@ -825,16 +828,52 @@ class ReportOrchestrator:
         cfg: EducationConfig,
         spec: ReportSpec,
     ) -> None:
-        """填充班级横向对比模板字段：均分柱图 + 排名表 + 摘要。"""
-        from src.agent.education.aggregation import aggregate_by
+        """填充班级横向对比模板字段：均分柱图 + 排名表 + 摘要。
+
+        选了科目 → 按该科单科分比各班；
+        未选科目 → 先按学生汇总各科得分再比各班（禁止把各科分数直接混均）。
+        """
+        from src.agent.education.aggregation import (
+            aggregate_by,
+            collapse_score_rows_to_student_total,
+        )
         from src.agent.education.dimension_parse import parse_grade_from_class
         from src.agent.education.school_intervention import build_class_compare_table_html
 
         school_name = spec.filters.get("school_name", "")
-        subject = spec.filters.get("subject", "")
+        subject = str(spec.filters.get("subject") or "").strip()
         exam_name = spec.filters.get("exam_name", "")
+        # 未选科目：各科合计（按学生），文案与单科口径区分开
+        subject_label = subject or "各科合计"
+        work_rows = rows
+        school_stats = stats
+        if not subject:
+            work_rows = collapse_score_rows_to_student_total(rows)
+            totals = [
+                float(r["score"])
+                for r in work_rows
+                if r.get("score") is not None
+            ]
+            full_score = _resolve_full_score_from_rows(work_rows)
+            school_stats = compute_score_stats(totals, cfg, full_score)
+            data["SUBJECT_NAME"] = subject_label
+            data["TOTAL_COUNT"] = str(school_stats.get("count") or 0)
+            data["AVG_SCORE"] = _fmt(school_stats.get("avg"))
+            data["PASS_RATE"] = _fmt_pct(school_stats.get("pass_rate"))
+            data["EXCELLENT_RATE"] = _fmt_pct(school_stats.get("excellent_rate"))
+            data["MAX_SCORE"] = _fmt(school_stats.get("max"))
+            data["MIN_SCORE"] = _fmt(school_stats.get("min"))
+            data["STDEV"] = _fmt(school_stats.get("stdev"))
+            data["_stats"] = school_stats
+            data.update(
+                _dispersion_fields(
+                    school_stats.get("stdev"),
+                    full_score=school_stats.get("full_score"),
+                    variance=school_stats.get("variance"),
+                )
+            )
 
-        class_agg = aggregate_by("class", rows, cfg)
+        class_agg = aggregate_by("class", work_rows, cfg)
         # 去掉「未知班级」噪声
         class_agg = [
             g for g in class_agg
@@ -871,10 +910,12 @@ class ReportOrchestrator:
             data["CLASS_RANKING_TABLE"] = "<p>未查到可对比的班级成绩数据。</p>"
             data["DISPERSION_INFO"] = "<p>无班级数据，无法分析均衡度。</p>"
             data["SUMMARY"] = (
-                f"<p>{school_name or '本校'}{subject or ''}{exam_name or '本次考试'}"
+                f"<p>{school_name or '本校'}{subject_label}{exam_name or '本次考试'}"
                 "暂无各班成绩，请检查筛选条件或数据权限。</p>"
             )
-            data["RECOMMENDATIONS"] = "<p>确认学校、考试、科目后重新生成；或换有数据的考试场次。</p>"
+            data["RECOMMENDATIONS"] = (
+                "<p>确认学校、考试后重新生成；要比单科请选择科目；或换有数据的考试场次。</p>"
+            )
             return
 
         # 柱图：按均分升序（横向柱图 y 轴自下而上）
@@ -885,7 +926,7 @@ class ReportOrchestrator:
                 "classes": [str(x.get("name") or "") for x in chart_items],
                 "values": [round(float(x.get("value") or 0), 2) for x in chart_items],
             },
-            title=f"{subject or '全科'}各班均分对比",
+            title=f"{subject_label}各班均分对比",
         )
 
         # 排名明细表（含校级基准）
@@ -901,12 +942,18 @@ class ReportOrchestrator:
         ]
         data["CLASS_RANKING_TABLE"] = build_class_compare_table_html(
             table_agg,
-            school_stats=stats,
+            school_stats=school_stats,
         ) or self._grade_ranking_table_html(ranked)
 
         top = ranked[0]
         bottom = ranked[-1]
         gap = float(top.get("value") or 0) - float(bottom.get("value") or 0)
+        scope_note = (
+            ""
+            if subject
+            else "<p class='edu-sub'>未选科目：按每名学生各科得分合计后比各班"
+            "（人数=学生数，不是科次）。要比某一科请在表单选择科目。</p>"
+        )
         data["DISPERSION_INFO"] = (
             f"<p>共 <strong>{len(ranked)}</strong> 个班级参与对比；"
             f"最高均分 <strong>{_fmt(top.get('value'))}</strong>"
@@ -914,10 +961,11 @@ class ReportOrchestrator:
             f"最低均分 <strong>{_fmt(bottom.get('value'))}</strong>"
             f"（{bottom.get('name')}），"
             f"班际分差 <strong>{_fmt(gap)}</strong> 分。</p>"
+            f"{scope_note}"
             f"<p>{data.get('DISPERSION_TIP') or ''}</p>"
         )
         data["SUMMARY"] = (
-            f"<p>{school_name or '本校'}{exam_name or '本次考试'}{subject or '全科'}："
+            f"<p>{school_name or '本校'}{exam_name or '本次考试'}{subject_label}："
             f"<strong>{top.get('name')}</strong> 均分领先"
             f"（{_fmt(top.get('value'))}），"
             f"<strong>{bottom.get('name')}</strong> 相对偏低"
@@ -1336,6 +1384,84 @@ class ReportOrchestrator:
             grade_rates_hidden=grade_rates_hidden,
             trend_exams=trend_exams,
             trend_rows=overview_by_exam,
+        )
+
+    async def _gather_elite_rank_shift(self, spec: ReportSpec) -> dict[str, Any]:
+        """尖子生排名变化：一届学生多场考试的全市排名追踪。对比场默认上一场。"""
+        from src.agent.education.class_line_reach import pick_compare_exam_or_none
+        from src.agent.education.elite_rank_shift import (
+            build_elite_rank_shift_report,
+            parse_top_n,
+            ranked_pool_sql,
+        )
+        from src.agent.education.line_reach_report import (
+            exam_batch_select_sql,
+            ordered_exam_names,
+            sql_result_to_dicts,
+        )
+        from src.agent.education.line_shift import (
+            exam_date_text,
+            select_line_shift_schools,
+            xx_literals,
+        )
+        from src.agent.education.schema_mapping import normalize_jc_label
+        from src.agent.education.subject_research import school_select_sql
+
+        school_query = str(spec.filters.get("school_name") or "").strip()
+        class_name = str(spec.filters.get("class_name") or "").strip()
+        exam_name = str(spec.filters.get("exam_name") or "").split(";;")[0].strip()
+        compare_query = str(spec.filters.get("compare_exam") or "").strip()
+        top_n = parse_top_n(spec.filters.get("top_n"))
+
+        role = ""
+        if self._user_id:
+            from src.datasource.service.edu_permission import edu_scope_dict_for_user_id
+
+            role = str(edu_scope_dict_for_user_id(self._user_id).get("edu_role") or "")
+
+        # 学校：教育局可不选（全市）；下钻/校长/老师点校
+        schools = sql_result_to_dicts(await self._execute_sql(school_select_sql()))
+        matched = select_line_shift_schools(schools, school_query) if school_query else []
+        if school_query and not matched:
+            raise ValueError(f"未找到学校「{school_query}」。请从列表里选择库内学校名称。")
+
+        batches = sql_result_to_dicts(await self._execute_sql(exam_batch_select_sql()))
+        compare_exam, compare_note = pick_compare_exam_or_none(batches, exam_name, compare_query)
+
+        # 历场走势：本届全部场次（按考试时间排序）
+        jc = normalize_jc_label(exam_name)
+        trend_exams = [
+            e for e in ordered_exam_names(batches) if jc and normalize_jc_label(e) == jc
+        ]
+        if exam_name not in trend_exams:
+            trend_exams = [exam_name]
+        fetch_exams: list[str] = []
+        for exam in (*trend_exams, exam_name, compare_exam):
+            if exam and exam not in fetch_exams:
+                fetch_exams.append(exam)
+
+        names = xx_literals(matched) if matched else []
+        rows_by_exam: dict[str, list[dict[str, Any]]] = {}
+        for exam in fetch_exams:
+            rows_by_exam[exam] = sql_result_to_dicts(
+                await self._execute_sql(ranked_pool_sql(exam, names))
+            )
+        if not any(rows_by_exam.values()):
+            raise ValueError(f"「{exam_name}」没有在籍生排名数据，请核对考试名称。")
+
+        return build_elite_rank_shift_report(
+            role=role,
+            exam_name=exam_name,
+            compare_exam=compare_exam,
+            top_n=top_n,
+            rows_by_exam=rows_by_exam,
+            schools=matched,
+            class_name=class_name,
+            compare_note=compare_note,
+            curr_date=exam_date_text(exam_name, batches),
+            compare_date=exam_date_text(compare_exam, batches),
+            report_time=_now_str(),
+            trend_exams=trend_exams,
         )
 
     async def _gather_subject_research(self, spec: ReportSpec) -> dict[str, Any]:

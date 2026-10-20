@@ -966,15 +966,36 @@ def _pred_targets_overview_student(pred: str) -> bool:
     return bool(re.search(r"anon_stu_id|student_id", pred, re.I))
 
 
-def _preds_for_overview_select(
-    select: Any,
-    predicates: list[str],
-    *,
-    skip_school_scope: bool = False,
-) -> list[str]:
-    """全市/区县指标与全市排名不注入本校/本班；明细与点名他校仍注入。"""
-    if not skip_school_scope and not _is_citywide_metric_select(select):
-        return predicates
+_STUDENT_RANK_FN_RE = re.compile(
+    r"\b(?:RANK|DENSE_RANK|ROW_NUMBER)\s*\(\s*\)", re.I
+)
+
+
+def _select_is_student_rank_pool(select: Any) -> bool:
+    """学生级全市排名池：RANK 窗口投影、无 GROUP BY。
+
+    与 ``_sql_is_citywide_rank_pool``（GROUP BY xx/bj 的聚合排名池）互补：
+    这里是每个学生一行的全市排名窗口（如尖子生排名），排名口径必须全市，
+    不能被本校/本班谓词收窄——过滤由主查询层做。
+    只看投影表达式的文本（不看 JOIN 子树，避免外层被 JOIN 内的
+    RANK 子查询误判）。
+    """
+    text = select.sql() or ""
+    if not (_OVERVIEW_SQL_RE.search(text) or re.search(r"\btb_score\b", text, re.I)):
+        return False
+    try:
+        proj_text = " ".join(
+            str(e.sql() or "") for e in (select.expressions or [])
+        )
+    except Exception:
+        return False
+    if not _STUDENT_RANK_FN_RE.search(proj_text):
+        return False
+    return not _group_by_column_names(select)
+
+
+def _drop_scope_predicates(predicates: list[str]) -> list[str]:
+    """丢掉本校/本班/本学生谓词（全市池口径）。"""
     out: list[str] = []
     for p in predicates:
         if _pred_targets_overview_school(p):
@@ -985,6 +1006,20 @@ def _preds_for_overview_select(
             continue
         out.append(p)
     return out
+
+
+def _preds_for_overview_select(
+    select: Any,
+    predicates: list[str],
+    *,
+    skip_school_scope: bool = False,
+) -> list[str]:
+    """全市/区县指标与全市排名不注入本校/本班；明细与点名他校仍注入。"""
+    if _select_is_student_rank_pool(select):
+        return _drop_scope_predicates(predicates)
+    if not skip_school_scope and not _is_citywide_metric_select(select):
+        return predicates
+    return _drop_scope_predicates(predicates)
 
 
 def _combine_predicate_tree(predicates: list[str], dialect: str) -> Any:

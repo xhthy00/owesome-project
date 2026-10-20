@@ -255,10 +255,66 @@ def prepare_score_rows_for_kpi(
     return dedupe_score_rows_by_student(narrowed)
 
 
+def collapse_score_rows_to_student_total(
+    score_rows: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """未指定科目时：按学生汇总各科得分，一行一学生。
+
+    用于班级横比的「全科」口径——禁止把各科分数直接混均（会膨胀人数、
+    打乱满分）。满分 = 该生各科 ``exam_score`` 之和（同科只计一次）。
+    """
+    narrowed = prepare_score_rows_for_kpi(score_rows)
+    # sid -> {score sum, full sum, class, school, exam, subjects seen}
+    acc: dict[str, dict[str, Any]] = {}
+    for r in narrowed:
+        if not isinstance(r, dict):
+            continue
+        sid = _student_key(r)
+        if not sid:
+            continue
+        score = _float(r.get("score"))
+        if score is None:
+            continue
+        subj = str(r.get("subject") or r.get("subject_name") or "").strip()
+        slot = acc.get(sid)
+        if slot is None:
+            slot = {
+                "student_id": sid,
+                "student_name": str(r.get("student_name") or "").strip() or sid,
+                "class": str(r.get("class") or r.get("class_name") or "").strip(),
+                "school_name": str(r.get("school_name") or r.get("school") or "").strip(),
+                "exam_name": str(r.get("exam_name") or r.get("exam") or "").strip(),
+                "score": 0.0,
+                "exam_score": 0.0,
+                "_subjects": set(),
+            }
+            acc[sid] = slot
+        slot["score"] = float(slot["score"]) + score
+        # 同科满分只加一次，避免重复行抬高满分
+        if subj and subj not in slot["_subjects"]:
+            fs = _float(r.get("exam_score") or r.get("full_score"))
+            if fs is not None and fs > 0:
+                slot["exam_score"] = float(slot["exam_score"]) + fs
+            slot["_subjects"].add(subj)
+        # 班级/校名以后出现的非空值为准（通常一致）
+        cls = str(r.get("class") or r.get("class_name") or "").strip()
+        if cls:
+            slot["class"] = cls
+    out: list[dict[str, Any]] = []
+    for slot in acc.values():
+        slot.pop("_subjects", None)
+        # 没有任何科目满分时，留给下游按分数推断
+        if not slot.get("exam_score"):
+            slot.pop("exam_score", None)
+        out.append(slot)
+    return out
+
+
 __all__ = [
     "DIMENSIONS",
     "aggregate_by",
     "aggregate_hierarchy",
+    "collapse_score_rows_to_student_total",
     "dedupe_score_rows_by_student",
     "narrow_score_rows_to_primary_exam",
     "pick_primary_exam_id",

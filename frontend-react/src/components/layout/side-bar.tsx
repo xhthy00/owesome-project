@@ -537,7 +537,7 @@ export default function SideBar() {
                                     {item.title || `对话 ${item.id}`}
                                   </div>
                                   <div className="mt-0.5 truncate text-[10px] text-[#98a2b3]">
-                                    {item.update_time?.slice(0, 16) || "刚刚"}
+                                    {item.update_time?.slice(0, 16).replace("T", " ") || "刚刚"}
                                   </div>
                                 </Link>
                                 <button

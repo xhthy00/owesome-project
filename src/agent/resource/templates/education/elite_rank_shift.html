@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ REPORT_TITLE }}</title>
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
+  <style>
+    :root {
+      --edu-primary: #1677ff; --edu-primary-bg: #e6f4ff;
+      --edu-text: rgba(0,0,0,0.88); --edu-text-2: rgba(0,0,0,0.65); --edu-text-3: rgba(0,0,0,0.45);
+      --edu-border: #f0f0f0; --edu-ok: #52c41a; --edu-warn: #faad14; --edu-err: #ff4d4f;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; background: #f0f2f5; color: var(--edu-text); line-height: 1.7; }
+    .edu-container { max-width: 1080px; margin: 24px auto; padding: 0 16px 32px; }
+    .edu-card { background: #fff; border: 1px solid var(--edu-border); border-radius: 10px; padding: 22px 26px; margin-bottom: 16px; }
+    h1 { margin: 0 0 8px; font-size: 22px; font-weight: 600; }
+    h2 { margin: 0 0 12px; font-size: 17px; font-weight: 600; padding-bottom: 8px; border-bottom: 1px solid var(--edu-border); }
+    p { margin: 6px 0; }
+    .edu-sub { color: var(--edu-text-3); font-size: 13px; }
+    .edu-badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; background: var(--edu-primary-bg); color: var(--edu-primary); margin-right: 6px; }
+    .edu-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .edu-table th, .edu-table td { border-bottom: 1px solid var(--edu-border); padding: 8px 10px; text-align: left; }
+    .edu-table th { background: var(--edu-primary-bg); color: var(--edu-text-2); font-weight: 600; }
+    .edu-table td.num, .edu-table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .edu-table td.neg { color: var(--edu-err); font-weight: 600; }
+    .edu-table td.pos { color: var(--edu-ok); font-weight: 600; }
+    .edu-table td.warn { color: var(--edu-warn); font-weight: 600; }
+    .edu-note { background: #fafafa; border-left: 3px solid var(--edu-primary); padding: 8px 12px; margin: 8px 0; }
+    .edu-chart { width: 100%; height: 360px; }
+    .edu-footer { color: var(--edu-text-3); font-size: 12px; text-align: right; }
+    ul { margin: 8px 0; padding-left: 20px; }
+  </style>
+</head>
+<body>
+  <div class="edu-container">
+    <div class="edu-card">
+      <span class="edu-badge">{{ REPORT_TYPE }}</span>
+      <h1>{{ REPORT_TITLE }}</h1>
+      <p class="edu-sub">{{ SCOPE }} · 尖子生口径：{{ POOL_DESC }}（按全市在籍生排名取前若干名，含并列）</p>
+      <p>本次考试：{{ CURR_EXAM }}{% if CURR_DATE %}（{{ CURR_DATE }}）{% endif %}</p>
+      {% if COMPARE_ON %}
+      <p>对比考试：{{ COMPARE_EXAM }}{% if COMPARE_DATE %}（{{ COMPARE_DATE }}）{% endif %}</p>
+      {% endif %}
+      {% if COMPARE_NOTE %}<p class="edu-note">{{ COMPARE_NOTE }}</p>{% endif %}
+      <p class="edu-footer">{{ REPORT_TIME }}</p>
+    </div>
+
+    <div class="edu-card">
+      <h2>总览</h2>
+      <p class="edu-note">{{ OVERVIEW }}</p>
+    </div>
+
+    <div class="edu-card">
+      {% if COMPARE_ON %}
+      <h2>上一场尖子生本次表现</h2>
+      <p class="edu-sub">锚定对比考试的{{ POOL_DESC }}，看这批学生本次的全市排名变化；退步最狠的排最前。「掉出」= 本次不在{{ POOL_DESC }}；「稳住」= 本次仍在池内。</p>
+      <table class="edu-table">
+        <thead>
+          <tr>
+            <th class="num">#</th><th>学生</th>
+            {% if SHOW_SCHOOL %}<th>学校</th>{% endif %}
+            <th>班级</th>
+            <th class="num">上一场全市排名</th>
+            <th class="num">本次全市排名</th>
+            <th class="num">变化</th>
+            <th>状态</th>
+            <th>主要退步科目（市排名）</th>
+            <th class="num">本次六门总分</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in MAIN_ROWS %}
+          <tr>
+            <td class="num">{{ row.idx }}</td>
+            <td>{{ row.name }}</td>
+            {% if SHOW_SCHOOL %}<td>{{ row.school }}</td>{% endif %}
+            <td>{{ row.class }}</td>
+            <td class="num">{{ row.prev_rank }}</td>
+            <td class="num">{{ row.curr_rank }}</td>
+            <td class="num{% if row.delta.startswith('上升') %} pos{% elif row.delta.startswith('下降') %} neg{% endif %}">{{ row.delta }}</td>
+            <td class="{% if row.status.startswith('掉出') %}warn{% elif row.status == '稳住' %}pos{% endif %}">{{ row.status }}</td>
+            <td class="{% if row.subjects != '—' and row.subjects %}neg{% endif %}">{{ row.subjects }}</td>
+            <td class="num">{{ row.total }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <h2>本次{{ POOL_DESC }}名单</h2>
+      <p class="edu-sub">未选对比考试（或本届没有更早场次），只列本次名单。要看变化请选一场对比考试。</p>
+      <table class="edu-table">
+        <thead>
+          <tr>
+            <th class="num">#</th><th>学生</th>
+            {% if SHOW_SCHOOL %}<th>学校</th>{% endif %}
+            <th>班级</th>
+            <th class="num">本次全市排名</th>
+            <th class="num">本次六门总分</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in MAIN_ROWS %}
+          <tr>
+            <td class="num">{{ row.idx }}</td>
+            <td>{{ row.name }}</td>
+            {% if SHOW_SCHOOL %}<td>{{ row.school }}</td>{% endif %}
+            <td>{{ row.class }}</td>
+            <td class="num">{{ row.curr_rank }}</td>
+            <td class="num">{{ row.total }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+
+    {% if COMPARE_ON and NEW_ROWS %}
+    <div class="edu-card">
+      <h2>本次新进{{ POOL_DESC }}</h2>
+      <p class="edu-sub">本次在池、上一场不在池（含上一场缺考后回归），按本次全市排名升序；「主要拉动科目」= 上一场→本次单科全市排名升幅最大的科目（上一场无成绩则无法归因）。</p>
+      <table class="edu-table">
+        <thead>
+          <tr>
+            <th class="num">#</th><th>学生</th>
+            {% if SHOW_SCHOOL %}<th>学校</th>{% endif %}
+            <th>班级</th>
+            <th class="num">本次全市排名</th>
+            <th>主要拉动科目（市排名）</th>
+            <th class="num">本次六门总分</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in NEW_ROWS %}
+          <tr>
+            <td class="num">{{ row.idx }}</td>
+            <td>{{ row.name }}</td>
+            {% if SHOW_SCHOOL %}<td>{{ row.school }}</td>{% endif %}
+            <td>{{ row.class }}</td>
+            <td class="num">{{ row.curr_rank }}</td>
+            <td class="{% if row.lift_subjects != '—' and row.lift_subjects %}pos{% endif %}">{{ row.lift_subjects }}</td>
+            <td class="num">{{ row.total }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+
+    {% if COMPARE_ON and SUBJECT_ROWS %}
+    <div class="edu-card">
+      <h2>学科归因汇总</h2>
+      <p class="edu-sub">上一场池内排名下滑学生的单科归因，按平均单科降幅降序——排最前的科目对本校尖子生拖累最重，教研组可直接按名单跟进。「新进拉动」= 本次新进学生的单科排名上升人数。单科排名 = 该科全市选考在籍生中的名次。</p>
+      <table class="edu-table">
+        <thead>
+          <tr>
+            <th>科目</th>
+            <th class="num">池内单科退步人数</th>
+            <th class="num">平均单科降幅（名）</th>
+            <th class="num">新进拉动人数</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in SUBJECT_ROWS %}
+          <tr>
+            <td>{{ row.subject }}</td>
+            <td class="num">{{ row.drop_n }}</td>
+            <td class="num">{{ row.avg_drop }}</td>
+            <td class="num">{{ row.lift_n }}</td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+      {% if SUBJECT_CHART %}
+      <div id="subjectChart" class="edu-chart"></div>
+      <script type="application/json" id="subjectChartData">{{ SUBJECT_CHART }}</script>
+      <script>
+        (function () {
+          var el = document.getElementById('subjectChart');
+          var raw = (document.getElementById('subjectChartData').textContent || '').trim();
+          if (!raw || raw === '{}' || raw === 'null') { if (el) el.style.display = 'none'; return; }
+          try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) { if (el) el.style.display = 'none'; }
+        })();
+      </script>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if TREND_CHART %}
+    <div class="edu-card">
+      <h2>历场全市排名走势</h2>
+      <p class="edu-sub">{{ TREND_NOTE }}</p>
+      <div id="trendChart" class="edu-chart"></div>
+      <script type="application/json" id="trendChartData">{{ TREND_CHART }}</script>
+      <script>
+        (function () {
+          var el = document.getElementById('trendChart');
+          var raw = (document.getElementById('trendChartData').textContent || '').trim();
+          if (!raw || raw === '{}' || raw === 'null') { if (el) el.style.display = 'none'; return; }
+          try { echarts.init(el).setOption(JSON.parse(raw)); } catch (e) { if (el) el.style.display = 'none'; }
+        })();
+      </script>
+    </div>
+    {% endif %}
+
+    {% if RECOMMENDATIONS %}
+    <div class="edu-card">
+      <h2>建议</h2>
+      <ul>
+        {% for rec in RECOMMENDATIONS %}
+        <li>{{ rec }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    <div class="edu-card">
+      <h2>计算口径</h2>
+      <ul>
+        <li>排名只认六门总分（zf6m），全市在籍生池，RANK() 含并列（同分同名次）；缺考/无六门总分不进池。</li>
+        <li>池按角色：教育局 = 全市前 N；校长（或教育局下钻一所学校）= 本校前 N（本校学生按全市排名取前 N，含并列）；老师 = 本班前 N。N 档位 100/50/30/10，默认 30。</li>
+        <li>主表锚定对比考试（上一场）的池：变化 = 上一场排名 − 本次排名，正为上升；掉出 = 本次不在池内（附现排名）；上一场缺考后本次进池算新进。</li>
+        <li>历场走势只画本次池 ∪ 上一场池的学生；排名窗口始终全市口径，老师/校长账号看到的学生行仍限本班/本校。</li>
+        <li>退步预警：较上一场全市排名下降 ≥ 30 名，或最近三场连降两场。</li>
+        <li>单科排名 = 该科全市选考在籍生中的名次（RANK 含并列）；再选科目（化学/生物/政治/地理）按赋分（转换分）排，与全系统对外展示口径一致；学科归因只算该生选科组合内的六门。</li>
+        <li>「主要退步科目」= 总排名下滑学生（含掉出）的单科排名降幅最大的前 2 科；「主要拉动科目」= 新进学生的单科排名升幅最大的前 2 科；本次缺考无法归因。</li>
+        <li>脱敏开启时名单与走势线只显示学生编码；关闭后显示姓名。身份证号、考生号永不显示。</li>
+      </ul>
+    </div>
+  </div>
+</body>
+</html>
