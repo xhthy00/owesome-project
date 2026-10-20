@@ -1,4 +1,4 @@
-import { ArrowDownOutlined, ArrowLeftOutlined, ArrowUpOutlined, CloseOutlined, HolderOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowLeftOutlined, ArrowUpOutlined, CloseOutlined, HolderOutlined, PlusOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -37,6 +37,16 @@ const SUBJECT_FULL_SCORE: Record<string, number> = {
   地理: 100
 };
 const QUESTION_TYPES = ["单选题", "多选题", "填空题", "解答题", "写作"];
+
+function blankQuestion(): PaperQuestionDraft {
+  return { question_no: "", question_type: "解答题", question_score: 0, content: "" };
+}
+
+function insertQuestionAfter(rows: PaperQuestionDraft[], index: number): PaperQuestionDraft[] {
+  const next = rows.slice();
+  next.splice(index + 1, 0, blankQuestion());
+  return next;
+}
 
 function reorderQuestions<T>(rows: T[], from: number, to: number): T[] {
   if (from === to || from < 0 || to < 0 || from >= rows.length || to >= rows.length) return rows;
@@ -437,7 +447,7 @@ export function PaperImportPage() {
     },
     {
       title: "",
-      width: 148,
+      width: 180,
       render: (_value, _row, index) => (
         <Space size={0}>
           <span
@@ -467,6 +477,13 @@ export function PaperImportPage() {
             disabled={index >= questions.length - 1}
             icon={<ArrowDownOutlined />}
             onClick={() => setQuestions((rows) => reorderQuestions(rows, index, index + 1))}
+          />
+          <Button
+            type="text"
+            size="small"
+            aria-label="在下方添加"
+            icon={<PlusOutlined />}
+            onClick={() => setQuestions((rows) => insertQuestionAfter(rows, index))}
           />
           <Button type="link" danger onClick={() => setQuestions((rows) => rows.filter((_, i) => i !== index))}>
             删除
@@ -582,16 +599,13 @@ export function PaperImportPage() {
           <Space>
             <Button
               onClick={() =>
-                setQuestions((rows) => [
-                  ...rows,
-                  { question_no: "", question_type: "解答题", question_score: 0, content: "" }
-                ])
+                setQuestions((rows) => [...rows, blankQuestion()])
               }
             >
               添加题目
             </Button>
             <Button type="primary" loading={saving} onClick={() => void save()}>
-              写入并打开题目
+              提交试卷
             </Button>
           </Space>
         </div>
