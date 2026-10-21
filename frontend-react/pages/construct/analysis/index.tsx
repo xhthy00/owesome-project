@@ -164,7 +164,7 @@ function fieldsForType(reportType: string): {
   };
   switch (reportType) {
     case "class_overview":
-      flags = { class_name: true, exam_name: true, subject: true };
+      flags = { school_name: true, class_name: true, exam_name: true, subject: true };
       break;
     case "grade_comparison":
       flags = { school_name: true, exam_name: true, subject: true };
@@ -173,7 +173,13 @@ function fieldsForType(reportType: string): {
       flags = { school_name: true, class_name: true, exam_name: true, subject: true };
       break;
     case "student_profile":
-      flags = { student_name: true, exam_name: true, subject: true, class_name: true };
+      flags = {
+        school_name: true,
+        student_name: true,
+        exam_name: true,
+        subject: true,
+        class_name: true
+      };
       break;
     case "trend_tracking":
       flags = { class_name: true, subject: true, school_name: true };
@@ -785,12 +791,19 @@ export default function AnalysisToolPage() {
                     extra={
                       selected.report_type === "elite_rank_shift"
                         ? "教育局可不选（看全市前 N）；选一所学校则下钻该校。校长自动统计本校。"
-                        : undefined
+                        : (selected.report_type === "class_overview" ||
+                              selected.report_type === "student_profile") &&
+                            eduRole !== "school_admin" &&
+                            eduRole !== "teacher"
+                          ? "必选。先选学校再选班级，避免同名班级、同名学生串校。校长/老师自动按本校统计。"
+                          : undefined
                     }
                     rules={
                       (selected.report_type === "line_shift" ||
                         selected.report_type === "absence" ||
-                        selected.report_type === "class_line_reach") &&
+                        selected.report_type === "class_line_reach" ||
+                        selected.report_type === "class_overview" ||
+                        selected.report_type === "student_profile") &&
                       eduRole !== "school_admin" &&
                       eduRole !== "teacher"
                         ? [{ required: true, message: "请选择学校" }]
