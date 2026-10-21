@@ -1,4 +1,4 @@
-import { ArrowLeftOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowLeftOutlined, ArrowUpOutlined, HolderOutlined, PlusOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -11,6 +11,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message
 } from "antd";
@@ -133,6 +134,35 @@ type Draft = {
   knowledge_ids: number[];
 };
 
+function reorderQuestions<T>(rows: T[], from: number, to: number): T[] {
+  if (from === to || from < 0 || to < 0 || from >= rows.length || to >= rows.length) return rows;
+  const next = rows.slice();
+  const [item] = next.splice(from, 1);
+  next.splice(to, 0, item);
+  return next;
+}
+
+let draftSeq = 0;
+
+function blankDraft(): Draft {
+  draftSeq += 1;
+  return {
+    key: `new-${draftSeq}`,
+    id: null,
+    question_no: "",
+    question_type: "解答题",
+    question_score: null,
+    content: "",
+    knowledge_ids: []
+  };
+}
+
+function insertQuestionAfter(rows: Draft[], index: number): Draft[] {
+  const next = rows.slice();
+  next.splice(index + 1, 0, blankDraft());
+  return next;
+}
+
 function toDrafts(detail: ExamDetail): Draft[] {
   return detail.questions.map((item) => ({
     key: String(item.id),
@@ -159,6 +189,7 @@ export default function ExamQuestionPage() {
   const [selected, setSelected] = useState<Record<number, { add: number[]; remove: number[] }>>({});
   const started = useRef("");
   const stopWatch = useRef<(() => void) | null>(null);
+  const dragFrom = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     if (!Number.isFinite(examId) || examId <= 0) return;
@@ -296,10 +327,10 @@ export default function ExamQuestionPage() {
           knowledge_ids: item.knowledge_links.map((link) => link.knowledge_id)
         }))
       );
-      message.success("题目已保存");
+      message.success("试卷已保存");
       await load();
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "保存题目失败");
+      message.error(error instanceof Error ? error.message : "保存试卷失败");
     } finally {
       setSaving(false);
     }
@@ -367,9 +398,46 @@ export default function ExamQuestionPage() {
     },
     {
       title: "操作",
-      width: 120,
-      render: (_, row) => (
-        <Space size={0}>
+      width: 248,
+      render: (_, row, index) => (
+        <Space size={0} className="whitespace-nowrap">
+          <span
+            draggable
+            aria-label="拖动调整顺序"
+            className="inline-flex cursor-grab items-center px-1 text-[#94a3b8] active:cursor-grabbing"
+            onDragStart={(event) => {
+              dragFrom.current = index;
+              event.dataTransfer.effectAllowed = "move";
+              event.dataTransfer.setData("text/plain", String(index));
+            }}
+          >
+            <HolderOutlined />
+          </span>
+          <Button
+            type="text"
+            size="small"
+            aria-label="上移"
+            disabled={index === 0}
+            icon={<ArrowUpOutlined />}
+            onClick={() => setRows((current) => reorderQuestions(current, index, index - 1))}
+          />
+          <Button
+            type="text"
+            size="small"
+            aria-label="下移"
+            disabled={index >= rows.length - 1}
+            icon={<ArrowDownOutlined />}
+            onClick={() => setRows((current) => reorderQuestions(current, index, index + 1))}
+          />
+          <Tooltip title="添加下一题">
+            <Button
+              type="text"
+              size="small"
+              aria-label="添加下一题"
+              icon={<PlusOutlined />}
+              onClick={() => setRows((current) => insertQuestionAfter(current, index))}
+            />
+          </Tooltip>
           <Button
             type="link"
             size="small"
@@ -427,7 +495,8 @@ export default function ExamQuestionPage() {
               ) : null}
             </div>
           </div>
-          <Space>
+          <Space wrap>
+            <Button onClick={() => setRows((current) => [...current, blankDraft()])}>添加题目</Button>
             {canImportExamPapers(currentUser) && detail?.exam.exam_batch_id ? (
               <Button
                 onClick={() =>
@@ -439,12 +508,12 @@ export default function ExamQuestionPage() {
                 重新导入
               </Button>
             ) : null}
+            <Button onClick={() => void startMatch()}>知识点核对</Button>
             <Button onClick={() => void openReport().catch((error) => message.error(error instanceof Error ? error.message : "读取核对报告失败"))}>
               核对报告
             </Button>
-            <Button onClick={() => void startMatch()}>知识点核对</Button>
             <Button type="primary" loading={saving} onClick={() => void save()}>
-              保存题目
+              保存试卷
             </Button>
           </Space>
         </div>
@@ -462,26 +531,24 @@ export default function ExamQuestionPage() {
           <Typography.Paragraph type="secondary">小题分合计 {scoreSum}</Typography.Paragraph>
         )}
         <div className="rounded-2xl border border-[#e5e7eb] bg-white p-4 shadow-sm dark:border-[#334155] dark:bg-[#141923]">
-          <Table rowKey="key" size="middle" loading={loading} columns={columns} dataSource={rows} pagination={false} scroll={{ x: 1100 }} />
-          <Button
-            className="mt-3"
-            onClick={() =>
-              setRows((current) => [
-                ...current,
-                {
-                  key: `new-${Date.now()}`,
-                  id: null,
-                  question_no: "",
-                  question_type: "解答题",
-                  question_score: null,
-                  content: "",
-                  knowledge_ids: []
-                }
-              ])
-            }
-          >
-            添加题目
-          </Button>
+          <Table
+            rowKey="key"
+            size="middle"
+            loading={loading}
+            columns={columns}
+            dataSource={rows}
+            pagination={false}
+            scroll={{ x: 1280 }}
+            onRow={(_row, index) => ({
+              onDragOver: (event) => event.preventDefault(),
+              onDrop: () => {
+                if (index == null || dragFrom.current == null) return;
+                const from = dragFrom.current;
+                dragFrom.current = null;
+                setRows((current) => reorderQuestions(current, from, index));
+              }
+            })}
+          />
         </div>
       </div>
       <Drawer

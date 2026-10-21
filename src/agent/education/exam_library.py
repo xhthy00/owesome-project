@@ -259,20 +259,17 @@ def _parse_batch_id(value: Any) -> int | None:
     return batch_id
 
 
-def _require_batch(session: Any, batch_id: int | None) -> None:
+def _require_batch(session: Any, batch_id: int | None) -> str:
     if batch_id is None:
-        return
-    row = _one(session, "SELECT id FROM tb_exam_batch WHERE id = %s", (batch_id,))
-    if row is None:
+        raise ValueError("请关联考试批次")
+    row = _one(session, "SELECT batch_name FROM tb_exam_batch WHERE id = %s", (batch_id,))
+    name = "" if row is None else str(row[0] or "").strip()
+    if row is None or not name:
         raise ValueError("考试批次不存在")
+    return name
 
 
 def _exam_payload(data: dict[str, Any], actor: ExamActor) -> dict[str, Any]:
-    name = str(data.get("exam_name") or "").strip()
-    if not name:
-        raise ValueError("试卷名称不能为空")
-    if len(name) > 200:
-        raise ValueError("试卷名称过长")
     subject = str(data.get("subject") or "").strip()
     if not subject:
         raise ValueError("请选择科目")
@@ -292,7 +289,6 @@ def _exam_payload(data: dict[str, Any], actor: ExamActor) -> dict[str, Any]:
     if batch_id is None:
         raise ValueError("请关联考试批次")
     return {
-        "exam_name": name,
         "exam_time": _parse_time(data.get("exam_time")),
         "subject": subject[:32],
         "exam_score": score,
@@ -333,6 +329,7 @@ def _exam_dict(row: tuple) -> dict[str, Any]:
         "question_count": int(row[10] or 0),
         "score_count": int(row[11] or 0),
         "detail_count": int(row[12] or 0),
+        "question_score_sum": round(float(row[13] or 0), 2),
     }
 
 
@@ -342,7 +339,8 @@ _EXAM_COLUMNS = (
     "(SELECT b.batch_name FROM tb_exam_batch b WHERE b.id = e.exam_batch_id), "
     "(SELECT COUNT(*) FROM tb_exam_question q WHERE q.exam_id = e.id), "
     "(SELECT COUNT(*) FROM tb_score s WHERE s.exam_id = e.id), "
-    "(SELECT COUNT(*) FROM tb_score_detail d WHERE d.exam_id = e.id)"
+    "(SELECT COUNT(*) FROM tb_score_detail d WHERE d.exam_id = e.id), "
+    "(SELECT COALESCE(SUM(q.question_score), 0) FROM tb_exam_question q WHERE q.exam_id = e.id)"
 )
 
 
@@ -395,11 +393,23 @@ def _score_counts(session: Any, exam_id: int) -> tuple[int, int]:
     return int(score[0] if score else 0), int(detail[0] if detail else 0)
 
 
+def _ensure_question_sort(session: Any) -> None:
+    if "sort_no" in _columns(session, "tb_exam_question"):
+        return
+    _must_write(
+        session,
+        "ALTER TABLE tb_exam_question ADD COLUMN IF NOT EXISTS sort_no INTEGER",
+        (),
+    )
+    session.commit()
+
+
 def _question_rows(session: Any, exam_id: int) -> list[dict[str, Any]]:
+    _ensure_question_sort(session)
     rows = _all(
         session,
         "SELECT id, question_no, question_type, question_score, content "
-        "FROM tb_exam_question WHERE exam_id = %s ORDER BY id",
+        "FROM tb_exam_question WHERE exam_id = %s ORDER BY sort_no NULLS LAST, id",
         (exam_id,),
     )
     questions = [
@@ -478,7 +488,7 @@ def create_exam(
 ) -> dict[str, Any]:
     payload = _exam_payload(data, actor)
     with WriteDbSession(db_type, config) as session:
-        _require_batch(session, payload["exam_batch_id"])
+        payload["exam_name"] = _require_batch(session, payload["exam_batch_id"])
         created = _one(
             session,
             "INSERT INTO tb_exam "
@@ -517,7 +527,7 @@ def update_exam(
         current = _load_exam(session, int(exam_id))
         if current is None or not exam_visible(current, actor):
             return None
-        _require_batch(session, payload["exam_batch_id"])
+        payload["exam_name"] = _require_batch(session, payload["exam_batch_id"])
         _must_write(
             session,
             "UPDATE tb_exam SET exam_name = %s, exam_time = %s, subject = %s, "
@@ -788,6 +798,7 @@ def save_questions(
 ) -> dict[str, Any] | None:
     prepared = normalize_question_rows(rows)
     with WriteDbSession(db_type, config) as session:
+        _ensure_question_sort(session)
         exam = _load_exam(session, int(exam_id))
         if exam is None or not exam_visible(exam, actor):
             return None
@@ -824,18 +835,21 @@ def save_questions(
                 (int(exam_id), [item["id"] for item in kept]),
             )
         saved_ids: list[int] = []
-        for item in prepared:
+        for index, item in enumerate(prepared):
+            sort_no = index + 1
             if item["id"]:
                 _must_write(
                     session,
                     "UPDATE tb_exam_question SET question_no = %s, question_type = %s, "
-                    "question_score = %s, content = %s, exam_name = %s WHERE id = %s",
+                    "question_score = %s, content = %s, exam_name = %s, sort_no = %s "
+                    "WHERE id = %s",
                     (
                         item["question_no"],
                         item["question_type"],
                         item["question_score"],
                         item["content"],
                         exam["exam_name"],
+                        sort_no,
                         item["id"],
                     ),
                 )
@@ -844,8 +858,9 @@ def save_questions(
                 created = _one(
                     session,
                     "INSERT INTO tb_exam_question "
-                    "(exam_name, question_no, content, question_score, exam_id, question_type) "
-                    "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                    "(exam_name, question_no, content, question_score, exam_id, "
+                    "question_type, sort_no) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id",
                     (
                         exam["exam_name"],
                         item["question_no"],
@@ -853,6 +868,7 @@ def save_questions(
                         item["question_score"],
                         int(exam_id),
                         item["question_type"],
+                        sort_no,
                     ),
                 )
                 if created is None:

@@ -19,6 +19,7 @@ export interface ExamLibraryItem {
   question_count: number;
   score_count?: number;
   detail_count?: number;
+  question_score_sum?: number;
 }
 
 export interface KnowledgeLink {

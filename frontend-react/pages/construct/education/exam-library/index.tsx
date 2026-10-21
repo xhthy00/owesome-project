@@ -1,5 +1,5 @@
-import { DownOutlined, FileTextOutlined, PlusOutlined, WarningOutlined } from "@ant-design/icons";
-import { Button, Drawer, Dropdown, Form, Input, InputNumber, Modal, Select, Space, Table, Tooltip, Typography, message } from "antd";
+import { CheckOutlined, DownOutlined, FileTextOutlined, PlusOutlined, WarningOutlined } from "@ant-design/icons";
+import { Button, Drawer, Dropdown, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import type { ColumnsType } from "antd/es/table";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useState } from "react";
@@ -24,19 +24,43 @@ const EXAM_TYPES = [
   { value: "teacher", label: "教师自建" }
 ];
 
-const PANEL =
-  "rounded-2xl border border-[#e5e7eb] bg-white p-4 shadow-sm dark:border-[#334155] dark:bg-[#141923]";
+const SUBJECT_COLOR: Record<string, string> = {
+  语文: "magenta",
+  数学: "blue",
+  英语: "cyan",
+  物理: "geekblue",
+  化学: "orange",
+  生物: "green",
+  政治: "purple",
+  历史: "gold",
+  地理: "lime"
+};
+
+function scoresDiffer(row: ExamLibraryItem): boolean {
+  if (row.exam_score == null || row.question_score_sum == null) return false;
+  return Math.round(row.question_score_sum * 100) !== Math.round(row.exam_score * 100);
+}
 
 function examAnomaly(row: ExamLibraryItem): string | null {
   if (row.question_count === 0) return "未关联题目";
+  if (scoresDiffer(row)) return "卷面总分异常";
   if ((row.score_count ?? 0) === 0) return "未关联成绩";
   return null;
 }
 
-function AnomalyMark({ title }: { title: string }) {
+function StatusMark({ title, ok }: { title: string; ok?: boolean }) {
   return (
     <Tooltip title={title} getPopupContainer={() => document.body}>
-      <WarningOutlined className="shrink-0 text-[14px] text-[#e09a3e]" aria-label={title} />
+      <span
+        aria-label={title}
+        className={
+          ok
+            ? "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#e9f8ef] text-[11px] text-[#14914a] ring-1 ring-[#b7e4c7]"
+            : "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#fff6e8] text-[11px] text-[#d48806] ring-1 ring-[#ffe1b3]"
+        }
+      >
+        {ok ? <CheckOutlined /> : <WarningOutlined />}
+      </span>
     </Tooltip>
   );
 }
@@ -151,7 +175,6 @@ export default function ExamLibraryPage() {
   const openCreate = () => {
     setEditing(null);
     form.setFieldsValue({
-      exam_name: "",
       exam_type: "city",
       subject: "语文",
       exam_score: 150,
@@ -166,7 +189,6 @@ export default function ExamLibraryPage() {
   const openEdit = (row: ExamLibraryItem) => {
     setEditing(row);
     form.setFieldsValue({
-      exam_name: row.exam_name,
       exam_type: row.exam_type,
       subject: row.subject,
       exam_score: row.exam_score ?? SUBJECT_SCORE[row.subject] ?? 100,
@@ -180,8 +202,10 @@ export default function ExamLibraryPage() {
 
   const submit = async () => {
     const values = await form.validateFields();
+    const batch = batches.find((item) => item.id === values.exam_batch_id);
     const payload: ExamPayload = {
       ...values,
+      exam_name: batch?.batch_name || "",
       exam_time: values.exam_time || null,
       school_id: values.school_id || null,
       owner_id: values.owner_id || null,
@@ -228,14 +252,24 @@ export default function ExamLibraryPage() {
       render: (value: string, row) => {
         const anomaly = examAnomaly(row);
         return (
-          <span className="inline-flex min-w-0 max-w-full items-center gap-1">
-            {anomaly ? <AnomalyMark title={anomaly} /> : null}
-            <span className="truncate">{value}</span>
+          <span className="inline-flex min-w-0 max-w-full items-center gap-2">
+            <StatusMark title={anomaly || "正常"} ok={!anomaly} />
+            <span className="truncate font-medium text-[#1f2937] dark:text-[#e5e7eb]">{value}</span>
           </span>
         );
       }
     },
-    { title: "科目", dataIndex: "subject", width: 80, align: "center" },
+    {
+      title: "科目",
+      dataIndex: "subject",
+      width: 88,
+      align: "center",
+      render: (value: string) => (
+        <Tag color={SUBJECT_COLOR[value] || "default"} className="!mr-0">
+          {value}
+        </Tag>
+      )
+    },
     {
       title: "类型",
       width: 120,
@@ -319,18 +353,33 @@ export default function ExamLibraryPage() {
     }
   ];
 
-  return (
-    <div className="dbgpt-ui-font h-full min-h-0 overflow-y-auto p-6 pb-10">
+    return (
+    <div className="dbgpt-ui-font h-full min-h-0 overflow-y-auto bg-[#f5f7fb] p-6 pb-10 dark:bg-transparent">
       <div className="w-full">
-        <div className="mb-4 flex items-center gap-2">
-          <FileTextOutlined />
-          <Typography.Title level={4} className="!mb-0">
-            试卷库
-          </Typography.Title>
-        </div>
-        <div className={PANEL}>
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-3">
+        <div className="mb-4 overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white shadow-sm dark:border-[#334155] dark:bg-[#141923]">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#eef2f6] bg-[linear-gradient(180deg,#f3f8ff_0%,#ffffff_72%)] px-5 py-4 dark:border-[#334155] dark:bg-none">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#e8f3ff] text-[18px] text-[#0C75FC]">
+                <FileTextOutlined />
+              </span>
+              <div className="min-w-0">
+                <Typography.Title level={4} className="!mb-0">
+                  试卷库
+                </Typography.Title>
+                <Typography.Text type="secondary" className="text-[13px]">
+                  名称前的标记按优先级提示未关联题目、卷面总分异常、未关联成绩；齐全时为绿色勾。可见范围：全市统考、本校学校自建、本人教师自建。
+                </Typography.Text>
+              </div>
+            </div>
+            <Space>
+              <Button onClick={() => setBatchOpen(true)}>批次管理</Button>
+              <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+                新增试卷
+              </Button>
+            </Space>
+          </div>
+          <div className="px-5 py-4">
+            <div className="mb-4 flex flex-wrap items-center gap-3">
               <Input.Search
                 allowClear
                 className="w-64"
@@ -351,33 +400,25 @@ export default function ExamLibraryPage() {
                   setExamType(value || "");
                 }}
               />
-              <Typography.Text type="secondary">
-                可见范围：全市统考、本校学校自建、本人教师自建。
-              </Typography.Text>
             </div>
-            <Space>
-              <Button onClick={() => setBatchOpen(true)}>批次管理</Button>
-              <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-                新增试卷
-              </Button>
-            </Space>
+            <Table
+              rowKey="id"
+              size="middle"
+              loading={loading}
+              columns={columns}
+              dataSource={rows}
+              scroll={{ x: 1080 }}
+              className="[&_.ant-table-thead>tr>th]:!bg-[#f7f9fc] [&_.ant-table-thead>tr>th]:!font-medium dark:[&_.ant-table-thead>tr>th]:!bg-[#1c2430]"
+              pagination={{
+                current: page,
+                pageSize: 20,
+                total,
+                showSizeChanger: false,
+                showTotal: (count) => `共 ${count} 条`,
+                onChange: (next) => setPage(next)
+              }}
+            />
           </div>
-          <Table
-            rowKey="id"
-            size="middle"
-            loading={loading}
-            columns={columns}
-            dataSource={rows}
-            scroll={{ x: 1080 }}
-            pagination={{
-              current: page,
-              pageSize: 20,
-              total,
-              showSizeChanger: false,
-              showTotal: (count) => `共 ${count} 条`,
-              onChange: (next) => setPage(next)
-            }}
-          />
         </div>
       </div>
       <Modal
@@ -391,9 +432,6 @@ export default function ExamLibraryPage() {
         destroyOnClose
       >
         <Form form={form} layout="vertical" className="mt-4">
-          <Form.Item name="exam_name" label="试卷名称" rules={[{ required: true, message: "请填写试卷名称" }]}>
-            <Input maxLength={200} />
-          </Form.Item>
           <Form.Item name="exam_type" label="试卷类型" rules={[{ required: true }]}>
             <Select options={EXAM_TYPES} />
           </Form.Item>
@@ -402,7 +440,7 @@ export default function ExamLibraryPage() {
             label="考试批次"
             extra={
               <span>
-                成绩导入按批次和科目找到这张试卷。同一批次下同一科目只能有一张。
+                试卷名称使用考试批次名称。成绩导入按批次和科目找到这张试卷。同一批次下同一科目只能有一张。
                 <Button type="link" size="small" className="!px-1" onClick={() => setBatchOpen(true)}>
                   管理批次
                 </Button>
@@ -421,9 +459,6 @@ export default function ExamLibraryPage() {
               onChange={(batchId) => {
                 const batch = batches.find((item) => item.id === batchId);
                 if (!batch) return;
-                if (!String(form.getFieldValue("exam_name") || "").trim()) {
-                  form.setFieldValue("exam_name", batch.batch_name);
-                }
                 if (!String(form.getFieldValue("exam_time") || "").trim() && batch.exam_time) {
                   form.setFieldValue("exam_time", String(batch.exam_time).slice(0, 10));
                 }
