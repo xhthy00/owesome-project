@@ -156,6 +156,33 @@ class WriteDbSession:
             logger.exception("SQL write failed")
             return False, f"SQL execution failed: {str(e)}", {}
 
+    def execute_values(
+        self,
+        sql: str,
+        param_rows: list[tuple],
+        *,
+        page_size: int = 500,
+    ) -> Tuple[bool, str, Dict[str, Any]]:
+        """一次往返写入多行。SQL 里用 ``VALUES %s``，由 psycopg2 展开。"""
+        if not param_rows:
+            return True, "Success", {"row_count": 0}
+        if self.db_type != "pg":
+            return False, "批量写入仅支持 PostgreSQL", {}
+        try:
+            self.connect()
+            from psycopg2.extras import execute_values
+
+            assert self._cursor is not None
+            execute_values(self._cursor, sql, param_rows, page_size=page_size)
+            return True, "Success", {"row_count": len(param_rows)}
+        except Exception as e:
+            try:
+                self.rollback()
+            except Exception:
+                pass
+            logger.exception("SQL batch write failed")
+            return False, f"SQL execution failed: {str(e)}", {}
+
     def execute_upsert_batch(
         self,
         table: str,

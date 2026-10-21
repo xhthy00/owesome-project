@@ -47,6 +47,7 @@ class ApplyOperation(BaseModel):
     item_id: int
     add_ids: list[int] = Field(default_factory=list)
     remove_ids: list[int] = Field(default_factory=list)
+    weights: dict[str, float] = Field(default_factory=dict)
 
 
 class ApplyBody(BaseModel):

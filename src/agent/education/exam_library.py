@@ -134,13 +134,33 @@ def normalize_links(links: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
     if not seen:
         return []
     if any(row["weight"] is None or row["weight"] <= 0 for row in seen):
-        avg = round(1 / len(seen), 4)
-        return [{"knowledge_id": row["knowledge_id"], "weight": avg} for row in seen]
-    total = sum(float(row["weight"]) for row in seen)
+        shares = _one_decimal_shares([1.0] * len(seen))
+    else:
+        shares = _one_decimal_shares([float(row["weight"]) for row in seen])
     return [
-        {"knowledge_id": row["knowledge_id"], "weight": round(float(row["weight"]) / total, 4)}
-        for row in seen
+        {"knowledge_id": row["knowledge_id"], "weight": shares[index]}
+        for index, row in enumerate(seen)
     ]
+
+
+def _one_decimal_shares(weights: list[float]) -> list[float]:
+    """把权重收成一位小数，并保证合计为 1。"""
+    count = len(weights)
+    if not count:
+        return []
+    total = sum(weights)
+    raw = [value / total * 10 for value in weights] if total > 0 else [10 / count] * count
+    floors = [int(value) for value in raw]
+    leftover = 10 - sum(floors)
+    order = sorted(range(count), key=lambda index: (raw[index] - floors[index], -index), reverse=True)
+    for step in range(max(leftover, 0)):
+        floors[order[step % count]] += 1
+    while sum(floors) > 10:
+        index = max(range(count), key=lambda item: floors[item])
+        if floors[index] <= 0:
+            break
+        floors[index] -= 1
+    return [item / 10 for item in floors]
 
 
 def normalize_question_rows(rows: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
@@ -465,11 +485,25 @@ def _knowledge_options(session: Any, subject: str) -> list[dict[str, Any]]:
         return []
     rows = _all(
         session,
-        "SELECT id, knowledge_name FROM tb_knowledge WHERE subject = %s "
-        "ORDER BY id LIMIT 500",
+        "SELECT id, knowledge_name, stage, grade, module, chapter, secondary "
+        "FROM tb_knowledge WHERE subject = %s "
+        "ORDER BY stage, grade, module_no NULLS LAST, module, "
+        "chapter_no NULLS LAST, chapter, secondary_no NULLS LAST, secondary NULLS LAST, "
+        "knowledge_no NULLS LAST, id",
         (subject,),
     )
-    return [{"id": int(row[0]), "knowledge_name": row[1] or ""} for row in rows]
+    return [
+        {
+            "id": int(row[0]),
+            "knowledge_name": row[1] or "",
+            "stage": row[2] or "",
+            "grade": row[3] or "",
+            "module": row[4] or "",
+            "chapter": row[5] or "",
+            "secondary": row[6] or "",
+        }
+        for row in rows
+    ]
 
 
 def get_exam(

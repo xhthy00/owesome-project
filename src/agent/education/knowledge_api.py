@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +31,8 @@ from src.agent.education.knowledge_admin import (
 from system.api.auth_deps import get_current_user
 from system.authz import is_super_admin
 from system.schemas import UserResponse
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/education/knowledge", tags=["education-knowledge"])
 
@@ -72,6 +77,13 @@ class _EduWriter:
             raise BadRequestException(msg or "写入失败")
         return int((data or {}).get("row_count") or 0)
 
+    def write_values(self, sql: str, rows: list[tuple]) -> None:
+        if not rows:
+            return
+        ok, msg, _data = self.session.execute_values(sql, rows)
+        if not ok:
+            raise BadRequestException(msg or "写入失败")
+
 
 def _edu_connection() -> tuple[str, dict]:
     from common.core.config import get_settings
@@ -109,6 +121,14 @@ def _run(db_type: str, config: dict, fn):
         if message == _NOT_FOUND:
             raise NotFoundException(message) from exc
         raise BadRequestException(message) from exc
+
+
+def _import_file(data: bytes, db_type: str, config: dict, operator: str):
+    rows, errors = parse_knowledge_xlsx(data)
+    inserted, updated = _run(
+        db_type, config, lambda db: import_knowledge_rows(db, rows, operator)
+    )
+    return rows, errors, inserted, updated
 
 
 def _as_dicts(data: dict | None) -> list[dict[str, Any]]:
@@ -212,19 +232,38 @@ async def import_knowledge_file(
 ) -> dict:
     _ = request
     name = (file.filename or "").lower()
-    if not name.endswith(".xlsx"):
-        raise BadRequestException("请上传 .xlsx 格式的 Excel 文件")
-    data = file.file.read()
+    if not name.endswith((".xlsx", ".xls")):
+        raise BadRequestException("请上传 .xlsx 或 .xls 格式的 Excel 文件")
+    data = await file.read()
     if not data:
         raise BadRequestException("上传文件为空")
-    try:
-        rows, errors = parse_knowledge_xlsx(data)
-    except ValueError as exc:
-        raise BadRequestException(str(exc)) from exc
     operator = _require_maintainer(current_user)
     db_type, config = _edu_connection()
-    inserted, updated = _run(
-        db_type, config, lambda db: import_knowledge_rows(db, rows, operator)
+    started = time.perf_counter()
+    logger.info(
+        "知识点导入开始 file=%s bytes=%s operator=%s",
+        file.filename,
+        len(data),
+        operator,
+    )
+    try:
+        rows, errors, inserted, updated = await asyncio.to_thread(
+            _import_file, data, db_type, config, operator
+        )
+    except ValueError as exc:
+        logger.info("知识点导入拒绝 file=%s error=%s", file.filename, exc)
+        raise BadRequestException(str(exc)) from exc
+    except Exception:
+        logger.exception("知识点导入失败 file=%s", file.filename)
+        raise
+    logger.info(
+        "知识点导入完成 file=%s rows=%s inserted=%s updated=%s errors=%s seconds=%.2f",
+        file.filename,
+        len(rows),
+        inserted,
+        updated,
+        len(errors),
+        time.perf_counter() - started,
     )
     return success_response(
         {

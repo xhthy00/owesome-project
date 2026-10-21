@@ -1,4 +1,4 @@
-import { ArrowDownOutlined, ArrowLeftOutlined, ArrowUpOutlined, HolderOutlined, PlusOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowLeftOutlined, ArrowUpOutlined, DeleteOutlined, HolderOutlined, PlusOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -7,11 +7,13 @@ import {
   Input,
   InputNumber,
   Progress,
+  Rate,
   Select,
   Space,
   Table,
   Tag,
   Tooltip,
+  TreeSelect,
   Typography,
   message
 } from "antd";
@@ -24,10 +26,12 @@ import {
   canImportExamPapers,
   examLibraryApi,
   type ExamDetail,
-  type KnowledgeOption,
   type MatchItem,
+  type MatchSuggestion,
   type MatchTask
 } from "@/api/examLibrary";
+import { buildKnowledgeTree } from "@/utils/knowledgeTree";
+import { adjustWeight, suggestWeights } from "@/utils/knowledgeWeights";
 
 const QUESTION_TYPES = ["单选题", "多选题", "填空题", "解答题", "写作"];
 
@@ -119,11 +123,43 @@ function StemField({ value, onChange }: { value: string; onChange: (next: string
     </div>
   );
 }
-const VERDICT: Record<string, { color: string; label: string }> = {
-  ok: { color: "green", label: "贴切" },
-  needs_review: { color: "orange", label: "待复核" },
-  failed: { color: "red", label: "失败" }
-};
+type ReportPick = { add: number[]; remove: number[]; weights: Record<number, number> };
+
+function orderedIds(ids: number[], suggestions: MatchSuggestion[]): number[] {
+  const rank = new Map(suggestions.map((item, index) => [item.knowledge_id, index]));
+  return [...ids].sort((left, right) => (rank.get(left) ?? 99) - (rank.get(right) ?? 99));
+}
+
+function weightsFor(ids: number[], suggestions: MatchSuggestion[]): Record<number, number> {
+  const ordered = orderedIds(ids, suggestions).slice(0, 3);
+  const shares = suggestWeights(
+    ordered.map((id) => suggestions.find((item) => item.knowledge_id === id)?.confidence || 0)
+  );
+  return Object.fromEntries(ordered.map((id, index) => [id, shares[index]]));
+}
+
+function topIds(suggestions: MatchSuggestion[]): number[] {
+  return [...suggestions]
+    .sort((left, right) => (right.confidence || 0) - (left.confidence || 0))
+    .slice(0, 3)
+    .map((item) => item.knowledge_id);
+}
+
+function formatWeight(value: number): string {
+  return String(Math.round(value * 10) / 10);
+}
+
+function contentPreview(content: string): string {
+  if (!content) return "（无题干）";
+  return content.length > 80 ? `${content.slice(0, 80)}…` : content;
+}
+
+function toggleId(current: number[] | undefined, id: number): number[] {
+  const next = new Set(current || []);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  return [...next];
+}
 
 type Draft = {
   key: string;
@@ -195,10 +231,11 @@ export default function ExamQuestionPage() {
   const [task, setTask] = useState<MatchTask | null>(null);
   const [reportItems, setReportItems] = useState<MatchItem[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [selected, setSelected] = useState<Record<number, { add: number[]; remove: number[] }>>({});
+  const [selected, setSelected] = useState<Record<number, ReportPick>>({});
   const started = useRef("");
   const stopWatch = useRef<(() => void) | null>(null);
   const dragFrom = useRef<number | null>(null);
+  const weightWarnAt = useRef(0);
 
   const load = useCallback(async () => {
     if (!Number.isFinite(examId) || examId <= 0) return;
@@ -230,14 +267,7 @@ export default function ExamQuestionPage() {
     const report = await examLibraryApi.report(examId, taskId);
     setTask(report.task);
     setReportItems(report.items);
-    const next: Record<number, { add: number[]; remove: number[] }> = {};
-    report.items.forEach((item) => {
-      next[item.id] = {
-        add: item.add_suggestions.map((suggestion) => suggestion.knowledge_id),
-        remove: item.remove_suggestions.map((suggestion) => suggestion.knowledge_id)
-      };
-    });
-    setSelected(next);
+    setSelected({});
     setDrawerOpen(true);
   }, [examId]);
 
@@ -306,6 +336,7 @@ export default function ExamQuestionPage() {
   );
   const examScore = detail?.exam.exam_score ?? 0;
   const knowledgeOptions = detail?.knowledge_options ?? [];
+  const knowledgeTree = useMemo(() => buildKnowledgeTree(knowledgeOptions), [knowledgeOptions]);
 
   const updateRow = (key: string, patch: Partial<Draft>) => {
     setRows((current) => current.map((row) => (row.key === key ? { ...row, ...patch } : row)));
@@ -400,21 +431,35 @@ export default function ExamQuestionPage() {
     },
     {
       title: "知识点",
-      width: 160,
+      width: 240,
       render: (_, row) => (
-        <Select
-          mode="multiple"
+        <TreeSelect
           className="w-full"
+          multiple
           allowClear
           showSearch
-          optionFilterProp="label"
-          maxTagCount={2}
+          treeExpandAction="click"
+          filterTreeNode={(input, node) => {
+            const keyword = input.trim().toLowerCase();
+            if (!keyword) return true;
+            const searchable = String(
+              (node as { searchText?: string }).searchText || node.title || ""
+            );
+            return searchable.toLowerCase().includes(keyword);
+          }}
+          maxTagCount="responsive"
+          placeholder="选择知识点"
+          popupMatchSelectWidth={false}
+          dropdownStyle={{ minWidth: 420, maxWidth: 560 }}
+          listHeight={400}
+          treeData={knowledgeTree}
           value={row.knowledge_ids}
-          options={knowledgeOptions.map((item: KnowledgeOption) => ({
-            value: item.id,
-            label: item.knowledge_name
-          }))}
-          onChange={(value) => updateRow(row.key, { knowledge_ids: value })}
+          onChange={(value) => {
+            const picked = (Array.isArray(value) ? value : [value]).filter(
+              (id): id is number => typeof id === "number"
+            );
+            updateRow(row.key, { knowledge_ids: picked });
+          }}
         />
       )
     },
@@ -476,13 +521,91 @@ export default function ExamQuestionPage() {
     }
   ];
 
+  const totalSuggestions = reportItems.reduce(
+    (sum, item) => sum + item.add_suggestions.length + item.remove_suggestions.length,
+    0
+  );
+  const selectedCount = Object.values(selected).reduce(
+    (sum, pick) => sum + pick.add.length + pick.remove.length,
+    0
+  );
+
+  const toggleAdd = (itemId: number, knowledgeId: number, suggestions: MatchSuggestion[]) => {
+    setSelected((current) => {
+      const pick = current[itemId] || { add: [], remove: [], weights: {} };
+      const exists = pick.add.includes(knowledgeId);
+      if (!exists && pick.add.length >= 3) {
+        const now = Date.now();
+        if (now - weightWarnAt.current > 400) {
+          weightWarnAt.current = now;
+          message.warning("一道题最多关联 3 个知识点");
+        }
+        return current;
+      }
+      const add = exists
+        ? pick.add.filter((id) => id !== knowledgeId)
+        : orderedIds([...pick.add, knowledgeId], suggestions);
+      return {
+        ...current,
+        [itemId]: { add, remove: pick.remove, weights: weightsFor(add, suggestions) }
+      };
+    });
+  };
+
+  const toggleRemove = (itemId: number, knowledgeId: number) => {
+    setSelected((current) => {
+      const pick = current[itemId] || { add: [], remove: [], weights: {} };
+      return {
+        ...current,
+        [itemId]: { ...pick, remove: toggleId(pick.remove, knowledgeId) }
+      };
+    });
+  };
+
+  const changeWeight = (itemId: number, knowledgeId: number, value: number, suggestions: MatchSuggestion[]) => {
+    setSelected((current) => {
+      const pick = current[itemId] || { add: [], remove: [], weights: {} };
+      const ids = orderedIds(pick.add, suggestions);
+      const values = ids.map((id) => pick.weights[id] ?? 0);
+      const next = adjustWeight(values, ids.indexOf(knowledgeId), value);
+      return {
+        ...current,
+        [itemId]: {
+          ...pick,
+          weights: Object.fromEntries(ids.map((id, index) => [id, next[index]]))
+        }
+      };
+    });
+  };
+
+  const selectAll = () => {
+    const next: Record<number, ReportPick> = {};
+    reportItems.forEach((item) => {
+      const add = topIds(item.add_suggestions);
+      next[item.id] = {
+        add,
+        remove: item.remove_suggestions.map((suggestion) => suggestion.knowledge_id),
+        weights: weightsFor(add, item.add_suggestions)
+      };
+    });
+    setSelected(next);
+  };
+
+  const clearAll = () => {
+    setSelected({});
+    message.info("已取消全部勾选");
+  };
+
   const adopt = async () => {
     if (!task) return;
     const operations = reportItems
       .map((item) => ({
         item_id: item.id,
         add_ids: selected[item.id]?.add || [],
-        remove_ids: selected[item.id]?.remove || []
+        remove_ids: selected[item.id]?.remove || [],
+        weights: Object.fromEntries(
+          (selected[item.id]?.add || []).map((id) => [String(id), selected[item.id]?.weights[id] ?? 0])
+        )
       }))
       .filter((item) => item.add_ids.length || item.remove_ids.length);
     if (!operations.length) {
@@ -575,76 +698,163 @@ export default function ExamQuestionPage() {
         </div>
       </div>
       <Drawer
-        title="核对报告"
-        width={720}
+        title="知识点核对报告"
+        width={520}
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         extra={
-          <Space>
-            {task?.status === "running" ? (
-              <Button onClick={() => task && void examLibraryApi.cancel(task.id)}>取消</Button>
+          task?.status === "running" ? (
+            <Button onClick={() => void examLibraryApi.cancel(task.id)}>取消</Button>
+          ) : null
+        }
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            {totalSuggestions ? (
+              <span className="mr-auto text-xs text-[#64748b]">共 {totalSuggestions} 条建议</span>
             ) : null}
-            <Button type="primary" disabled={!task || task.status === "running"} onClick={() => void adopt()}>
-              采纳所选
+            <Button onClick={() => setDrawerOpen(false)}>关闭</Button>
+            <Button type="primary" disabled={!selectedCount} onClick={() => void adopt()}>
+              采纳选中（{selectedCount}）
             </Button>
-          </Space>
+          </div>
         }
       >
         {task?.status === "running" ? (
           <Progress percent={task.total ? Math.round((task.done / task.total) * 100) : 0} />
         ) : null}
-        {task?.summary ? <Typography.Paragraph>{task.summary}</Typography.Paragraph> : null}
+        {task ? (
+          <div className="mb-4 rounded-lg bg-[#eff6ff] px-3 py-2.5 dark:bg-[#1e3a5f]">
+            <Tag color={task.status === "done" ? "green" : task.status === "failed" ? "red" : "orange"}>
+              {task.status === "done" ? "已完成" : task.status === "failed" ? "失败" : task.status === "running" ? "进行中" : task.status}
+            </Tag>
+            {task.summary ? <p className="mb-0 mt-2 text-[13px]">{task.summary}</p> : null}
+          </div>
+        ) : null}
         {task?.error ? <Alert className="mb-3" type="error" showIcon message={task.error} /> : null}
-        {!task && !reportItems.length ? <Typography.Text type="secondary">还没有核对报告。</Typography.Text> : null}
+        {reportItems.length ? (
+          <div className="sticky top-0 z-10 mb-4 flex items-center justify-between gap-3 rounded-lg border border-[#e5e7eb] bg-white px-3 py-2.5 dark:border-[#334155] dark:bg-[#141923]">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className="text-[13px] font-semibold">批量操作</span>
+              {selectedCount ? (
+                <span className="rounded-full bg-[#eff6ff] px-2 text-xs leading-[18px] text-[#0C75FC]">已选 {selectedCount}</span>
+              ) : (
+                <span className="text-xs text-[#64748b]">{totalSuggestions} 条建议</span>
+              )}
+            </div>
+            <Space size={8}>
+              <Button disabled={!selectedCount} onClick={clearAll}>全部勾除</Button>
+              <Button type="primary" disabled={!totalSuggestions} onClick={selectAll}>全部勾选</Button>
+            </Space>
+          </div>
+        ) : null}
+        {!task && !reportItems.length ? <Typography.Text type="secondary">暂无核对记录</Typography.Text> : null}
         <div className="space-y-3">
           {reportItems.map((item) => {
-            const verdict = VERDICT[item.verdict] || { color: "default", label: item.verdict || "未核对" };
-            const pick = selected[item.id] || { add: [], remove: [] };
+            const pick = selected[item.id] || { add: [], remove: [], weights: {} };
             return (
-              <div key={item.id} className="rounded-xl border border-[#e5e7eb] p-3 dark:border-[#334155]">
+              <div key={item.id} className="rounded-lg border border-[#e5e7eb] p-3.5 dark:border-[#334155]">
                 <div className="mb-2 flex items-center gap-2">
-                  <span className="font-medium">第 {item.question_no || "-"} 题</span>
-                  <Tag color={verdict.color}>{verdict.label}</Tag>
-                  {item.adopted ? <Tag>已采纳</Tag> : null}
+                  <span className="text-sm font-semibold">{item.question_no || "-"} 题</span>
+                  {item.verdict === "failed" ? <Tag color="red">失败</Tag> : null}
+                  {item.adopted ? <span className="ml-auto text-xs text-[#16a34a]">已采纳</span> : null}
                 </div>
-                <Typography.Paragraph className="!mb-2 whitespace-pre-wrap" ellipsis={{ rows: 3 }}>
-                  {item.content || "（无题干）"}
-                </Typography.Paragraph>
-                <div className="text-sm text-[#64748b]">
-                  当前：{item.current_links.map((link) => link.knowledge_name || link.knowledge_id).join("、") || "无"}
-                </div>
-                {item.add_suggestions.map((suggestion) => (
-                  <Checkbox
-                    key={`add-${suggestion.knowledge_id}`}
-                    className="mt-1 flex"
-                    checked={pick.add.includes(suggestion.knowledge_id)}
-                    onChange={(event) => {
-                      const add = event.target.checked
-                        ? [...pick.add, suggestion.knowledge_id]
-                        : pick.add.filter((id) => id !== suggestion.knowledge_id);
-                      setSelected((current) => ({ ...current, [item.id]: { ...pick, add } }));
-                    }}
-                  >
-                    新增 {suggestion.knowledge_name}
-                    {suggestion.reason ? `：${suggestion.reason}` : ""}
-                  </Checkbox>
-                ))}
-                {item.remove_suggestions.map((suggestion) => (
-                  <Checkbox
-                    key={`remove-${suggestion.knowledge_id}`}
-                    className="mt-1 flex"
-                    checked={pick.remove.includes(suggestion.knowledge_id)}
-                    onChange={(event) => {
-                      const remove = event.target.checked
-                        ? [...pick.remove, suggestion.knowledge_id]
-                        : pick.remove.filter((id) => id !== suggestion.knowledge_id);
-                      setSelected((current) => ({ ...current, [item.id]: { ...pick, remove } }));
-                    }}
-                  >
-                    移除 {suggestion.knowledge_name}
-                    {suggestion.reason ? `：${suggestion.reason}` : ""}
-                  </Checkbox>
-                ))}
+                <p className="mb-3 text-[13px] leading-6 text-[#64748b]">{contentPreview(item.content)}</p>
+                <div className="text-xs font-semibold text-[#64748b]">当前关联</div>
+                {item.current_links.length ? (
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {item.current_links.map((link) => (
+                      <Tag key={link.knowledge_id}>
+                        {link.knowledge_name || `ID:${link.knowledge_id}`}
+                        {link.weight != null ? `(${formatWeight(link.weight)})` : ""}
+                      </Tag>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-1 text-[13px] text-[#64748b]">无</div>
+                )}
+                {item.remove_suggestions.length ? (
+                  <div className="mt-3">
+                    <div className="mb-1.5 text-xs font-semibold text-[#dc2626]">建议移除</div>
+                    <div className="space-y-1.5">
+                      {item.remove_suggestions.map((suggestion) => {
+                        const checked = pick.remove.includes(suggestion.knowledge_id);
+                        return (
+                          <div
+                            key={suggestion.knowledge_id}
+                            className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-2 ${checked ? "border-[#0C75FC] bg-[#eff6ff] dark:bg-[#1e3a5f]" : "border-[#e5e7eb] dark:border-[#334155]"}`}
+                            onClick={() => toggleRemove(item.id, suggestion.knowledge_id)}
+                          >
+                            <DeleteOutlined className="mt-0.5 text-[#64748b]" />
+                            <div className="min-w-0 flex-1">
+                              <div className="text-[13px] font-medium">{suggestion.knowledge_name}</div>
+                              {suggestion.reason ? <div className="mt-0.5 text-xs leading-5 text-[#64748b]">{suggestion.reason}</div> : null}
+                            </div>
+                            <Checkbox
+                              checked={checked}
+                              onClick={(event) => event.stopPropagation()}
+                              onChange={() => toggleRemove(item.id, suggestion.knowledge_id)}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+                {item.add_suggestions.length ? (
+                  <div className="mt-3">
+                    <div className="mb-1.5 text-xs font-semibold text-[#16a34a]">建议关联</div>
+                    <div className="space-y-1.5">
+                      {item.add_suggestions.map((suggestion) => {
+                        const checked = pick.add.includes(suggestion.knowledge_id);
+                        return (
+                          <div
+                            key={suggestion.knowledge_id}
+                            className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-2 ${checked ? "border-[#0C75FC] bg-[#eff6ff] dark:bg-[#1e3a5f]" : "border-[#e5e7eb] dark:border-[#334155]"}`}
+                            onClick={() => toggleAdd(item.id, suggestion.knowledge_id, item.add_suggestions)}
+                          >
+                            <PlusOutlined className="mt-0.5 text-[#64748b]" />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-[13px] font-medium">{suggestion.knowledge_name}</span>
+                                {checked ? (
+                                  <span
+                                    className="inline-flex items-center gap-1 text-xs text-[#64748b]"
+                                    onClick={(event) => event.stopPropagation()}
+                                  >
+                                    权重
+                                    <InputNumber
+                                      size="small"
+                                      min={0.1}
+                                      max={pick.add.length <= 1 ? 1 : Math.round((1 - (pick.add.length - 1) * 0.1) * 10) / 10}
+                                      step={0.1}
+                                      precision={1}
+                                      disabled={pick.add.length === 1}
+                                      value={pick.weights[suggestion.knowledge_id]}
+                                      className="w-16"
+                                      onChange={(value) => {
+                                        if (value == null) return;
+                                        changeWeight(item.id, suggestion.knowledge_id, value, item.add_suggestions);
+                                      }}
+                                    />
+                                  </span>
+                                ) : null}
+                              </div>
+                              <div className="mt-0.5 flex flex-wrap items-center gap-1 text-xs leading-5 text-[#64748b]">
+                                <Rate disabled count={5} value={Math.round((suggestion.confidence || 0) * 5)} className="text-[12px]" />
+                                <span>{suggestion.reason}</span>
+                              </div>
+                            </div>
+                            <Checkbox
+                              checked={checked}
+                              onClick={(event) => event.stopPropagation()}
+                              onChange={() => toggleAdd(item.id, suggestion.knowledge_id, item.add_suggestions)}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             );
           })}

@@ -12,6 +12,7 @@ from typing import Any, Protocol
 from urllib.parse import unquote, urlsplit
 
 import openpyxl
+import xlrd
 
 HEADER_MAP = {
     "学段": "stage",
@@ -103,6 +104,8 @@ class KnowledgeDb(Protocol):
 
     def write(self, sql: str, params: tuple | list = ()) -> int: ...
 
+    def write_values(self, sql: str, rows: list[tuple]) -> None: ...
+
 
 @dataclass
 class RowError:
@@ -171,22 +174,41 @@ def cell_text(value: Any) -> str:
     return text
 
 
-def parse_knowledge_xlsx(data: bytes) -> tuple[list[KnowledgeRow], list[RowError]]:
-    """解析导入模板。空行跳过；文件内重复的知识点编码记为错误行。"""
+def _sheet_rows(data: bytes) -> list[tuple]:
+    if data.startswith(b"\xd0\xcf\x11\xe0"):
+        return _xls_rows(data)
     try:
         workbook = openpyxl.load_workbook(BytesIO(data), data_only=True)
     except Exception as exc:  # noqa: BLE001
-        raise ValueError("无法读取 Excel，请上传 .xlsx 模板") from exc
+        raise ValueError("无法读取 Excel，请上传 .xlsx 或 .xls 文件") from exc
     sheet = workbook.worksheets[0] if workbook.worksheets else None
     if sheet is None:
         raise ValueError("Excel 没有工作表")
+    return [tuple(row) for row in sheet.iter_rows(values_only=True)]
 
-    header_row_no = _find_header_row(sheet)
-    header_cells = list(next(sheet.iter_rows(min_row=header_row_no, max_row=header_row_no, values_only=True)))
+
+def _xls_rows(data: bytes) -> list[tuple]:
+    try:
+        book = xlrd.open_workbook(file_contents=data)
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError("无法读取 Excel，请上传 .xlsx 或 .xls 文件") from exc
+    if book.nsheets < 1:
+        raise ValueError("Excel 没有工作表")
+    sheet = book.sheet_by_index(0)
+    return [
+        tuple(sheet.cell_value(row_index, col_index) for col_index in range(sheet.ncols))
+        for row_index in range(sheet.nrows)
+    ]
+
+
+def parse_knowledge_xlsx(data: bytes) -> tuple[list[KnowledgeRow], list[RowError]]:
+    """解析导入模板。空行跳过；文件内重复的知识点编码记为错误行。"""
+    sheet_rows = _sheet_rows(data)
+    header_row_no = _find_header_row(sheet_rows)
+    header_cells = sheet_rows[header_row_no - 1]
     columns: dict[str, int] = {}
     for index, cell in enumerate(header_cells):
-        name = cell_text(cell)
-        field_name = HEADER_MAP.get(name)
+        field_name = HEADER_MAP.get(cell_text(cell))
         if field_name and field_name not in columns:
             columns[field_name] = index
     missing = [FIELD_LABELS[name] for name in HEADER_MAP.values() if name not in columns]
@@ -196,10 +218,7 @@ def parse_knowledge_xlsx(data: bytes) -> tuple[list[KnowledgeRow], list[RowError
     rows: list[KnowledgeRow] = []
     errors: list[RowError] = []
     seen: dict[str, int] = {}
-    for row_no, raw in enumerate(
-        sheet.iter_rows(min_row=header_row_no + 1, values_only=True),
-        start=header_row_no + 1,
-    ):
+    for row_no, raw in enumerate(sheet_rows[header_row_no:], start=header_row_no + 1):
         values = {
             field_name: cell_text(raw[index] if index < len(raw) else None)
             for field_name, index in columns.items()
@@ -405,36 +424,70 @@ def import_knowledge_rows(
         (numbers,),
     )
     by_no = {str(item["knowledge_no"]): int(item["id"]) for item in found}
-    inserted = 0
-    updated = 0
-    for row in rows:
-        values = row.values
-        knowledge_id = by_no.get(row.knowledge_no)
-        if knowledge_id is None:
-            cols = ", ".join(_WRITE_COLUMNS)
-            placeholders = ", ".join(["%s"] * len(_WRITE_COLUMNS))
-            db.write(
-                f"INSERT INTO tb_knowledge ({cols}) VALUES ({placeholders})",
-                tuple(values[name] for name in _WRITE_COLUMNS),
-            )
-            created = db.query(
-                "SELECT id FROM tb_knowledge WHERE knowledge_no = %s",
-                (row.knowledge_no,),
-            )
-            knowledge_id = int(created[0]["id"])
-            by_no[row.knowledge_no] = knowledge_id
-            inserted += 1
-        else:
-            assignments = ", ".join(f"{name} = %s" for name in _WRITE_COLUMNS)
-            db.write(
-                f"UPDATE tb_knowledge SET {assignments} WHERE id = %s",
-                tuple(values[name] for name in _WRITE_COLUMNS) + (knowledge_id,),
-            )
-            updated += 1
-        _append_version(
-            db, knowledge_id, values["knowledge_content"], "import", "import", operator
+    operator_name = _operator(operator)
+    inserts = [row for row in rows if row.knowledge_no not in by_no]
+    updates = [row for row in rows if row.knowledge_no in by_no]
+    if inserts:
+        db.write_values(
+            f"INSERT INTO tb_knowledge ({', '.join(_WRITE_COLUMNS)}) VALUES %s",
+            [_knowledge_params(row) for row in inserts],
         )
-    return inserted, updated
+        created = db.query(
+            "SELECT id, knowledge_no FROM tb_knowledge WHERE knowledge_no = ANY(%s)",
+            ([row.knowledge_no for row in inserts],),
+        )
+        for item in created:
+            by_no[str(item["knowledge_no"])] = int(item["id"])
+    if updates:
+        db.write_values(
+            _knowledge_update_sql(),
+            [_knowledge_params(row) + (by_no[row.knowledge_no],) for row in updates],
+        )
+    ids = [by_no[row.knowledge_no] for row in rows]
+    existing_versions = db.query(
+        "SELECT knowledge_id, MAX(version_no) AS v FROM tb_knowledge_version "
+        "WHERE knowledge_id = ANY(%s) GROUP BY knowledge_id",
+        (ids,),
+    )
+    next_version = {
+        int(item["knowledge_id"]): int(item["v"]) for item in existing_versions
+    }
+    version_rows: list[tuple] = []
+    for row in rows:
+        knowledge_id = by_no[row.knowledge_no]
+        version_no = next_version.get(knowledge_id, 0) + 1
+        next_version[knowledge_id] = version_no
+        version_rows.append(
+            (
+                knowledge_id,
+                version_no,
+                row.values["knowledge_content"],
+                "import",
+                operator_name,
+                "import",
+            )
+        )
+    db.write_values(
+        "INSERT INTO tb_knowledge_version "
+        "(knowledge_id, version_no, knowledge_content, change_type, operator, source) "
+        "VALUES %s",
+        version_rows,
+    )
+    return len(inserts), len(updates)
+
+
+def _knowledge_params(row: KnowledgeRow) -> tuple:
+    return tuple(row.values[name] for name in _WRITE_COLUMNS)
+
+
+def _knowledge_update_sql() -> str:
+    assignments = ", ".join(f"{name} = v.{name}" for name in _WRITE_COLUMNS)
+    value_cols = ", ".join((*_WRITE_COLUMNS, "id"))
+    return (
+        f"UPDATE tb_knowledge AS k SET {assignments} "
+        f"FROM (VALUES %s) AS v({value_cols}) "
+        "WHERE k.id = v.id::bigint"
+    )
 
 
 def _append_version(
@@ -483,8 +536,8 @@ def _filters(**raw: str) -> tuple[str, list[Any]]:
     return " WHERE " + " AND ".join(clauses), params
 
 
-def _find_header_row(sheet: Any) -> int:
-    for row_no, raw in enumerate(sheet.iter_rows(max_row=5, values_only=True), start=1):
+def _find_header_row(rows: list[tuple]) -> int:
+    for row_no, raw in enumerate(rows[:5], start=1):
         labels = {cell_text(cell) for cell in raw}
         if "知识点编码" in labels and "知识点名称" in labels:
             return row_no

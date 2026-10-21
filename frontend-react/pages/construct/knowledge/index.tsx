@@ -6,7 +6,7 @@ import {
   SearchOutlined,
   UploadOutlined
 } from "@ant-design/icons";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Button,
   Drawer,
@@ -126,6 +126,8 @@ export default function ConstructKnowledgePage() {
   const [versions, setVersions] = useState<KnowledgeVersion[]>([]);
   const [versionTitle, setVersionTitle] = useState("");
   const [canMaintain, setCanMaintain] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const importingRef = useRef(false);
 
   useEffect(() => {
     void getCurrentUser()
@@ -280,6 +282,10 @@ export default function ConstructKnowledgePage() {
   };
 
   const onImport = async (file: File) => {
+    if (importingRef.current) return false;
+    importingRef.current = true;
+    setImporting(true);
+    const hide = message.loading("正在导入知识点…", 0);
     try {
       const result = await knowledgeApi.importFile(file);
       const failed = result.errors?.length || 0;
@@ -303,6 +309,10 @@ export default function ConstructKnowledgePage() {
       void loadList(applied, 1, pageSize);
     } catch (err) {
       message.error(err instanceof Error ? err.message : "导入失败");
+    } finally {
+      hide();
+      importingRef.current = false;
+      setImporting(false);
     }
     return false;
   };
@@ -370,8 +380,15 @@ export default function ConstructKnowledgePage() {
               >
                 下载模板
               </Button>
-              <Upload accept=".xlsx" showUploadList={false} beforeUpload={onImport}>
-                <Button icon={<UploadOutlined />}>导入</Button>
+              <Upload
+                accept=".xls,.xlsx"
+                showUploadList={false}
+                disabled={importing}
+                beforeUpload={onImport}
+              >
+                <Button icon={<UploadOutlined />} loading={importing} disabled={importing}>
+                  导入
+                </Button>
               </Upload>
               <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
                 新增

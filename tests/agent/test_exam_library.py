@@ -10,7 +10,7 @@ from src.agent.education.exam_library import (
     normalize_ownership,
     normalize_question_rows,
 )
-from src.agent.education.exam_match import parse_match_reply
+from src.agent.education.exam_match import limit_suggestions, match_summary, parse_match_reply
 
 
 def _actor(**kwargs) -> ExamActor:
@@ -127,3 +127,37 @@ def test_parse_match_reply_keeps_only_known_names():
     ]
     assert parsed["remove"][0]["knowledge_id"] == 2
     assert json.loads(json.dumps(parsed))["verdict"] == "needs_review"
+
+
+def test_limit_suggestions_keeps_the_three_most_confident():
+    kept = limit_suggestions(
+        [
+            {"knowledge_id": 1, "confidence": 0.4},
+            {"knowledge_id": 2, "confidence": 0.95},
+            {"knowledge_id": 3, "confidence": 0.8},
+            {"knowledge_id": 4, "confidence": 0.7},
+        ]
+    )
+    assert [item["knowledge_id"] for item in kept] == [2, 3, 4]
+
+
+def test_link_weights_stay_on_one_decimal():
+    from src.agent.education.exam_library import normalize_links
+
+    even = normalize_links([{"knowledge_id": 1}, {"knowledge_id": 2}, {"knowledge_id": 3}])
+    assert [item["weight"] for item in even] == [0.4, 0.3, 0.3]
+    tuned = normalize_links(
+        [
+            {"knowledge_id": 1, "weight": 0.7},
+            {"knowledge_id": 2, "weight": 0.2},
+            {"knowledge_id": 3, "weight": 0.1},
+        ]
+    )
+    assert [item["weight"] for item in tuned] == [0.7, 0.2, 0.1]
+
+
+def test_match_summary_distinguishes_unlinked_papers_from_adjustments():
+    assert match_summary(24, 0, 24, 0, 24) == (
+        "共 24 题目前都还没有关联知识点，本次给出关联建议 24 题，核对失败 0 题"
+    )
+    assert match_summary(10, 7, 2, 1, 3) == "共 10 题：关联正确 7 题，建议调整 2 题，核对失败 1 题"

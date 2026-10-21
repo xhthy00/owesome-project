@@ -40,6 +40,11 @@ export interface ExamQuestion {
 export interface KnowledgeOption {
   id: number;
   knowledge_name: string;
+  stage?: string | null;
+  grade?: string | null;
+  module?: string | null;
+  chapter?: string | null;
+  secondary?: string | null;
 }
 
 export interface ExamDetail {
@@ -220,7 +225,10 @@ export const examLibraryApi = {
       "读取核对报告失败"
     );
   },
-  apply(taskId: number, operations: Array<{ item_id: number; add_ids: number[]; remove_ids: number[] }>) {
+  apply(
+    taskId: number,
+    operations: Array<{ item_id: number; add_ids: number[]; remove_ids: number[]; weights?: Record<string, number> }>
+  ) {
     return send<{ success: number; errors: string[] }>(
       `/match/${taskId}/apply`,
       { method: "POST", body: JSON.stringify({ operations }) },

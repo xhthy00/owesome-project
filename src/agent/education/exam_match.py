@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from datasource.db.db import WriteDbSession
@@ -26,6 +27,8 @@ __all__ = [
     "apply_suggestions",
     "get_report",
     "get_task",
+    "limit_suggestions",
+    "match_summary",
     "parse_match_reply",
     "start_check",
 ]
@@ -87,8 +90,34 @@ def parse_match_reply(
             }
         )
     ok = bool(parsed.get("ok"))
+    add = limit_suggestions(add)
+    remove = limit_suggestions(remove)
     verdict = "ok" if ok or not (add or remove) else "needs_review"
     return {"verdict": verdict, "add": add, "remove": remove}
+
+
+def limit_suggestions(items: list[dict[str, Any]], limit: int = 3) -> list[dict[str, Any]]:
+    """只保留置信度最高的几条，避免一道题被贴上一长串泛化知识点。"""
+    ranked = sorted(items, key=lambda item: float(item.get("confidence") or 0), reverse=True)
+    return ranked[:limit]
+
+
+def match_summary(
+    total: int,
+    ok_count: int,
+    review_count: int,
+    failed_count: int,
+    unlinked_count: int,
+) -> str:
+    if total and unlinked_count == total:
+        return (
+            f"共 {total} 题目前都还没有关联知识点，"
+            f"本次给出关联建议 {review_count} 题，核对失败 {failed_count} 题"
+        )
+    return (
+        f"共 {total} 题：关联正确 {ok_count} 题，"
+        f"建议调整 {review_count} 题，核对失败 {failed_count} 题"
+    )
 
 
 def _one(session: Any, sql: str, params: tuple) -> tuple | None:
@@ -279,15 +308,14 @@ def _candidates(db_type: str, config: dict[str, Any], subject: str) -> list[dict
 
 def _system_prompt() -> str:
     return (
-        "你是知识点匹配助手。请根据题目内容、题型和已关联知识点，判断关联是否准确，"
-        "并给出可操作的增删建议。\n"
-        "输出必须是 JSON 对象，不要有任何其他文字：\n"
-        '{"ok": true, "add": [{"name": "知识点名称", "confidence": 0.95, "reason": "简短理由"}], '
-        '"remove": [{"name": "知识点名称", "reason": "简短理由"}]}\n'
-        "规则：add 中的知识点必须从候选知识点清单中选取，名称完全一致；"
-        "remove 中的知识点必须是当前关联知识点之一，名称完全一致；"
-        "当前关联为空但题干明显对应某个候选知识点时 ok=false 并给出 add；"
-        "当前关联已正确覆盖题意时 ok=true，add 和 remove 留空。"
+        "你是学科教研员。请从候选清单中为题目选出最贴合的知识点，最多 3 个。\n"
+        "只输出 JSON，不要解释：\n"
+        '{"ok": false, "add": [{"name": "知识点名称", "confidence": 0.9, "reason": "20字以内"}], '
+        '"remove": []}\n'
+        "规则：name 必须与候选清单逐字一致；"
+        "还没有关联知识点时只填写 add，ok 必须为 false；"
+        "已有关联且不需要增删时 ok 为 true，add 和 remove 都为空；"
+        "remove 只能填写当前已关联的名称。不要输出清单以外的名称。"
     )
 
 
@@ -297,8 +325,11 @@ def _user_prompt(question: dict[str, Any], candidates: list[dict[str, Any]]) -> 
         f"- {item.get('knowledge_name') or item.get('knowledge_id')}" for item in current
     ) or "（无）"
     names = "\n".join(f"- {item['knowledge_name']}" for item in candidates if item.get("knowledge_name"))
+    content = str(question.get("content") or "（无题干）")
+    if len(content) > 1600:
+        content = content[:1600] + "…"
     return (
-        f"题目：{question.get('content') or '（无题干）'}\n"
+        f"题目：{content}\n"
         f"题号：{question.get('question_no') or '-'}\n"
         f"题型：{question.get('question_type') or '未指定'}\n\n"
         f"当前已关联知识点：\n{current_text}\n\n"
@@ -307,12 +338,24 @@ def _user_prompt(question: dict[str, Any], candidates: list[dict[str, Any]]) -> 
     )
 
 
-def _ask_model(question: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
+def _match_llm():
+    """核对只需要短 JSON。MiniMax-M3 默认会长时间思考，这里关掉并限制输出长度。"""
+    from src.common.core.config import get_settings
     from src.llm.service import create_llm
 
-    llm = create_llm()
+    settings = get_settings()
+    kwargs: dict[str, Any] = {"max_tokens": 512, "temperature": 0}
+    model = (settings.llm_model or "").lower()
+    if "minimax" in model or settings.llm_thinking:
+        kwargs["thinking"] = "disabled"
+    return create_llm(**kwargs)
+
+
+def _ask_model(question: dict[str, Any], candidates: list[dict[str, Any]], llm: Any = None) -> dict[str, Any]:
+    if llm is None:
+        llm = _match_llm()
     last_error = "大模型调用失败"
-    for _attempt in range(3):
+    for _attempt in range(2):
         try:
             raw = llm.chat(
                 [
@@ -397,39 +440,59 @@ def _run_check(
     global _busy
     try:
         candidates = _candidates(db_type, config, subject)
+        llm = _match_llm() if candidates else None
+        total = len(questions)
         ok_count = 0
         failed_count = 0
-        total = len(questions)
-        for index, question in enumerate(questions, start=1):
+        unlinked_count = 0
+        done = 0
+        progress = threading.Lock()
+
+        def evaluate(question: dict[str, Any]):
             if task_id in _cancelled:
-                _finish(db_type, config, task_id, "cancelled", f"已取消：完成 {index - 1}/{total} 题")
-                return
+                return None
             if not candidates:
-                verdict, add, remove = "needs_review", [], []
-            else:
-                try:
-                    result = _ask_model(question, candidates)
-                    verdict, add, remove = result["verdict"], result["add"], result["remove"]
-                except Exception:
-                    logger.exception("题目 %s 核对失败", question.get("id"))
-                    verdict, add, remove = "failed", [], []
-                    failed_count += 1
-            if verdict == "ok":
-                ok_count += 1
-            _insert_item(
-                db_type,
-                config,
-                task_id,
-                question,
-                verdict,
-                add,
-                remove,
-                index,
-                failed_count,
-                total,
-            )
+                return question, "needs_review", [], []
+            try:
+                result = _ask_model(question, candidates, llm)
+            except Exception:
+                logger.exception("题目 %s 核对失败", question.get("id"))
+                return question, "failed", [], []
+            return question, result["verdict"], result["add"], result["remove"]
+
+        workers = 1 if not candidates else min(3, total)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(evaluate, question) for question in questions]
+            for future in as_completed(futures):
+                outcome = future.result()
+                if outcome is None or task_id in _cancelled:
+                    _finish(db_type, config, task_id, "cancelled", f"已取消：完成 {done}/{total} 题")
+                    return
+                question, verdict, add, remove = outcome
+                with progress:
+                    done += 1
+                    if verdict == "failed":
+                        failed_count += 1
+                    if verdict == "ok":
+                        ok_count += 1
+                    if not (question.get("knowledge_links") or []):
+                        unlinked_count += 1
+                    current_done = done
+                    current_failed = failed_count
+                _insert_item(
+                    db_type,
+                    config,
+                    task_id,
+                    question,
+                    verdict,
+                    add,
+                    remove,
+                    current_done,
+                    current_failed,
+                    total,
+                )
         review_count = total - ok_count - failed_count
-        summary = f"共 {total} 题：贴切 {ok_count} 题，待复核 {review_count} 题，失败 {failed_count} 题"
+        summary = match_summary(total, ok_count, review_count, failed_count, unlinked_count)
         _finish(db_type, config, task_id, "done", summary)
     except Exception as exc:
         logger.exception("知识点核对失败")
@@ -551,16 +614,24 @@ def apply_suggestions(
                 if int(link[0]) not in remove_ids
             ]
             known = {link["knowledge_id"] for link in links}
+            incoming = []
             for suggestion in item["add_suggestions"]:
                 knowledge_id = int(suggestion.get("knowledge_id") or 0)
                 if knowledge_id not in add_ids or knowledge_id in known:
                     continue
-                links.append(
-                    {
-                        "knowledge_id": knowledge_id,
-                        "weight": float(suggestion.get("confidence") or 0.5),
-                    }
-                )
+                incoming.append(suggestion)
+            if len(links) + len(incoming) > 3:
+                errors.append(f"题号 {item['question_no']}：一道题最多关联 3 个知识点")
+                continue
+            given = operation.get("weights") or {}
+            for suggestion in incoming:
+                knowledge_id = int(suggestion["knowledge_id"])
+                raw = given.get(str(knowledge_id), given.get(knowledge_id))
+                try:
+                    weight = float(raw) if raw is not None else float(suggestion.get("confidence") or 0.5)
+                except (TypeError, ValueError):
+                    weight = float(suggestion.get("confidence") or 0.5)
+                links.append({"knowledge_id": knowledge_id, "weight": weight})
             try:
                 prepared = normalize_links(links)
                 _replace_links(session, item["question_id"], prepared)
