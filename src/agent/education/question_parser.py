@@ -8,7 +8,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-__all__ = ["parse_question_header", "question_type_from_label", "parse_questions_from_headers"]
+__all__ = [
+    "parse_question_header",
+    "parse_questions_from_headers",
+    "question_type_from_label",
+    "without_parent_total_columns",
+]
 
 
 def parse_question_header(value: Any) -> tuple[str, float] | None:
@@ -96,4 +101,23 @@ def parse_questions_from_headers(headers: list[Any]) -> list[dict[str, Any]]:
                 "col_idx": col_idx,
             }
         )
-    return questions
+    return without_parent_total_columns(questions)
+
+
+def without_parent_total_columns(questions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """同一大题既有小题列又有总分列时，去掉总分列。
+
+    例如 ``15_1``、``15_2`` 与 ``15`` 同时出现，``15`` 是题目总分，不参与校验和写入。
+    """
+    mains_with_subs = {
+        str(item.get("main_no"))
+        for item in questions
+        if item.get("is_sub") and item.get("main_no")
+    }
+    if not mains_with_subs:
+        return questions
+    return [
+        item
+        for item in questions
+        if str(item.get("question_no") or "") not in mains_with_subs
+    ]

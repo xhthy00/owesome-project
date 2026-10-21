@@ -41,3 +41,4 @@ tests/agent/*
 !tests/agent/test_paper_import_save.py
 !tests/agent/test_paper_text_layer.py
 !tests/agent/test_exam_library.py
+!tests/agent/test_question_parser.py
