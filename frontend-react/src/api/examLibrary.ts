@@ -150,12 +150,21 @@ export const examLibraryApi = {
   removeBatch(id: number) {
     return send<{ id: number }>(`/batches/${id}`, { method: "DELETE" }, "删除批次失败");
   },
-  list(query: { keyword?: string; examType?: string; page: number; pageSize: number }) {
+  list(query: {
+    keyword?: string;
+    examType?: string;
+    subject?: string;
+    examBatchId?: number;
+    page: number;
+    pageSize: number;
+  }) {
     const params = new URLSearchParams();
     params.set("page", String(query.page));
     params.set("page_size", String(query.pageSize));
     if (query.keyword) params.set("keyword", query.keyword);
     if (query.examType) params.set("exam_type", query.examType);
+    if (query.subject) params.set("subject", query.subject);
+    if (query.examBatchId) params.set("exam_batch_id", String(query.examBatchId));
     return send<{ items: ExamLibraryItem[]; total: number; page: number; page_size: number }>(
       `?${params.toString()}`,
       { method: "GET" },

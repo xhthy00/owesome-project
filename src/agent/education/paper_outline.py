@@ -548,7 +548,11 @@ def _is_fragment(line: str) -> bool:
 
 
 _PAGE_MARK_RE = re.compile(
+    r"(?:"
     r"[\u4e00-\u9fffA-Za-z0-9]*试卷\s*第\s*\d+\s*页\s*[（(]\s*共\s*\d+\s*页\s*[）)]"
+    r"|高[一二三][\u4e00-\u9fff]{0,6}\s*第\s*\d+\s*页\s*共\s*\d+\s*页"
+    r"|[\u4e00-\u9fff]{1,8}试卷\s*第\s*\d+\s*页\s*共\s*\d+\s*页"
+    r")"
 )
 _LISTEN_CUE_RE = re.compile(
     r"听第\s*\d+\s*段材料[，,]\s*回答第\s*\d+\s*至\s*\d+\s*题[。．.]?"
@@ -934,10 +938,25 @@ def _is_figure_debris(line: str) -> bool:
     return len(text) <= 40
 
 
+def _is_axis_tick(line: str) -> bool:
+    text = line.strip()
+    if re.fullmatch(r"\d{1,3}", text):
+        return True
+    if re.fullmatch(r"[\d.]+(?:\s+[\d.]+){2,}", text):
+        return True
+    if re.fullmatch(r"[（(]\s*\d+\s*[,，]\s*\d+\s*[）)]", text):
+        return True
+    if re.fullmatch(r".{0,30}/%", text) or re.fullmatch(r"温度\s*/\s*[℃°C]+", text):
+        return True
+    return False
+
+
 def _drop_figure_noise(text: str) -> str:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     kept: list[str] = []
     for line in lines:
+        if _is_axis_tick(line):
+            continue
         if _is_chart_furniture(line) or re.fullmatch(r"(?:题\s*\d+\s*图(?:\s*[-－]\s*\d+)?)+", line):
             continue
         if _is_figure_debris(line) and kept and re.match(r"^[A-D][．.]", kept[-1]):

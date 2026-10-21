@@ -87,6 +87,8 @@ def _call(action):
 async def list_exam_library(
     keyword: str = "",
     exam_type: str = "",
+    subject: str = "",
+    exam_batch_id: int | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user),
@@ -102,6 +104,8 @@ async def list_exam_library(
             actor,
             keyword=keyword,
             exam_type=exam_type,
+            subject=subject,
+            exam_batch_id=exam_batch_id,
             page=page,
             page_size=page_size,
         )

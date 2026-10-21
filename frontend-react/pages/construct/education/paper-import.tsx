@@ -400,9 +400,11 @@ export function PaperImportPage() {
     {
       title: "题号",
       dataIndex: "question_no",
-      width: 160,
+      width: 168,
+      onCell: () => ({ style: { whiteSpace: "normal", verticalAlign: "top" } }),
       render: (_value, _row, index) => (
         <Input
+          className="w-full"
           value={questions[index]?.question_no}
           onChange={(event) => patchQuestion(index, { question_no: event.target.value })}
         />
@@ -411,7 +413,7 @@ export function PaperImportPage() {
     {
       title: "题型",
       dataIndex: "question_type",
-      width: 130,
+      width: 120,
       render: (_value, _row, index) => (
         <Select
           className="w-full"
@@ -424,9 +426,10 @@ export function PaperImportPage() {
     {
       title: "分值",
       dataIndex: "question_score",
-      width: 110,
+      width: 88,
       render: (_value, _row, index) => (
         <InputNumber
+          className="w-full"
           min={0}
           step={0.5}
           value={questions[index]?.question_score}
@@ -437,7 +440,7 @@ export function PaperImportPage() {
     {
       title: "题干",
       dataIndex: "content",
-      onCell: () => ({ style: { maxWidth: 680, verticalAlign: "top" } }),
+      onCell: () => ({ style: { whiteSpace: "normal", verticalAlign: "top", minWidth: 0 } }),
       render: (_value, _row, index) => (
         <StemField
           value={questions[index]?.content || ""}
@@ -447,9 +450,9 @@ export function PaperImportPage() {
     },
     {
       title: "",
-      width: 180,
+      width: 196,
       render: (_value, _row, index) => (
-        <Space size={0}>
+        <Space size={0} className="whitespace-nowrap">
           <span
             draggable
             aria-label="拖动调整顺序"
@@ -495,7 +498,7 @@ export function PaperImportPage() {
 
   return (
     <div className="dbgpt-ui-font h-full min-h-0 overflow-y-auto p-6 pb-10">
-    <div className="mx-auto max-w-6xl">
+    <div className="w-full min-w-0">
       <div className="mb-4 flex items-center gap-2">
         <Link href="/construct/education/exam-library" className="text-[#0C75FC]">
           <ArrowLeftOutlined />
@@ -615,6 +618,8 @@ export function PaperImportPage() {
           columns={columns}
           dataSource={questions}
           pagination={false}
+          tableLayout="fixed"
+          className="[&_.ant-table]:!w-full [&_td]:align-top [&_td]:whitespace-normal"
           locale={{ emptyText: "识别后在这里改题号、分值、题干和顺序" }}
           onRow={(_row, index) => ({
             onDragOver: (event) => event.preventDefault(),

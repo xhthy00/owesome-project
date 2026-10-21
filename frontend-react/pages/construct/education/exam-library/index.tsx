@@ -70,6 +70,8 @@ export default function ExamLibraryPage() {
   const [form] = Form.useForm<ExamPayload>();
   const [keyword, setKeyword] = useState("");
   const [examType, setExamType] = useState("");
+  const [subjectFilter, setSubjectFilter] = useState("");
+  const [batchFilter, setBatchFilter] = useState<number | undefined>();
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [rows, setRows] = useState<ExamLibraryItem[]>([]);
@@ -90,7 +92,14 @@ export default function ExamLibraryPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const data = await examLibraryApi.list({ keyword, examType, page, pageSize: 20 });
+      const data = await examLibraryApi.list({
+        keyword,
+        examType,
+        subject: subjectFilter,
+        examBatchId: batchFilter,
+        page,
+        pageSize: 20
+      });
       setRows(data.items);
       setTotal(data.total);
     } catch (error) {
@@ -98,7 +107,7 @@ export default function ExamLibraryPage() {
     } finally {
       setLoading(false);
     }
-  }, [keyword, examType, page]);
+  }, [keyword, examType, subjectFilter, batchFilter, page]);
 
   useEffect(() => {
     void load();
@@ -246,15 +255,18 @@ export default function ExamLibraryPage() {
 
   const columns: ColumnsType<ExamLibraryItem> = [
     {
-      title: "试卷名称",
-      dataIndex: "exam_name",
+      title: "考试批次",
+      dataIndex: "exam_batch_name",
+      width: "24%",
       ellipsis: true,
-      render: (value: string, row) => {
+      render: (value: string | null, row) => {
         const anomaly = examAnomaly(row);
         return (
           <span className="inline-flex min-w-0 max-w-full items-center gap-2">
             <StatusMark title={anomaly || "正常"} ok={!anomaly} />
-            <span className="truncate font-medium text-[#1f2937] dark:text-[#e5e7eb]">{value}</span>
+            <span className="truncate font-medium text-[#1f2937] dark:text-[#e5e7eb]">
+              {value || row.exam_name || "-"}
+            </span>
           </span>
         );
       }
@@ -262,7 +274,7 @@ export default function ExamLibraryPage() {
     {
       title: "科目",
       dataIndex: "subject",
-      width: 88,
+      width: "10%",
       align: "center",
       render: (value: string) => (
         <Tag color={SUBJECT_COLOR[value] || "default"} className="!mr-0">
@@ -272,7 +284,7 @@ export default function ExamLibraryPage() {
     },
     {
       title: "类型",
-      width: 120,
+      width: "13%",
       render: (_, row) => (
         <div className="min-w-0">
           <div>{row.exam_type_label}</div>
@@ -284,19 +296,12 @@ export default function ExamLibraryPage() {
         </div>
       )
     },
-    {
-      title: "考试批次",
-      dataIndex: "exam_batch_name",
-      ellipsis: true,
-      render: (value) => value || "-"
-    },
-    { title: "考试时间", dataIndex: "exam_time", width: 120, render: (value) => value || "-" },
-    { title: "满分", dataIndex: "exam_score", width: 72, align: "center" },
-    { title: "题目", dataIndex: "question_count", width: 72, align: "center" },
+    { title: "考试时间", dataIndex: "exam_time", width: "14%", render: (value) => value || "-" },
+    { title: "满分", dataIndex: "exam_score", width: "8%", align: "center" },
+    { title: "题目", dataIndex: "question_count", width: "9%", align: "center" },
     {
       title: "操作",
-      width: 340,
-      fixed: "right",
+      width: "22%",
       render: (_, row) => {
         const params = new URLSearchParams();
         if (row.exam_batch_id) params.set("batchId", String(row.exam_batch_id));
@@ -367,7 +372,7 @@ export default function ExamLibraryPage() {
                   试卷库
                 </Typography.Title>
                 <Typography.Text type="secondary" className="text-[13px]">
-                  名称前的标记按优先级提示未关联题目、卷面总分异常、未关联成绩；齐全时为绿色勾。可见范围：全市统考、本校学校自建、本人教师自建。
+                  批次前的标记按优先级提示未关联题目、卷面总分异常、未关联成绩；齐全时为绿色勾。可见范围：全市统考、本校学校自建、本人教师自建。
                 </Typography.Text>
               </div>
             </div>
@@ -382,11 +387,35 @@ export default function ExamLibraryPage() {
             <div className="mb-4 flex flex-wrap items-center gap-3">
               <Input.Search
                 allowClear
-                className="w-64"
-                placeholder="按试卷名称搜索"
+                className="w-56"
+                placeholder="搜索考试批次"
                 onSearch={(value) => {
                   setPage(1);
                   setKeyword(value.trim());
+                }}
+              />
+              <Select
+                allowClear
+                showSearch
+                optionFilterProp="label"
+                className="w-64"
+                placeholder="考试批次"
+                value={batchFilter}
+                options={batches.map((item) => ({ value: item.id, label: item.batch_name }))}
+                onChange={(value) => {
+                  setPage(1);
+                  setBatchFilter(value);
+                }}
+              />
+              <Select
+                allowClear
+                className="w-28"
+                placeholder="学科"
+                value={subjectFilter || undefined}
+                options={SUBJECTS.map((item) => ({ value: item, label: item }))}
+                onChange={(value) => {
+                  setPage(1);
+                  setSubjectFilter(value || "");
                 }}
               />
               <Select
@@ -407,8 +436,8 @@ export default function ExamLibraryPage() {
               loading={loading}
               columns={columns}
               dataSource={rows}
-              scroll={{ x: 1080 }}
-              className="[&_.ant-table-thead>tr>th]:!bg-[#f7f9fc] [&_.ant-table-thead>tr>th]:!font-medium dark:[&_.ant-table-thead>tr>th]:!bg-[#1c2430]"
+              tableLayout="fixed"
+              className="[&_.ant-table]:!w-full [&_.ant-table-thead>tr>th]:!bg-[#f7f9fc] [&_.ant-table-thead>tr>th]:!font-medium dark:[&_.ant-table-thead>tr>th]:!bg-[#1c2430]"
               pagination={{
                 current: page,
                 pageSize: 20,

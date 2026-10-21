@@ -351,6 +351,8 @@ def list_exams(
     *,
     keyword: str = "",
     exam_type: str = "",
+    subject: str = "",
+    exam_batch_id: int | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> dict[str, Any]:
@@ -360,11 +362,21 @@ def list_exams(
     values: list[Any] = list(params)
     text = keyword.strip()
     if text:
-        where += " AND e.exam_name ILIKE %s"
+        where += (
+            " AND (e.exam_name ILIKE %s OR EXISTS ("
+            "SELECT 1 FROM tb_exam_batch b WHERE b.id = e.exam_batch_id AND b.batch_name ILIKE %s))"
+        )
+        values.append(f"%{text}%")
         values.append(f"%{text}%")
     if exam_type.strip():
         where += " AND e.exam_type = %s"
         values.append(normalize_exam_type(exam_type))
+    if subject.strip():
+        where += " AND e.subject = %s"
+        values.append(subject.strip())
+    if exam_batch_id:
+        where += " AND e.exam_batch_id = %s"
+        values.append(int(exam_batch_id))
     with WriteDbSession(db_type, config) as session:
         total_row = _one(session, f"SELECT COUNT(*) FROM tb_exam e WHERE {where}", tuple(values))
         total = int(total_row[0]) if total_row else 0

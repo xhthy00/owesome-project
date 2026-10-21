@@ -71,7 +71,8 @@ function StemField({ value, onChange }: { value: string; onChange: (next: string
       <Input.TextArea
         value={value}
         autoFocus={editing}
-        autoSize={{ minRows: 1, maxRows: 6 }}
+        autoSize={{ minRows: 2 }}
+        className="!w-full"
         placeholder="题干"
         onBlur={() => setEditing(false)}
         onChange={(event) => onChange(event.target.value)}
@@ -143,6 +144,14 @@ function reorderQuestions<T>(rows: T[], from: number, to: number): T[] {
 }
 
 let draftSeq = 0;
+
+function questionNoTextWidth(value: string): number {
+  let width = 0;
+  for (const char of value) {
+    width += char.charCodeAt(0) > 255 ? 14 : 8;
+  }
+  return width;
+}
 
 function blankDraft(): Draft {
   draftSeq += 1;
@@ -336,17 +345,29 @@ export default function ExamQuestionPage() {
     }
   };
 
+  const questionNoWidth = Math.min(
+    360,
+    Math.max(
+      128,
+      rows.reduce((max, row) => Math.max(max, questionNoTextWidth(row.question_no)), 0) + 36
+    )
+  );
+
   const columns: ColumnsType<Draft> = [
     {
       title: "题号",
-      width: 90,
+      width: questionNoWidth,
       render: (_, row) => (
-        <Input value={row.question_no} onChange={(event) => updateRow(row.key, { question_no: event.target.value })} />
+        <Input
+          className="w-full"
+          value={row.question_no}
+          onChange={(event) => updateRow(row.key, { question_no: event.target.value })}
+        />
       )
     },
     {
       title: "题型",
-      width: 120,
+      width: 100,
       render: (_, row) => (
         <Select
           className="w-full"
@@ -359,7 +380,7 @@ export default function ExamQuestionPage() {
     },
     {
       title: "分值",
-      width: 100,
+      width: 72,
       render: (_, row) => (
         <InputNumber
           className="w-full"
@@ -372,13 +393,14 @@ export default function ExamQuestionPage() {
     },
     {
       title: "题干",
+      onCell: () => ({ style: { whiteSpace: "normal", verticalAlign: "top", minWidth: 0 } }),
       render: (_, row) => (
         <StemField value={row.content} onChange={(content) => updateRow(row.key, { content })} />
       )
     },
     {
       title: "知识点",
-      width: 240,
+      width: 160,
       render: (_, row) => (
         <Select
           mode="multiple"
@@ -398,7 +420,7 @@ export default function ExamQuestionPage() {
     },
     {
       title: "操作",
-      width: 248,
+      width: 208,
       render: (_, row, index) => (
         <Space size={0} className="whitespace-nowrap">
           <span
@@ -480,7 +502,7 @@ export default function ExamQuestionPage() {
 
   return (
     <div className="dbgpt-ui-font h-full min-h-0 overflow-y-auto p-6 pb-10">
-      <div className="mx-auto max-w-6xl">
+      <div className="w-full min-w-0">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Link href="/construct/education/exam-library" className="text-[#0C75FC]">
@@ -538,7 +560,8 @@ export default function ExamQuestionPage() {
             columns={columns}
             dataSource={rows}
             pagination={false}
-            scroll={{ x: 1280 }}
+            tableLayout="fixed"
+            className="[&_.ant-table]:!w-full [&_td]:align-top [&_td]:whitespace-normal"
             onRow={(_row, index) => ({
               onDragOver: (event) => event.preventDefault(),
               onDrop: () => {
