@@ -54,6 +54,8 @@
         <div class="edu-kpi"><div class="label">{% if IS_SINGLE_SUBJECT %}得分{% else %}总分{% endif %}</div><div class="value">{{TOTAL_SCORE}}</div></div>
         <div class="edu-kpi"><div class="label">班级排名</div><div class="value">{{CLASS_RANK}}</div></div>
         <div class="edu-kpi"><div class="label">年级排名</div><div class="value">{{GRADE_RANK}}</div></div>
+        {% if CITY_RANK %}<div class="edu-kpi"><div class="label">全市排名（总分）</div><div class="value">{{CITY_RANK}}</div></div>{% endif %}
+        {% if PEER_RANK %}<div class="edu-kpi"><div class="label">同层次排名（{{PEER_TIER}}校）</div><div class="value">{{PEER_RANK}}</div></div>{% endif %}
       </div>
     </section>
 

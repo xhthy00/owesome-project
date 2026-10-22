@@ -1942,6 +1942,100 @@ class ReportOrchestrator:
             filled["WEAK_KNOWLEDGE_LIST"] = "暂无（请确认已导入小题明细与知识点关联）"
         data.update(filled)
 
+        # 全市 / 同层次总分排名（单科报告不适用）。best-effort，失败不动主报告。
+        if not subject_hint:
+            # exam_order 是按考试时间升序的（[-1]=最近一场）；多选过滤的
+            # 书写顺序不代表时间，不能拿它定「最近一场」。
+            exam_candidates = list(exam_order) or _split_exam_filter(
+                str(spec.filters.get("exam_name") or "")
+            )
+            try:
+                await self._fill_student_external_rank(
+                    data,
+                    rows=rows,
+                    student=student,
+                    exam_name=exam_candidates[-1] if exam_candidates else "",
+                    spec=spec,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning("学生画像全市/同层次排名失败（已跳过）: %s", e)
+
+    async def _fill_student_external_rank(
+        self,
+        data: dict[str, Any],
+        *,
+        rows: list[dict[str, Any]],
+        student: str,
+        exam_name: str,
+        spec: ReportSpec,
+    ) -> None:
+        """查 ``tb_score_overview`` 排名池，写 ``CITY_RANK`` / ``PEER_RANK``。
+
+        排名池套路（与尖子生名次池一致）：目标行走外层 ``FROM`` 受权限过滤，
+        全市与同层次名次在内层 RANK() 子查询里先算（权限层对名次池结构放行整池），校长/老师只拿回自己那一行，名次仍是全市的。
+        口径：同场考试、在籍生、六门总分 ``zf6m`` 非空；同层次按 ``xxlb``
+        （引领/支撑/发展）分池。查不到（如只有 ``tb_score`` 库）就静默跳过。
+        """
+        from src.agent.education.line_reach_report import sql_result_to_dicts
+        from src.agent.education.query_parse import student_matches
+
+        if not exam_name or not student:
+            return
+        anon_stu_id = ""
+        for r in rows or []:
+            cand_id = str(r.get("student_id") or "").strip()
+            cand_name = str(r.get("student_name") or "").strip()
+            if not cand_id:
+                continue
+            if (
+                cand_id == student
+                or student_matches(cand_id, student)
+                or (cand_name and student_matches(cand_name, student))
+            ):
+                anon_stu_id = cand_id
+                break
+        if not anon_stu_id:
+            return
+
+        from src.agent.education.difficulty_curve import sql_lit
+
+        exam_lit = sql_lit(str(exam_name))
+        stu_lit = sql_lit(anon_stu_id)
+        tier_case = (
+            "CASE WHEN xxlb LIKE '%引领%' THEN '引领' "
+            "WHEN xxlb LIKE '%支撑%' THEN '支撑' "
+            "WHEN xxlb LIKE '%发展%' THEN '发展' END"
+        )
+        pool_select = (
+            "SELECT anon_stu_id, xxlb,\n"
+            "             RANK() OVER (ORDER BY zf6m DESC NULLS LAST) AS city_rank,\n"
+            "             COUNT(*) OVER () AS city_total,\n"
+            f"             RANK() OVER (PARTITION BY {tier_case} ORDER BY zf6m DESC"
+            " NULLS LAST) AS peer_rank,\n"
+            f"             COUNT(*) OVER (PARTITION BY {tier_case}) AS peer_total\n"
+            "      FROM tb_score_overview\n"
+            f"      WHERE exam_name = '{exam_lit}' AND xsxz = '在籍生' "
+            "AND zf6m IS NOT NULL"
+        )
+        sql = (
+            "SELECT o.anon_stu_id, o.xxlb, r.city_rank, r.city_total, "
+            "r.peer_rank, r.peer_total\n"
+            "FROM tb_score_overview o\n"
+            f"JOIN (\n      {pool_select}\n) r "
+            "ON r.anon_stu_id = o.anon_stu_id\n"
+            f"WHERE o.exam_name = '{exam_lit}' AND o.xsxz = '在籍生' "
+            f"AND o.anon_stu_id = '{stu_lit}'\n"
+            "LIMIT 1"
+        )
+        try:
+            found = sql_result_to_dicts(await self._execute_sql(sql))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("学生全市/同层次排名查询失败（已跳过）: %s", e)
+            return
+        if not found:
+            return
+        data.update(_student_external_rank_fields(found[0]))
+
     def _fill_trend_tracking(
         self,
         data: dict[str, Any],
@@ -2697,6 +2791,35 @@ def _external_class_rank_summary(
         f"{r.get('bj')}（{_rank_text(r)}）" for r in ordered_targets
     )
     return f"{head}<p class='edu-sub'>各班外部排名：{items}。</p>"
+
+
+def _student_external_rank_fields(row: dict[str, Any] | None) -> dict[str, str]:
+    """把 overview 排名池结果行转成学生报告展示字段（纯计算）。
+
+    全市排名 = 该生六门总分（``zf6m``）在同场全部在籍生中的名次；
+    同层次排名 = 与该生学校同层次（引领/支撑/发展）学生池中的名次。
+    层次识别不出（如「其他」）时不产出同层次名次。
+    """
+    if not row:
+        return {}
+    from src.agent.education.query_parse import canon_school_type
+
+    def _int(key: str) -> int | None:
+        try:
+            return int(float(row.get(key)))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+
+    out: dict[str, str] = {}
+    city_rank, city_total = _int("city_rank"), _int("city_total")
+    if city_rank and city_total:
+        out["CITY_RANK"] = f"第{city_rank}/{city_total}"
+    tier = canon_school_type(str(row.get("xxlb") or ""))
+    peer_rank, peer_total = _int("peer_rank"), _int("peer_total")
+    if tier and peer_rank and peer_total:
+        out["PEER_RANK"] = f"第{peer_rank}/{peer_total}"
+        out["PEER_TIER"] = tier
+    return out
 
 
 def _row_names_school(

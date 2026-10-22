@@ -256,6 +256,7 @@ export default function AnalysisToolPage() {
   const [skills, setSkills] = useState<SkillItem[]>([]);
   const [skillsLoading, setSkillsLoading] = useState(true);
   const [eduRole, setEduRole] = useState<string | null>(null);
+  const [boundSchoolName, setBoundSchoolName] = useState("");
   const [selected, setSelected] = useState<SkillItem | null>(null);
   const [datasources, setDatasources] = useState<DatasourceItem[]>([]);
   const [generating, setGenerating] = useState(false);
@@ -309,7 +310,10 @@ export default function AnalysisToolPage() {
     let cancelled = false;
     void getCurrentUser()
       .then((user) => {
-        if (!cancelled) setEduRole(String(user.edu_scope?.edu_role || "").trim());
+        if (!cancelled) {
+          setEduRole(String(user.edu_scope?.edu_role || "").trim());
+          setBoundSchoolName(String(user.edu_scope?.school_name || "").trim());
+        }
       })
       .catch(() => {
         if (!cancelled) setEduRole("");
@@ -404,6 +408,19 @@ export default function AnalysisToolPage() {
 
   const cardsLoading = skillsLoading || eduRole == null;
 
+  // 校长/老师账号绑定了学校：学校不用选，自动带入本校（后端也会按账号限本校，
+  // 这里带入是为了让班级/学生下拉一打开就是本校范围，少一步操作）。
+  const autoSchool =
+    eduRole != null && isSchoolOrTeacherRole(eduRole) && boundSchoolName
+      ? boundSchoolName
+      : "";
+
+  useEffect(() => {
+    if (autoSchool) {
+      form.setFieldsValue({ school_name: autoSchool });
+    }
+  }, [autoSchool, form]);
+
   const selectSkill = (skill: SkillItem) => {
     if (!OPEN_REPORT_TYPES.has(skill.report_type)) {
       message.info("该报告类型暂未开放");
@@ -421,12 +438,17 @@ export default function AnalysisToolPage() {
     setResult(null);
     setBatchItems([]);
     form.setFieldsValue({
-      audience: skill.audience_default || "default",
+      // 学生个体画像的技能配置默认家长版，现阶段不用家长版：
+      // 分析工具里固定出教师版（详细）。
+      audience:
+        skill.report_type === "student_profile"
+          ? "default"
+          : skill.audience_default || "default",
       include_charts: true,
       class_name: undefined,
       exam_name: undefined,
       subject: undefined,
-      school_name: undefined,
+      school_name: autoSchool || undefined,
       student_name: undefined,
       jc: undefined
     });
@@ -756,7 +778,13 @@ export default function AnalysisToolPage() {
                 form={form}
                 layout="vertical"
                 onFinish={onGenerate}
-                initialValues={{ audience: selected.audience_default, include_charts: true }}
+                initialValues={{
+                  audience:
+                    selected.report_type === "student_profile"
+                      ? "default"
+                      : selected.audience_default,
+                  include_charts: true
+                }}
                 size="middle"
               >
                 <Form.Item
@@ -772,7 +800,7 @@ export default function AnalysisToolPage() {
                     placeholder="选择数据源"
                     onChange={() => {
                       form.setFieldsValue({
-                        school_name: undefined,
+                        school_name: autoSchool || undefined,
                         class_name: undefined,
                         exam_name: undefined,
                         subject: undefined,
@@ -784,7 +812,19 @@ export default function AnalysisToolPage() {
                 <Form.Item name="audience" hidden>
                   <Input />
                 </Form.Item>
-                {fieldFlags.school_name ? (
+                {fieldFlags.school_name && autoSchool ? (
+                  <>
+                    <Form.Item
+                      label="学校"
+                      extra="已按账号绑定学校自动统计，无需选择"
+                    >
+                      <Input value={autoSchool} disabled />
+                    </Form.Item>
+                    <Form.Item name="school_name" hidden>
+                      <Input />
+                    </Form.Item>
+                  </>
+                ) : fieldFlags.school_name ? (
                   <Form.Item
                     name="school_name"
                     label="学校"

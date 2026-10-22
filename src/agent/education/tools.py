@@ -4796,6 +4796,100 @@ def _fetch_class_score_long_table(
     }
 
 
+def _fill_tool_student_external_rank(
+    data: dict[str, Any],
+    *,
+    datasource_id: int,
+    workspace_oid: int | None,
+    user_id: int | None,
+    target: str,
+    exam_name: str,
+) -> None:
+    """问答路径：给学生报告 data 补全市 / 同层次总分排名（best-effort）。
+
+    与编排层 ``_fill_student_external_rank`` 同口径：``tb_score_overview``
+    同场在籍生、六门总分 ``zf6m``；名次在内层 RANK() 子查询先算，
+    权限层放行整池，目标行只回一行。查不到就静默跳过。
+    """
+    from src.agent.education.difficulty_curve import sql_lit
+    from src.agent.education.line_reach_report import sql_result_to_dicts
+    from src.agent.education.query_parse import canon_school_type
+
+    if not exam_name or not target:
+        return
+    exam_lit = sql_lit(str(exam_name))
+    target_lit = sql_lit(str(target))
+
+    # 先按姓名或脱敏学号定位目标行（拿 anon_stu_id）
+    id_sql = (
+        "SELECT anon_stu_id FROM tb_score_overview "
+        f"WHERE exam_name = '{exam_lit}' AND xsxz = '在籍生' "
+        f"AND (anon_stu_id = '{target_lit}' OR xm = '{target_lit}') LIMIT 1"
+    )
+    ok, _msg, res, _run = _run_edu_sql(
+        id_sql,
+        datasource_id=int(datasource_id),
+        workspace_oid=workspace_oid,
+        user_id=user_id,
+    )
+    id_rows = sql_result_to_dicts(res) if ok else []
+    if not id_rows:
+        return
+    stu_lit = sql_lit(str(id_rows[0].get("anon_stu_id") or ""))
+
+    tier_case = (
+        "CASE WHEN xxlb LIKE '%引领%' THEN '引领' "
+        "WHEN xxlb LIKE '%支撑%' THEN '支撑' "
+        "WHEN xxlb LIKE '%发展%' THEN '发展' END"
+    )
+    pool_select = (
+        "SELECT anon_stu_id, xxlb,\n"
+        "             RANK() OVER (ORDER BY zf6m DESC NULLS LAST) AS city_rank,\n"
+        "             COUNT(*) OVER () AS city_total,\n"
+        f"             RANK() OVER (PARTITION BY {tier_case} ORDER BY zf6m DESC"
+        " NULLS LAST) AS peer_rank,\n"
+        f"             COUNT(*) OVER (PARTITION BY {tier_case}) AS peer_total\n"
+        "      FROM tb_score_overview\n"
+        f"      WHERE exam_name = '{exam_lit}' AND xsxz = '在籍生' "
+        "AND zf6m IS NOT NULL"
+    )
+    sql = (
+        "SELECT o.anon_stu_id, o.xxlb, r.city_rank, r.city_total, "
+        "r.peer_rank, r.peer_total\n"
+        "FROM tb_score_overview o\n"
+        f"JOIN (\n      {pool_select}\n) r "
+        "ON r.anon_stu_id = o.anon_stu_id\n"
+        f"WHERE o.exam_name = '{exam_lit}' AND o.xsxz = '在籍生' "
+        f"AND o.anon_stu_id = '{stu_lit}'\n"
+        "LIMIT 1"
+    )
+    ok, _msg, res, _run = _run_edu_sql(
+        sql,
+        datasource_id=int(datasource_id),
+        workspace_oid=workspace_oid,
+        user_id=user_id,
+    )
+    found = sql_result_to_dicts(res) if ok else []
+    if not found:
+        return
+    row = found[0]
+
+    def _int(key: str) -> int | None:
+        try:
+            return int(float(row.get(key)))  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return None
+
+    city_rank, city_total = _int("city_rank"), _int("city_total")
+    if city_rank and city_total:
+        data["CITY_RANK"] = f"第{city_rank}/{city_total}"
+    tier = canon_school_type(str(row.get("xxlb") or ""))
+    peer_rank, peer_total = _int("peer_rank"), _int("peer_total")
+    if tier and peer_rank and peer_total:
+        data["PEER_RANK"] = f"第{peer_rank}/{peer_total}"
+        data["PEER_TIER"] = tier
+
+
 @tool()
 def build_student_exam_report_data_tool(
     student_name: str = "",
@@ -5018,6 +5112,21 @@ def build_student_exam_report_data_tool(
         class_size=class_size,
         student_item_insights=student_item_insights or None,
     )
+
+    # 全市 / 同层次总分排名（单科报告不适用）。best-effort，失败不动主报告。
+    if datasource_id and not subject_name:
+        rank_exams = list(exam_order or exams_in_data or [])
+        try:
+            _fill_tool_student_external_rank(
+                data,
+                datasource_id=int(datasource_id),
+                workspace_oid=workspace_oid,
+                user_id=ctx.get("user_id"),
+                target=target,
+                exam_name=rank_exams[-1] if rank_exams else "",
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("学生报告全市/同层次排名失败（已跳过）", exc_info=True)
 
     if not render:
         return ToolResult(

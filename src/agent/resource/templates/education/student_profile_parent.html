@@ -48,6 +48,7 @@
         {{REPORT_TIME}}
       </p>
       <p class="edu-sub">{{COVER_META}}</p>
+      {% if CITY_RANK %}<p class="edu-sub">最近一场考试总分定位：全市 {{CITY_RANK}}{% if PEER_RANK %}；同层次（{{PEER_TIER}}校）{{PEER_RANK}}{% endif %}（同场在籍生口径）。</p>{% endif %}
     </section>
 
     <section class="edu-card">

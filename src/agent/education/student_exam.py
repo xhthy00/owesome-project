@@ -533,6 +533,63 @@ def _build_knowledge_section(
     return insight_html, table, weak_table, chart
 
 
+_ELECTIVE_SUBJECTS = frozenset({"物理", "历史", "化学", "生物", "政治", "地理"})
+_XKKM_CHAR_SUBJECT = {
+    "物": "物理",
+    "化": "化学",
+    "生": "生物",
+    "史": "历史",
+    "历": "历史",
+    "政": "政治",
+    "地": "地理",
+}
+
+
+def _selected_electives_from_records(
+    records: list[dict[str, Any]], student_name: str
+) -> set[str] | None:
+    """从该生记录的 ``xkkm``（如「物化生」）解析选考科目；无 xkkm 返回 None。"""
+    for r in records or []:
+        if str(r.get("student") or "") != student_name:
+            continue
+        xk = str(r.get("xkkm") or r.get("track") or "")
+        subs = {_XKKM_CHAR_SUBJECT[ch] for ch in xk if ch in _XKKM_CHAR_SUBJECT}
+        if subs:
+            return subs
+    return None
+
+
+def _drop_unselected_subjects(
+    subjects: list[str],
+    stu_sub_scores: dict[str, dict[str, float]],
+    selected_electives: set[str] | None,
+) -> list[str]:
+    """剔除该生未选的选考科目，返回保留科目（原序）。
+
+    有 xkkm 时以选科组合为准（缺考 0 分的已选科目保留）；
+    无 xkkm 时，该科历次全为 0 视为未选（overview 未选恒 0）。
+    语数英为必考，不剔除。全部被剔时回退原列表，避免空报告。
+    """
+    kept: list[str] = []
+    for sub in subjects:
+        if sub not in _ELECTIVE_SUBJECTS:
+            kept.append(sub)
+            continue
+        if selected_electives is not None:
+            if sub in selected_electives:
+                kept.append(sub)
+            continue
+        vals = [v for v in (stu_sub_scores.get(sub) or {}).values() if v is not None]
+        if any(v > 0 for v in vals):
+            kept.append(sub)
+    if not kept:
+        return subjects
+    dropped = [s for s in subjects if s not in kept]
+    for sub in dropped:
+        stu_sub_scores.pop(sub, None)
+    return kept
+
+
 def build_student_exam_data(
     records: list[dict[str, Any]],
     student_name: str,
@@ -619,6 +676,12 @@ def build_student_exam_data(
             v = (row.get("subjects") or {}).get(sub)
             if v is not None:
                 stu_sub_scores[sub][e] = float(v)
+
+    # 未选选考在 overview 里恒为 0，会被当 0 分计入雷达/偏科/贡献度，必须先剔除。
+    # 有 xkkm 按选科组合剔除；没有则用「该生该科历次全为 0」判定（语数英必考不剔）。
+    subjects = _drop_unselected_subjects(
+        subjects, stu_sub_scores, _selected_electives_from_records(records, resolved_name)
+    )
 
     single_subject = len(subjects) == 1
     sole_subject = subjects[0] if single_subject else ""
@@ -907,6 +970,7 @@ def build_student_exam_data(
         trend_narrative = "".join(bits_n)
 
     contrib_parts: list[str] = []
+    subject_gap_avg: dict[str, float] = {}
     for sub in subjects:
         diffs = []
         for e in exams:
@@ -915,8 +979,11 @@ def build_student_exam_data(
                 diffs.append(sc - ca)
         if diffs:
             avg_d = sum(diffs) / len(diffs)
-            role = "拉分项" if avg_d > 8 else ("扣分项" if avg_d < -8 else "均衡项")
-            contrib_parts.append(f"{sub}（{role}，平均与均分差 {_fmt(avg_d)} 分）")
+            subject_gap_avg[sub] = avg_d
+            # 与班均差为正=高于班均（优势），为负=低于班均（拖分）；带符号避免方向误读
+            role = "优势项" if avg_d > 8 else ("拖分项" if avg_d < -8 else "均衡项")
+            sign = "+" if avg_d > 0 else ""
+            contrib_parts.append(f"{sub}（{role}，与班均差 {sign}{_fmt(avg_d)} 分）")
     contribution_insight = "；".join(contrib_parts) or "学科贡献度数据不足。"
 
     diff_rows: list[list[str]] = []
@@ -1137,7 +1204,15 @@ def build_student_exam_data(
                 f"（{'、'.join(subjects)}），按单次考试各科对比呈现。"
                 + (
                     f"{'优势科目为' + strong_sub + '，' if strong_sub else ''}"
-                    f"{'需重点提升' + weak_sub + '。' if weak_sub else ''}"
+                    + (
+                        f"需重点提升{weak_sub}。"
+                        if weak_sub and subject_gap_avg.get(weak_sub, 0.0) < -8
+                        else (
+                            f"相对较弱的是{weak_sub}（仍在班均之上）。"
+                            if weak_sub and subject_gap_avg.get(weak_sub, 0.0) >= 0
+                            else (f"相对较弱的是{weak_sub}。" if weak_sub else "")
+                        )
+                    )
                 )
                 + f"{trend_narrative}"
             )
@@ -1147,11 +1222,23 @@ def build_student_exam_data(
         for k in (insight.get("weak_knowledge") or [])[:3]
         if _know_label(k) not in ("", "未关联知识点")
     ]
-    assessment = (
-        f"该生呈现"
-        f"{'明显的偏科特征' if strong_sub and weak_sub else '相对均衡的学科结构'}。"
-        f"{contribution_insight}"
-    )
+    # 偏科判定要有门槛：存在低于班均的拖分科且强弱科班均差拉开 ≥20 分才算偏科；
+    # 各科都在班均之上只是强弱分化，不能误判偏科（原逻辑只要有最强/最弱科就恒成立）。
+    _gap_vals = list(subject_gap_avg.values())
+    if _gap_vals:
+        _weak_gap = min(_gap_vals)
+        _strong_gap = max(_gap_vals)
+        if _weak_gap < -8 and (_strong_gap - _weak_gap) >= 20:
+            _structure_text = "明显的偏科特征"
+        elif (_strong_gap - _weak_gap) >= 30:
+            # 走到这里最弱科未明显低于班均：强科突出但没有拖分短板
+            _structure_text = "学科强弱分化较明显的特征，但最弱科也未明显低于班均、无突出短板"
+        else:
+            _structure_text = "相对均衡的学科结构"
+    else:
+        _structure_text = "相对均衡的学科结构"
+    # 只写结论，科目差值清单由 CONTRIBUTION_INSIGHT 一节单独呈现，避免同段重复
+    assessment = f"该生呈现{_structure_text}。"
     if single_subject:
         assessment = (
             f"{resolved_name} 本报告聚焦 <strong>{sole_subject}</strong> 单科分析。"
@@ -1436,6 +1523,11 @@ def build_student_exam_data(
         "TOTAL_SCORE": _fmt(last_total),
         "CLASS_RANK": _rank_label(last_rank, n_class or 0),
         "GRADE_RANK": _rank_label(last_rank, n_class or 0),
+        # 全市 / 同层次总分排名：仅编排层（overview 排名池）能算，这里给空占位，
+        # 模板用 {% if CITY_RANK %} 条件展示，chat 路径无此数据时不显示。
+        "CITY_RANK": "",
+        "PEER_RANK": "",
+        "PEER_TIER": "",
         "SUBJECT_TABLE": score_summary_table,
         "SUMMARY": f"<p>{assessment}</p><p>{contribution_insight_out}</p>",
         # 单科 / 多科 / 是否真多次考试（模板与联调用）
