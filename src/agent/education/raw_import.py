@@ -19,7 +19,10 @@ from openpyxl.utils import get_column_letter
 
 from datasource.db.db import WriteDbSession, execute_sql
 from datasource.service.edu_permission import EduScope
-from src.agent.education.question_parser import parse_questions_from_headers
+from src.agent.education.question_parser import (
+    align_detail_question_columns,
+    parse_questions_from_headers,
+)
 from src.agent.education.score_import import (
     ImportErrorRow,
     ImportResult,
@@ -1335,6 +1338,16 @@ def _validate_detail_rows(
 ) -> tuple[list[dict[str, Any]], list[ImportErrorRow]]:
     errors: list[ImportErrorRow] = []
     questions_by_no = dims.get("questions_by_no") or {}
+    paper_scores: dict[str, float] = {}
+    for number, row in questions_by_no.items():
+        try:
+            paper_scores[str(number)] = float((row or {}).get("question_score") or 0)
+        except (TypeError, ValueError):
+            paper_scores[str(number)] = 0.0
+    kept, rename = align_detail_question_columns(questions, set(questions_by_no), paper_scores)
+    questions[:] = kept
+    for row in rows:
+        row.scores = {rename[no]: score for no, score in row.scores.items() if no in rename}
     file_nos = {str(q.get("question_no") or "") for q in questions if q.get("question_no")}
     missing = sorted(file_nos - set(questions_by_no.keys()))
     if missing:

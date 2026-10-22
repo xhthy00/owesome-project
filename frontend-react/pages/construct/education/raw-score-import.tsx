@@ -723,13 +723,7 @@ export default function RawScoreImportPage() {
                   <Button onClick={() => setCreateOpen(true)}>新建批次</Button>
                 </Space>
               </div>
-              {!selectedBatch ? (
-                <Alert
-                  type="warning"
-                  showIcon
-                  message="请选择考试批次。成绩固定写入 edu 业务库，无需选择数据源。"
-                />
-              ) : papersStatus === "loading" ? (
+              {!selectedBatch ? null : papersStatus === "loading" ? (
                 <Alert type="info" showIcon message="正在加载试卷…" />
               ) : papersStatus === "failed" ? (
                 <Alert type="warning" showIcon message="试卷加载失败，请刷新后重试" />
