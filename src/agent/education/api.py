@@ -2189,7 +2189,15 @@ async def execute_paper_import(
 ) -> dict:
     from src.agent.education.paper_import import save_paper_outline
 
-    _ds_id, _scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    from common.core.database import get_db_session
+    from src.agent.education.exam_library import build_actor
+    from system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        user = get_user_by_id(session, int(current_user.id))
+    if user is None:
+        raise ForbiddenException("用户不存在")
     try:
         saved = save_paper_outline(
             db_type,
@@ -2198,6 +2206,7 @@ async def execute_paper_import(
             subject=body.subject,
             exam_score=body.exam_score,
             questions=[item.model_dump() for item in body.questions],
+            actor=build_actor(user, scope),
         )
     except ValueError as exc:
         raise BadRequestException(str(exc)) from exc

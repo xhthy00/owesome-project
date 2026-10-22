@@ -245,13 +245,14 @@ export default function EduPermissionPage() {
         .split(/[|,，]/)
         .map((s) => s.trim())
         .filter(Boolean);
-      const selectedSchool = schools.find((s) => s.id === values.school_id);
+      const isBureau = values.edu_role === "bureau_admin";
+      const selectedSchool = isBureau ? undefined : schools.find((s) => s.id === values.school_id);
       const payload = {
         edu_role: values.edu_role,
-        school_id: values.school_id,
-        school_name: selectedSchool?.label || values.school_name,
-        class_names: classNames.length ? classNames : undefined,
-        student_id: values.student_id,
+        school_id: isBureau ? "" : values.school_id,
+        school_name: isBureau ? "" : selectedSchool?.label || values.school_name,
+        class_names: isBureau ? undefined : classNames.length ? classNames : undefined,
+        student_id: isBureau ? "" : values.student_id,
         edu_remark: (values.edu_remark || "").trim() || undefined
       };
       setLoading(true);
@@ -405,7 +406,7 @@ export default function EduPermissionPage() {
             教育权限
           </Typography.Title>
           <Typography.Text className="oc-muted">
-            教育局 / 校长 / 老师 / 学生 四级数据范围，与数据权限规则叠加生效
+            教育局 / 学校 / 老师 / 学生 四级数据范围，与数据权限规则叠加生效
           </Typography.Text>
         </div>
         <Space>
@@ -661,15 +662,7 @@ export default function EduPermissionPage() {
             <Select options={roleOptions} placeholder="选择角色" />
           </Form.Item>
 
-          <Form.Item
-            name="edu_remark"
-            label="备注"
-            extra="选填，用于区分同角色账号，如「市教研室」「邗江区」"
-          >
-            <Input placeholder="如 市教研室" maxLength={80} allowClear />
-          </Form.Item>
-
-          {(requiredFields.includes("school_id") || selectedRole === "bureau_admin") && (
+          {requiredFields.includes("school_id") && (
             <Form.Item
               name="school_id"
               label={anonymizeDisplay ? "学校 ID" : "学校"}
@@ -722,6 +715,14 @@ export default function EduPermissionPage() {
               <Input placeholder="STU20240002" />
             </Form.Item>
           )}
+
+          <Form.Item
+            name="edu_remark"
+            label="备注"
+            extra="选填，用于区分同角色账号，如「市教研室」「邗江区」"
+          >
+            <Input placeholder="如 市教研室" maxLength={80} allowClear />
+          </Form.Item>
         </Form>
       </Modal>
 

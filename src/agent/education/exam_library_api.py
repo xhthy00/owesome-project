@@ -84,6 +84,11 @@ def _call(action):
         raise BadRequestException(str(exc)) from exc
 
 
+def _require_batch_manager(actor) -> None:
+    if not actor.see_all:
+        raise ForbiddenException("只有管理员和教育局可以维护考试批次")
+
+
 @router.get("")
 async def list_exam_library(
     keyword: str = "",
@@ -150,7 +155,8 @@ async def create_exam_batch(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    db_type, config, _actor = _db(current_user, workspace_oid)
+    db_type, config, actor = _db(current_user, workspace_oid)
+    _require_batch_manager(actor)
     from src.agent.education.exam_library import create_exam_batch as add_batch
 
     data = _call(lambda: add_batch(db_type, config, body.model_dump()))
@@ -164,7 +170,8 @@ async def update_exam_batch(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    db_type, config, _actor = _db(current_user, workspace_oid)
+    db_type, config, actor = _db(current_user, workspace_oid)
+    _require_batch_manager(actor)
     from src.agent.education.exam_library import update_exam_batch as save_batch
 
     data = _call(lambda: save_batch(db_type, config, batch_id, body.model_dump()))
@@ -179,7 +186,8 @@ async def delete_exam_batch(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    db_type, config, _actor = _db(current_user, workspace_oid)
+    db_type, config, actor = _db(current_user, workspace_oid)
+    _require_batch_manager(actor)
     from src.agent.education.exam_library import delete_exam_batch as remove_batch
 
     deleted = _call(lambda: remove_batch(db_type, config, batch_id))

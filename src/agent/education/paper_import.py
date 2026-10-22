@@ -104,6 +104,7 @@ def save_paper_outline(
     subject: str,
     exam_score: float,
     questions: list[dict[str, Any]],
+    actor: Any = None,
 ) -> dict[str, Any]:
     """按批次和科目写入试卷。已有同一科目时覆盖题目，并清除该科成绩和小题分。"""
     from datasource.db.db import WriteDbSession
@@ -136,15 +137,37 @@ def save_paper_outline(
             raise ValueError(f"批次中已有多份{name}试卷，请先整理后再导入")
         exam_id = int(existing[0][0]) if existing else None
         updated = exam_id is not None
+        owner_id = None
+        if actor is not None:
+            from src.agent.education.exam_library import can_create_exam, exam_writable
+
+            if exam_id is None:
+                if not can_create_exam(actor):
+                    raise ValueError("无权创建试卷")
+                if not actor.see_all:
+                    owner_id = str(actor.owner_id or "").strip() or None
+            else:
+                current = _one(
+                    session,
+                    "SELECT exam_type, school_id, owner_id FROM tb_exam WHERE id = %s",
+                    (exam_id,),
+                )
+                owned = {
+                    "exam_type": None if current is None else current[0],
+                    "school_id": None if current is None else current[1],
+                    "owner_id": None if current is None else current[2],
+                }
+                if not exam_writable(owned, actor):
+                    raise ValueError("无权维护这张试卷")
         cleared_score_count = 0
         cleared_detail_count = 0
         if exam_id is None:
             created = _one(
                 session,
                 "INSERT INTO tb_exam "
-                "(exam_name, exam_time, subject, exam_score, exam_type, exam_batch_id) "
-                "VALUES (%s, %s, %s, %s, 'city', %s) RETURNING id",
-                (exam_name, exam_time, name, float(exam_score), int(exam_batch_id)),
+                "(exam_name, exam_time, subject, exam_score, exam_type, exam_batch_id, owner_id) "
+                "VALUES (%s, %s, %s, %s, 'city', %s, %s) RETURNING id",
+                (exam_name, exam_time, name, float(exam_score), int(exam_batch_id), owner_id),
             )
             if created is None:
                 raise ValueError("创建试卷失败")

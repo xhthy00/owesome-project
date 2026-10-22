@@ -2,12 +2,12 @@
   "version": "edu-perm-v1",
   "roles": {
     "bureau_admin": {
-      "label": "教育局（全市）",
+      "label": "教育局",
       "required_fields": [],
       "predicates": []
     },
     "school_admin": {
-      "label": "学校（校长）",
+      "label": "学校",
       "required_fields": ["school_id"],
       "predicates": [
         { "field": "school_id", "op": "=", "value": "${user.school_id}" }

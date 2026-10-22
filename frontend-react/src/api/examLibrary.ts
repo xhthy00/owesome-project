@@ -91,11 +91,27 @@ export interface MatchItem {
   adopted: boolean;
 }
 
-export function canImportExamPapers(user: CurrentUser | null): boolean {
+export function canManageExamBatches(user: CurrentUser | null): boolean {
   if (!user) return false;
   return Boolean(
     user.is_platform_admin || user.is_super_admin || user.edu_scope?.edu_role === "bureau_admin"
   );
+}
+
+export function canCreateExam(user: CurrentUser | null): boolean {
+  if (!user) return false;
+  return canManageExamBatches(user) || user.edu_scope?.edu_role === "school_admin";
+}
+
+export function canMaintainExam(
+  user: CurrentUser | null,
+  exam: { owner_id?: string | null } | null | undefined
+): boolean {
+  if (!user || !exam) return false;
+  if (canManageExamBatches(user)) return true;
+  const owner = String(exam.owner_id || "").trim();
+  const account = String(user.account || "").trim();
+  return Boolean(owner && account && owner === account);
 }
 
 export interface MatchTask {

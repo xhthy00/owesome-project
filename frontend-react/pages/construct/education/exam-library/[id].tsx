@@ -24,7 +24,7 @@ import { useRouter } from "next/router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentUser, type CurrentUser } from "@/api/auth";
 import {
-  canImportExamPapers,
+  canMaintainExam,
   examLibraryApi,
   type ExamDetail,
   type KnowledgeLink,
@@ -69,11 +69,19 @@ function stemBlocks(content: string): Array<{ kind: "text"; text: string } | { k
   return blocks;
 }
 
-function StemField({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+function StemField({
+  value,
+  onChange,
+  readOnly
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  readOnly?: boolean;
+}) {
   const [editing, setEditing] = useState(false);
   const blocks = stemBlocks(value);
   const hasTable = blocks.some((block) => block.kind === "table");
-  if (!hasTable || editing) {
+  if (!readOnly && (!hasTable || editing)) {
     return (
       <Input.TextArea
         value={value}
@@ -92,8 +100,11 @@ function StemField({ value, onChange }: { value: string; onChange: (next: string
       tabIndex={0}
       title="点击编辑题干"
       className="w-full cursor-text rounded-lg border border-[#e4eef8] bg-[#f8fbff] px-3 py-2 text-left"
-      onClick={() => setEditing(true)}
+      onClick={() => {
+        if (!readOnly) setEditing(true);
+      }}
       onKeyDown={(event) => {
+        if (readOnly) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           setEditing(true);
@@ -197,12 +208,14 @@ function KnowledgeLinksCell({
   links,
   tree,
   options,
-  onChange
+  onChange,
+  readOnly
 }: {
   links: KnowledgeDraftLink[];
   tree: KnowledgeTreeNode[];
   options: KnowledgeOption[];
   onChange: (links: KnowledgeDraftLink[]) => void;
+  readOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const popupRoot = useRef<HTMLDivElement>(null);
@@ -285,6 +298,7 @@ function KnowledgeLinksCell({
       open={open}
       destroyOnHidden
       onOpenChange={(next) => {
+        if (readOnly) return;
         if (!next && document.querySelector(".knowledge-tree-dropdown:not(.ant-select-dropdown-hidden)")) return;
         setOpen(next);
       }}
@@ -292,8 +306,9 @@ function KnowledgeLinksCell({
     >
       <button
         type="button"
-        title={links.length ? "调整知识点" : "关联知识点"}
-        className="w-full text-left"
+        disabled={readOnly}
+        title={readOnly ? undefined : links.length ? "调整知识点" : "关联知识点"}
+        className="w-full text-left disabled:cursor-default"
       >
         {links.length ? (
           <span className="flex flex-col gap-1.5">
@@ -566,6 +581,7 @@ export default function ExamQuestionPage() {
     }
   };
 
+  const writable = canMaintainExam(currentUser, detail?.exam);
   const questionNoWidth = Math.min(
     360,
     Math.max(
@@ -582,6 +598,7 @@ export default function ExamQuestionPage() {
         <Input
           className="w-full !rounded-lg !border-[#e4eef8] !bg-[#eef5ff] !text-center !font-medium !text-[#0C75FC]"
           value={row.question_no}
+          disabled={!writable}
           onChange={(event) => updateRow(row.key, { question_no: event.target.value })}
         />
       )
@@ -593,6 +610,7 @@ export default function ExamQuestionPage() {
         <Select
           className="w-full [&_.ant-select-selector]:!rounded-lg [&_.ant-select-selector]:!border-[#e4eef8]"
           allowClear
+          disabled={!writable}
           value={row.question_type || undefined}
           options={QUESTION_TYPES.map((item) => ({ value: item, label: item }))}
           onChange={(value) => updateRow(row.key, { question_type: value || null })}
@@ -607,6 +625,7 @@ export default function ExamQuestionPage() {
           className="w-full !rounded-lg !border-[#e4eef8]"
           min={0}
           step={0.5}
+          disabled={!writable}
           value={row.question_score ?? undefined}
           onChange={(value) => updateRow(row.key, { question_score: value })}
         />
@@ -617,7 +636,7 @@ export default function ExamQuestionPage() {
       width: "28%",
       onCell: () => ({ style: { whiteSpace: "normal", verticalAlign: "middle" } }),
       render: (_, row) => (
-        <StemField value={row.content} onChange={(content) => updateRow(row.key, { content })} />
+        <StemField readOnly={!writable} value={row.content} onChange={(content) => updateRow(row.key, { content })} />
       )
     },
     {
@@ -629,6 +648,7 @@ export default function ExamQuestionPage() {
           links={row.knowledge_links}
           tree={knowledgeTree}
           options={knowledgeOptions}
+          readOnly={!writable}
           onChange={(knowledge_links) => updateRow(row.key, { knowledge_links })}
         />
       )
@@ -858,8 +878,8 @@ export default function ExamQuestionPage() {
               </div>
             </div>
             <Space wrap>
-              <Button onClick={() => setRows((current) => [...current, blankDraft()])}>添加题目</Button>
-              {canImportExamPapers(currentUser) && detail?.exam.exam_batch_id ? (
+              {writable ? <Button onClick={() => setRows((current) => [...current, blankDraft()])}>添加题目</Button> : null}
+              {writable && detail?.exam.exam_batch_id ? (
                 <Button
                   onClick={() =>
                     router.push(
@@ -870,13 +890,15 @@ export default function ExamQuestionPage() {
                   重新导入
                 </Button>
               ) : null}
-              <Button onClick={() => void startMatch()}>知识点核对</Button>
+              {writable ? <Button onClick={() => void startMatch()}>知识点核对</Button> : null}
               <Button onClick={() => void openReport().catch((error) => message.error(error instanceof Error ? error.message : "读取核对报告失败"))}>
                 核对报告
               </Button>
-              <Button type="primary" loading={saving} onClick={() => void save()}>
-                保存试卷
-              </Button>
+              {writable ? (
+                <Button type="primary" loading={saving} onClick={() => void save()}>
+                  保存试卷
+                </Button>
+              ) : null}
             </Space>
           </div>
           {hasScores || scoreMismatch ? (
@@ -895,15 +917,17 @@ export default function ExamQuestionPage() {
             rowKey="key"
             size="middle"
             loading={loading}
-            columns={columns}
+            columns={writable ? columns : columns.filter((column) => column.title !== "操作")}
             dataSource={rows}
             pagination={false}
             tableLayout="fixed"
             className="[&_.ant-table]:!w-full [&_.ant-table-container]:!overflow-visible [&_.ant-table-content]:!overflow-visible [&_.ant-table-tbody>tr:hover>td]:!bg-[#f9fbfe] [&_.ant-table-tbody>tr>td]:!border-[#eef3f8] [&_.ant-table-tbody>tr>td]:!py-3.5 [&_.ant-table-thead>tr>th]:!sticky [&_.ant-table-thead>tr>th]:!top-0 [&_.ant-table-thead>tr>th]:!z-10 [&_.ant-table-thead>tr>th]:!border-b-[#d6e6f8] [&_.ant-table-thead>tr>th]:!bg-[#f7f9fc] [&_.ant-table-thead>tr>th]:!font-medium [&_.ant-table-thead>tr>th]:!py-3 [&_.ant-table-thead>tr>th]:!text-[#475569] [&_td]:!align-middle [&_td]:whitespace-normal dark:[&_.ant-table-thead>tr>th]:!bg-[#1c2430]"
             onRow={(_row, index) => ({
-              onDragOver: (event) => event.preventDefault(),
+              onDragOver: (event) => {
+                if (writable) event.preventDefault();
+              },
               onDrop: () => {
-                if (index == null || dragFrom.current == null) return;
+                if (!writable || index == null || dragFrom.current == null) return;
                 const from = dragFrom.current;
                 dragFrom.current = null;
                 setRows((current) => reorderQuestions(current, from, index));
@@ -933,9 +957,11 @@ export default function ExamQuestionPage() {
               <span className="mr-auto text-xs text-[#64748b]">共 {totalSuggestions} 条建议</span>
             ) : null}
             <Button disabled={adopting} onClick={() => setDrawerOpen(false)}>关闭</Button>
-            <Button type="primary" loading={adopting} disabled={!selectedCount} onClick={() => void adopt()}>
-              {adopting ? "正在写入" : `采纳选中（${selectedCount}）`}
-            </Button>
+            {writable ? (
+              <Button type="primary" loading={adopting} disabled={!selectedCount} onClick={() => void adopt()}>
+                {adopting ? "正在写入" : `采纳选中（${selectedCount}）`}
+              </Button>
+            ) : null}
           </div>
         }
       >

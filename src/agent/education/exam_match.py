@@ -13,6 +13,7 @@ from datasource.db.db import WriteDbSession
 from src.agent.education.exam_library import (
     ExamActor,
     _replace_links,
+    exam_writable,
     get_exam,
     normalize_links,
 )
@@ -317,6 +318,8 @@ def start_check(
 ) -> dict[str, Any]:
     global _busy
     detail = _require_exam(db_type, config, actor, exam_id)
+    if not exam_writable(detail["exam"], actor):
+        raise ValueError("无权维护这张试卷")
     questions = detail["questions"]
     attach_match_context(questions)
     if question_id is not None:
@@ -714,8 +717,11 @@ def apply_suggestions(
     report_task = get_task(db_type, config, task_id)
     if report_task is None:
         raise ValueError("核对报告不存在")
-    if get_exam(db_type, config, actor, int(report_task["exam_id"])) is None:
+    detail = get_exam(db_type, config, actor, int(report_task["exam_id"]))
+    if detail is None:
         raise ValueError("试卷不存在或无权查看")
+    if not exam_writable(detail["exam"], actor):
+        raise ValueError("无权维护这张试卷")
     success = 0
     errors: list[str] = []
     with WriteDbSession(db_type, config) as session:

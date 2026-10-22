@@ -1,5 +1,8 @@
 import { ApartmentOutlined } from "@ant-design/icons";
 import { App as AntApp, ConfigProvider, Select, Watermark, theme } from "antd";
+import zhCN from "antd/locale/zh_CN";
+import dayjs from "dayjs";
+import "dayjs/locale/zh-cn";
 import type { AppProps } from "next/app";
 import { useRouter } from "next/router";
 import { useContext, useEffect, useMemo, useState } from "react";
@@ -12,6 +15,8 @@ import SideBar from "@/components/layout/side-bar";
 import UserAvatarMenu from "@/components/layout/user-menu";
 import { setCachedWatermarkText, userWatermarkText } from "@/utils/userWatermark";
 import "../styles/globals.css";
+
+dayjs.locale("zh-cn");
 
 const APP_MODE_KEY = "frontend_react_mode";
 const WORKSPACE_OID_KEY = "frontend_react_workspace_oid";
@@ -166,7 +171,7 @@ function LayoutWrapper({
   );
 
   return (
-    <ConfigProvider theme={themeConfig}>
+    <ConfigProvider locale={zhCN} theme={themeConfig}>
       <AntApp>
         {isBypassLayout ? (
           children

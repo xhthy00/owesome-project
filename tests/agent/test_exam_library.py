@@ -4,8 +4,11 @@ import json
 
 from src.agent.education.exam_library import (
     ExamActor,
+    _exam_name_is_this_batch,
     _exam_payload,
+    can_create_exam,
     exam_visible,
+    exam_writable,
     normalize_batch_fields,
     normalize_ownership,
     normalize_question_rows,
@@ -26,28 +29,40 @@ def _actor(**kwargs) -> ExamActor:
     return ExamActor(**base)
 
 
-def test_visibility_follows_city_school_and_owner():
+def test_school_user_sees_city_papers_and_owns_what_they_create():
+    actor = _actor(edu_role="school_admin", school_id="A01", owner_id="school1")
     city = {"exam_type": "city", "school_id": None, "owner_id": None}
-    school = {"exam_type": "school", "school_id": "A01", "owner_id": None}
-    other_school = {"exam_type": "school", "school_id": "B02", "owner_id": None}
-    own = {"exam_type": "teacher", "school_id": "A01", "owner_id": "teacher1"}
-    peer = {"exam_type": "teacher", "school_id": "A01", "owner_id": "teacher2"}
-    actor = _actor()
+    own = {"exam_type": "school", "school_id": "A01", "owner_id": "school1"}
+    peer = {"exam_type": "school", "school_id": "A01", "owner_id": "school2"}
+    legacy = {"exam_type": "school", "school_id": "A01", "owner_id": None}
+    bureau = _actor(see_all=True, edu_role="bureau_admin")
 
     assert exam_visible(city, actor)
-    assert exam_visible(school, actor)
-    assert not exam_visible(other_school, actor)
+    assert not exam_writable(city, actor)
     assert exam_visible(own, actor)
+    assert exam_writable(own, actor)
     assert not exam_visible(peer, actor)
-    assert exam_visible(peer, _actor(see_all=True, edu_role="bureau_admin"))
+    assert not exam_visible(legacy, actor)
+    assert exam_visible(peer, bureau)
+    assert exam_writable(city, bureau)
     assert exam_visible({"exam_type": None}, actor)
 
 
-def test_city_exam_clears_school_and_owner():
-    actor = _actor()
-    assert normalize_ownership("全市统考", "A01", "teacher1", actor) == ("city", None, None)
-    assert normalize_ownership("school", "", "", actor) == ("school", "A01", None)
-    assert normalize_ownership("teacher", None, None, actor) == ("teacher", "A01", "teacher1")
+def test_school_user_cannot_assign_another_school_or_owner():
+    school = _actor(edu_role="school_admin", school_id="A01", owner_id="school1")
+    assert normalize_ownership("全市统考", "B02", "other", school) == ("city", None, "school1")
+    assert normalize_ownership("school", "B02", "other", school) == ("school", "A01", "school1")
+    bureau = _actor(see_all=True, edu_role="bureau_admin", school_id="A01", owner_id="admin")
+    assert normalize_ownership("全市统考", "A01", "teacher1", bureau) == ("city", None, None)
+    assert normalize_ownership("全市统考", "A01", "teacher1", bureau, "school1") == (
+        "city",
+        None,
+        "school1",
+    )
+    assert normalize_ownership("school", "", "", bureau) == ("school", "A01", None)
+    assert can_create_exam(bureau)
+    assert can_create_exam(school)
+    assert not can_create_exam(_actor(edu_role="teacher"))
 
 
 def test_batch_fields_require_name_and_date():
@@ -69,11 +84,25 @@ def test_batch_fields_require_name_and_date():
         raise AssertionError("empty exam time should fail")
 
 
+def test_mismatched_score_line_name_is_not_this_batch():
+    batch = "新华中学2026~2027学年度第一学期第一阶段自主练习"
+    assert not _exam_name_is_this_batch("2026届高三5月模拟", batch)
+    assert _exam_name_is_this_batch(batch, batch)
+    assert _exam_name_is_this_batch("  ", batch)
+    assert _exam_name_is_this_batch(None, batch)
+
+
 def test_every_exam_requires_a_batch():
-    actor = _actor()
-    base = {"exam_name": "练习卷", "subject": "语文", "exam_score": 150, "exam_type": "teacher"}
-    assert _exam_payload({**base, "exam_batch_id": "3"}, actor)["exam_batch_id"] == 3
-    assert _exam_payload({**base, "exam_type": "city", "exam_batch_id": 3}, actor)["exam_batch_id"] == 3
+    actor = _actor(edu_role="school_admin", school_id="A01", owner_id="school1")
+    base = {"exam_name": "练习卷", "subject": "语文", "exam_score": 150, "exam_type": "school"}
+    owned = _exam_payload({**base, "exam_batch_id": "3"}, actor)
+    assert owned["exam_batch_id"] == 3
+    assert owned["owner_id"] == "school1"
+    assert owned["school_id"] == "A01"
+    city = _exam_payload({**base, "exam_type": "city", "exam_batch_id": 3}, actor)
+    assert city["exam_batch_id"] == 3
+    assert city["owner_id"] == "school1"
+    assert city["school_id"] is None
 
     try:
         _exam_payload(base, actor)
