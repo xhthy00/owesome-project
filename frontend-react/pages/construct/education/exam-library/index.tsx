@@ -44,7 +44,9 @@ function scoresDiffer(row: ExamLibraryItem): boolean {
 function examAnomaly(row: ExamLibraryItem): string | null {
   if (row.question_count === 0) return "未关联题目";
   if (scoresDiffer(row)) return "卷面总分异常";
-  if ((row.unmatched_knowledge_count ?? 0) > 0) return "未匹配知识点";
+  const unmatched = row.unmatched_knowledge_count ?? 0;
+  if (unmatched > 0 && unmatched >= row.question_count) return "未关联知识点";
+  if (unmatched > 0) return `尚有 ${unmatched} 道题未关联知识点`;
   if ((row.score_count ?? 0) === 0) return "未关联成绩";
   return null;
 }
@@ -382,7 +384,7 @@ export default function ExamLibraryPage() {
                   试卷库
                 </Typography.Title>
                 <Typography.Text type="secondary" className="text-[13px]">
-                  批次前的标记按优先级提示未关联题目、卷面总分异常、未匹配知识点、未关联成绩；齐全时为绿色勾。可见范围：全市统考、本校学校自建、本人教师自建。
+                  批次前的标记按优先级提示未关联题目、卷面总分异常、未关联知识点或尚有若干题未关联、未关联成绩；齐全时为绿色勾。可见范围：全市统考、本校学校自建、本人教师自建。
                 </Typography.Text>
               </div>
             </div>
