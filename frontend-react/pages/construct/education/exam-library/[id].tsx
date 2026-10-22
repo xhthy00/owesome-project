@@ -1,4 +1,4 @@
-import { ArrowDownOutlined, ArrowLeftOutlined, ArrowUpOutlined, DeleteOutlined, HolderOutlined, PlusOutlined } from "@ant-design/icons";
+import { ArrowDownOutlined, ArrowLeftOutlined, ArrowUpOutlined, DeleteOutlined, FileTextOutlined, HolderOutlined, PlusOutlined } from "@ant-design/icons";
 import {
   Alert,
   Button,
@@ -6,6 +6,7 @@ import {
   Drawer,
   Input,
   InputNumber,
+  Popover,
   Progress,
   Rate,
   Select,
@@ -26,12 +27,14 @@ import {
   canImportExamPapers,
   examLibraryApi,
   type ExamDetail,
+  type KnowledgeLink,
+  type KnowledgeOption,
   type MatchItem,
   type MatchSuggestion,
   type MatchTask
 } from "@/api/examLibrary";
-import { buildKnowledgeTree } from "@/utils/knowledgeTree";
-import { adjustWeight, suggestWeights } from "@/utils/knowledgeWeights";
+import { buildKnowledgeTree, type KnowledgeTreeNode } from "@/utils/knowledgeTree";
+import { adjustWeight, shareWeights, suggestWeights } from "@/utils/knowledgeWeights";
 
 const QUESTION_TYPES = ["单选题", "多选题", "填空题", "解答题", "写作"];
 
@@ -76,7 +79,7 @@ function StemField({ value, onChange }: { value: string; onChange: (next: string
         value={value}
         autoFocus={editing}
         autoSize={{ minRows: 2 }}
-        className="!w-full"
+        className="!max-h-none !w-full !overflow-hidden !rounded-lg !border-[#e4eef8] !bg-[#f8fbff] !px-3 !py-2 !text-[13px] !leading-6"
         placeholder="题干"
         onBlur={() => setEditing(false)}
         onChange={(event) => onChange(event.target.value)}
@@ -88,7 +91,7 @@ function StemField({ value, onChange }: { value: string; onChange: (next: string
       role="button"
       tabIndex={0}
       title="点击编辑题干"
-      className="w-full cursor-text rounded-md border border-[#d9d9d9] bg-white px-2 py-1.5 text-left"
+      className="w-full cursor-text rounded-lg border border-[#e4eef8] bg-[#f8fbff] px-3 py-2 text-left"
       onClick={() => setEditing(true)}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -149,6 +152,187 @@ function formatWeight(value: number): string {
   return String(Math.round(value * 10) / 10);
 }
 
+type KnowledgeDraftLink = { knowledge_id: number; weight: number };
+
+function draftLinks(links: KnowledgeLink[]): KnowledgeDraftLink[] {
+  if (!links.length) return [];
+  const weights = links.map((link) => Number(link.weight) || 0);
+  const shares = weights.some((value) => value <= 0) ? shareWeights(links.map(() => 1)) : shareWeights(weights);
+  return links.map((link, index) => ({ knowledge_id: link.knowledge_id, weight: shares[index] ?? 0 }));
+}
+
+function nextLinks(previous: KnowledgeDraftLink[], ids: number[]): KnowledgeDraftLink[] {
+  const previousById = new Map(previous.map((item) => [item.knowledge_id, item.weight]));
+  const hasNew = ids.some((id) => !previousById.has(id));
+  const weights = ids.map((id) => previousById.get(id) ?? 0);
+  const shares = hasNew || weights.some((value) => value <= 0) ? shareWeights(ids.map(() => 1)) : shareWeights(weights);
+  return ids.map((id, index) => ({ knowledge_id: id, weight: shares[index] ?? 0 }));
+}
+
+function knowledgeLevels(option: KnowledgeOption | undefined, fallbackId: number): string[] {
+  const name = (option?.knowledge_name || "").trim() || `知识点 ${fallbackId}`;
+  const parents = [option?.module, option?.chapter, option?.secondary]
+    .map((item) => (item || "").trim())
+    .filter(Boolean);
+  return [...parents, name];
+}
+
+function KnowledgePath({ levels }: { levels: string[] }) {
+  const name = levels[levels.length - 1] || "";
+  const trail = levels.slice(0, -1);
+  return (
+    <span className="min-w-0 flex-1 whitespace-normal break-words text-[13px] leading-6">
+      {trail.map((part, index) => (
+        <span key={`${part}-${index}`} className="text-[#64748b]">
+          {part}
+          <span className="px-1 text-[#cbd5e1]">-</span>
+        </span>
+      ))}
+      <span className="font-medium text-[#1e293b] dark:text-[#e2e8f0]">{name}</span>
+    </span>
+  );
+}
+
+function KnowledgeLinksCell({
+  links,
+  tree,
+  options,
+  onChange
+}: {
+  links: KnowledgeDraftLink[];
+  tree: KnowledgeTreeNode[];
+  options: KnowledgeOption[];
+  onChange: (links: KnowledgeDraftLink[]) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const popupRoot = useRef<HTMLDivElement>(null);
+  const byId = useMemo(() => new Map(options.map((item) => [item.id, item])), [options]);
+  const weightMax = links.length <= 1 ? 1 : Math.round((1 - (links.length - 1) * 0.1) * 10) / 10;
+  const levelsOf = (knowledgeId: number) => knowledgeLevels(byId.get(knowledgeId), knowledgeId);
+
+  const changeIds = (value: number | number[]) => {
+    const picked = (Array.isArray(value) ? value : [value]).filter((id): id is number => typeof id === "number");
+    if (picked.length > 3 && picked.length > links.length) {
+      message.warning("一道题最多关联 3 个知识点");
+      return;
+    }
+    onChange(nextLinks(links, picked));
+  };
+
+  const changeWeight = (knowledgeId: number, value: number) => {
+    const ids = links.map((item) => item.knowledge_id);
+    const next = adjustWeight(
+      links.map((item) => item.weight),
+      ids.indexOf(knowledgeId),
+      value
+    );
+    onChange(ids.map((id, index) => ({ knowledge_id: id, weight: next[index] ?? 0 })));
+  };
+
+  const editor = (
+    <div ref={popupRoot} className="w-[420px]">
+      <TreeSelect
+        className="w-full"
+        multiple
+        showSearch
+        treeExpandAction="click"
+        filterTreeNode={(input, node) => {
+          const keyword = input.trim().toLowerCase();
+          if (!keyword) return true;
+          const searchable = String((node as { searchText?: string }).searchText || node.title || "");
+          return searchable.toLowerCase().includes(keyword);
+        }}
+        placeholder="搜索知识点"
+        popupMatchSelectWidth={false}
+        popupClassName="knowledge-tree-dropdown"
+        getPopupContainer={() => popupRoot.current || document.body}
+        dropdownStyle={{ minWidth: 360, maxWidth: 480 }}
+        listHeight={320}
+        treeData={tree}
+        value={links.map((item) => item.knowledge_id)}
+        onChange={changeIds}
+      />
+      {links.length > 1 ? (
+        <div className="mt-3 space-y-2 border-t border-[#eef2f6] pt-3">
+          {links.map((link) => (
+            <div key={link.knowledge_id} className="flex items-start gap-2">
+              <KnowledgePath levels={levelsOf(link.knowledge_id)} />
+              <InputNumber
+                size="small"
+                min={0.1}
+                max={weightMax}
+                step={0.1}
+                precision={1}
+                value={link.weight}
+                aria-label="权重"
+                className="mt-0.5 w-16 shrink-0"
+                onChange={(value) => {
+                  if (value == null) return;
+                  changeWeight(link.knowledge_id, Number(value));
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+
+  return (
+    <Popover
+      trigger="click"
+      placement="bottomLeft"
+      open={open}
+      destroyOnHidden
+      onOpenChange={(next) => {
+        if (!next && document.querySelector(".knowledge-tree-dropdown:not(.ant-select-dropdown-hidden)")) return;
+        setOpen(next);
+      }}
+      content={editor}
+    >
+      <button
+        type="button"
+        title={links.length ? "调整知识点" : "关联知识点"}
+        className="w-full text-left"
+      >
+        {links.length ? (
+          <span className="flex flex-col gap-1.5">
+            {links.map((link) => {
+              const levels = levelsOf(link.knowledge_id);
+              const name = levels[levels.length - 1] || "";
+              const trail = levels.slice(0, -1);
+              return (
+                <span key={link.knowledge_id} className="block rounded-lg bg-[#f3f8ff] px-2.5 py-1.5 dark:bg-[#1e3a5f]">
+                  {trail.length ? (
+                    <span className="block whitespace-normal break-words text-[11px] leading-4 text-[#7b8da6]">
+                      {trail.join(" - ")}
+                    </span>
+                  ) : null}
+                  <span className="mt-0.5 flex items-start gap-2">
+                    <span className="min-w-0 flex-1 whitespace-normal break-words text-[13px] font-medium leading-5 text-[#16324f] dark:text-[#e2e8f0]">
+                      {name}
+                    </span>
+                    {links.length > 1 ? (
+                      <span className="shrink-0 rounded-full bg-white px-1.5 text-[11px] leading-5 tabular-nums text-[#0C75FC] ring-1 ring-[#d6e8ff] dark:bg-[#141923]">
+                        {formatWeight(link.weight)}
+                      </span>
+                    ) : null}
+                  </span>
+                </span>
+              );
+            })}
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[#c5ddfb] bg-[#f4f8ff] px-2.5 py-1.5 text-[13px] text-[#0C75FC]">
+            <PlusOutlined className="text-[11px]" />
+            关联知识点
+          </span>
+        )}
+      </button>
+    </Popover>
+  );
+}
+
 function contentPreview(content: string): string {
   if (!content) return "（无题干）";
   return content.length > 80 ? `${content.slice(0, 80)}…` : content;
@@ -168,7 +352,7 @@ type Draft = {
   question_type: string | null;
   question_score: number | null;
   content: string;
-  knowledge_ids: number[];
+  knowledge_links: KnowledgeDraftLink[];
 };
 
 function reorderQuestions<T>(rows: T[], from: number, to: number): T[] {
@@ -198,7 +382,7 @@ function blankDraft(): Draft {
     question_type: "解答题",
     question_score: null,
     content: "",
-    knowledge_ids: []
+    knowledge_links: []
   };
 }
 
@@ -216,7 +400,7 @@ function toDrafts(detail: ExamDetail): Draft[] {
     question_type: item.question_type,
     question_score: item.question_score,
     content: item.content || "",
-    knowledge_ids: item.knowledge_links.map((link) => link.knowledge_id)
+    knowledge_links: draftLinks(item.knowledge_links)
   }));
 }
 
@@ -231,6 +415,7 @@ export default function ExamQuestionPage() {
   const [task, setTask] = useState<MatchTask | null>(null);
   const [reportItems, setReportItems] = useState<MatchItem[]>([]);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [adopting, setAdopting] = useState(false);
   const [selected, setSelected] = useState<Record<number, ReportPick>>({});
   const started = useRef("");
   const stopWatch = useRef<(() => void) | null>(null);
@@ -334,7 +519,9 @@ export default function ExamQuestionPage() {
     () => Math.round(rows.reduce((sum, row) => sum + (Number(row.question_score) || 0), 0) * 100) / 100,
     [rows]
   );
+  const linkedCount = rows.filter((row) => row.knowledge_links.length > 0).length;
   const examScore = detail?.exam.exam_score ?? 0;
+  const scoreMismatch = Boolean(examScore) && scoreSum !== examScore;
   const knowledgeOptions = detail?.knowledge_options ?? [];
   const knowledgeTree = useMemo(() => buildKnowledgeTree(knowledgeOptions), [knowledgeOptions]);
 
@@ -353,7 +540,10 @@ export default function ExamQuestionPage() {
           question_type: row.question_type,
           question_score: Number(row.question_score) || 0,
           content: row.content,
-          knowledge_links: row.knowledge_ids.map((knowledgeId) => ({ knowledge_id: knowledgeId }))
+          knowledge_links: row.knowledge_links.map((link) => ({
+            knowledge_id: link.knowledge_id,
+            weight: link.weight
+          }))
         }))
       );
       setRows(
@@ -364,7 +554,7 @@ export default function ExamQuestionPage() {
           question_type: item.question_type,
           question_score: item.question_score,
           content: item.content || "",
-          knowledge_ids: item.knowledge_links.map((link) => link.knowledge_id)
+          knowledge_links: draftLinks(item.knowledge_links)
         }))
       );
       message.success("试卷已保存");
@@ -390,7 +580,7 @@ export default function ExamQuestionPage() {
       width: questionNoWidth,
       render: (_, row) => (
         <Input
-          className="w-full"
+          className="w-full !rounded-lg !border-[#e4eef8] !bg-[#eef5ff] !text-center !font-medium !text-[#0C75FC]"
           value={row.question_no}
           onChange={(event) => updateRow(row.key, { question_no: event.target.value })}
         />
@@ -401,7 +591,7 @@ export default function ExamQuestionPage() {
       width: 100,
       render: (_, row) => (
         <Select
-          className="w-full"
+          className="w-full [&_.ant-select-selector]:!rounded-lg [&_.ant-select-selector]:!border-[#e4eef8]"
           allowClear
           value={row.question_type || undefined}
           options={QUESTION_TYPES.map((item) => ({ value: item, label: item }))}
@@ -414,7 +604,7 @@ export default function ExamQuestionPage() {
       width: 72,
       render: (_, row) => (
         <InputNumber
-          className="w-full"
+          className="w-full !rounded-lg !border-[#e4eef8]"
           min={0}
           step={0.5}
           value={row.question_score ?? undefined}
@@ -424,42 +614,22 @@ export default function ExamQuestionPage() {
     },
     {
       title: "题干",
-      onCell: () => ({ style: { whiteSpace: "normal", verticalAlign: "top", minWidth: 0 } }),
+      width: "28%",
+      onCell: () => ({ style: { whiteSpace: "normal", verticalAlign: "middle" } }),
       render: (_, row) => (
         <StemField value={row.content} onChange={(content) => updateRow(row.key, { content })} />
       )
     },
     {
       title: "知识点",
-      width: 240,
+      width: "40%",
+      onCell: () => ({ style: { whiteSpace: "normal", verticalAlign: "middle" } }),
       render: (_, row) => (
-        <TreeSelect
-          className="w-full"
-          multiple
-          allowClear
-          showSearch
-          treeExpandAction="click"
-          filterTreeNode={(input, node) => {
-            const keyword = input.trim().toLowerCase();
-            if (!keyword) return true;
-            const searchable = String(
-              (node as { searchText?: string }).searchText || node.title || ""
-            );
-            return searchable.toLowerCase().includes(keyword);
-          }}
-          maxTagCount="responsive"
-          placeholder="选择知识点"
-          popupMatchSelectWidth={false}
-          dropdownStyle={{ minWidth: 420, maxWidth: 560 }}
-          listHeight={400}
-          treeData={knowledgeTree}
-          value={row.knowledge_ids}
-          onChange={(value) => {
-            const picked = (Array.isArray(value) ? value : [value]).filter(
-              (id): id is number => typeof id === "number"
-            );
-            updateRow(row.key, { knowledge_ids: picked });
-          }}
+        <KnowledgeLinksCell
+          links={row.knowledge_links}
+          tree={knowledgeTree}
+          options={knowledgeOptions}
+          onChange={(knowledge_links) => updateRow(row.key, { knowledge_links })}
         />
       )
     },
@@ -531,6 +701,7 @@ export default function ExamQuestionPage() {
   );
 
   const toggleAdd = (itemId: number, knowledgeId: number, suggestions: MatchSuggestion[]) => {
+    if (adopting) return;
     setSelected((current) => {
       const pick = current[itemId] || { add: [], remove: [], weights: {} };
       const exists = pick.add.includes(knowledgeId);
@@ -553,6 +724,7 @@ export default function ExamQuestionPage() {
   };
 
   const toggleRemove = (itemId: number, knowledgeId: number) => {
+    if (adopting) return;
     setSelected((current) => {
       const pick = current[itemId] || { add: [], remove: [], weights: {} };
       return {
@@ -563,6 +735,7 @@ export default function ExamQuestionPage() {
   };
 
   const changeWeight = (itemId: number, knowledgeId: number, value: number, suggestions: MatchSuggestion[]) => {
+    if (adopting) return;
     setSelected((current) => {
       const pick = current[itemId] || { add: [], remove: [], weights: {} };
       const ids = orderedIds(pick.add, suggestions);
@@ -579,6 +752,7 @@ export default function ExamQuestionPage() {
   };
 
   const selectAll = () => {
+    if (adopting) return;
     const next: Record<number, ReportPick> = {};
     reportItems.forEach((item) => {
       const add = topIds(item.add_suggestions);
@@ -592,12 +766,13 @@ export default function ExamQuestionPage() {
   };
 
   const clearAll = () => {
+    if (adopting) return;
     setSelected({});
     message.info("已取消全部勾选");
   };
 
   const adopt = async () => {
-    if (!task) return;
+    if (!task || adopting) return;
     const operations = reportItems
       .map((item) => ({
         item_id: item.id,
@@ -612,70 +787,101 @@ export default function ExamQuestionPage() {
       message.info("没有可采纳的建议");
       return;
     }
+    setAdopting(true);
     try {
       const result = await examLibraryApi.apply(task.id, operations);
-      if (result.errors.length) message.warning(result.errors.join("；"));
+      if (result.errors.length) {
+        message.warning(result.errors.join("；"));
+        await openReport(task.id);
+        return;
+      }
       message.success(`已采纳 ${result.success} 题`);
-      await load();
-      await openReport(task.id);
+      setSelected({});
+      setDrawerOpen(false);
     } catch (error) {
       message.error(error instanceof Error ? error.message : "采纳建议失败");
+      return;
+    } finally {
+      setAdopting(false);
     }
+    void load();
   };
 
+  const hasScores = Boolean(detail && (detail.exam.score_count || detail.exam.detail_count));
+
   return (
-    <div className="dbgpt-ui-font h-full min-h-0 overflow-y-auto p-6 pb-10">
-      <div className="w-full min-w-0">
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <Link href="/construct/education/exam-library" className="text-[#0C75FC]">
-              <ArrowLeftOutlined />
-            </Link>
-            <div>
-              <Typography.Title level={4} className="!mb-0">
-                {detail ? `${detail.exam.exam_name} · ${detail.exam.subject}` : "题目明细"}
-              </Typography.Title>
-              {detail?.exam.exam_batch_name ? (
-                <Typography.Text type="secondary">考试批次：{detail.exam.exam_batch_name}</Typography.Text>
-              ) : null}
+    <div className="dbgpt-ui-font flex h-full min-h-0 flex-col overflow-hidden bg-[#f5f7fb] p-6 dark:bg-transparent">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white shadow-sm dark:border-[#334155] dark:bg-[#141923]">
+        <div className="shrink-0 border-b border-[#eef2f6] bg-[linear-gradient(180deg,#f3f8ff_0%,#ffffff_78%)] px-5 py-4 dark:border-[#334155] dark:bg-none">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex min-w-0 items-start gap-3">
+              <Link href="/construct/education/exam-library" aria-label="返回试卷库" className="mt-2.5 text-[#0C75FC]">
+                <ArrowLeftOutlined />
+              </Link>
+              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#e8f3ff] text-[18px] text-[#0C75FC]">
+                <FileTextOutlined />
+              </span>
+              <div className="min-w-0">
+                <Typography.Title level={4} className="!mb-0">
+                  {detail ? `${detail.exam.exam_name} · ${detail.exam.subject}` : "题目明细"}
+                </Typography.Title>
+                <Typography.Text type="secondary" className="text-[13px]">
+                  {detail?.exam.exam_batch_name || "题目、分值与知识点"}
+                </Typography.Text>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-2.5 py-1 text-xs ring-1 ring-[#e5e7eb] dark:bg-[#141923] dark:ring-[#334155]">
+                    <span className="text-[#64748b]">题目</span>
+                    <span className="font-medium tabular-nums text-[#1e293b] dark:text-[#e2e8f0]">{rows.length}</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-2.5 py-1 text-xs ring-1 ring-[#e5e7eb] dark:bg-[#141923] dark:ring-[#334155]">
+                    <span className="text-[#64748b]">已关联</span>
+                    <span className={`font-medium tabular-nums ${rows.length && linkedCount === rows.length ? "text-[#15803d]" : "text-[#0C75FC]"}`}>
+                      {linkedCount}/{rows.length}
+                    </span>
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-2.5 py-1 text-xs ring-1 ring-[#e5e7eb] dark:bg-[#141923] dark:ring-[#334155]">
+                    <span className="text-[#64748b]">小题分</span>
+                    <span className={`font-medium tabular-nums ${scoreMismatch ? "text-[#c2410c]" : "text-[#1e293b] dark:text-[#e2e8f0]"}`}>
+                      {examScore ? `${scoreSum}/${examScore}` : scoreSum}
+                    </span>
+                  </span>
+                </div>
+              </div>
             </div>
-          </div>
-          <Space wrap>
-            <Button onClick={() => setRows((current) => [...current, blankDraft()])}>添加题目</Button>
-            {canImportExamPapers(currentUser) && detail?.exam.exam_batch_id ? (
-              <Button
-                onClick={() =>
-                  router.push(
-                    `/construct/education/exam-library/import?batchId=${detail.exam.exam_batch_id}&subject=${encodeURIComponent(detail.exam.subject)}`
-                  )
-                }
-              >
-                重新导入
+            <Space wrap>
+              <Button onClick={() => setRows((current) => [...current, blankDraft()])}>添加题目</Button>
+              {canImportExamPapers(currentUser) && detail?.exam.exam_batch_id ? (
+                <Button
+                  onClick={() =>
+                    router.push(
+                      `/construct/education/exam-library/import?batchId=${detail.exam.exam_batch_id}&subject=${encodeURIComponent(detail.exam.subject)}`
+                    )
+                  }
+                >
+                  重新导入
+                </Button>
+              ) : null}
+              <Button onClick={() => void startMatch()}>知识点核对</Button>
+              <Button onClick={() => void openReport().catch((error) => message.error(error instanceof Error ? error.message : "读取核对报告失败"))}>
+                核对报告
               </Button>
-            ) : null}
-            <Button onClick={() => void startMatch()}>知识点核对</Button>
-            <Button onClick={() => void openReport().catch((error) => message.error(error instanceof Error ? error.message : "读取核对报告失败"))}>
-              核对报告
-            </Button>
-            <Button type="primary" loading={saving} onClick={() => void save()}>
-              保存试卷
-            </Button>
-          </Space>
+              <Button type="primary" loading={saving} onClick={() => void save()}>
+                保存试卷
+              </Button>
+            </Space>
+          </div>
+          {hasScores || scoreMismatch ? (
+            <div className="mt-3 rounded-lg bg-[#fff7ed] px-3 py-2 text-xs leading-5 text-[#9a3412]">
+              {hasScores ? (
+                <div>
+                  该试卷已有 {detail?.exam.score_count || 0} 条成绩、{detail?.exam.detail_count || 0} 条小题分。修改题目不会自动改成绩，已有成绩的试卷不能删除。
+                </div>
+              ) : null}
+              {scoreMismatch ? <div>小题分合计 {scoreSum}，与卷面满分 {examScore} 不一致。</div> : null}
+            </div>
+          ) : null}
         </div>
-        {detail && (detail.exam.score_count || detail.exam.detail_count) ? (
-          <Alert
-            className="mb-4"
-            type="warning"
-            showIcon
-            message={`该试卷已有 ${detail.exam.score_count || 0} 条成绩、${detail.exam.detail_count || 0} 条小题分。修改题目不会自动改成绩，已有成绩的试卷不能删除。`}
-          />
-        ) : null}
-        {examScore && scoreSum !== examScore ? (
-          <Alert className="mb-4" type="warning" showIcon message={`小题分合计 ${scoreSum}，与卷面满分 ${examScore} 不一致。`} />
-        ) : (
-          <Typography.Paragraph type="secondary">小题分合计 {scoreSum}</Typography.Paragraph>
-        )}
-        <div className="rounded-2xl border border-[#e5e7eb] bg-white p-4 shadow-sm dark:border-[#334155] dark:bg-[#141923]">
+        <div className="min-h-0 flex-1 overflow-auto px-5 pb-4">
           <Table
             rowKey="key"
             size="middle"
@@ -684,7 +890,7 @@ export default function ExamQuestionPage() {
             dataSource={rows}
             pagination={false}
             tableLayout="fixed"
-            className="[&_.ant-table]:!w-full [&_td]:align-top [&_td]:whitespace-normal"
+            className="[&_.ant-table]:!w-full [&_.ant-table-container]:!overflow-visible [&_.ant-table-content]:!overflow-visible [&_.ant-table-tbody>tr:hover>td]:!bg-[#f9fbfe] [&_.ant-table-tbody>tr>td]:!border-[#eef3f8] [&_.ant-table-tbody>tr>td]:!py-3.5 [&_.ant-table-thead>tr>th]:!sticky [&_.ant-table-thead>tr>th]:!top-0 [&_.ant-table-thead>tr>th]:!z-10 [&_.ant-table-thead>tr>th]:!border-b-[#d6e6f8] [&_.ant-table-thead>tr>th]:!bg-[#f7f9fc] [&_.ant-table-thead>tr>th]:!font-medium [&_.ant-table-thead>tr>th]:!py-3 [&_.ant-table-thead>tr>th]:!text-[#475569] [&_td]:!align-middle [&_td]:whitespace-normal dark:[&_.ant-table-thead>tr>th]:!bg-[#1c2430]"
             onRow={(_row, index) => ({
               onDragOver: (event) => event.preventDefault(),
               onDrop: () => {
@@ -701,7 +907,12 @@ export default function ExamQuestionPage() {
         title="知识点核对报告"
         width={520}
         open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
+        closable={!adopting}
+        maskClosable={!adopting}
+        keyboard={!adopting}
+        onClose={() => {
+          if (!adopting) setDrawerOpen(false);
+        }}
         extra={
           task?.status === "running" ? (
             <Button onClick={() => void examLibraryApi.cancel(task.id)}>取消</Button>
@@ -712,9 +923,9 @@ export default function ExamQuestionPage() {
             {totalSuggestions ? (
               <span className="mr-auto text-xs text-[#64748b]">共 {totalSuggestions} 条建议</span>
             ) : null}
-            <Button onClick={() => setDrawerOpen(false)}>关闭</Button>
-            <Button type="primary" disabled={!selectedCount} onClick={() => void adopt()}>
-              采纳选中（{selectedCount}）
+            <Button disabled={adopting} onClick={() => setDrawerOpen(false)}>关闭</Button>
+            <Button type="primary" loading={adopting} disabled={!selectedCount} onClick={() => void adopt()}>
+              {adopting ? "正在写入" : `采纳选中（${selectedCount}）`}
             </Button>
           </div>
         }
@@ -742,13 +953,13 @@ export default function ExamQuestionPage() {
               )}
             </div>
             <Space size={8}>
-              <Button disabled={!selectedCount} onClick={clearAll}>全部勾除</Button>
-              <Button type="primary" disabled={!totalSuggestions} onClick={selectAll}>全部勾选</Button>
+              <Button disabled={adopting || !selectedCount} onClick={clearAll}>全部勾除</Button>
+              <Button type="primary" disabled={adopting || !totalSuggestions} onClick={selectAll}>全部勾选</Button>
             </Space>
           </div>
         ) : null}
         {!task && !reportItems.length ? <Typography.Text type="secondary">暂无核对记录</Typography.Text> : null}
-        <div className="space-y-3">
+        <div className={`space-y-3${adopting ? " pointer-events-none" : ""}`}>
           {reportItems.map((item) => {
             const pick = selected[item.id] || { add: [], remove: [], weights: {} };
             return (
@@ -791,6 +1002,7 @@ export default function ExamQuestionPage() {
                             </div>
                             <Checkbox
                               checked={checked}
+                              disabled={adopting}
                               onClick={(event) => event.stopPropagation()}
                               onChange={() => toggleRemove(item.id, suggestion.knowledge_id)}
                             />
@@ -828,7 +1040,7 @@ export default function ExamQuestionPage() {
                                       max={pick.add.length <= 1 ? 1 : Math.round((1 - (pick.add.length - 1) * 0.1) * 10) / 10}
                                       step={0.1}
                                       precision={1}
-                                      disabled={pick.add.length === 1}
+                                      disabled={adopting || pick.add.length === 1}
                                       value={pick.weights[suggestion.knowledge_id]}
                                       className="w-16"
                                       onChange={(value) => {
@@ -846,6 +1058,7 @@ export default function ExamQuestionPage() {
                             </div>
                             <Checkbox
                               checked={checked}
+                              disabled={adopting}
                               onClick={(event) => event.stopPropagation()}
                               onChange={() => toggleAdd(item.id, suggestion.knowledge_id, item.add_suggestions)}
                             />

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adjustWeight, suggestWeights } from "./knowledgeWeights";
+import { adjustWeight, shareWeights, suggestWeights } from "./knowledgeWeights";
 
 describe("suggestWeights", () => {
   it("按置信度差距分配一位小数权重", () => {
@@ -7,6 +7,16 @@ describe("suggestWeights", () => {
     expect(suggestWeights([0.92, 0.9])).toEqual([0.5, 0.5]);
     expect(suggestWeights([0.95, 0.7])).toEqual([0.6, 0.4]);
     expect(suggestWeights([0.9, 0.8, 0.4])).toEqual([0.5, 0.3, 0.2]);
+  });
+});
+
+describe("shareWeights", () => {
+  it("收成一位小数且合计为 1", () => {
+    expect(shareWeights([1])).toEqual([1]);
+    expect(shareWeights([1, 1])).toEqual([0.5, 0.5]);
+    expect(shareWeights([1, 1, 1])).toEqual([0.4, 0.3, 0.3]);
+    expect(shareWeights([0.6, 0.4])).toEqual([0.6, 0.4]);
+    expect(shareWeights([0.5, 0.3])).toEqual([0.6, 0.4]);
   });
 });
 

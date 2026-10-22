@@ -350,6 +350,7 @@ def _exam_dict(row: tuple) -> dict[str, Any]:
         "score_count": int(row[11] or 0),
         "detail_count": int(row[12] or 0),
         "question_score_sum": round(float(row[13] or 0), 2),
+        "unmatched_knowledge_count": int(row[14] or 0),
     }
 
 
@@ -360,7 +361,9 @@ _EXAM_COLUMNS = (
     "(SELECT COUNT(*) FROM tb_exam_question q WHERE q.exam_id = e.id), "
     "(SELECT COUNT(*) FROM tb_score s WHERE s.exam_id = e.id), "
     "(SELECT COUNT(*) FROM tb_score_detail d WHERE d.exam_id = e.id), "
-    "(SELECT COALESCE(SUM(q.question_score), 0) FROM tb_exam_question q WHERE q.exam_id = e.id)"
+    "(SELECT COALESCE(SUM(q.question_score), 0) FROM tb_exam_question q WHERE q.exam_id = e.id), "
+    "(SELECT COUNT(*) FROM tb_exam_question q WHERE q.exam_id = e.id AND NOT EXISTS ("
+    "SELECT 1 FROM tb_exam_question_knowledge k WHERE k.question_id = q.id))"
 )
 
 

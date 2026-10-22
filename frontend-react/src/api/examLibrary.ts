@@ -20,6 +20,7 @@ export interface ExamLibraryItem {
   score_count?: number;
   detail_count?: number;
   question_score_sum?: number;
+  unmatched_knowledge_count?: number;
 }
 
 export interface KnowledgeLink {
@@ -196,7 +197,7 @@ export const examLibraryApi = {
       question_type: string | null;
       question_score: number;
       content: string;
-      knowledge_links: Array<{ knowledge_id: number }>;
+      knowledge_links: Array<{ knowledge_id: number; weight?: number | null }>;
     }>
   ) {
     return send<{ questions: ExamQuestion[] }>(

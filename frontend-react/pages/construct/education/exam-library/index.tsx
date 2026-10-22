@@ -44,6 +44,7 @@ function scoresDiffer(row: ExamLibraryItem): boolean {
 function examAnomaly(row: ExamLibraryItem): string | null {
   if (row.question_count === 0) return "未关联题目";
   if (scoresDiffer(row)) return "卷面总分异常";
+  if ((row.unmatched_knowledge_count ?? 0) > 0) return "未匹配知识点";
   if ((row.score_count ?? 0) === 0) return "未关联成绩";
   return null;
 }
@@ -68,7 +69,6 @@ function StatusMark({ title, ok }: { title: string; ok?: boolean }) {
 export default function ExamLibraryPage() {
   const router = useRouter();
   const [form] = Form.useForm<ExamPayload>();
-  const [keyword, setKeyword] = useState("");
   const [examType, setExamType] = useState("");
   const [subjectFilter, setSubjectFilter] = useState("");
   const [batchFilter, setBatchFilter] = useState<number | undefined>();
@@ -93,7 +93,6 @@ export default function ExamLibraryPage() {
     setLoading(true);
     try {
       const data = await examLibraryApi.list({
-        keyword,
         examType,
         subject: subjectFilter,
         examBatchId: batchFilter,
@@ -107,7 +106,7 @@ export default function ExamLibraryPage() {
     } finally {
       setLoading(false);
     }
-  }, [keyword, examType, subjectFilter, batchFilter, page]);
+  }, [examType, subjectFilter, batchFilter, page]);
 
   useEffect(() => {
     void load();
@@ -298,7 +297,21 @@ export default function ExamLibraryPage() {
     },
     { title: "考试时间", dataIndex: "exam_time", width: "14%", render: (value) => value || "-" },
     { title: "满分", dataIndex: "exam_score", width: "8%", align: "center" },
-    { title: "题目", dataIndex: "question_count", width: "9%", align: "center" },
+    {
+      title: "题目",
+      dataIndex: "question_count",
+      width: "9%",
+      align: "center",
+      render: (value: number, row) => (
+        <button
+          type="button"
+          className="text-[#0C75FC] underline decoration-[#0C75FC] underline-offset-2 hover:opacity-80"
+          onClick={() => router.push(`/construct/education/exam-library/${row.id}`)}
+        >
+          {value}
+        </button>
+      )
+    },
     {
       title: "操作",
       width: "22%",
@@ -309,9 +322,6 @@ export default function ExamLibraryPage() {
         const query = params.toString();
         return (
           <Space size={0} className="whitespace-nowrap">
-            <Button type="link" size="small" onClick={() => router.push(`/construct/education/exam-library/${row.id}`)}>
-              详情
-            </Button>
             <Button type="link" size="small" onClick={() => openEdit(row)}>
               编辑
             </Button>
@@ -336,7 +346,7 @@ export default function ExamLibraryPage() {
               getPopupContainer={() => document.body}
               menu={{
                 items: [
-                  { key: "report", label: "核对报告" },
+                  { key: "report", label: "核对报告", style: { color: "#0C75FC" } },
                   { key: "delete", label: "删除", danger: true }
                 ],
                 onClick: ({ key }) => {
@@ -372,7 +382,7 @@ export default function ExamLibraryPage() {
                   试卷库
                 </Typography.Title>
                 <Typography.Text type="secondary" className="text-[13px]">
-                  批次前的标记按优先级提示未关联题目、卷面总分异常、未关联成绩；齐全时为绿色勾。可见范围：全市统考、本校学校自建、本人教师自建。
+                  批次前的标记按优先级提示未关联题目、卷面总分异常、未匹配知识点、未关联成绩；齐全时为绿色勾。可见范围：全市统考、本校学校自建、本人教师自建。
                 </Typography.Text>
               </div>
             </div>
@@ -385,15 +395,6 @@ export default function ExamLibraryPage() {
           </div>
           <div className="px-5 py-4">
             <div className="mb-4 flex flex-wrap items-center gap-3">
-              <Input.Search
-                allowClear
-                className="w-56"
-                placeholder="搜索考试批次"
-                onSearch={(value) => {
-                  setPage(1);
-                  setKeyword(value.trim());
-                }}
-              />
               <Select
                 allowClear
                 showSearch
