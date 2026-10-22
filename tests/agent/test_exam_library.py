@@ -10,7 +10,12 @@ from src.agent.education.exam_library import (
     normalize_ownership,
     normalize_question_rows,
 )
-from src.agent.education.exam_match import limit_suggestions, match_summary, parse_match_reply
+from src.agent.education.exam_match import (
+    limit_suggestions,
+    links_after_adopt,
+    match_summary,
+    parse_match_reply,
+)
 
 
 def _actor(**kwargs) -> ExamActor:
@@ -127,6 +132,41 @@ def test_parse_match_reply_keeps_only_known_names():
     ]
     assert parsed["remove"][0]["knowledge_id"] == 2
     assert json.loads(json.dumps(parsed))["verdict"] == "needs_review"
+
+
+def test_full_suggestion_replaces_existing_links():
+    chosen = links_after_adopt([4343, 4344, 4368], set(), [4349, 4350, 4383])
+    assert chosen == [4349, 4350, 4383]
+
+
+def test_partial_suggestion_still_requires_room():
+    try:
+        links_after_adopt([1, 2, 3], set(), [4])
+    except ValueError as exc:
+        assert "超过 3 个" in str(exc)
+    else:
+        raise AssertionError("one extra link should not fit")
+    assert links_after_adopt([1, 2, 3], {1}, [4]) == [2, 3, 4]
+
+
+def test_parse_match_reply_moves_overflow_into_remove():
+    parsed = parse_match_reply(
+        '{"ok": false, "add": [{"name": "甲", "confidence": 0.9, "reason": "a"},'
+        '{"name": "乙", "confidence": 0.8, "reason": "b"},'
+        '{"name": "丙", "confidence": 0.7, "reason": "c"}], "remove": []}',
+        [
+            {"id": 11, "knowledge_name": "甲"},
+            {"id": 12, "knowledge_name": "乙"},
+            {"id": 13, "knowledge_name": "丙"},
+        ],
+        [
+            {"knowledge_id": 1, "knowledge_name": "旧一", "weight": 0.5},
+            {"knowledge_id": 2, "knowledge_name": "旧二", "weight": 0.2},
+            {"knowledge_id": 3, "knowledge_name": "旧三", "weight": 0.3},
+        ],
+    )
+    assert [item["knowledge_id"] for item in parsed["add"]] == [11, 12, 13]
+    assert {item["knowledge_id"] for item in parsed["remove"]} == {1, 2, 3}
 
 
 def test_limit_suggestions_keeps_the_three_most_confident():

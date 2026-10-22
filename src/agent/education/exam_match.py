@@ -27,7 +27,9 @@ __all__ = [
     "apply_suggestions",
     "get_report",
     "get_task",
+    "fit_match_removals",
     "limit_suggestions",
+    "links_after_adopt",
     "match_summary",
     "parse_match_reply",
     "start_check",
@@ -91,9 +93,76 @@ def parse_match_reply(
         )
     ok = bool(parsed.get("ok"))
     add = limit_suggestions(add)
-    remove = limit_suggestions(remove)
+    remove = fit_match_removals(current, add, limit_suggestions(remove))
     verdict = "ok" if ok or not (add or remove) else "needs_review"
     return {"verdict": verdict, "add": add, "remove": remove}
+
+
+def links_after_adopt(
+    current_ids: list[int],
+    remove_ids: set[int],
+    add_ids: list[int],
+    limit: int = 3,
+) -> list[int]:
+    """合并仍保留的当前关联和勾选的新建议，结果不超过 limit 个。
+
+    一次勾选满 limit 条建议时，这些建议就是本题的关联，原来多出来的关联让位。
+    """
+    removed = {int(item) for item in remove_ids}
+    ordered_add: list[int] = []
+    for raw in add_ids:
+        knowledge_id = int(raw)
+        if knowledge_id not in ordered_add:
+            ordered_add.append(knowledge_id)
+    kept = [int(item) for item in current_ids if int(item) not in removed]
+    fresh = [item for item in ordered_add if item not in set(kept)]
+    if len(ordered_add) >= limit and len(kept) + len(fresh) > limit:
+        chosen = set(ordered_add)
+        kept = [item for item in kept if item in chosen]
+        fresh = [item for item in ordered_add if item not in set(kept)]
+    if len(fresh) > limit or len(kept) + len(fresh) > limit:
+        raise ValueError(
+            f"当前保留 {len(kept)} 个，再采纳 {len(fresh)} 个会超过 {limit} 个。请先去掉不需要的当前关联"
+        )
+    return kept + fresh
+
+
+def fit_match_removals(
+    current: list[dict[str, Any]],
+    add: list[dict[str, Any]],
+    remove: list[dict[str, Any]],
+    limit: int = 3,
+) -> list[dict[str, Any]]:
+    """建议新增后若会超过上限，把权重较低的当前关联补进移除建议。"""
+    if not add:
+        return remove
+    add_ids = {int(item["knowledge_id"]) for item in add}
+    remove_ids = {int(item["knowledge_id"]) for item in remove}
+    kept: list[tuple[int, float, str]] = []
+    for item in current:
+        try:
+            knowledge_id = int(item.get("knowledge_id"))
+        except (TypeError, ValueError):
+            continue
+        if knowledge_id in add_ids or knowledge_id in remove_ids:
+            continue
+        try:
+            weight = float(item.get("weight") or 0)
+        except (TypeError, ValueError):
+            weight = 0.0
+        kept.append((knowledge_id, weight, str(item.get("knowledge_name") or "")))
+    overflow = len(kept) + len(add) - limit
+    if overflow <= 0:
+        return remove
+    extra = [
+        {
+            "knowledge_id": knowledge_id,
+            "knowledge_name": name,
+            "reason": "超出单题 3 个知识点上限",
+        }
+        for knowledge_id, _weight, name in sorted(kept, key=lambda row: (row[1], row[0]))[:overflow]
+    ]
+    return [*remove, *extra]
 
 
 def limit_suggestions(items: list[dict[str, Any]], limit: int = 3) -> list[dict[str, Any]]:
@@ -315,6 +384,7 @@ def _system_prompt() -> str:
         "规则：name 必须与候选清单逐字一致；"
         "还没有关联知识点时只填写 add，ok 必须为 false；"
         "已有关联且不需要增删时 ok 为 true，add 和 remove 都为空；"
+        "当前关联加上 add、减去 remove 后不能超过 3 个，位置不够时把要让出的当前关联写入 remove；"
         "remove 只能填写当前已关联的名称。不要输出清单以外的名称。"
     )
 
@@ -608,29 +678,34 @@ def apply_suggestions(
                 "SELECT knowledge_id, weight FROM tb_exam_question_knowledge WHERE question_id = %s",
                 (item["question_id"],),
             )
-            links = [
-                {"knowledge_id": int(link[0]), "weight": float(link[1] or 0)}
-                for link in current_rows
-                if int(link[0]) not in remove_ids
-            ]
-            known = {link["knowledge_id"] for link in links}
-            incoming = []
+            current_weight = {int(link[0]): float(link[1] or 0) for link in current_rows}
+            ordered_add = []
+            suggestion_by_id = {}
             for suggestion in item["add_suggestions"]:
                 knowledge_id = int(suggestion.get("knowledge_id") or 0)
-                if knowledge_id not in add_ids or knowledge_id in known:
+                if knowledge_id not in add_ids or knowledge_id in suggestion_by_id:
                     continue
-                incoming.append(suggestion)
-            if len(links) + len(incoming) > 3:
-                errors.append(f"题号 {item['question_no']}：一道题最多关联 3 个知识点")
+                suggestion_by_id[knowledge_id] = suggestion
+                ordered_add.append(knowledge_id)
+            try:
+                chosen = links_after_adopt(list(current_weight), remove_ids, ordered_add)
+            except ValueError as exc:
+                errors.append(f"题号 {item['question_no']}：{exc}")
                 continue
             given = operation.get("weights") or {}
-            for suggestion in incoming:
-                knowledge_id = int(suggestion["knowledge_id"])
-                raw = given.get(str(knowledge_id), given.get(knowledge_id))
-                try:
-                    weight = float(raw) if raw is not None else float(suggestion.get("confidence") or 0.5)
-                except (TypeError, ValueError):
-                    weight = float(suggestion.get("confidence") or 0.5)
+            links = []
+            for knowledge_id in chosen:
+                suggestion = suggestion_by_id.get(knowledge_id)
+                raw = given.get(str(knowledge_id), given.get(knowledge_id)) if suggestion else None
+                if suggestion is not None and raw is not None:
+                    try:
+                        weight = float(raw)
+                    except (TypeError, ValueError):
+                        weight = float(suggestion.get("confidence") or 0.5)
+                elif knowledge_id in current_weight and (suggestion is None or raw is None):
+                    weight = current_weight[knowledge_id]
+                else:
+                    weight = float((suggestion or {}).get("confidence") or 0.5)
                 links.append({"knowledge_id": knowledge_id, "weight": weight})
             try:
                 prepared = normalize_links(links)

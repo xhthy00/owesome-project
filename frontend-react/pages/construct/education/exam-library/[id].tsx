@@ -774,14 +774,23 @@ export default function ExamQuestionPage() {
   const adopt = async () => {
     if (!task || adopting) return;
     const operations = reportItems
-      .map((item) => ({
-        item_id: item.id,
-        add_ids: selected[item.id]?.add || [],
-        remove_ids: selected[item.id]?.remove || [],
-        weights: Object.fromEntries(
-          (selected[item.id]?.add || []).map((id) => [String(id), selected[item.id]?.weights[id] ?? 0])
-        )
-      }))
+      .map((item) => {
+        const add = selected[item.id]?.add || [];
+        const remove = new Set(selected[item.id]?.remove || []);
+        if (add.length >= 3) {
+          item.current_links.forEach((link) => {
+            if (!add.includes(link.knowledge_id)) remove.add(link.knowledge_id);
+          });
+        }
+        return {
+          item_id: item.id,
+          add_ids: add,
+          remove_ids: [...remove],
+          weights: Object.fromEntries(
+            add.map((id) => [String(id), selected[item.id]?.weights[id] ?? 0])
+          )
+        };
+      })
       .filter((item) => item.add_ids.length || item.remove_ids.length);
     if (!operations.length) {
       message.info("没有可采纳的建议");
@@ -973,16 +982,31 @@ export default function ExamQuestionPage() {
                 <div className="text-xs font-semibold text-[#64748b]">当前关联</div>
                 {item.current_links.length ? (
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
-                    {item.current_links.map((link) => (
-                      <Tag key={link.knowledge_id}>
-                        {link.knowledge_name || `ID:${link.knowledge_id}`}
-                        {link.weight != null ? `(${formatWeight(link.weight)})` : ""}
-                      </Tag>
-                    ))}
+                    {item.current_links.map((link) => {
+                      const replaced = pick.add.length >= 3 && !pick.add.includes(link.knowledge_id);
+                      const removing = replaced || pick.remove.includes(link.knowledge_id);
+                      return (
+                        <Tag
+                          key={link.knowledge_id}
+                          className={removing ? "!cursor-pointer !text-[#94a3b8] line-through" : "!cursor-pointer"}
+                          onClick={() => {
+                            if (!replaced) toggleRemove(item.id, link.knowledge_id);
+                          }}
+                        >
+                          {link.knowledge_name || `ID:${link.knowledge_id}`}
+                          {link.weight != null ? `(${formatWeight(link.weight)})` : ""}
+                        </Tag>
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="mt-1 text-[13px] text-[#64748b]">无</div>
                 )}
+                {item.add_suggestions.length > 0 && item.current_links.length + item.add_suggestions.length > 3 ? (
+                  <div className="mt-1 text-xs leading-5 text-[#64748b]">
+                    当前已有 {item.current_links.length} 个关联。勾选满 3 条建议再采纳，会用这些建议替换当前关联；只采纳其中一部分时，请先点掉不需要保留的当前关联。
+                  </div>
+                ) : null}
                 {item.remove_suggestions.length ? (
                   <div className="mt-3">
                     <div className="mb-1.5 text-xs font-semibold text-[#dc2626]">建议移除</div>
