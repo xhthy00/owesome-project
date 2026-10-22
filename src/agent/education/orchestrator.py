@@ -539,6 +539,11 @@ class ReportOrchestrator:
             )
         if spec.report_type == ReportType.GRADE_COMPARISON:
             self._fill_grade_comparison(data, rows, stats, cfg, spec)
+            if mapping.source == "config_edu":
+                try:
+                    await self._fill_grade_comparison_external_rank(data, spec, mapping)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("班级横比外部排名填充失败: %s", e)
         if spec.report_type == ReportType.STUDENT_PROFILE:
             await self._fill_student_profile(data, rows, spec)
         if spec.report_type == ReportType.TREND_TRACKING:
@@ -904,6 +909,8 @@ class ReportOrchestrator:
             if grade_name:
                 break
         data["GRADE_NAME"] = grade_name or school_name or "年级"
+        # 外部排名（同层次/全市）按这些班级去 overview 池里定位
+        data["_gc_target_classes"] = [str(r.get("name") or "") for r in ranked]
 
         if not ranked:
             data["CLASS_COMPARE_CHART"] = ""
@@ -978,6 +985,89 @@ class ReportOrchestrator:
             "<li>结合各班及格率结构，安排分层辅导与临界生盯梢。</li>"
             "</ul>"
         )
+
+    async def _fill_grade_comparison_external_rank(
+        self,
+        data: dict[str, Any],
+        spec: ReportSpec,
+        mapping: ScoreSchemaMapping,
+    ) -> None:
+        """给横比总结追加外部定位：本校各班在同层次、全市同年级班级中的排名。
+
+        排名池读 ``tb_score_overview``（同场考试、在籍生、每班 ≥10 人、不含其他校）；
+        未选科目用六门总分 ``zf6m``，选了科目用该科分数列。
+        SQL 带 RANK 窗口，权限层会按全市排名池口径放行，不收窄到本校。
+        overview 无该场数据时静默跳过，保留原总结。
+        """
+        from src.agent.education.bureau_analysis import (
+            school_codes_from_lookup,
+            school_lookup_sql,
+        )
+        from src.agent.education.dimension_parse import parse_grade_from_class
+        from src.agent.education.line_reach_report import sql_result_to_dicts
+        from src.agent.education.score_library import SCORE_SUBJECTS
+
+        school_name = str(spec.filters.get("school_name") or "").strip()
+        subject = str(spec.filters.get("subject") or "").strip()
+        exam_names = _split_exam_filter(str(spec.filters.get("exam_name") or ""))
+        exam_name = exam_names[0] if exam_names else ""
+        class_names = [str(c) for c in (data.get("_gc_target_classes") or []) if str(c)]
+        if not school_name or not exam_name or not class_names:
+            return
+        if subject:
+            metric_col = SCORE_SUBJECTS.get(subject)
+            if not metric_col:
+                return
+            metric_label = subject
+        else:
+            metric_col = "zf6m"
+            metric_label = "六门总分"
+        grade_name = ""
+        for c in class_names:
+            grade_name = parse_grade_from_class(c) or ""
+            if grade_name:
+                break
+
+        exam_lit = _sql_escape(exam_name)
+        sql = (
+            "SELECT xx, bj, xxlb, n, avg_score, "
+            "RANK() OVER (ORDER BY avg_score DESC) AS city_rank_all\n"
+            "FROM (\n"
+            f"  SELECT xx, bj, MAX(xxlb) AS xxlb, COUNT(*) AS n, "
+            f"ROUND(AVG({metric_col}), 2) AS avg_score\n"
+            "  FROM tb_score_overview\n"
+            f"  WHERE exam_name = '{exam_lit}' AND xsxz = '在籍生'\n"
+            f"    AND {metric_col} IS NOT NULL AND {metric_col} > 0\n"
+            "    AND bj IS NOT NULL AND CAST(bj AS TEXT) <> ''\n"
+            "    AND (xxlb IS NULL OR xxlb NOT LIKE '%其他%')\n"
+            "  GROUP BY xx, bj\n"
+            "  HAVING COUNT(*) >= 10\n"
+            ") pool\n"
+            "LIMIT 2000"
+        )
+        pool_rows = sql_result_to_dicts(await self._execute_sql(sql))
+        if not pool_rows:
+            return
+
+        codes: set[str] = set()
+        try:
+            looked = sql_result_to_dicts(
+                await self._execute_sql(school_lookup_sql(school_name))
+            )
+            codes.update(school_codes_from_lookup(looked))
+        except Exception:  # noqa: BLE001
+            codes = set()
+
+        snippet = _external_class_rank_summary(
+            pool_rows,
+            school_name=school_name,
+            school_codes=codes,
+            grade_name=grade_name,
+            class_names=class_names,
+            metric_label=metric_label,
+        )
+        if snippet:
+            data["SUMMARY"] = f"{data.get('SUMMARY') or ''}{snippet}"
 
     @staticmethod
     def _grade_ranking_table_html(ranked: list[dict[str, Any]]) -> str:
@@ -2489,6 +2579,124 @@ def _config_edu_where_sql(spec: ReportSpec, mapping: ScoreSchemaMapping) -> str:
             filters.pop("exam_name", None)
     where = _filters_to_where(filters, school_expr, class_expr, subject_expr, exam_expr)
     return f"WHERE {where}" if where else ""
+
+
+def _external_class_rank_summary(
+    pool_rows: list[dict[str, Any]],
+    *,
+    school_name: str,
+    school_codes: set[str],
+    grade_name: str,
+    class_names: list[str],
+    metric_label: str,
+) -> str:
+    """本校各班在同层次/全市同年级班级池中的排名总结（纯计算）。
+
+    池口径：同场考试、每班 ≥10 人（SQL 已过滤）、不含其他校；
+    同层次 = 与本校同 ``xxlb`` 层次（引领/支撑/发展）的全部班级。
+    名次用并列排名（1、2、2、4），与 RANK() 一致。
+    """
+    from src.agent.education.dimension_parse import parse_grade_from_class
+    from src.agent.education.query_parse import canon_school_type
+
+    def _avg(row: dict[str, Any]) -> float | None:
+        try:
+            return float(row.get("avg_score"))
+        except (TypeError, ValueError):
+            return None
+
+    rows = [
+        r
+        for r in (pool_rows or [])
+        if str(r.get("bj") or "").strip()
+        and _avg(r) is not None
+        and "其他" not in str(r.get("xxlb") or "")
+    ]
+    if grade_name:
+        rows = [
+            r for r in rows if parse_grade_from_class(str(r.get("bj") or "")) == grade_name
+        ]
+    if not rows:
+        return ""
+    wanted = {str(c) for c in (class_names or []) if str(c)}
+    targets = [
+        r
+        for r in rows
+        if _row_names_school(r, school_name, school_codes, "xx")
+        and (not wanted or str(r.get("bj") or "") in wanted)
+    ]
+    if not targets:
+        return ""
+
+    def _ranks(pool: list[dict[str, Any]]) -> dict[tuple[str, str], int]:
+        ordered = sorted(pool, key=lambda r: -float(_avg(r) or 0))
+        out: dict[tuple[str, str], int] = {}
+        prev_avg: float | None = None
+        prev_rank = 0
+        for i, r in enumerate(ordered):
+            avg = float(_avg(r) or 0)
+            rank = prev_rank if prev_avg is not None and avg == prev_avg else i + 1
+            out[(str(r.get("xx") or ""), str(r.get("bj") or ""))] = rank
+            prev_avg, prev_rank = avg, rank
+        return out
+
+    city_ranks = _ranks(rows)
+    city_total = len(rows)
+    tier = canon_school_type(str(targets[0].get("xxlb") or ""))
+    peer_ranks: dict[tuple[str, str], int] = {}
+    peer_total = 0
+    if tier:
+        peer_pool = [
+            r for r in rows if canon_school_type(str(r.get("xxlb") or "")) == tier
+        ]
+        peer_ranks = _ranks(peer_pool)
+        peer_total = len(peer_pool)
+
+    ordered_targets = sorted(targets, key=lambda r: -float(_avg(r) or 0))
+
+    def _rank_text(row: dict[str, Any]) -> str:
+        key = (str(row.get("xx") or ""), str(row.get("bj") or ""))
+        parts = []
+        if tier and key in peer_ranks:
+            parts.append(f"同层次第 {peer_ranks[key]}/{peer_total}")
+        if key in city_ranks:
+            parts.append(f"全市第 {city_ranks[key]}/{city_total}")
+        return "、".join(parts)
+
+    top = ordered_targets[0]
+    bottom = ordered_targets[-1]
+    peer_label = f"{tier}校" if tier else "同层次校"
+
+    def _city_rank(row: dict[str, Any]) -> Any:
+        return city_ranks.get(
+            (str(row.get("xx") or ""), str(row.get("bj") or "")), "-"
+        )
+
+    def _peer_rank(row: dict[str, Any]) -> Any:
+        return peer_ranks.get(
+            (str(row.get("xx") or ""), str(row.get("bj") or "")), "-"
+        )
+
+    top_peer = f"同层次（{peer_label}）第 {_peer_rank(top)}/{peer_total}，" if tier else ""
+    head = (
+        f"<p>外部定位（{metric_label}，同场同年级、每班不少于 10 人，"
+        f"全市池不含其他校）：本校领先的<strong>{top.get('bj')}</strong>"
+        f"{top_peer}全市第 {_city_rank(top)}/{city_total}"
+    )
+    if len(ordered_targets) > 1:
+        bottom_peer = (
+            f"同层次第 {_peer_rank(bottom)}/{peer_total}，" if tier else ""
+        )
+        head += (
+            f"；末位<strong>{bottom.get('bj')}</strong>"
+            f"{bottom_peer}全市第 {_city_rank(bottom)}/{city_total}。</p>"
+        )
+    else:
+        head += "。</p>"
+    items = "、".join(
+        f"{r.get('bj')}（{_rank_text(r)}）" for r in ordered_targets
+    )
+    return f"{head}<p class='edu-sub'>各班外部排名：{items}。</p>"
 
 
 def _row_names_school(

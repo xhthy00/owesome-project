@@ -361,13 +361,20 @@ _VAGUE_FACT_HINTS = (
 def is_fact_metric_unresolved(question: str, route: Any = None) -> bool:
     """自由问答未点名均分/达线/排名等指标时声明分叉。"""
     from src.agent.education.clarification import FactQueryKind, fact_query_kind
-    from src.agent.education.query_parse import is_item_difficulty_curve_query
+    from src.agent.education.query_parse import (
+        is_item_difficulty_curve_query,
+        is_rank_query,
+        is_top_student_lookup_query,
+    )
 
     needs, _report_type, _confidence, _reason = _route_fields(route)
     if needs:
         return False
     q = (question or "").strip()
     if not q or _explicit_report_kind(q):
+        return False
+    # 查第一名/排名本身就是明确口径，防弱规则（如句中含「成绩」判 SCORE_STAT）误抓后弹口径窗
+    if is_top_student_lookup_query(q) or is_rank_query(q):
         return False
     # 「对比本校各班成绩」已点名各班对照，不再问均分/达线/弱科。
     # is_school_class_comparison_query 对「本校」抽不到校名会漏判，这里按字面兜底。
