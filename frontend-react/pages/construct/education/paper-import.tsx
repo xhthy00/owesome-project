@@ -10,6 +10,7 @@ import {
   Space,
   Switch,
   Table,
+  Tooltip,
   Typography,
   Upload,
   message
@@ -46,6 +47,14 @@ function insertQuestionAfter(rows: PaperQuestionDraft[], index: number): PaperQu
   const next = rows.slice();
   next.splice(index + 1, 0, blankQuestion());
   return next;
+}
+
+function questionNoTextWidth(value: string): number {
+  let width = 0;
+  for (const char of value) {
+    width += char.charCodeAt(0) > 255 ? 14 : 8;
+  }
+  return width;
 }
 
 function reorderQuestions<T>(rows: T[], from: number, to: number): T[] {
@@ -148,7 +157,8 @@ function StemField({ value, onChange }: { value: string; onChange: (next: string
       <Input.TextArea
         value={plain}
         autoFocus={editing}
-        autoSize={{ minRows: 2, maxRows: 8 }}
+        autoSize={{ minRows: 2 }}
+        className="!max-h-none !w-full !overflow-hidden !rounded-lg !border-[#e4eef8] !bg-[#f8fbff] !px-3 !py-2 !text-[13px] !leading-6"
         placeholder="题干"
         onBlur={() => setEditing(false)}
         onChange={(event) => onChange(event.target.value)}
@@ -160,7 +170,7 @@ function StemField({ value, onChange }: { value: string; onChange: (next: string
       role="button"
       tabIndex={0}
       title="点击编辑题干"
-      className="w-full cursor-text rounded-md border border-[#d9d9d9] bg-white px-2 py-1.5 text-left dark:border-[#334155] dark:bg-[#141923]"
+      className="w-full cursor-text rounded-lg border border-[#e4eef8] bg-[#f8fbff] px-3 py-2 text-left"
       onClick={() => setEditing(true)}
       onKeyDown={(event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -396,15 +406,22 @@ export function PaperImportPage() {
     }
   }
 
+  const questionNoWidth = Math.min(
+    360,
+    Math.max(
+      128,
+      questions.reduce((max, row) => Math.max(max, questionNoTextWidth(row.question_no)), 0) + 36
+    )
+  );
+
   const columns: ColumnsType<PaperQuestionDraft> = [
     {
       title: "题号",
       dataIndex: "question_no",
-      width: 168,
-      onCell: () => ({ style: { whiteSpace: "normal", verticalAlign: "top" } }),
+      width: questionNoWidth,
       render: (_value, _row, index) => (
         <Input
-          className="w-full"
+          className="w-full !rounded-lg !border-[#e4eef8] !bg-[#eef5ff] !text-center !font-medium !text-[#0C75FC]"
           value={questions[index]?.question_no}
           onChange={(event) => patchQuestion(index, { question_no: event.target.value })}
         />
@@ -413,10 +430,10 @@ export function PaperImportPage() {
     {
       title: "题型",
       dataIndex: "question_type",
-      width: 120,
+      width: 112,
       render: (_value, _row, index) => (
         <Select
-          className="w-full"
+          className="w-full [&_.ant-select-selector]:!rounded-lg [&_.ant-select-selector]:!border-[#e4eef8]"
           value={questions[index]?.question_type || undefined}
           options={QUESTION_TYPES.map((item) => ({ value: item, label: item }))}
           onChange={(value) => patchQuestion(index, { question_type: value })}
@@ -426,10 +443,10 @@ export function PaperImportPage() {
     {
       title: "分值",
       dataIndex: "question_score",
-      width: 88,
+      width: 80,
       render: (_value, _row, index) => (
         <InputNumber
-          className="w-full"
+          className="w-full !rounded-lg !border-[#e4eef8]"
           min={0}
           step={0.5}
           value={questions[index]?.question_score}
@@ -440,7 +457,7 @@ export function PaperImportPage() {
     {
       title: "题干",
       dataIndex: "content",
-      onCell: () => ({ style: { whiteSpace: "normal", verticalAlign: "top", minWidth: 0 } }),
+      onCell: () => ({ style: { whiteSpace: "normal", verticalAlign: "middle", minWidth: 0 } }),
       render: (_value, _row, index) => (
         <StemField
           value={questions[index]?.content || ""}
@@ -449,8 +466,8 @@ export function PaperImportPage() {
       )
     },
     {
-      title: "",
-      width: 196,
+      title: "操作",
+      width: 168,
       render: (_value, _row, index) => (
         <Space size={0} className="whitespace-nowrap">
           <span
@@ -481,14 +498,16 @@ export function PaperImportPage() {
             icon={<ArrowDownOutlined />}
             onClick={() => setQuestions((rows) => reorderQuestions(rows, index, index + 1))}
           />
-          <Button
-            type="text"
-            size="small"
-            aria-label="在下方添加"
-            icon={<PlusOutlined />}
-            onClick={() => setQuestions((rows) => insertQuestionAfter(rows, index))}
-          />
-          <Button type="link" danger onClick={() => setQuestions((rows) => rows.filter((_, i) => i !== index))}>
+          <Tooltip title="添加下一题">
+            <Button
+              type="text"
+              size="small"
+              aria-label="添加下一题"
+              icon={<PlusOutlined />}
+              onClick={() => setQuestions((rows) => insertQuestionAfter(rows, index))}
+            />
+          </Tooltip>
+          <Button type="link" size="small" danger onClick={() => setQuestions((rows) => rows.filter((_, i) => i !== index))}>
             删除
           </Button>
         </Space>
@@ -497,9 +516,9 @@ export function PaperImportPage() {
   ];
 
   return (
-    <div className="dbgpt-ui-font h-full min-h-0 overflow-y-auto p-6 pb-10">
-    <div className="w-full min-w-0">
-      <div className="mb-4 flex items-center gap-2">
+    <div className="dbgpt-ui-font flex h-full min-h-0 flex-col overflow-hidden bg-[#f5f7fb] p-6 dark:bg-transparent">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="mb-4 flex shrink-0 items-center gap-2">
         <Link href="/construct/education/exam-library" className="text-[#0C75FC]">
           <ArrowLeftOutlined />
         </Link>
@@ -508,7 +527,7 @@ export function PaperImportPage() {
         </Typography.Title>
       </div>
 
-      <div className={`${PANEL} mb-4`}>
+      <div className={`${PANEL} mb-4 shrink-0`}>
         <Typography.Paragraph type="secondary" className="!mb-3">
           上传 Word、PDF 或图片。题号按卷面生成：选择题写成单选/多选加印刷题号，解答题按小问拆开。物理实验、化学和生物的细目请在下表里改到与阅卷表一致。同一批次、同一科目再次导入会覆盖题目，并删除该科单科成绩和小题分。成绩宽表不会自动清理。
         </Typography.Paragraph>
@@ -582,44 +601,54 @@ export function PaperImportPage() {
         ) : null}
       </div>
       {warnings.length > 0 ? (
-        <Alert className="mb-4" type="warning" showIcon message={warnings.join("；")} />
+        <Alert className="mb-4 shrink-0" type="warning" showIcon message={warnings.join("；")} />
       ) : null}
-      {scoreAlert ? <Alert className="mb-4" type="warning" showIcon message={scoreAlert} /> : null}
+      {scoreAlert ? <Alert className="mb-4 shrink-0" type="warning" showIcon message={scoreAlert} /> : null}
       {textSource === "ocr" ? (
-        <Alert className="mb-4" type="info" showIcon message="这份文件没有文字层，题干来自图片识别，请核对题号。" />
+        <Alert className="mb-4 shrink-0" type="info" showIcon message="这份文件没有文字层，题干来自图片识别，请核对题号。" />
       ) : null}
 
-      <div className={PANEL}>
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white shadow-sm dark:border-[#334155] dark:bg-[#141923]">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-[#eef2f6] bg-[linear-gradient(180deg,#f3f8ff_0%,#ffffff_78%)] px-5 py-3 dark:border-[#334155] dark:bg-none">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-2.5 py-1 text-xs ring-1 ring-[#e5e7eb] dark:bg-[#141923] dark:ring-[#334155]">
+              <span className="text-[#64748b]">题目</span>
+              <span className="font-medium tabular-nums text-[#1e293b] dark:text-[#e2e8f0]">{questions.length}</span>
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-2.5 py-1 text-xs ring-1 ring-[#e5e7eb] dark:bg-[#141923] dark:ring-[#334155]">
+              <span className="text-[#64748b]">卷面满分</span>
+              <InputNumber
+                size="small"
+                min={1}
+                className="!w-16"
+                value={examScore}
+                onChange={(value) => setExamScore(Number(value) || 0)}
+              />
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-2.5 py-1 text-xs ring-1 ring-[#e5e7eb] dark:bg-[#141923] dark:ring-[#334155]">
+              <span className="text-[#64748b]">小题分</span>
+              <span className={`font-medium tabular-nums ${scoreMismatch ? "text-[#c2410c]" : "text-[#1e293b] dark:text-[#e2e8f0]"}`}>
+                {examScore ? `${scoreSum}/${examScore}` : scoreSum}
+              </span>
+              {containers.size > 0 ? <span className="text-[#94a3b8]">含小问的大题不重复计入</span> : null}
+            </span>
+          </div>
           <Space>
-            <span>卷面满分</span>
-            <InputNumber min={1} value={examScore} onChange={(value) => setExamScore(Number(value) || 0)} />
-            <Typography.Text type={scoreMismatch ? "warning" : "secondary"}>
-              小题分合计 {scoreSum}
-              {containers.size > 0 ? "（含小问的大题不重复计入）" : ""}
-            </Typography.Text>
-          </Space>
-          <Space>
-            <Button
-              onClick={() =>
-                setQuestions((rows) => [...rows, blankQuestion()])
-              }
-            >
-              添加题目
-            </Button>
+            <Button onClick={() => setQuestions((rows) => [...rows, blankQuestion()])}>添加题目</Button>
             <Button type="primary" loading={saving} onClick={() => void save()}>
               提交试卷
             </Button>
           </Space>
         </div>
+        <div className="min-h-0 flex-1 overflow-auto px-5 pb-4">
         <Table
-          size="small"
+          size="middle"
           rowKey={(row) => String(questions.indexOf(row))}
           columns={columns}
           dataSource={questions}
           pagination={false}
           tableLayout="fixed"
-          className="[&_.ant-table]:!w-full [&_td]:align-top [&_td]:whitespace-normal"
+          className="[&_.ant-table]:!w-full [&_.ant-table-container]:!overflow-visible [&_.ant-table-content]:!overflow-visible [&_.ant-table-tbody>tr:hover>td]:!bg-[#f9fbfe] [&_.ant-table-tbody>tr>td]:!border-[#eef3f8] [&_.ant-table-tbody>tr>td]:!py-3.5 [&_.ant-table-thead>tr>th]:!sticky [&_.ant-table-thead>tr>th]:!top-0 [&_.ant-table-thead>tr>th]:!z-10 [&_.ant-table-thead>tr>th]:!border-b-[#d6e6f8] [&_.ant-table-thead>tr>th]:!bg-[#f7f9fc] [&_.ant-table-thead>tr>th]:!font-medium [&_.ant-table-thead>tr>th]:!py-3 [&_.ant-table-thead>tr>th]:!text-[#475569] [&_td]:!align-middle [&_td]:whitespace-normal dark:[&_.ant-table-thead>tr>th]:!bg-[#1c2430]"
           locale={{ emptyText: "识别后在这里改题号、分值、题干和顺序" }}
           onRow={(_row, index) => ({
             onDragOver: (event) => event.preventDefault(),
@@ -631,6 +660,7 @@ export function PaperImportPage() {
             }
           })}
         />
+        </div>
       </div>
     </div>
     </div>

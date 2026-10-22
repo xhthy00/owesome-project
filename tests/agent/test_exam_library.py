@@ -11,6 +11,8 @@ from src.agent.education.exam_library import (
     normalize_question_rows,
 )
 from src.agent.education.exam_match import (
+    _user_prompt,
+    attach_match_context,
     limit_suggestions,
     links_after_adopt,
     match_summary,
@@ -167,6 +169,47 @@ def test_parse_match_reply_moves_overflow_into_remove():
     )
     assert [item["knowledge_id"] for item in parsed["add"]] == [11, 12, 13]
     assert {item["knowledge_id"] for item in parsed["remove"]} == {1, 2, 3}
+
+
+def test_sub_question_match_uses_the_shared_stem():
+    questions = [
+        {"question_no": "16-1", "content": "阅读材料：循吏是古代良吏。\n（1）概括特点。"},
+        {"question_no": "16-2", "content": "（2）分析取得成效的原因。"},
+        {"question_no": "17", "content": "阅读材料，完成下列要求。材料 中国现代化。"},
+        {"question_no": "单选1", "content": "西周封卫国以统治殷商遗民。"},
+    ]
+    attach_match_context(questions)
+    assert "lead_in" not in questions[0]
+    assert "循吏是古代良吏" in questions[1]["lead_in"]
+    assert "lead_in" not in questions[2]
+    assert "lead_in" not in questions[3]
+    prompt = _user_prompt(questions[1], [])
+    assert "大题材料与前文" in prompt
+    assert "当前小题" in prompt
+    assert "分析取得成效的原因" in prompt
+
+
+def test_later_sub_question_keeps_opening_and_previous_part():
+    questions = [
+        {"question_no": "14（1）①", "content": "从氧化锌烟尘中回收锌。①写出原因。"},
+        {"question_no": "14（1）②", "content": "②浸出率变化的原因是。"},
+        {"question_no": "14（3）②", "content": "②电解后的溶液可循环用于哪一步。"},
+    ]
+    attach_match_context(questions)
+    lead = questions[2]["lead_in"]
+    assert "氧化锌烟尘" in lead
+    assert "浸出率变化的原因" in lead
+    assert "电解后的溶液" not in lead
+
+
+def test_only_sub_question_uses_parent_row_stem():
+    questions = [
+        {"question_no": "15", "content": "阅读材料：科茨沃尔兹是英国乡村城镇化的代表。"},
+        {"question_no": "15-1", "content": "（1）说明城镇化起步的条件。"},
+    ]
+    attach_match_context(questions)
+    assert "科茨沃尔兹" in questions[1]["lead_in"]
+    assert "lead_in" not in questions[0]
 
 
 def test_limit_suggestions_keeps_the_three_most_confident():

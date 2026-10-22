@@ -27,6 +27,7 @@ __all__ = [
     "apply_suggestions",
     "get_report",
     "get_task",
+    "attach_match_context",
     "fit_match_removals",
     "limit_suggestions",
     "links_after_adopt",
@@ -317,6 +318,7 @@ def start_check(
     global _busy
     detail = _require_exam(db_type, config, actor, exam_id)
     questions = detail["questions"]
+    attach_match_context(questions)
     if question_id is not None:
         questions = [item for item in questions if int(item["id"]) == int(question_id)]
         if not questions:
@@ -385,8 +387,73 @@ def _system_prompt() -> str:
         "还没有关联知识点时只填写 add，ok 必须为 false；"
         "已有关联且不需要增删时 ok 为 true，add 和 remove 都为空；"
         "当前关联加上 add、减去 remove 后不能超过 3 个，位置不够时把要让出的当前关联写入 remove；"
-        "remove 只能填写当前已关联的名称。不要输出清单以外的名称。"
+        "remove 只能填写当前已关联的名称。不要输出清单以外的名称。\n"
+        "若题目含有「大题材料与前文」，必须按当前小题在这份材料里的设问来判断，"
+        "不要只根据当前小题的短题干匹配知识点。"
     )
+
+
+def question_main_no(question_no: str) -> str | None:
+    """返回小题所属大题号。``16-2``、``15_1``、``14（1）②`` 属于大题 16、15、14。"""
+    matched = re.match(r"^(\d+)(.*)$", str(question_no or "").strip())
+    if not matched:
+        return None
+    rest = matched.group(2)
+    if not rest or rest[0] not in "-_（(":
+        return None
+    return matched.group(1)
+
+
+def _remember_context(chunks: list[str], text: str, current: str) -> None:
+    text = text.strip()
+    if not text or text == current or (current and current in text):
+        return
+    kept: list[str] = []
+    for item in chunks:
+        if text in item:
+            return
+        if item not in text:
+            kept.append(item)
+    kept.append(text)
+    chunks[:] = kept
+
+
+def attach_match_context(questions: list[dict[str, Any]]) -> None:
+    """给小题补上同大题的前文。材料通常在第一小题，后面的小题题干很短。"""
+    by_no = {str(item.get("question_no") or ""): item for item in questions}
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for question in questions:
+        main = question_main_no(str(question.get("question_no") or ""))
+        if main is None:
+            continue
+        groups.setdefault(main, []).append(question)
+    for main, members in groups.items():
+        parent = by_no.get(main)
+        if len(members) < 2 and parent is None:
+            continue
+        for index, question in enumerate(members):
+            if index == 0 and parent is None:
+                continue
+            current = str(question.get("content") or "").strip()
+            chunks: list[str] = []
+            if parent is not None and parent is not question:
+                _remember_context(chunks, str(parent.get("content") or ""), current)
+            first = members[0]
+            if first is not question:
+                _remember_context(chunks, str(first.get("content") or ""), current)
+            if index > 0:
+                previous = members[index - 1]
+                if previous is not first:
+                    _remember_context(chunks, str(previous.get("content") or ""), current)
+            if chunks:
+                question["lead_in"] = "\n\n".join(chunks)
+
+
+def _clip(text: str, limit: int) -> str:
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1] + "…"
 
 
 def _user_prompt(question: dict[str, Any], candidates: list[dict[str, Any]]) -> str:
@@ -395,11 +462,15 @@ def _user_prompt(question: dict[str, Any], candidates: list[dict[str, Any]]) -> 
         f"- {item.get('knowledge_name') or item.get('knowledge_id')}" for item in current
     ) or "（无）"
     names = "\n".join(f"- {item['knowledge_name']}" for item in candidates if item.get("knowledge_name"))
-    content = str(question.get("content") or "（无题干）")
-    if len(content) > 1600:
-        content = content[:1600] + "…"
+    content = str(question.get("content") or "").strip() or "（无题干）"
+    lead = str(question.get("lead_in") or "").strip()
+    if lead:
+        body = _clip(content, 700)
+        shown = f"大题材料与前文：\n{_clip(lead, max(200, 1500 - len(body)))}\n\n当前小题：\n{body}"
+    else:
+        shown = _clip(content, 1600)
     return (
-        f"题目：{content}\n"
+        f"题目：{shown}\n"
         f"题号：{question.get('question_no') or '-'}\n"
         f"题型：{question.get('question_type') or '未指定'}\n\n"
         f"当前已关联知识点：\n{current_text}\n\n"

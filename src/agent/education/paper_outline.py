@@ -43,7 +43,7 @@ _HEADER_RE = re.compile(
     r"(?:阅读|名篇名句默写|语言文字运用)[^\n]{0,40}"
     r")"
 )
-_QUESTION_RE = re.compile(r"(?m)^\s*(\d{1,2})[\.．、]\s*")
+_QUESTION_RE = re.compile(r"(?m)^\s*(\d{1,2})[\.．、](?!\d)\s*")
 _BARE_QUESTION_RE = re.compile(r"(?m)^\s*(\d{1,2})\s*$")
 _SUB_RE = re.compile(r"(?m)^\s*[（(]\s*(\d+)\s*[）)]")
 _SCORE_RE = re.compile(
@@ -940,7 +940,7 @@ def _is_figure_debris(line: str) -> bool:
 
 def _is_axis_tick(line: str) -> bool:
     text = line.strip()
-    if re.fullmatch(r"\d{1,3}", text):
+    if re.fullmatch(r"\d{1,3}(?:\.\d+)?", text):
         return True
     if re.fullmatch(r"[\d.]+(?:\s+[\d.]+){2,}", text):
         return True
