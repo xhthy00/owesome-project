@@ -605,7 +605,7 @@ export function PaperImportPage() {
       ) : null}
       {scoreAlert ? <Alert className="mb-4 shrink-0" type="warning" showIcon message={scoreAlert} /> : null}
       {textSource === "ocr" ? (
-        <Alert className="mb-4 shrink-0" type="info" showIcon message="这份文件没有文字层，题干来自图片识别，请核对题号。" />
+        <Alert className="mb-4 shrink-0" type="info" showIcon message="题干来自 AI 识别，请核对题号。" />
       ) : null}
 
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white shadow-sm dark:border-[#334155] dark:bg-[#141923]">

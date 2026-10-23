@@ -1,6 +1,7 @@
 """试卷文件读取与写入。
 
-接受 PDF、Word、图片。有文字层时直接切题；没有文字层时尝试图片识别。
+接受 PDF、Word、图片。代码识别用文字层和 Word 自动编号切题。
+打开 AI 识别时，PDF 和 Word 都按页面交给大模型转写，图片也走大模型。
 确认后的题目以预览里改过的题号为准，写入 tb_exam / tb_exam_question。
 同一批次、同一科目只保留一份试卷。再次导入会覆盖题目，并清除该科成绩和小题分。
 成绩宽表不在这里清理。
@@ -12,6 +13,7 @@ import base64
 import io
 import logging
 import re
+import threading
 import unicodedata
 from typing import Any
 
@@ -29,6 +31,8 @@ __all__ = [
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 _MIN_TEXT = 40
+_DOCX_PDF_LOCK = threading.Lock()
+_W_NS = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
 
 
 def preview_paper_file(
@@ -82,6 +86,13 @@ def extract_paper_text(
             raise ValueError("这份 PDF 没有可复制的文字，图片识别也没有读出内容")
         return ocr, "ocr"
     if ext == ".docx":
+        if mode == "model":
+            if on_progress:
+                on_progress(0, 1, "正在把 Word 转成页面")
+            ocr = _ocr_pdf(_docx_to_pdf(data), on_progress)
+            if len(ocr.strip()) < _MIN_TEXT:
+                raise ValueError("大模型没有从 Word 中识别出足够的文字")
+            return ocr, "ocr"
         text = _docx_text(data)
         if len(text.strip()) < _MIN_TEXT:
             raise ValueError("Word 里没有读到足够的正文")
@@ -1658,5 +1669,166 @@ def _docx_text(data: bytes) -> str:
     import docx
 
     document = docx.Document(io.BytesIO(data))
-    lines = [p.text.strip() for p in document.paragraphs if p.text and p.text.strip()]
+    specs = _list_specs(document)
+    counters: dict[tuple[str, str], int] = {}
+    lines: list[str] = []
+    for paragraph in document.paragraphs:
+        label = _list_label(paragraph, specs, counters)
+        text = (paragraph.text or "").strip()
+        if not text:
+            continue
+        if label and not text.startswith(label.strip()):
+            text = f"{label}{text}"
+        lines.append(text)
     return "\n".join(lines)
+
+
+def _list_specs(document: Any) -> dict[str, dict[str, dict[str, Any]]]:
+    """numId -> ilvl -> 编号格式。没有 numbering.xml 时返回空。"""
+    try:
+        root = document.part.numbering_part.element
+    except (AttributeError, KeyError, NotImplementedError, ValueError):
+        return {}
+    abstracts: dict[str, dict[str, dict[str, Any]]] = {}
+    for abstract in root.findall("w:abstractNum", _W_NS):
+        levels: dict[str, dict[str, Any]] = {}
+        for lvl in abstract.findall("w:lvl", _W_NS):
+            ilvl = lvl.get(_w("ilvl")) or "0"
+            levels[ilvl] = _level_spec(lvl)
+        abstracts[abstract.get(_w("abstractNumId")) or ""] = levels
+    specs: dict[str, dict[str, dict[str, Any]]] = {}
+    for num in root.findall("w:num", _W_NS):
+        num_id = num.get(_w("numId"))
+        if not num_id:
+            continue
+        aid = _child_val(num, "w:abstractNumId")
+        levels = {key: dict(value) for key, value in abstracts.get(aid or "", {}).items()}
+        for override in num.findall("w:lvlOverride", _W_NS):
+            ilvl = override.get(_w("ilvl")) or "0"
+            start = _child_val(override, "w:startOverride")
+            level = levels.setdefault(ilvl, _level_spec(None))
+            if start and start.isdigit():
+                level["start"] = int(start)
+        specs[num_id] = levels
+    return specs
+
+
+def _level_spec(lvl: Any) -> dict[str, Any]:
+    start = _child_val(lvl, "w:start") if lvl is not None else None
+    return {
+        "start": int(start) if start and start.isdigit() else 1,
+        "fmt": (_child_val(lvl, "w:numFmt") if lvl is not None else None) or "decimal",
+        "text": (_child_val(lvl, "w:lvlText") if lvl is not None else None) or "%1.",
+        "suff": (_child_val(lvl, "w:suff") if lvl is not None else None) or "tab",
+    }
+
+
+def _list_label(paragraph: Any, specs: dict[str, Any], counters: dict[tuple[str, str], int]) -> str:
+    """把 Word 自动编号还原成「16. 」或「三、」。numId 为 0 表示这一段不编号。"""
+    num_id, ilvl = _num_pr(paragraph)
+    if not num_id:
+        return ""
+    levels = specs.get(num_id) or {}
+    level = levels.get(ilvl)
+    if not level or level["fmt"] == "bullet":
+        return ""
+    key = (num_id, ilvl)
+    current = counters.get(key, level["start"])
+    counters[key] = current + 1
+    for other in list(counters):
+        if other[0] == num_id and other[1].isdigit() and int(other[1]) > int(ilvl or 0):
+            del counters[other]
+    rendered = _render_list_value(str(level["fmt"]), current)
+    label = str(level["text"]).replace("%1", rendered)
+    if level["suff"] in {"space", "tab"}:
+        label += " "
+    return label
+
+
+def _num_pr(paragraph: Any) -> tuple[str, str]:
+    p_pr = paragraph._p.pPr
+    if p_pr is None or p_pr.numPr is None:
+        return "", ""
+    num_pr = p_pr.numPr
+    num_id = None if num_pr.numId is None else num_pr.numId.val
+    if num_id is None or str(num_id) == "0":
+        return "", ""
+    ilvl = "0" if num_pr.ilvl is None or num_pr.ilvl.val is None else str(num_pr.ilvl.val)
+    return str(num_id), ilvl
+
+
+def _render_list_value(fmt: str, number: int) -> str:
+    chinese = {"chineseCounting", "chineseCountingThousand", "japaneseCounting", "ideographDigital"}
+    if fmt in chinese:
+        return _chinese_count(number)
+    return str(number)
+
+
+def _chinese_count(number: int) -> str:
+    digits = "零一二三四五六七八九"
+    if number <= 0 or number >= 100:
+        return str(number)
+    if number < 10:
+        return digits[number]
+    if number == 10:
+        return "十"
+    if number < 20:
+        return "十" + digits[number - 10]
+    tens, ones = divmod(number, 10)
+    return digits[tens] + "十" + (digits[ones] if ones else "")
+
+
+def _child_val(element: Any, tag: str) -> str | None:
+    if element is None:
+        return None
+    child = element.find(tag, _W_NS)
+    if child is None:
+        return None
+    return child.get(_w("val"))
+
+
+def _w(name: str) -> str:
+    return f"{{{_W_NS['w']}}}{name}"
+
+
+def _docx_to_pdf(data: bytes) -> bytes:
+    """用本机 Word 或 WPS 把 docx 印成 PDF，供按页图像识别。"""
+    import tempfile
+    from pathlib import Path
+
+    try:
+        import pythoncom
+        import win32com.client
+    except ImportError as exc:
+        raise ValueError("Word 的 AI 识别需要本机安装 Word 或 WPS") from exc
+
+    with _DOCX_PDF_LOCK:
+        pythoncom.CoInitialize()
+        try:
+            with tempfile.TemporaryDirectory() as folder:
+                src = Path(folder) / "paper.docx"
+                dst = Path(folder) / "paper.pdf"
+                src.write_bytes(data)
+                for prog in ("Kwps.Application", "Word.Application", "wps.Application"):
+                    app = None
+                    try:
+                        app = win32com.client.DispatchEx(prog)
+                        app.Visible = False
+                        app.DisplayAlerts = 0
+                        doc = app.Documents.Open(str(src), ReadOnly=True)
+                        doc.ExportAsFixedFormat(str(dst), 17)
+                        doc.Close(False)
+                        blob = dst.read_bytes()
+                        if blob.startswith(b"%PDF"):
+                            return blob
+                    except Exception as exc:
+                        logger.warning("Word 转 PDF 失败（%s）: %s", prog, exc)
+                    finally:
+                        if app is not None:
+                            try:
+                                app.Quit()
+                            except Exception:
+                                logger.warning("关闭 %s 失败", prog)
+        finally:
+            pythoncom.CoUninitialize()
+    raise ValueError("Word 的 AI 识别需要本机的 Word 或 WPS 把文档转成页面")
