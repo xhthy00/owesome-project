@@ -17,6 +17,19 @@ COMMENT ON COLUMN tb_exam_batch.exam_time IS '考试时间；上场/环比按本
 ALTER TABLE tb_exam_batch
     ADD COLUMN IF NOT EXISTS exam_time TIMESTAMP;
 
+-- 学校账号创建的批次记下学校和创建者。空值表示管理员或教育局创建，仅这两类账号可维护。
+-- exam_type 是这场考试的类型。各科试卷 tb_exam.exam_type 冗余这份值，维护试卷时不能单独修改。
+ALTER TABLE tb_exam_batch
+    ADD COLUMN IF NOT EXISTS school_id VARCHAR(128);
+ALTER TABLE tb_exam_batch
+    ADD COLUMN IF NOT EXISTS owner_id VARCHAR(255);
+ALTER TABLE tb_exam_batch
+    ADD COLUMN IF NOT EXISTS exam_type VARCHAR(16) DEFAULT 'city';
+
+COMMENT ON COLUMN tb_exam_batch.school_id IS '创建者所属学校。同校学校账号可维护；空值仅管理员和教育局可维护';
+COMMENT ON COLUMN tb_exam_batch.owner_id IS '创建者账号。创建者本人可维护该批次';
+COMMENT ON COLUMN tb_exam_batch.exam_type IS '考试类型：city 全市统考，school 学校自建。试卷冗余该值';
+
 CREATE INDEX IF NOT EXISTS idx_exam_batch_exam_time ON tb_exam_batch (exam_time);
 CREATE UNIQUE INDEX IF NOT EXISTS uk_exam_batch_batch_name ON tb_exam_batch (batch_name);
 

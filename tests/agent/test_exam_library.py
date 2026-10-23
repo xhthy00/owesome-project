@@ -6,12 +6,17 @@ from src.agent.education.exam_library import (
     ExamActor,
     _exam_name_is_this_batch,
     _exam_payload,
+    batch_writable,
+    can_create_batch,
     can_create_exam,
     exam_visible,
     exam_writable,
+    new_batch_owner,
+    normalize_batch_exam_type,
     normalize_batch_fields,
     normalize_ownership,
     normalize_question_rows,
+    stamp_exam_from_batch,
 )
 from src.agent.education.exam_match import (
     _user_prompt,
@@ -32,37 +37,89 @@ def _actor(**kwargs) -> ExamActor:
 def test_school_user_sees_city_papers_and_owns_what_they_create():
     actor = _actor(edu_role="school_admin", school_id="A01", owner_id="school1")
     city = {"exam_type": "city", "school_id": None, "owner_id": None}
-    own = {"exam_type": "school", "school_id": "A01", "owner_id": "school1"}
-    peer = {"exam_type": "school", "school_id": "A01", "owner_id": "school2"}
-    legacy = {"exam_type": "school", "school_id": "A01", "owner_id": None}
+    own = {"exam_type": "school", "school_id": "A01", "owner_id": None}
+    other_school = {"exam_type": "school", "school_id": "B02", "owner_id": None}
     bureau = _actor(see_all=True, edu_role="bureau_admin")
 
     assert exam_visible(city, actor)
     assert not exam_writable(city, actor)
     assert exam_visible(own, actor)
     assert exam_writable(own, actor)
-    assert not exam_visible(peer, actor)
-    assert not exam_visible(legacy, actor)
-    assert exam_visible(peer, bureau)
+    assert not exam_visible(other_school, actor)
+    assert exam_visible(other_school, bureau)
     assert exam_writable(city, bureau)
     assert exam_visible({"exam_type": None}, actor)
 
 
 def test_school_user_cannot_assign_another_school_or_owner():
     school = _actor(edu_role="school_admin", school_id="A01", owner_id="school1")
-    assert normalize_ownership("全市统考", "B02", "other", school) == ("city", None, "school1")
-    assert normalize_ownership("school", "B02", "other", school) == ("school", "A01", "school1")
+    assert normalize_ownership("全市统考", "B02", "other", school) == ("city", None, None)
+    assert normalize_ownership("school", "B02", "other", school) == ("school", "A01", None)
     bureau = _actor(see_all=True, edu_role="bureau_admin", school_id="A01", owner_id="admin")
     assert normalize_ownership("全市统考", "A01", "teacher1", bureau) == ("city", None, None)
     assert normalize_ownership("全市统考", "A01", "teacher1", bureau, "school1") == (
         "city",
         None,
-        "school1",
+        None,
     )
     assert normalize_ownership("school", "", "", bureau) == ("school", "A01", None)
     assert can_create_exam(bureau)
     assert can_create_exam(school)
     assert not can_create_exam(_actor(edu_role="teacher"))
+
+
+def test_same_school_users_maintain_their_batch():
+    school = "GZ_AADB4D1D"
+    own = {"school_id": school, "owner_id": "exvwji03"}
+    city = {"school_id": None, "owner_id": None}
+    creator = _actor(edu_role="school_admin", school_id=school, owner_id="exvwji03")
+    peer = _actor(edu_role="school_admin", school_id=school, owner_id="dvfort31")
+    other = _actor(edu_role="school_admin", school_id="OTHER", owner_id="other")
+    teacher = _actor(edu_role="teacher", school_id=school, owner_id="teacher1")
+    bureau = _actor(see_all=True, edu_role="bureau_admin", owner_id="admin")
+
+    assert batch_writable(own, creator)
+    assert batch_writable(own, peer)
+    assert not batch_writable(city, creator)
+    assert not batch_writable(own, other)
+    assert not batch_writable(own, teacher)
+    assert batch_writable(city, bureau)
+    assert can_create_batch(creator)
+    assert can_create_batch(bureau)
+    assert not can_create_batch(teacher)
+    assert new_batch_owner(creator) == (school, "exvwji03")
+    assert new_batch_owner(bureau) == (None, None)
+    assert batch_writable({"school_id": None, "owner_id": "exvwji03"}, creator)
+
+
+def test_paper_type_follows_the_batch_not_the_form():
+    school = _actor(edu_role="school_admin", school_id="A01", owner_id="school1")
+    base = {
+        "exam_name": "练习卷",
+        "subject": "语文",
+        "exam_score": 150,
+        "exam_type": "school",
+        "school_id": "B02",
+        "exam_batch_id": 3,
+    }
+    payload = _exam_payload(base, school)
+    stamp_exam_from_batch(payload, "city", None, school)
+    assert payload["exam_type"] == "city"
+    assert payload["school_id"] is None
+    assert payload["owner_id"] is None
+
+    bureau = _actor(see_all=True, edu_role="bureau_admin", school_id="A01", owner_id="admin")
+    city_form = _exam_payload({**base, "exam_type": "city"}, bureau)
+    stamp_exam_from_batch(city_form, "school", "B02", bureau)
+    assert city_form["exam_type"] == "school"
+    assert city_form["school_id"] == "B02"
+    assert normalize_batch_exam_type("全市统考") == "city"
+    try:
+        normalize_batch_exam_type("教师自建")
+    except ValueError as exc:
+        assert "考试类型" in str(exc)
+    else:
+        raise AssertionError("teacher type is not a batch type")
 
 
 def test_batch_fields_require_name_and_date():
@@ -97,11 +154,11 @@ def test_every_exam_requires_a_batch():
     base = {"exam_name": "练习卷", "subject": "语文", "exam_score": 150, "exam_type": "school"}
     owned = _exam_payload({**base, "exam_batch_id": "3"}, actor)
     assert owned["exam_batch_id"] == 3
-    assert owned["owner_id"] == "school1"
+    assert owned["owner_id"] is None
     assert owned["school_id"] == "A01"
     city = _exam_payload({**base, "exam_type": "city", "exam_batch_id": 3}, actor)
     assert city["exam_batch_id"] == 3
-    assert city["owner_id"] == "school1"
+    assert city["owner_id"] is None
     assert city["school_id"] is None
 
     try:

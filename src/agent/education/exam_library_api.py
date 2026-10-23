@@ -84,11 +84,6 @@ def _call(action):
         raise BadRequestException(str(exc)) from exc
 
 
-def _require_batch_manager(actor) -> None:
-    if not actor.see_all:
-        raise ForbiddenException("只有管理员和教育局可以维护考试批次")
-
-
 @router.get("")
 async def list_exam_library(
     keyword: str = "",
@@ -135,6 +130,7 @@ async def create_exam_library(
 class BatchBody(BaseModel):
     batch_name: str
     exam_time: str | None = None
+    exam_type: str | None = None
 
 
 @router.get("/batches")
@@ -142,10 +138,10 @@ async def list_exam_batches(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    db_type, config, _actor = _db(current_user, workspace_oid)
+    db_type, config, actor = _db(current_user, workspace_oid)
     from src.agent.education.exam_library import list_exam_batches as load_batches
 
-    data = _call(lambda: load_batches(db_type, config))
+    data = _call(lambda: load_batches(db_type, config, actor))
     return success_response(data)
 
 
@@ -156,10 +152,9 @@ async def create_exam_batch(
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     db_type, config, actor = _db(current_user, workspace_oid)
-    _require_batch_manager(actor)
     from src.agent.education.exam_library import create_exam_batch as add_batch
 
-    data = _call(lambda: add_batch(db_type, config, body.model_dump()))
+    data = _call(lambda: add_batch(db_type, config, actor, body.model_dump()))
     return success_response(data, message="批次已创建")
 
 
@@ -171,10 +166,9 @@ async def update_exam_batch(
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     db_type, config, actor = _db(current_user, workspace_oid)
-    _require_batch_manager(actor)
     from src.agent.education.exam_library import update_exam_batch as save_batch
 
-    data = _call(lambda: save_batch(db_type, config, batch_id, body.model_dump()))
+    data = _call(lambda: save_batch(db_type, config, actor, batch_id, body.model_dump()))
     if data is None:
         raise NotFoundException("考试批次不存在")
     return success_response(data, message="批次已更新")
@@ -187,10 +181,9 @@ async def delete_exam_batch(
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     db_type, config, actor = _db(current_user, workspace_oid)
-    _require_batch_manager(actor)
     from src.agent.education.exam_library import delete_exam_batch as remove_batch
 
-    deleted = _call(lambda: remove_batch(db_type, config, batch_id))
+    deleted = _call(lambda: remove_batch(db_type, config, actor, batch_id))
     if not deleted:
         raise NotFoundException("考试批次不存在")
     return success_response({"id": batch_id}, message="批次已删除")

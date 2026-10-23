@@ -118,9 +118,16 @@ def save_paper_outline(
 
     with WriteDbSession(db_type, config) as session:
         _ensure_exam_unique(session)
+        from src.agent.education.exam_library import (
+            _ensure_batch_scope,
+            normalize_batch_exam_type,
+        )
+
+        _ensure_batch_scope(session)
         batch = _one(
             session,
-            "SELECT id, batch_name, exam_time FROM tb_exam_batch WHERE id = %s",
+            "SELECT id, batch_name, exam_time, exam_type, school_id "
+            "FROM tb_exam_batch WHERE id = %s",
             (int(exam_batch_id),),
         )
         if batch is None:
@@ -128,6 +135,8 @@ def save_paper_outline(
         batch_name = str(batch[1] or "").strip()
         exam_time = batch[2]
         exam_name = batch_name
+        batch_type = normalize_batch_exam_type(batch[3] if len(batch) > 3 else None, default_city=True)
+        batch_school = str(batch[4]).strip() if len(batch) > 4 and batch[4] else ""
         existing = _all(
             session,
             "SELECT id FROM tb_exam WHERE exam_batch_id = %s AND subject = %s",
@@ -138,14 +147,13 @@ def save_paper_outline(
         exam_id = int(existing[0][0]) if existing else None
         updated = exam_id is not None
         owner_id = None
+        current_school = None
         if actor is not None:
             from src.agent.education.exam_library import can_create_exam, exam_writable
 
             if exam_id is None:
                 if not can_create_exam(actor):
                     raise ValueError("无权创建试卷")
-                if not actor.see_all:
-                    owner_id = str(actor.owner_id or "").strip() or None
             else:
                 current = _one(
                     session,
@@ -159,15 +167,35 @@ def save_paper_outline(
                 }
                 if not exam_writable(owned, actor):
                     raise ValueError("无权维护这张试卷")
+                current_school = None if current is None else current[1]
+        if batch_type == "city":
+            paper_school = None
+        else:
+            paper_school = batch_school or (None if current_school is None else str(current_school).strip())
+            if not paper_school and actor is not None and not actor.see_all:
+                paper_school = str(actor.school_id or "").strip() or None
+            paper_school = paper_school or None
+            if batch_type == "teacher" and actor is not None and not actor.see_all:
+                owner_id = str(actor.owner_id or "").strip() or None
         cleared_score_count = 0
         cleared_detail_count = 0
         if exam_id is None:
             created = _one(
                 session,
                 "INSERT INTO tb_exam "
-                "(exam_name, exam_time, subject, exam_score, exam_type, exam_batch_id, owner_id) "
-                "VALUES (%s, %s, %s, %s, 'city', %s, %s) RETURNING id",
-                (exam_name, exam_time, name, float(exam_score), int(exam_batch_id), owner_id),
+                "(exam_name, exam_time, subject, exam_score, exam_type, exam_batch_id, "
+                "owner_id, school_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                (
+                    exam_name,
+                    exam_time,
+                    name,
+                    float(exam_score),
+                    batch_type,
+                    int(exam_batch_id),
+                    owner_id,
+                    paper_school,
+                ),
             )
             if created is None:
                 raise ValueError("创建试卷失败")
@@ -181,8 +209,9 @@ def save_paper_outline(
             )
             _must_write(
                 session,
-                "UPDATE tb_exam SET exam_name = %s, exam_time = %s, exam_score = %s WHERE id = %s",
-                (exam_name, exam_time, float(exam_score), exam_id),
+                "UPDATE tb_exam SET exam_name = %s, exam_time = %s, exam_score = %s, "
+                "exam_type = %s, school_id = %s WHERE id = %s",
+                (exam_name, exam_time, float(exam_score), batch_type, paper_school, exam_id),
             )
             _replace_questions(session, exam_id)
         for item in rows:

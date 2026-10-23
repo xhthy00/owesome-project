@@ -13,6 +13,7 @@ export interface ExamLibraryItem {
   exam_type: "city" | "school" | "teacher";
   exam_type_label: string;
   school_id: string | null;
+  school_name?: string | null;
   owner_id: string | null;
   exam_batch_id: number | null;
   exam_batch_name?: string | null;
@@ -59,6 +60,11 @@ export interface ExamBatchItem {
   batch_name: string;
   exam_time: string | null;
   exam_count: number;
+  school_id?: string | null;
+  owner_id?: string | null;
+  exam_type?: string | null;
+  exam_type_label?: string | null;
+  writable?: boolean;
 }
 
 export interface ExamPayload {
@@ -103,12 +109,37 @@ export function canCreateExam(user: CurrentUser | null): boolean {
   return canManageExamBatches(user) || user.edu_scope?.edu_role === "school_admin";
 }
 
+export function canCreateBatch(user: CurrentUser | null): boolean {
+  return canCreateExam(user);
+}
+
+export function canMaintainBatch(
+  user: CurrentUser | null,
+  batch: { school_id?: string | null; owner_id?: string | null; writable?: boolean } | null | undefined
+): boolean {
+  if (!user || !batch) return false;
+  if (canManageExamBatches(user)) return true;
+  if (user.edu_scope?.edu_role !== "school_admin") return false;
+  if (batch.writable === true) return true;
+  const school = String(batch.school_id || "").trim();
+  const mine = String(user.edu_scope?.school_id || "").trim();
+  if (school && mine && school === mine) return true;
+  const owner = String(batch.owner_id || "").trim();
+  const account = String(user.account || "").trim();
+  return Boolean(owner && account && owner === account);
+}
+
 export function canMaintainExam(
   user: CurrentUser | null,
-  exam: { owner_id?: string | null } | null | undefined
+  exam: { exam_type?: string | null; school_id?: string | null; owner_id?: string | null } | null | undefined
 ): boolean {
   if (!user || !exam) return false;
   if (canManageExamBatches(user)) return true;
+  if (user.edu_scope?.edu_role === "school_admin" && exam.exam_type === "school") {
+    const school = String(exam.school_id || "").trim();
+    const mine = String(user.edu_scope?.school_id || "").trim();
+    if (school && mine && school === mine) return true;
+  }
   const owner = String(exam.owner_id || "").trim();
   const account = String(user.account || "").trim();
   return Boolean(owner && account && owner === account);
@@ -163,10 +194,10 @@ export const examLibraryApi = {
   listBatches() {
     return send<ExamBatchItem[]>("/batches", { method: "GET" }, "加载考试批次失败");
   },
-  createBatch(payload: { batch_name: string; exam_time: string }) {
+  createBatch(payload: { batch_name: string; exam_time: string; exam_type: string }) {
     return send<ExamBatchItem>("/batches", { method: "POST", body: JSON.stringify(payload) }, "创建批次失败");
   },
-  updateBatch(id: number, payload: { batch_name: string; exam_time: string }) {
+  updateBatch(id: number, payload: { batch_name: string; exam_time: string; exam_type: string }) {
     return send<ExamBatchItem>(`/batches/${id}`, { method: "PUT", body: JSON.stringify(payload) }, "更新批次失败");
   },
   removeBatch(id: number) {

@@ -1787,7 +1787,23 @@ async def create_raw_import_batch(
     when = (exam_time or "").strip()
     if not name:
         raise BadRequestException("批次名称不能为空")
-    _ds_id, _scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    from common.core.database import get_db_session
+    from src.agent.education.exam_library import (
+        build_actor,
+        ensure_exam_batch_scope,
+        new_batch_owner,
+    )
+    from system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        user = get_user_by_id(session, int(current_user.id))
+    if user is None:
+        raise ForbiddenException("用户不存在")
+    actor = build_actor(user, scope)
+    school_id, owner_id = new_batch_owner(actor)
+    exam_type = "school" if school_id else "city"
+    ensure_exam_batch_scope(db_type, config)
     with WriteDbSession(db_type, config) as session:
         ok, msg, data = session.execute_query(
             "SELECT id, batch_name, exam_time FROM tb_exam_batch WHERE batch_name = %s",
@@ -1814,8 +1830,10 @@ async def create_raw_import_batch(
                 },
             )
         ok, msg, _ = session.execute_write(
-            "INSERT INTO tb_exam_batch (batch_name, exam_time) VALUES (%s, %s)",
-            (name, when),
+            "INSERT INTO tb_exam_batch "
+            "(batch_name, exam_time, school_id, owner_id, exam_type) "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (name, when, school_id, owner_id, exam_type),
         )
         if not ok:
             session.rollback()
