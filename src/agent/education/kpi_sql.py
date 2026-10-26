@@ -179,6 +179,33 @@ def kpi_row_to_stats(
     }
 
 
+def format_score_kpi_observation(stats: Any, *, show_excellent: bool = False) -> str:
+    """认证指标回给模型的短文本。最高分/最低分必须写出来，避免只报均分。"""
+
+    def _num(key: str) -> str:
+        value = stats.get(key) if isinstance(stats, dict) else None
+        if value is None or value == "":
+            return "—"
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        if number.is_integer():
+            return str(int(number))
+        return f"{number:.2f}".rstrip("0").rstrip(".")
+
+    bits = [
+        f"最高分 {_num('max')}",
+        f"最低分 {_num('min')}",
+        f"均分 {_num('avg')}",
+        f"参考人数 {_num('count')}",
+        f"及格率 {_num('pass_rate')}%",
+    ]
+    if show_excellent:
+        bits.append(f"优秀率 {_num('excellent_rate')}%")
+    return "认证指标 score_kpi：" + "，".join(bits) + "。面向用户不要写表名或 SQL。"
+
+
 def compute_empty_stats(
     config: EducationConfig,
     *,
@@ -208,5 +235,6 @@ __all__ = [
     "build_primary_exam_id_sql",
     "build_score_count_sql",
     "compute_empty_stats",
+    "format_score_kpi_observation",
     "kpi_row_to_stats",
 ]

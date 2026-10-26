@@ -109,6 +109,55 @@ def format_peek_payload(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _peek_select_sql(tbl: str, hint: str) -> str | None:
+    """按表生成 DISTINCT 探查 SQL。试卷/批次读考试专名，不改查指标表。"""
+    quoted = _sql_quote(hint) if hint else ""
+    if tbl == "tb_score_overview":
+        where = f" WHERE exam_name LIKE '%{quoted}%'" if quoted else ""
+        return (
+            "SELECT DISTINCT exam_name, dq AS district "
+            f"FROM tb_score_overview{where} "
+            "ORDER BY 1, 2 LIMIT 200"
+        )
+    if tbl == "tb_exam_batch":
+        where = f" WHERE batch_name LIKE '%{quoted}%'" if quoted else ""
+        return (
+            "SELECT DISTINCT batch_name AS exam_name "
+            f"FROM tb_exam_batch{where} "
+            "ORDER BY 1 LIMIT 200"
+        )
+    if tbl == "tb_exam":
+        expr = "COALESCE(eb.batch_name, e.exam_name)"
+        where = f" WHERE {expr} LIKE '%{quoted}%'" if quoted else ""
+        return (
+            f"SELECT DISTINCT {expr} AS exam_name "
+            "FROM tb_exam e "
+            "LEFT JOIN tb_exam_batch eb ON e.exam_batch_id = eb.id"
+            f"{where} ORDER BY 1 LIMIT 200"
+        )
+    if tbl == "tb_score_indicator":
+        where = f" WHERE exam_name LIKE '%{quoted}%'" if quoted else ""
+        return (
+            "SELECT DISTINCT exam_name, district, line_name, track "
+            f"FROM tb_score_indicator{where} "
+            "ORDER BY 1, 2, 3, 4 LIMIT 500"
+        )
+    return None
+
+
+def _peek_payload(tbl: str, hint: str, sql: str, result: dict[str, Any] | None) -> dict[str, Any]:
+    districts = _col_values(result, "district") or _col_values(result, "dq")
+    return {
+        "table": tbl,
+        "exam_hint": hint,
+        "exam_names": _col_values(result, "exam_name"),
+        "districts": districts,
+        "line_names": _col_values(result, "line_name"),
+        "tracks": _col_values(result, "track"),
+        "sql": sql,
+    }
+
+
 def peek_edu_filter_values(
     execute: ExecuteFn,
     *,
@@ -118,85 +167,37 @@ def peek_edu_filter_values(
     """执行 DISTINCT 探查，返回结构化维值。
 
     ``execute(sql) -> (ok, msg, result)``，result 形如 ``{columns, rows}``。
+    指标表未收录的学校考试（如「新华中学2027届高三10月月考」）改查总览/批次专名，
+    避免把其它场次当成这场考试的候选。
     """
     hint = str(exam_hint or "").strip()
     primary = (table or "tb_score_indicator").strip() or "tb_score_indicator"
     tables_try = [primary]
-    if primary != "tb_score_overview":
-        tables_try.append("tb_score_overview")
-    if primary != "tb_score_indicator":
-        tables_try.append("tb_score_indicator")
+    for extra in ("tb_score_overview", "tb_exam_batch", "tb_score_indicator"):
+        if extra not in tables_try:
+            tables_try.append(extra)
 
     last_error = ""
     for tbl in tables_try:
-        where = ""
-        if hint:
-            where = f" WHERE exam_name LIKE '%{_sql_quote(hint)}%'"
-        # indicator: district/line_name/track；overview: dq，无 line_name
-        if tbl == "tb_score_overview":
-            sql = (
-                f"SELECT DISTINCT exam_name, dq AS district "
-                f"FROM tb_score_overview{where} "
-                f"ORDER BY 1, 2 LIMIT 200"
-            )
-        else:
-            sql = (
-                f"SELECT DISTINCT exam_name, district, line_name, track "
-                f"FROM tb_score_indicator{where} "
-                f"ORDER BY 1, 2, 3, 4 LIMIT 500"
-            )
+        sql = _peek_select_sql(tbl, hint)
+        if not sql:
+            continue
         ok, msg, result = execute(sql)
         if not ok:
             last_error = msg or "查询失败"
-            # 无 exam_name 列时去掉 hint 再试一次
-            if hint and where:
-                ok2, msg2, result2 = execute(
-                    sql.replace(where, "") if where in sql else sql
-                )
-                if ok2:
-                    ok, msg, result = ok2, msg2, result2
-                else:
-                    last_error = msg2 or last_error
-                    continue
-            else:
-                continue
+            continue
+        payload = _peek_payload(tbl, hint, sql, result)
+        if payload["exam_names"] or not hint:
+            return payload
 
-        exam_names = _col_values(result, "exam_name")
-        districts = _col_values(result, "district")
-        if not districts:
-            districts = _col_values(result, "dq")
-        line_names = _col_values(result, "line_name")
-        tracks = _col_values(result, "track")
-        payload = {
-            "table": tbl,
-            "exam_hint": hint,
-            "exam_names": exam_names,
-            "districts": districts,
-            "line_names": line_names,
-            "tracks": tracks,
-            "sql": sql,
-        }
-        if not exam_names and not districts and hint:
-            # hint 过严：无 hint 再 peek 一次本表
-            if tbl == "tb_score_overview":
-                sql_all = (
-                    "SELECT DISTINCT exam_name, dq AS district "
-                    "FROM tb_score_overview ORDER BY 1, 2 LIMIT 200"
-                )
-            else:
-                sql_all = (
-                    "SELECT DISTINCT exam_name, district, line_name, track "
-                    "FROM tb_score_indicator ORDER BY 1, 2, 3, 4 LIMIT 500"
-                )
-            ok_all, _, result_all = execute(sql_all)
-            if ok_all and result_all:
-                payload["exam_names"] = _col_values(result_all, "exam_name")
-                d2 = _col_values(result_all, "district") or _col_values(result_all, "dq")
-                payload["districts"] = d2
-                payload["line_names"] = _col_values(result_all, "line_name")
-                payload["tracks"] = _col_values(result_all, "track")
-                payload["note"] = "exam_hint 未命中行，已回退为全表候选"
-        return payload
+    if hint:
+        sql_all = _peek_select_sql("tb_score_indicator", "")
+        ok_all, msg_all, result_all = execute(sql_all or "")
+        if ok_all and result_all:
+            payload = _peek_payload("tb_score_indicator", hint, sql_all or "", result_all)
+            payload["note"] = "exam_hint 未命中行，已回退为全表候选"
+            return payload
+        last_error = msg_all or last_error
 
     return {
         "table": primary,

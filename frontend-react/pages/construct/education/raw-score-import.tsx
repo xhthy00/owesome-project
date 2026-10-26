@@ -1,5 +1,6 @@
 import {
   CheckCircleOutlined,
+  DownOutlined,
   DownloadOutlined,
   ReloadOutlined,
   UploadOutlined
@@ -9,6 +10,7 @@ import {
   Button,
   Collapse,
   DatePicker,
+  Dropdown,
   Input,
   InputNumber,
   Modal,
@@ -93,6 +95,14 @@ function asWarnings(result: RawImportResult | null): RawImportWarning[] {
 }
 
 const DETAIL_SUBJECT_ORDER = ["语文", "数学", "英语", "物理", "化学", "生物", "历史", "政治", "地理"];
+
+function papersBySubject(list: RawPaperOption[]): RawPaperOption[] {
+  const rank = (subject: string) => {
+    const index = DETAIL_SUBJECT_ORDER.indexOf(subject);
+    return index === -1 ? DETAIL_SUBJECT_ORDER.length : index;
+  };
+  return [...list].sort((a, b) => rank(a.subject) - rank(b.subject));
+}
 
 function sortDetailPapers(list: RawPaperOption[]): RawPaperOption[] {
   const rank = (subject: string) => {
@@ -201,8 +211,6 @@ export default function RawScoreImportPage() {
   const [dbOverview, setDbOverview] = useState<RawOverviewStatus | null>(null);
   const [jcYear, setJcYear] = useState<number | null>(null);
   const [jcManual, setJcManual] = useState(false);
-  const [detailTemplateExamId, setDetailTemplateExamId] = useState<number | null>(null);
-
   const [detailItems, setDetailItems] = useState<DetailItem[]>([]);
   const [papersStatus, setPapersStatus] = useState<"idle" | "loading" | "ok" | "failed">("idle");
   const papersReqId = useRef(0);
@@ -210,6 +218,7 @@ export default function RawScoreImportPage() {
   const papersReady =
     Boolean(batchId) && duplicateSubjects.length === 0 && papers.length > 0;
   const readySubjectText = orderedSubjects(papers).join("、");
+  const templatePapers = papersBySubject(papers);
   const overviewReady = overviewDone || Boolean(dbOverview?.imported);
 
   const errorColumns: ColumnsType<ScoreImportErrorRow> = useMemo(
@@ -245,12 +254,6 @@ export default function RawScoreImportPage() {
       setDuplicateSubjects(res.duplicate_subjects);
       setDbOverview(res.overview ?? { imported: false, row_count: 0, school_count: 0, last_write_time: null });
       setPapersStatus("ok");
-      setDetailTemplateExamId((prev) => {
-        const ordered = sortDetailPapers(res.papers);
-        const ids = ordered.map((p) => p.exam_id);
-        if (prev != null && ids.includes(prev)) return prev;
-        return ids[0] ?? null;
-      });
     } catch (err) {
       if (reqId !== papersReqId.current) return;
       setPapers([]);
@@ -284,7 +287,6 @@ export default function RawScoreImportPage() {
     setDbOverview(null);
     setJcYear(null);
     setJcManual(false);
-    setDetailTemplateExamId(null);
     setDetailItems([]);
   };
 
@@ -801,6 +803,15 @@ export default function RawScoreImportPage() {
                 }
               />
             ) : null}
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium text-slate-800 dark:text-slate-100">成绩宽表</div>
+                <div className="mt-0.5 text-xs text-slate-500">按模板填写，表头列名不要改</div>
+              </div>
+              <Button icon={<DownloadOutlined />} onClick={() => void downloadTemplate("overview")}>
+                下载宽表模板
+              </Button>
+            </div>
             <Upload.Dragger
               accept=".xlsx"
               maxCount={1}
@@ -843,9 +854,6 @@ export default function RawScoreImportPage() {
               <span className="text-xs text-slate-400">优先从宽表文件名识别，可手动修改</span>
             </div>
             <Space className="mt-4">
-              <Button icon={<DownloadOutlined />} onClick={() => void downloadTemplate("overview")}>
-                下载宽表模板
-              </Button>
               <Button
                 disabled={!overviewFile}
                 loading={loading}
@@ -908,28 +916,28 @@ export default function RawScoreImportPage() {
                 description="再次导入会覆盖原数据，请确认后再操作。"
               />
             ) : null}
-            <Alert
-              className="mb-4"
-              type="info"
-              showIcon
-              message="请先选择科目再下载小题分模板。表头会按该卷真实题目生成，与教科院小题分原表一致。"
-            />
-            <Space className="mb-4" wrap>
-              <Select
-                className="min-w-[220px]"
-                placeholder="选择科目生成模板"
-                value={detailTemplateExamId ?? undefined}
-                onChange={(v) => setDetailTemplateExamId(v)}
-                options={sortDetailPapers(papers).map((p) => ({ value: p.exam_id, label: paperLabel(p) }))}
-              />
-              <Button
-                icon={<DownloadOutlined />}
-                disabled={!detailTemplateExamId}
-                onClick={() => void downloadTemplate("detail", detailTemplateExamId)}
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="text-sm font-medium text-slate-800 dark:text-slate-100">各科小题分</div>
+                <div className="mt-0.5 text-xs text-slate-500">点开后选择科目，模板按该卷题目生成</div>
+              </div>
+              <Dropdown
+                trigger={["click"]}
+                disabled={!templatePapers.length}
+                menu={{
+                  items: templatePapers.map((paper) => ({
+                    key: String(paper.exam_id),
+                    label: paper.subject,
+                    onClick: () => void downloadTemplate("detail", paper.exam_id)
+                  }))
+                }}
               >
-                下载该科小题分模板
-              </Button>
-            </Space>
+                <Button icon={<DownloadOutlined />} disabled={!templatePapers.length}>
+                  下载模板
+                  <DownOutlined className="ml-1 text-[10px]" />
+                </Button>
+              </Dropdown>
+            </div>
             <Upload.Dragger
               accept=".xls,.xlsx"
               multiple

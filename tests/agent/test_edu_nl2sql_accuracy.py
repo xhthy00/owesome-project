@@ -9,6 +9,8 @@ from src.agent.education.filter_peek import (
     peek_edu_filter_values,
     touches_edu_table,
 )
+from src.agent.education.kpi_sql import format_score_kpi_observation
+from src.agent.education.metric_catalog import match_catalog_exam_name
 from src.agent.education.prompt_context import (
     build_education_prompt_extras,
     build_education_sql_hint_text,
@@ -75,6 +77,76 @@ def test_peek_edu_filter_values_parses_distinct():
     assert "2026届高三3月" in payload["exam_names"]
     text = format_peek_payload(payload)
     assert "广陵区" in text
+
+
+def test_peek_school_exam_name_not_replaced_by_other_exams():
+    def fake_exec(sql: str):
+        if "tb_score_indicator" in sql and "LIKE" in sql:
+            return (
+                True,
+                "ok",
+                {"columns": ["exam_name", "district", "line_name", "track"], "rows": []},
+            )
+        if "tb_score_overview" in sql:
+            return (
+                True,
+                "ok",
+                {"columns": ["exam_name", "district"], "rows": [["新华中学2027届高三10月月考", "市直"]]},
+            )
+        raise AssertionError(sql)
+
+    payload = peek_edu_filter_values(
+        fake_exec, exam_hint="2027届高三10月月考", table="tb_score_indicator"
+    )
+    assert payload["exam_names"] == ["新华中学2027届高三10月月考"]
+    assert "2026届高三3月" not in payload["exam_names"]
+
+
+def test_peek_exam_table_reads_batch_name():
+    def fake_exec(sql: str):
+        assert "tb_exam_batch" in sql
+        assert "2027届高三10月月考" in sql
+        return (
+            True,
+            "ok",
+            {"columns": ["exam_name"], "rows": [["新华中学2027届高三10月月考"]]},
+        )
+
+    payload = peek_edu_filter_values(fake_exec, exam_hint="2027届高三10月月考", table="tb_exam")
+    assert payload["table"] == "tb_exam"
+    assert payload["exam_names"] == ["新华中学2027届高三10月月考"]
+
+
+def test_match_catalog_exam_keeps_city_exam_and_expands_school_exam():
+    city = ["2026届高三1月期末", "2026届高三3月"]
+    assert (
+        match_catalog_exam_name(
+            "2026届高三1月期末",
+            "新华中学2026届高三1月期末数学均分",
+            city,
+        )
+        == "2026届高三1月期末"
+    )
+    school = ["新华中学2027届高三10月月考", *city]
+    question = "新华中学高三(1)班在新华中学2027届高三10月月考，数学最高分"
+    assert (
+        match_catalog_exam_name("2027届高三10月月考", question, school)
+        == "新华中学2027届高三10月月考"
+    )
+    assert (
+        match_catalog_exam_name("2027届高三10月月考", "", ["新华中学2027届高三10月月考"])
+        == "新华中学2027届高三10月月考"
+    )
+
+
+def test_score_kpi_observation_includes_max():
+    text = format_score_kpi_observation(
+        {"count": 56, "avg": 121.34, "min": 84.0, "max": 143.0, "pass_rate": 98.21}
+    )
+    assert "最高分 143" in text
+    assert "最低分 84" in text
+    assert "均分 121.34" in text
+    assert "参考人数 56" in text
 
 
 def test_touches_edu_table_and_empty_protocol():

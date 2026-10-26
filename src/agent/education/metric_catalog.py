@@ -187,6 +187,35 @@ def compile_metric_sql(
     )
 
 
+def match_catalog_exam_name(hint: str, question: str, catalog: Any) -> str:
+    """把问句里的考试简称对齐到库内专名。
+
+    问句里出现了更长的库内专名（学校前缀 + 批次）时用那条。
+    库内已有与 hint 完全相同的专名、且问句没有更长专名时保持原样。
+    否则仅当 hint 唯一地落在一条更长专名里时才展开。
+    """
+    raw = str(hint or "").strip()
+    names: list[str] = []
+    seen: set[str] = set()
+    for item in catalog or []:
+        name = str(item or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    if not raw or not names:
+        return raw
+    q = question or ""
+    verbatim = [name for name in names if name in q and (raw == name or raw in name)]
+    if verbatim:
+        return max(verbatim, key=len)
+    if raw in names:
+        return raw
+    contained = [name for name in names if raw in name]
+    if len(contained) == 1:
+        return contained[0]
+    return raw
+
+
 def format_metric_plan(spec: MetricSpec, bound: Mapping[str, str], question: str) -> str:
     """生成「调认证指标工具」子任务文案。"""
     bits = [f"metric_id='{spec.id}'"]
@@ -217,6 +246,7 @@ __all__ = [
     "build_metric_where",
     "compile_metric_sql",
     "format_metric_plan",
+    "match_catalog_exam_name",
     "metric_by_id",
     "overview_score_column",
     "resolve_metric",

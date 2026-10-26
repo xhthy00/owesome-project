@@ -8041,6 +8041,43 @@ def peek_edu_filter_values(
     return ToolResult(content=format_peek_payload(payload), data=payload)
 
 
+def _overview_exam_names(
+    datasource_id: int,
+    workspace_oid: int | None,
+    user_id: int | None,
+) -> list[str]:
+    """库内考试专名，供简称对齐。总览失败时再读批次表。"""
+    sqls = (
+        "SELECT DISTINCT exam_name AS exam_name FROM tb_score_overview "
+        "WHERE exam_name IS NOT NULL AND CAST(exam_name AS TEXT) <> '' "
+        "ORDER BY 1 LIMIT 300",
+        "SELECT DISTINCT batch_name AS exam_name FROM tb_exam_batch "
+        "WHERE batch_name IS NOT NULL AND CAST(batch_name AS TEXT) <> '' "
+        "ORDER BY 1 LIMIT 300",
+    )
+    names: list[str] = []
+    for sql in sqls:
+        ok, _, result, _ = _run_edu_sql(
+            sql,
+            datasource_id=datasource_id,
+            workspace_oid=int(workspace_oid) if workspace_oid is not None else None,
+            user_id=int(user_id) if user_id is not None else None,
+        )
+        if not ok or not isinstance(result, dict):
+            continue
+        columns = [str(c) for c in (result.get("columns") or [])]
+        key = next((c for c in columns if c.lower() == "exam_name"), "")
+        if not key:
+            continue
+        idx = columns.index(key)
+        for row in result.get("rows") or []:
+            if isinstance(row, (list, tuple)) and idx < len(row) and row[idx]:
+                names.append(str(row[idx]).strip())
+        if names:
+            break
+    return names
+
+
 @tool()
 def query_certified_metric_tool(
     metric_id: str = "",
@@ -8055,10 +8092,11 @@ def query_certified_metric_tool(
 ) -> ToolResult:
     """按认证指标编译 SQL 并出数（均分/达线/总分/优势薄弱）。禁止手写口径。"""
     from src.agent.education.config_store import get_config
-    from src.agent.education.kpi_sql import kpi_row_to_stats
+    from src.agent.education.kpi_sql import format_score_kpi_observation, kpi_row_to_stats
     from src.agent.education.metric_catalog import (
         METRIC_SCORE_KPI,
         compile_metric_sql,
+        match_catalog_exam_name,
         metric_by_id,
         resolve_metric,
     )
@@ -8085,15 +8123,23 @@ def query_certified_metric_tool(
             content="认证指标缺少考试专名，请先确认考试后再查。",
             data={"error": "missing_exam"},
         )
-    sql = compile_metric_sql(spec, bound, question=q, config=get_config())
+    requested_exam = str(bound.get("exam_name") or "")
     ds_id = datasource_id if datasource_id is not None else ctx.get("datasource_id")
+    ws_oid = workspace_oid if workspace_oid is not None else ctx.get("workspace_oid")
+    uid = user_id if user_id is not None else ctx.get("user_id")
+    catalog = (
+        _overview_exam_names(int(ds_id), ws_oid, uid)
+        if ds_id
+        else []
+    )
+    aligned = match_catalog_exam_name(requested_exam, q, catalog) or requested_exam
+    bound["exam_name"] = aligned
+    sql = compile_metric_sql(spec, bound, question=q, config=get_config())
     if not ds_id:
         return ToolResult(
             content="query_certified_metric_tool 失败：缺少 datasource_id。",
             data={"error": "missing datasource_id", "sql": sql},
         )
-    ws_oid = workspace_oid if workspace_oid is not None else ctx.get("workspace_oid")
-    uid = user_id if user_id is not None else ctx.get("user_id")
     ok, msg, result, sql_run = _run_edu_sql(
         sql,
         datasource_id=int(ds_id),
@@ -8119,18 +8165,9 @@ def query_certified_metric_tool(
         row_map = {cols[i]: rows[0][i] for i in range(min(len(cols), len(rows[0])))} if rows[0] else {}
         stats = kpi_row_to_stats(row_map, get_config())
         payload["stats"] = stats
-        content = (
-            f"认证指标 {spec.id}：均分 {stats.get('avg')}，"
-            f"参考人数 {stats.get('count')}，及格率 {stats.get('pass_rate')}%。"
-            "面向用户不要写表名或 SQL。"
-        )
-        if SHOW_EXCELLENT_RATE:
-            content = (
-                f"认证指标 {spec.id}：均分 {stats.get('avg')}，"
-                f"参考人数 {stats.get('count')}，及格率 {stats.get('pass_rate')}%，"
-                f"优秀率 {stats.get('excellent_rate')}%。"
-                "面向用户不要写表名或 SQL。"
-            )
+        content = format_score_kpi_observation(stats, show_excellent=SHOW_EXCELLENT_RATE)
+        if aligned and aligned != requested_exam:
+            content = f"考试专名已对齐为「{aligned}」。" + content
         return ToolResult(content=content, data=payload)
     if not rows:
         return ToolResult(
