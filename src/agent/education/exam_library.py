@@ -42,6 +42,8 @@ __all__ = [
     "list_exams",
     "normalize_batch_fields",
     "normalize_batch_exam_type",
+    "normalize_batch_jc",
+    "normalize_batch_jc",
     "normalize_ownership",
     "stamp_exam_from_batch",
     "normalize_question_rows",
@@ -142,6 +144,16 @@ def normalize_exam_type(value: str | None) -> str:
     if not kind:
         raise ValueError("试卷类型无效")
     return kind
+
+
+def normalize_batch_jc(value: Any) -> str:
+    """届次收成四位年份，与成绩宽表现有的 ``jc`` 一致，如 ``2027``。"""
+    from src.agent.education.schema_mapping import normalize_jc_label
+
+    label = normalize_jc_label(str("" if value is None else value))
+    if not label:
+        raise ValueError("请填写届次，如 2027")
+    return label[:4]
 
 
 def normalize_batch_exam_type(value: str | None, *, default_city: bool = False) -> str:
@@ -376,19 +388,20 @@ def _parse_batch_id(value: Any) -> int | None:
     return batch_id
 
 
-def _load_batch(session: Any, batch_id: int | None) -> tuple[str, str, str | None]:
+def _load_batch(session: Any, batch_id: int | None) -> tuple[str, str, str | None, str | None]:
     if batch_id is None:
         raise ValueError("请关联考试批次")
     _ensure_batch_scope(session)
     row = _one(
         session,
-        "SELECT batch_name, exam_type, school_id FROM tb_exam_batch WHERE id = %s",
+        "SELECT batch_name, exam_type, school_id, jc FROM tb_exam_batch WHERE id = %s",
         (batch_id,),
     )
     name = "" if row is None else str(row[0] or "").strip()
     if row is None or not name:
         raise ValueError("考试批次不存在")
-    return name, normalize_batch_exam_type(row[1], default_city=True), _text(row[2])
+    cohort = _text(row[3]) if len(row) > 3 else None
+    return name, normalize_batch_exam_type(row[1], default_city=True), _text(row[2]), cohort
 
 
 def _exam_payload(
@@ -649,15 +662,17 @@ def create_exam(
         raise ValueError("无权创建试卷")
     payload = _exam_payload(data, actor)
     with WriteDbSession(db_type, config) as session:
-        batch_name, batch_type, batch_school = _load_batch(session, payload["exam_batch_id"])
+        batch_name, batch_type, batch_school, batch_jc = _load_batch(
+            session, payload["exam_batch_id"]
+        )
         payload["exam_name"] = batch_name
         stamp_exam_from_batch(payload, batch_type, batch_school, actor)
         created = _one(
             session,
             "INSERT INTO tb_exam "
             "(exam_name, exam_time, subject, exam_score, exam_type, school_id, owner_id, "
-            "exam_batch_id) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            "exam_batch_id, jc) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (
                 payload["exam_name"],
                 payload["exam_time"],
@@ -667,6 +682,7 @@ def create_exam(
                 payload["school_id"],
                 payload["owner_id"],
                 payload["exam_batch_id"],
+                batch_jc,
             ),
         )
         if created is None:
@@ -692,7 +708,9 @@ def update_exam(
         if not exam_writable(current, actor):
             raise ValueError("无权维护这张试卷")
         payload = _exam_payload(data, actor, keep_owner=current.get("owner_id"))
-        batch_name, batch_type, batch_school = _load_batch(session, payload["exam_batch_id"])
+        batch_name, batch_type, batch_school, batch_jc = _load_batch(
+            session, payload["exam_batch_id"]
+        )
         payload["exam_name"] = batch_name
         stamp_exam_from_batch(
             payload, batch_type, batch_school, actor, keep_owner=current.get("owner_id")
@@ -701,7 +719,7 @@ def update_exam(
             session,
             "UPDATE tb_exam SET exam_name = %s, exam_time = %s, subject = %s, "
             "exam_score = %s, exam_type = %s, school_id = %s, owner_id = %s, "
-            "exam_batch_id = %s WHERE id = %s",
+            "exam_batch_id = %s, jc = %s WHERE id = %s",
             (
                 payload["exam_name"],
                 payload["exam_time"],
@@ -711,6 +729,7 @@ def update_exam(
                 payload["school_id"],
                 payload["owner_id"],
                 payload["exam_batch_id"],
+                batch_jc,
                 int(exam_id),
             ),
         )
@@ -815,6 +834,23 @@ def _ensure_batch_scope(session: Any) -> None:
             (),
         )
         pending = True
+    exam_cols = _columns(session, "tb_exam")
+    if "jc" not in cols:
+        _must_write(
+            session,
+            "ALTER TABLE tb_exam_batch ADD COLUMN IF NOT EXISTS jc VARCHAR(16)",
+            (),
+        )
+        pending = True
+    if "jc" not in exam_cols:
+        _must_write(
+            session,
+            "ALTER TABLE tb_exam ADD COLUMN IF NOT EXISTS jc VARCHAR(16)",
+            (),
+        )
+        pending = True
+    if "jc" not in cols or "jc" not in exam_cols:
+        _backfill_batch_jc(session)
     if pending:
         session.commit()
 
@@ -845,6 +881,44 @@ def _backfill_batch_exam_type(session: Any) -> None:
         "UPDATE tb_exam_batch SET exam_type = 'city' "
         "WHERE exam_type IS NULL OR btrim(exam_type) = ''",
         (),
+    )
+
+
+def _backfill_batch_jc(session: Any) -> None:
+    """空届次从批次名称里的「2027届」回填，再抄到还没有届次的试卷。"""
+    _must_write(
+        session,
+        "UPDATE tb_exam_batch SET jc = (regexp_match(batch_name, '([0-9]{4})届'))[1] "
+        "WHERE (jc IS NULL OR btrim(jc) = '') "
+        "AND batch_name ~ '[0-9]{4}届' "
+        "AND (regexp_match(batch_name, '([0-9]{4})届'))[1]::int BETWEEN 1990 AND 2099",
+        (),
+    )
+    _must_write(
+        session,
+        "UPDATE tb_exam e SET jc = b.jc "
+        "FROM tb_exam_batch b "
+        "WHERE e.exam_batch_id = b.id "
+        "AND b.jc IS NOT NULL AND btrim(b.jc) <> '' "
+        "AND (e.jc IS NULL OR btrim(e.jc) = '')",
+        (),
+    )
+
+
+def _sync_batch_jc(session: Any, batch_id: int, jc: str) -> None:
+    """届次以批次为准，冗余到该批次的试卷和成绩宽表。"""
+    _must_write(
+        session,
+        "UPDATE tb_exam SET jc = %s WHERE exam_batch_id = %s",
+        (jc, int(batch_id)),
+    )
+    overview_cols = _columns(session, "tb_score_overview")
+    if "jc" not in overview_cols or "exam_batch_id" not in overview_cols:
+        return
+    _must_write(
+        session,
+        "UPDATE tb_score_overview SET jc = %s WHERE exam_batch_id = %s",
+        (jc, int(batch_id)),
     )
 
 
@@ -888,6 +962,7 @@ def _batch_dict(row: tuple, actor: ExamActor) -> dict[str, Any]:
         "owner_id": _text(row[5]) if len(row) > 5 else None,
         "exam_type": kind,
         "exam_type_label": EXAM_TYPE_LABELS[kind],
+        "jc": _text(row[7]) if len(row) > 7 else None,
     }
     item["writable"] = batch_writable(item, actor)
     return item
@@ -896,7 +971,7 @@ def _batch_dict(row: tuple, actor: ExamActor) -> dict[str, Any]:
 _BATCH_LIST_SQL = (
     "SELECT b.id, b.batch_name, b.exam_time, "
     "(SELECT COUNT(*) FROM tb_exam e WHERE e.exam_batch_id = b.id), "
-    "b.school_id, b.owner_id, b.exam_type "
+    "b.school_id, b.owner_id, b.exam_type, b.jc "
     "FROM tb_exam_batch b"
 )
 
@@ -921,22 +996,23 @@ def create_exam_batch(
         raise ValueError("无权创建考试批次")
     name, when = normalize_batch_fields(data.get("batch_name"), data.get("exam_time"))
     kind = normalize_batch_exam_type(data.get("exam_type"))
+    cohort = normalize_batch_jc(data.get("jc"))
     school_id, owner_id = new_batch_owner(actor)
     with WriteDbSession(db_type, config) as session:
         _ensure_batch_scope(session)
         created = _one(
             session,
             "INSERT INTO tb_exam_batch "
-            "(batch_name, exam_time, school_id, owner_id, exam_type) "
-            "VALUES (%s, %s, %s, %s, %s) "
-            "RETURNING id, batch_name, exam_time, school_id, owner_id, exam_type",
-            (name, when, school_id, owner_id, kind),
+            "(batch_name, exam_time, school_id, owner_id, exam_type, jc) "
+            "VALUES (%s, %s, %s, %s, %s, %s) "
+            "RETURNING id, batch_name, exam_time, school_id, owner_id, exam_type, jc",
+            (name, when, school_id, owner_id, kind, cohort),
         )
         if created is None:
             raise ValueError("创建批次失败")
         session.commit()
     return _batch_dict(
-        (created[0], created[1], created[2], 0, created[3], created[4], created[5]),
+        (created[0], created[1], created[2], 0, created[3], created[4], created[5], created[6]),
         actor,
     )
 
@@ -1057,14 +1133,16 @@ def update_exam_batch(
         if current is None:
             return None
         kind = normalize_batch_exam_type(data.get("exam_type") or current[4], default_city=True)
+        cohort = normalize_batch_jc(data.get("jc"))
         _must_write(
             session,
-            "UPDATE tb_exam_batch SET batch_name = %s, exam_time = %s, exam_type = %s "
+            "UPDATE tb_exam_batch SET batch_name = %s, exam_time = %s, exam_type = %s, jc = %s "
             "WHERE id = %s",
-            (name, when, kind, int(batch_id)),
+            (name, when, kind, cohort, int(batch_id)),
         )
         _rename_batch_refs(session, int(batch_id), str(current[1] or ""), name)
         _sync_batch_exam_type(session, int(batch_id), kind, _text(current[2]))
+        _sync_batch_jc(session, int(batch_id), cohort)
         row = _one(
             session,
             _BATCH_LIST_SQL + " WHERE b.id = %s",

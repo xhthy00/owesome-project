@@ -14,6 +14,7 @@ from src.agent.education.exam_library import (
     new_batch_owner,
     normalize_batch_exam_type,
     normalize_batch_fields,
+    normalize_batch_jc,
     normalize_ownership,
     normalize_question_rows,
     stamp_exam_from_batch,
@@ -114,6 +115,13 @@ def test_paper_type_follows_the_batch_not_the_form():
     assert city_form["exam_type"] == "school"
     assert city_form["school_id"] == "B02"
     assert normalize_batch_exam_type("全市统考") == "city"
+    assert normalize_batch_jc("2027届高三10月月考") == "2027"
+    assert normalize_batch_jc(2027) == "2027"
+    try:
+        normalize_batch_jc("")
+        raise AssertionError("empty cohort should be rejected")
+    except ValueError as exc:
+        assert "届次" in str(exc)
     try:
         normalize_batch_exam_type("教师自建")
     except ValueError as exc:

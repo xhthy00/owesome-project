@@ -664,11 +664,13 @@ export const educationApi = {
 
   async createRawImportBatch(
     batchName: string,
-    examTime: string
+    examTime: string,
+    jc: string
   ): Promise<{ ok: boolean; message: string; data: ExamBatchOption | null }> {
     const fd = new FormData();
     fd.append("batch_name", batchName);
     fd.append("exam_time", examTime);
+    fd.append("jc", jc);
     const resp = await fetch(`${getApiBaseUrl()}/education/raw-score-import/batches`, {
       method: "POST",
       headers: await authHeaders(),
@@ -1031,6 +1033,7 @@ export interface ExamBatchOption {
   id: number;
   batch_name: string;
   exam_time?: string | null;
+  jc?: string | null;
 }
 
 export interface PaperQuestionDraft {

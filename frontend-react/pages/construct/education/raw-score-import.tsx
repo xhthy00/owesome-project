@@ -202,6 +202,7 @@ export default function RawScoreImportPage() {
   const [duplicateSubjects, setDuplicateSubjects] = useState<string[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
   const [newBatchName, setNewBatchName] = useState("");
+  const [newBatchJc, setNewBatchJc] = useState<number | null>(null);
   const [newExamTime, setNewExamTime] = useState<Dayjs | null>(null);
 
   const [overviewFile, setOverviewFile] = useState<File | null>(null);
@@ -275,8 +276,12 @@ export default function RawScoreImportPage() {
 
   useEffect(() => {
     if (jcManual) return;
-    const batchName = batches.find((b) => b.id === batchId)?.batch_name;
-    setJcYear(parseJcYearFromName(overviewFile?.name) ?? parseJcYearFromName(batchName));
+    const batch = batches.find((item) => item.id === batchId);
+    const batchJc = Number(batch?.jc);
+    setJcYear(
+      parseJcYearFromName(overviewFile?.name) ??
+        (Number.isInteger(batchJc) && batchJc >= 1990 ? batchJc : null)
+    );
   }, [overviewFile, batchId, batches, jcManual]);
 
   const resetImportState = () => {
@@ -302,13 +307,13 @@ export default function RawScoreImportPage() {
   const createBatch = async () => {
     const name = newBatchName.trim();
     const when = newExamTime ? newExamTime.format("YYYY-MM-DD") : "";
-    if (!name || !when) {
-      message.warning("请填写批次名称和考试时间");
+    if (!name || !when || newBatchJc == null) {
+      message.warning("请填写批次名称、届次和考试时间");
       return;
     }
     setLoading(true);
     try {
-      const res = await educationApi.createRawImportBatch(name, when);
+      const res = await educationApi.createRawImportBatch(name, when, String(newBatchJc));
       const created = res.data;
       if (!created?.id) {
         throw new Error(res.message || "创建批次失败");
@@ -322,6 +327,7 @@ export default function RawScoreImportPage() {
       await loadPapers(created.id);
       setCreateOpen(false);
       setNewBatchName("");
+      setNewBatchJc(null);
       setNewExamTime(null);
       if (!res.ok) {
         message.info("已存在，已为您选中");
@@ -851,7 +857,11 @@ export default function RawScoreImportPage() {
                   setJcYear(typeof value === "number" ? value : null);
                 }}
               />
-              <span className="text-xs text-slate-400">优先从宽表文件名识别，可手动修改</span>
+              <span className="text-xs text-slate-400">
+                须与考试批次届次一致
+                {selectedBatch?.jc ? `（本批次 ${selectedBatch.jc}届）` : ""}
+                。文件名或宽表中的届次不同时会拒绝导入。
+              </span>
             </div>
             <Space className="mt-4">
               <Button
@@ -1113,7 +1123,24 @@ export default function RawScoreImportPage() {
           <Input
             placeholder="批次名称"
             value={newBatchName}
-            onChange={(e) => setNewBatchName(e.target.value)}
+            onChange={(e) => {
+              const name = e.target.value;
+              setNewBatchName(name);
+              const matched = name.match(/(\d{4})届/);
+              const year = matched ? Number(matched[1]) : null;
+              if (year && year >= 1990 && year <= 2099 && newBatchJc == null) {
+                setNewBatchJc(year);
+              }
+            }}
+          />
+          <InputNumber
+            className="w-full"
+            min={1990}
+            max={2099}
+            precision={0}
+            placeholder="届次，如 2027"
+            value={newBatchJc ?? undefined}
+            onChange={(value) => setNewBatchJc(typeof value === "number" ? value : null)}
           />
           <DatePicker
             className="w-full"

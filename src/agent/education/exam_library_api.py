@@ -131,6 +131,7 @@ class BatchBody(BaseModel):
     batch_name: str
     exam_time: str | None = None
     exam_type: str | None = None
+    jc: str | int | None = None
 
 
 @router.get("/batches")

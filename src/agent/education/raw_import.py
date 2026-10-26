@@ -374,13 +374,13 @@ def list_writable_score_batches(
     own = str(school_id or "").strip()
     if see_all:
         sql = (
-            "SELECT id, batch_name, exam_time, school_id, exam_type FROM tb_exam_batch "
+            "SELECT id, batch_name, exam_time, school_id, exam_type, jc FROM tb_exam_batch "
             "ORDER BY exam_time DESC NULLS LAST, id DESC LIMIT 500"
         )
         params: tuple = ()
     elif str(edu_role or "").strip() == "school_admin" and own:
         sql = (
-            "SELECT id, batch_name, exam_time, school_id, exam_type FROM tb_exam_batch "
+            "SELECT id, batch_name, exam_time, school_id, exam_type, jc FROM tb_exam_batch "
             "WHERE exam_type = 'school' AND school_id = %s "
             "ORDER BY exam_time DESC NULLS LAST, id DESC LIMIT 500"
         )
@@ -401,6 +401,7 @@ def list_writable_score_batches(
             "id": row.get("id"),
             "batch_name": row.get("batch_name"),
             "exam_time": row.get("exam_time"),
+            "jc": row.get("jc"),
         }
         for row in visible
     ]
@@ -548,16 +549,19 @@ def _load_overview_dimensions(
     exam_batch_id: int,
     xx_values: set[str] | list[str],
 ) -> dict:
+    from src.agent.education.exam_library import ensure_exam_batch_scope
+
     tables = _table_names()
     batch_table = tables.get("exam_batch", "tb_exam_batch")
     school_table = tables.get("school", "tb_school")
     exam_table = tables.get("exam", "tb_exam")
     batch_id = int(exam_batch_id)
+    ensure_exam_batch_scope(db_type, config)
 
     ok, msg, result = execute_sql(
         db_type,
         config,
-        f"SELECT id, batch_name, exam_time FROM {batch_table} WHERE id = {batch_id}",
+        f"SELECT id, batch_name, exam_time, jc FROM {batch_table} WHERE id = {batch_id}",
     )
     if not ok:
         raise ValueError(msg)
@@ -993,6 +997,55 @@ def _normalize_jc_year(value: Any) -> int | None:
     return None
 
 
+def cohort_year(value: Any) -> str | None:
+    """把 ``2027`` / ``2027届`` / 带届次的名称收成四位年份。无法识别时返回空。"""
+    from src.agent.education.schema_mapping import normalize_jc_label
+
+    label = normalize_jc_label(str("" if value is None else value))
+    return label[:4] if label else None
+
+
+def import_jc_mismatch(
+    batch_jc: Any,
+    explicit: Any,
+    source_name: str | None,
+    rows: list[RawOverviewRow],
+) -> str | None:
+    """导入数据里的届次必须和考试批次一致。没有带届次时不算冲突。"""
+    expected = cohort_year(batch_jc)
+    if not expected:
+        return "请先在考试批次中维护届次"
+    supplied = cohort_year(explicit)
+    if supplied and supplied != expected:
+        return f"导入届次 {supplied}届 与考试批次届次 {expected}届 不一致"
+    file_year = _parse_jc_year(source_name)
+    if file_year and file_year != expected:
+        return f"文件名中的届次 {file_year}届 与考试批次届次 {expected}届 不一致"
+    bad_rows: list[int] = []
+    for row in rows:
+        raw = (row.others or {}).get("JC") or (row.others or {}).get("届次")
+        year = cohort_year(raw) if raw else None
+        if year and year != expected:
+            bad_rows.append(row.row_num)
+    if bad_rows:
+        shown = "、".join(str(number) for number in bad_rows[:5])
+        return f"宽表中的届次与考试批次届次 {expected}届 不一致（第 {shown} 行）"
+    return None
+
+
+def _checked_import_jc(
+    dims: dict,
+    explicit: Any,
+    source_name: str | None,
+    rows: list[RawOverviewRow],
+) -> tuple[str | None, str | None]:
+    batch = dims.get("batch") or {}
+    message = import_jc_mismatch(batch.get("jc"), explicit, source_name, rows)
+    if message:
+        return None, message
+    return cohort_year(batch.get("jc")), None
+
+
 def _resolve_overview_jc(explicit: Any = None, *names: str | None) -> str | None:
     year = _normalize_jc_year(explicit)
     if year is not None:
@@ -1208,8 +1261,9 @@ def preview_raw_overview_import(
     valid, val_errors = _validate_overview_rows(rows, dims, scope=scope)
     result.error_rows.extend(val_errors)
     result.valid_rows = len(valid)
-    batch_name = str((dims.get("batch") or {}).get("batch_name") or "")
-    resolved_jc = _resolve_overview_jc(jc, source_name, batch_name)
+    resolved_jc, mismatch = _checked_import_jc(dims, jc, source_name, valid)
+    if mismatch:
+        result.error_rows.append(ImportErrorRow(row=0, field="届次", message=mismatch))
     sample, resolved, columns = _preview_sample_and_resolved(
         valid, dims, excel_headers, jc=resolved_jc
     )
@@ -1249,12 +1303,9 @@ def execute_raw_overview_import(
         preview.error_rows = list(val_errors)
         preview.valid_rows = len(valid)
         return preview
-    batch_name = str((dims.get("batch") or {}).get("batch_name") or "")
-    resolved_jc = _resolve_overview_jc(jc, source_name, batch_name)
-    if not resolved_jc:
-        preview.error_rows.append(
-            ImportErrorRow(row=0, field="届次", message="请填写届次（四位年份），或使用含「xxxx届」的宽表文件名")
-        )
+    resolved_jc, mismatch = _checked_import_jc(dims, jc, source_name, valid)
+    if mismatch:
+        preview.error_rows.append(ImportErrorRow(row=0, field="届次", message=mismatch))
         return preview
     try:
         counts = _write_overview_to_db(db_type, config, valid, dims, jc=resolved_jc)

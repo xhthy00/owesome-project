@@ -1818,6 +1818,7 @@ async def create_raw_import_batch(
     request: Request,
     batch_name: str = Form(...),
     exam_time: str = Form(...),
+    jc: Optional[str] = Form(None),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
@@ -1833,6 +1834,7 @@ async def create_raw_import_batch(
         build_actor,
         ensure_exam_batch_scope,
         new_batch_owner,
+        normalize_batch_jc,
     )
     from system.crud.crud_user import get_user_by_id
 
@@ -1843,6 +1845,10 @@ async def create_raw_import_batch(
     actor = build_actor(user, scope)
     school_id, owner_id = new_batch_owner(actor)
     exam_type = "school" if school_id else "city"
+    try:
+        cohort = normalize_batch_jc(jc or name)
+    except ValueError as exc:
+        raise BadRequestException(str(exc)) from exc
     ensure_exam_batch_scope(db_type, config)
     with WriteDbSession(db_type, config) as session:
         ok, msg, data = session.execute_query(
@@ -1881,9 +1887,9 @@ async def create_raw_import_batch(
             )
         ok, msg, _ = session.execute_write(
             "INSERT INTO tb_exam_batch "
-            "(batch_name, exam_time, school_id, owner_id, exam_type) "
-            "VALUES (%s, %s, %s, %s, %s)",
-            (name, when, school_id, owner_id, exam_type),
+            "(batch_name, exam_time, school_id, owner_id, exam_type, jc) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (name, when, school_id, owner_id, exam_type, cohort),
         )
         if not ok:
             session.rollback()
@@ -1901,7 +1907,7 @@ async def create_raw_import_batch(
         raise BadRequestException("创建批次后未找到记录")
     rec = row2 if isinstance(row2, dict) else {cols2[i]: row2[i] for i in range(min(len(cols2), len(row2)))}
     return success_response(
-        data={"id": rec.get("id"), "batch_name": rec.get("batch_name"), "exam_time": rec.get("exam_time")}
+        data={"id": rec.get("id"), "batch_name": rec.get("batch_name"), "exam_time": rec.get("exam_time"), "jc": cohort}
     )
 
 

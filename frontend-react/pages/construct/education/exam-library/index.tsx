@@ -18,6 +18,18 @@ import {
 } from "@/api/examLibrary";
 
 const SUBJECTS = ["语文", "数学", "英语", "物理", "化学", "生物", "政治", "历史", "地理"];
+
+function yearFromBatchName(name: string): number | null {
+  const matched = name.match(/(\d{4})届/);
+  if (!matched) return null;
+  const year = Number(matched[1]);
+  return year >= 1990 && year <= 2099 ? year : null;
+}
+
+function cohortText(jc?: string | null): string {
+  if (!jc) return "";
+  return String(jc).endsWith("届") ? String(jc) : `${jc}届`;
+}
 const SUBJECT_SCORE: Record<string, number> = {
   语文: 150,
   数学: 150,
@@ -99,8 +111,14 @@ export default function ExamLibraryPage() {
   const [batchFormOpen, setBatchFormOpen] = useState(false);
   const [batchEditing, setBatchEditing] = useState<ExamBatchItem | null>(null);
   const [batchSaving, setBatchSaving] = useState(false);
-  const [batchForm] = Form.useForm<{ batch_name: string; exam_type: string; exam_time: Dayjs | null }>();
+  const [batchForm] = Form.useForm<{
+    batch_name: string;
+    exam_type: string;
+    exam_time: Dayjs | null;
+    jc: number | null;
+  }>();
   const examTypeValue = Form.useWatch("exam_type", form);
+  const examBatchIdValue = Form.useWatch("exam_batch_id", form);
   const canManageBatches = canManageExamBatches(currentUser);
   const canCreate = canCreateExam(currentUser);
   const canCreateBatches = canCreateBatch(currentUser);
@@ -148,7 +166,8 @@ export default function ExamLibraryPage() {
     batchForm.setFieldsValue({
       batch_name: "",
       exam_type: canManageBatches ? "city" : "school",
-      exam_time: null
+      exam_time: null,
+      jc: null
     });
     setBatchFormOpen(true);
   };
@@ -159,7 +178,8 @@ export default function ExamLibraryPage() {
     batchForm.setFieldsValue({
       batch_name: row.batch_name,
       exam_type: row.exam_type || "city",
-      exam_time: examDate ? dayjs(examDate) : null
+      exam_time: examDate ? dayjs(examDate) : null,
+      jc: Number(row.jc) || yearFromBatchName(row.batch_name)
     });
     setBatchFormOpen(true);
   };
@@ -178,7 +198,8 @@ export default function ExamLibraryPage() {
     const payload = {
       batch_name: values.batch_name.trim(),
       exam_time: values.exam_time ? values.exam_time.format("YYYY-MM-DD") : "",
-      exam_type: values.exam_type
+      exam_type: values.exam_type,
+      jc: String(values.jc)
     };
     setBatchSaving(true);
     try {
@@ -545,6 +566,13 @@ export default function ExamLibraryPage() {
               onChange={(batchId) => applyBatchType(batchId)}
             />
           </Form.Item>
+          <Form.Item label="届次" extra="届次由考试批次决定，此处仅展示。">
+            <Input
+              disabled
+              value={cohortText(batches.find((item) => item.id === examBatchIdValue)?.jc)}
+              placeholder="请先选择考试批次"
+            />
+          </Form.Item>
           {canManageBatches && examTypeValue === "school" ? (
             <Form.Item name="school_id" label="学校" extra="留空时使用当前账号所属学校">
               <Input />
@@ -590,6 +618,12 @@ export default function ExamLibraryPage() {
               dataIndex: "exam_type_label",
               width: 100,
               render: (value) => value || "全市统考"
+            },
+            {
+              title: "届次",
+              dataIndex: "jc",
+              width: 90,
+              render: (value) => cohortText(value) || "-"
             },
             { title: "考试时间", dataIndex: "exam_time", width: 120, render: (value) => value || "-" },
             { title: "试卷", dataIndex: "exam_count", width: 70 },
@@ -640,8 +674,29 @@ export default function ExamLibraryPage() {
         destroyOnClose
       >
         <Form form={batchForm} layout="vertical" className="mt-4">
-          <Form.Item name="batch_name" label="批次名称" rules={[{ required: true, message: "请填写批次名称" }]}>
-            <Input maxLength={255} placeholder="如 2027届高二6月期末" />
+          <Form.Item
+            name="batch_name"
+            label="批次名称"
+            rules={[{ required: true, message: "请填写批次名称" }]}
+          >
+            <Input
+              maxLength={255}
+              placeholder="如 2027届高二6月期末"
+              onChange={(event) => {
+                const year = yearFromBatchName(event.target.value);
+                if (year && batchForm.getFieldValue("jc") == null) {
+                  batchForm.setFieldValue("jc", year);
+                }
+              }}
+            />
+          </Form.Item>
+          <Form.Item
+            name="jc"
+            label="届次"
+            extra="同一批次下的试卷和成绩宽表都使用这个届次。"
+            rules={[{ required: true, message: "请填写届次" }]}
+          >
+            <InputNumber className="w-full" min={1990} max={2099} precision={0} placeholder="如 2027" />
           </Form.Item>
           <Form.Item
             name="exam_type"

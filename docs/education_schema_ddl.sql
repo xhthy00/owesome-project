@@ -25,19 +25,25 @@ ALTER TABLE tb_exam_batch
     ADD COLUMN IF NOT EXISTS owner_id VARCHAR(255);
 ALTER TABLE tb_exam_batch
     ADD COLUMN IF NOT EXISTS exam_type VARCHAR(16) DEFAULT 'city';
+ALTER TABLE tb_exam_batch
+    ADD COLUMN IF NOT EXISTS jc VARCHAR(16);
 
 COMMENT ON COLUMN tb_exam_batch.school_id IS '创建者所属学校。同校学校账号可维护；空值仅管理员和教育局可维护';
 COMMENT ON COLUMN tb_exam_batch.owner_id IS '创建者账号。创建者本人可维护该批次';
 COMMENT ON COLUMN tb_exam_batch.exam_type IS '考试类型：city 全市统考，school 学校自建。试卷冗余该值';
+COMMENT ON COLUMN tb_exam_batch.jc IS '届次，四位年份，如 2027。试卷和成绩宽表冗余该值';
 
 CREATE INDEX IF NOT EXISTS idx_exam_batch_exam_time ON tb_exam_batch (exam_time);
 CREATE UNIQUE INDEX IF NOT EXISTS uk_exam_batch_batch_name ON tb_exam_batch (batch_name);
 
 ALTER TABLE tb_exam
     ADD COLUMN IF NOT EXISTS exam_batch_id BIGINT;
+ALTER TABLE tb_exam
+    ADD COLUMN IF NOT EXISTS jc VARCHAR(16);
 
 COMMENT ON TABLE tb_exam IS '试卷基础信息表；一场批次下多科试卷，exam_score 为该科卷面满分';
 COMMENT ON COLUMN tb_exam.exam_batch_id IS '考试批次ID，关联 tb_exam_batch.id';
+COMMENT ON COLUMN tb_exam.jc IS '届次，冗余自 tb_exam_batch.jc';
 
 CREATE INDEX IF NOT EXISTS idx_exam_batch_id ON tb_exam (exam_batch_id);
 

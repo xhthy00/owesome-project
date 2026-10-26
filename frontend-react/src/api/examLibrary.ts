@@ -64,6 +64,7 @@ export interface ExamBatchItem {
   owner_id?: string | null;
   exam_type?: string | null;
   exam_type_label?: string | null;
+  jc?: string | null;
   writable?: boolean;
 }
 
@@ -194,10 +195,10 @@ export const examLibraryApi = {
   listBatches() {
     return send<ExamBatchItem[]>("/batches", { method: "GET" }, "加载考试批次失败");
   },
-  createBatch(payload: { batch_name: string; exam_time: string; exam_type: string }) {
+  createBatch(payload: { batch_name: string; exam_time: string; exam_type: string; jc: string }) {
     return send<ExamBatchItem>("/batches", { method: "POST", body: JSON.stringify(payload) }, "创建批次失败");
   },
-  updateBatch(id: number, payload: { batch_name: string; exam_time: string; exam_type: string }) {
+  updateBatch(id: number, payload: { batch_name: string; exam_time: string; exam_type: string; jc: string }) {
     return send<ExamBatchItem>(`/batches/${id}`, { method: "PUT", body: JSON.stringify(payload) }, "更新批次失败");
   },
   removeBatch(id: number) {

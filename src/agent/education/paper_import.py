@@ -137,7 +137,7 @@ def save_paper_outline(
         _ensure_batch_scope(session)
         batch = _one(
             session,
-            "SELECT id, batch_name, exam_time, exam_type, school_id "
+            "SELECT id, batch_name, exam_time, exam_type, school_id, jc "
             "FROM tb_exam_batch WHERE id = %s",
             (int(exam_batch_id),),
         )
@@ -148,6 +148,7 @@ def save_paper_outline(
         exam_name = batch_name
         batch_type = normalize_batch_exam_type(batch[3] if len(batch) > 3 else None, default_city=True)
         batch_school = str(batch[4]).strip() if len(batch) > 4 and batch[4] else ""
+        batch_jc = str(batch[5]).strip() if len(batch) > 5 and batch[5] else None
         existing = _all(
             session,
             "SELECT id FROM tb_exam WHERE exam_batch_id = %s AND subject = %s",
@@ -195,8 +196,8 @@ def save_paper_outline(
                 session,
                 "INSERT INTO tb_exam "
                 "(exam_name, exam_time, subject, exam_score, exam_type, exam_batch_id, "
-                "owner_id, school_id) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                "owner_id, school_id, jc) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
                 (
                     exam_name,
                     exam_time,
@@ -206,6 +207,7 @@ def save_paper_outline(
                     int(exam_batch_id),
                     owner_id,
                     paper_school,
+                    batch_jc,
                 ),
             )
             if created is None:
@@ -221,8 +223,8 @@ def save_paper_outline(
             _must_write(
                 session,
                 "UPDATE tb_exam SET exam_name = %s, exam_time = %s, exam_score = %s, "
-                "exam_type = %s, school_id = %s WHERE id = %s",
-                (exam_name, exam_time, float(exam_score), batch_type, paper_school, exam_id),
+                "exam_type = %s, school_id = %s, jc = %s WHERE id = %s",
+                (exam_name, exam_time, float(exam_score), batch_type, paper_school, batch_jc, exam_id),
             )
             _replace_questions(session, exam_id)
         for item in rows:
