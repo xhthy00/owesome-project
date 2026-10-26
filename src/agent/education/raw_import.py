@@ -279,13 +279,131 @@ def _normalize_id_str(value: Any) -> str:
     return text
 
 
-def assert_raw_import_role_allowed(scope: EduScope) -> str | None:
-    """原始成绩导入仅允许局端/校管理员；教师与学生一律拒绝。"""
+def assert_raw_import_role_allowed(
+    scope: EduScope, *, privileged: bool = False
+) -> str | None:
+    """原始成绩导入允许管理员、教育局和学校账号。教师与学生拒绝。"""
+    if privileged:
+        return None
     if not scope.edu_role:
         return "未配置教育角色，无法导入原始成绩"
     if scope.edu_role not in _ALLOWED_RAW_IMPORT_ROLES:
         return "仅局端管理员和校管理员可导入原始成绩"
     return None
+
+
+def score_import_batch_allowed(
+    batch: dict[str, Any],
+    *,
+    see_all: bool,
+    edu_role: str,
+    school_id: str,
+) -> bool:
+    """管理员和教育局可维护任意批次。学校账号只能维护本校的学校自建考试。"""
+    if see_all:
+        return True
+    if str(edu_role or "").strip() != "school_admin":
+        return False
+    if str(batch.get("exam_type") or "").strip() != "school":
+        return False
+    school = str(batch.get("school_id") or "").strip()
+    own = str(school_id or "").strip()
+    return bool(school) and school == own
+
+
+def _import_query_rows(session: Any, sql: str, params: tuple) -> list[dict[str, Any]]:
+    ok, msg, data = session.execute_query(sql, params)
+    if not ok:
+        raise ValueError(msg or "查询考试批次失败")
+    cols = list((data or {}).get("columns") or [])
+    rows: list[dict[str, Any]] = []
+    for row in (data or {}).get("rows") or []:
+        if isinstance(row, dict):
+            rows.append(row)
+        else:
+            rows.append({cols[i]: row[i] for i in range(min(len(cols), len(row)))})
+    return rows
+
+
+def fetch_score_import_batch(
+    db_type: str, config: dict[str, Any], exam_batch_id: int
+) -> dict[str, Any] | None:
+    """读取批次的学校和考试类型。批次不存在时返回 None。"""
+    from src.agent.education.exam_library import ensure_exam_batch_scope
+
+    ensure_exam_batch_scope(db_type, config)
+    with WriteDbSession(db_type, config) as session:
+        rows = _import_query_rows(
+            session,
+            "SELECT id, school_id, exam_type FROM tb_exam_batch WHERE id = %s",
+            (int(exam_batch_id),),
+        )
+    return rows[0] if rows else None
+
+
+def fetch_exam_import_batch_id(
+    db_type: str, config: dict[str, Any], exam_id: int
+) -> tuple[bool, int | None]:
+    """返回试卷是否存在，以及它所属的考试批次。"""
+    with WriteDbSession(db_type, config) as session:
+        rows = _import_query_rows(
+            session,
+            "SELECT exam_batch_id FROM tb_exam WHERE id = %s",
+            (int(exam_id),),
+        )
+    if not rows:
+        return False, None
+    raw = rows[0].get("exam_batch_id")
+    if raw is None or str(raw).strip() == "":
+        return True, None
+    return True, int(raw)
+
+
+def list_writable_score_batches(
+    db_type: str,
+    config: dict[str, Any],
+    *,
+    see_all: bool,
+    edu_role: str,
+    school_id: str,
+) -> list[dict[str, Any]]:
+    """成绩导入可选批次。学校账号只列出本校学校自建考试。"""
+    from src.agent.education.exam_library import ensure_exam_batch_scope
+
+    ensure_exam_batch_scope(db_type, config)
+    own = str(school_id or "").strip()
+    if see_all:
+        sql = (
+            "SELECT id, batch_name, exam_time, school_id, exam_type FROM tb_exam_batch "
+            "ORDER BY exam_time DESC NULLS LAST, id DESC LIMIT 500"
+        )
+        params: tuple = ()
+    elif str(edu_role or "").strip() == "school_admin" and own:
+        sql = (
+            "SELECT id, batch_name, exam_time, school_id, exam_type FROM tb_exam_batch "
+            "WHERE exam_type = 'school' AND school_id = %s "
+            "ORDER BY exam_time DESC NULLS LAST, id DESC LIMIT 500"
+        )
+        params = (own,)
+    else:
+        return []
+    with WriteDbSession(db_type, config) as session:
+        rows = _import_query_rows(session, sql, params)
+    visible = [
+        row
+        for row in rows
+        if score_import_batch_allowed(
+            row, see_all=see_all, edu_role=edu_role, school_id=school_id
+        )
+    ]
+    return [
+        {
+            "id": row.get("id"),
+            "batch_name": row.get("batch_name"),
+            "exam_time": row.get("exam_time"),
+        }
+        for row in visible
+    ]
 
 
 def resolve_edu_datasource_id(session: Any, workspace_oid: int) -> int | None:
@@ -669,14 +787,19 @@ def _validate_overview_rows(
 
     exams_by_subject = dims.get("exams_by_subject") or {}
     duplicate_subjects = list(dims.get("duplicate_subjects") or [])
-    missing = [s for s in _REQUIRED_SUBJECTS if s not in exams_by_subject]
-    if missing or duplicate_subjects:
-        parts: list[str] = []
-        if missing:
-            parts.append(f"批次缺少试卷: {', '.join(missing)}，请先补齐试卷维度")
-        if duplicate_subjects:
-            parts.append(f"批次存在重复试卷: {', '.join(duplicate_subjects)}")
-        return [], [ImportErrorRow(row=0, field="试卷", message="；".join(parts))]
+    if duplicate_subjects:
+        listed = ", ".join(duplicate_subjects)
+        return [], [
+            ImportErrorRow(
+                row=0,
+                field="试卷",
+                message=f"批次存在重复试卷: {listed}，请先处理同科多卷",
+            )
+        ]
+    if not exams_by_subject:
+        return [], [
+            ImportErrorRow(row=0, field="试卷", message="该批次还没有试卷，请先导入至少一科")
+        ]
 
     schools_by_name = dims.get("schools_by_name") or {}
     batch = dims.get("batch") or {}
@@ -916,6 +1039,8 @@ def _build_score_rows(
             if not _should_write_subject_score(subject, score, xkkm):
                 continue
             exam = exams_by_subject.get(subject) or {}
+            if exam.get("id") is None:
+                continue
             rec = {
                 "exam_id": exam.get("id"),
                 "student_id": anon,
@@ -1820,6 +1945,10 @@ __all__ = [
     "_validate_detail_rows",
     "_validate_overview_rows",
     "assert_raw_import_role_allowed",
+    "score_import_batch_allowed",
+    "fetch_score_import_batch",
+    "fetch_exam_import_batch_id",
+    "list_writable_score_batches",
     "resolve_edu_datasource_id",
     "execute_raw_detail_import",
     "execute_raw_overview_import",

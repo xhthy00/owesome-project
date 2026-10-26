@@ -644,8 +644,9 @@ export const educationApi = {
     return body.data;
   },
 
-  async listRawImportBatches(): Promise<ExamBatchOption[]> {
-    const resp = await fetch(`${getApiBaseUrl()}/education/raw-score-import/batches`, {
+  async listRawImportBatches(maintain = false): Promise<ExamBatchOption[]> {
+    const query = maintain ? "?maintain=true" : "";
+    const resp = await fetch(`${getApiBaseUrl()}/education/raw-score-import/batches${query}`, {
       headers: await authHeaders(),
       signal: rawImportTimeoutSignal()
     });

@@ -1659,6 +1659,7 @@ def _prepare_raw_import(current_user: UserResponse, workspace_oid: int):
         resolve_edu_datasource_id,
     )
     from src.agent.resource.tool.business import _load_datasource
+    from system.authz import is_platform_admin
     from system.crud.crud_user import get_user_by_id
 
     with get_db_session() as session:
@@ -1668,11 +1669,35 @@ def _prepare_raw_import(current_user: UserResponse, workspace_oid: int):
         assert_datasource_accessible(session, current_user, ds_id, workspace_oid)
         user = get_user_by_id(session, int(current_user.id))
         scope = parse_edu_scope(user)
-        err = assert_raw_import_role_allowed(scope)
+        privileged = bool(is_platform_admin(user))
+        see_all = privileged or scope.edu_role == "bureau_admin"
+        err = assert_raw_import_role_allowed(scope, privileged=privileged)
         if err:
             raise ForbiddenException(err)
     db_type, config, _ = _load_datasource(ds_id, workspace_oid)
-    return ds_id, scope, db_type, config
+    return ds_id, scope, db_type, config, see_all
+
+
+def _require_score_import_batch(
+    see_all: bool, scope, db_type: str, config: dict, exam_batch_id: int
+) -> None:
+    """学校账号写入或查看导入材料时，批次必须是本校的学校自建考试。"""
+    from common.exceptions.base import ForbiddenException
+    from src.agent.education.raw_import import fetch_score_import_batch, score_import_batch_allowed
+
+    try:
+        batch = fetch_score_import_batch(db_type, config, int(exam_batch_id))
+    except ValueError as exc:
+        raise BadRequestException(str(exc)) from exc
+    if batch is None:
+        raise BadRequestException("考试批次不存在")
+    if not score_import_batch_allowed(
+        batch,
+        see_all=see_all,
+        edu_role=getattr(scope, "edu_role", "") or "",
+        school_id=getattr(scope, "school_id", "") or "",
+    ):
+        raise ForbiddenException("只能维护本校的学校自建考试")
 
 
 def _read_raw_upload_file(file: UploadFile) -> bytes:
@@ -1742,12 +1767,27 @@ def _raw_execute_error(result, payload: dict) -> dict:
 @audit_access(query_arg="current_user.id")
 async def list_raw_import_batches(
     request: Request,
+    maintain: bool = Query(False),
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     from datasource.db.db import execute_sql
 
-    _ds_id, _scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
+    if maintain:
+        from src.agent.education.raw_import import list_writable_score_batches
+
+        try:
+            rows = list_writable_score_batches(
+                db_type,
+                config,
+                see_all=see_all,
+                edu_role=scope.edu_role,
+                school_id=scope.school_id,
+            )
+        except ValueError as exc:
+            raise BadRequestException(str(exc)) from exc
+        return success_response(data={"batches": rows})
     ok, msg, data = execute_sql(
         db_type,
         config,
@@ -1787,7 +1827,7 @@ async def create_raw_import_batch(
     when = (exam_time or "").strip()
     if not name:
         raise BadRequestException("批次名称不能为空")
-    _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
     from common.core.database import get_db_session
     from src.agent.education.exam_library import (
         build_actor,
@@ -1806,7 +1846,8 @@ async def create_raw_import_batch(
     ensure_exam_batch_scope(db_type, config)
     with WriteDbSession(db_type, config) as session:
         ok, msg, data = session.execute_query(
-            "SELECT id, batch_name, exam_time FROM tb_exam_batch WHERE batch_name = %s",
+            "SELECT id, batch_name, exam_time, school_id, exam_type "
+            "FROM tb_exam_batch WHERE batch_name = %s",
             (name,),
         )
         if not ok:
@@ -1820,6 +1861,15 @@ async def create_raw_import_batch(
                 if isinstance(row, dict)
                 else {cols[i]: row[i] for i in range(min(len(cols), len(row)))}
             )
+            from src.agent.education.raw_import import score_import_batch_allowed
+
+            if not score_import_batch_allowed(
+                rec,
+                see_all=see_all,
+                edu_role=scope.edu_role,
+                school_id=scope.school_id,
+            ):
+                raise ForbiddenException("只能维护本校的学校自建考试")
             return error_response(
                 code=400,
                 message=f"批次『{name}』已存在",
@@ -1872,7 +1922,8 @@ async def list_raw_import_papers(
         _overview_import_status,
     )
 
-    _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
+    _require_score_import_batch(see_all, scope, db_type, config, int(exam_batch_id))
     ok, msg, data = execute_sql(
         db_type,
         config,
@@ -1941,7 +1992,7 @@ async def download_raw_import_template(
         load_raw_detail_template_meta,
     )
 
-    _ds_id, _scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
     name = (kind or "").strip().lower()
     if name == "overview":
         payload = build_raw_overview_template()
@@ -1949,6 +2000,19 @@ async def download_raw_import_template(
     elif name == "detail":
         if exam_id is None:
             raise BadRequestException("请选择科目后再下载小题分模板")
+        from src.agent.education.raw_import import fetch_exam_import_batch_id
+
+        try:
+            exists, linked_batch = fetch_exam_import_batch_id(db_type, config, int(exam_id))
+        except ValueError as exc:
+            raise BadRequestException(str(exc)) from exc
+        if not exists:
+            raise BadRequestException("试卷不存在")
+        if linked_batch is None:
+            if not see_all:
+                raise ForbiddenException("只能维护本校的学校自建考试")
+        else:
+            _require_score_import_batch(see_all, scope, db_type, config, linked_batch)
         try:
             subject, questions = load_raw_detail_template_meta(db_type, config, int(exam_id))
         except ValueError as e:
@@ -1984,7 +2048,8 @@ async def preview_raw_overview(
     from src.agent.education.raw_import import preview_raw_overview_import
 
     file_bytes = _read_raw_upload_file(file)
-    _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
+    _require_score_import_batch(see_all, scope, db_type, config, int(exam_batch_id))
     result = preview_raw_overview_import(
         file_bytes, exam_batch_id, scope, db_type, config, jc=jc, source_name=file.filename
     )
@@ -2005,7 +2070,8 @@ async def execute_raw_overview(
     from src.agent.education.raw_import import execute_raw_overview_import
 
     file_bytes = _read_raw_upload_file(file)
-    ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
+    _require_score_import_batch(see_all, scope, db_type, config, int(exam_batch_id))
     result = await asyncio.to_thread(
         execute_raw_overview_import,
         file_bytes,
@@ -2045,7 +2111,8 @@ async def preview_raw_detail(
     from src.agent.education.raw_import import preview_raw_detail_import
 
     file_bytes = _read_raw_upload_file(file)
-    _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
+    _require_score_import_batch(see_all, scope, db_type, config, int(exam_batch_id))
     result = preview_raw_detail_import(file_bytes, exam_batch_id, exam_id, scope, db_type, config)
     return success_response(data=_raw_result_payload(result))
 
@@ -2063,7 +2130,8 @@ async def execute_raw_detail(
     from src.agent.education.raw_import import execute_raw_detail_import
 
     file_bytes = _read_raw_upload_file(file)
-    _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
+    _require_score_import_batch(see_all, scope, db_type, config, int(exam_batch_id))
     result = execute_raw_detail_import(file_bytes, exam_batch_id, exam_id, scope, db_type, config)
     payload = _raw_result_payload(result)
     if result.error_rows:
@@ -2207,7 +2275,7 @@ async def execute_paper_import(
 ) -> dict:
     from src.agent.education.paper_import import save_paper_outline
 
-    _ds_id, scope, db_type, config = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config, _see_all = _prepare_raw_import(current_user, workspace_oid)
     from common.core.database import get_db_session
     from src.agent.education.exam_library import build_actor
     from system.crud.crud_user import get_user_by_id

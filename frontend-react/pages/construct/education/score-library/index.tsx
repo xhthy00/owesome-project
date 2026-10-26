@@ -4,6 +4,7 @@ import type { ColumnsType } from "antd/es/table";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { educationApi, type ExamBatchOption } from "@/api/education";
+import { getCurrentUser } from "@/api/auth";
 import {
   scoreLibraryApi,
   type ScoreDetailItem,
@@ -190,6 +191,7 @@ export default function ScoreLibraryPage() {
   const [total, setTotal] = useState(0);
   const [rows, setRows] = useState<ScoreLibraryItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [schoolScoped, setSchoolScoped] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailWho, setDetailWho] = useState("");
@@ -219,6 +221,15 @@ export default function ScoreLibraryPage() {
       setLoading(false);
     }
   }, [examBatchId, school, grade, className, track, subject, student, page, pageSize]);
+
+  useEffect(() => {
+    void getCurrentUser()
+      .then((user) => {
+        const role = user.edu_scope?.edu_role || "";
+        setSchoolScoped(role === "school_admin" && !user.is_platform_admin && !user.is_super_admin);
+      })
+      .catch(() => setSchoolScoped(false));
+  }, []);
 
   useEffect(() => {
     void load();
@@ -399,6 +410,7 @@ export default function ScoreLibraryPage() {
                 }}
               />
             </FilterField>
+            {schoolScoped ? null : (
             <FilterField label="学校" width="w-[200px]">
               <Select
                 allowClear
@@ -415,6 +427,7 @@ export default function ScoreLibraryPage() {
                 }}
               />
             </FilterField>
+            )}
             <FilterField label="年级">
               <Select
                 allowClear

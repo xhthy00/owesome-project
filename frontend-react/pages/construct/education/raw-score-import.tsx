@@ -63,9 +63,9 @@ const KPI_SURFACE =
   "h-full rounded-2xl border border-[#e2e8f0] bg-gradient-to-br from-white via-[#fafcff] to-[#f1f6ff] p-4 shadow-[0_2px_14px_rgba(15,23,42,0.06)] dark:border-[#334155] dark:from-[#141923] dark:via-[#11161f] dark:to-[#0f141c]";
 
 const STEP_META = [
-  { title: "选择考试批次", description: "确认 9 科试卷齐全" },
+  { title: "选择考试批次", description: "确认已有试卷" },
   { title: "导入成绩宽表", description: "全市/本校成绩宽表" },
-  { title: "导入各科小题分", description: "逐科上传小题分文件" }
+  { title: "导入各科小题分", description: "按已有试卷逐科上传" }
 ];
 
 function guessSubjectFromFilename(name: string): string {
@@ -104,6 +104,17 @@ function sortDetailPapers(list: RawPaperOption[]): RawPaperOption[] {
     if (importedDelta !== 0) return importedDelta;
     return rank(a.subject) - rank(b.subject);
   });
+}
+
+function orderedSubjects(list: RawPaperOption[]): string[] {
+  const rank = (subject: string) => {
+    const index = DETAIL_SUBJECT_ORDER.indexOf(subject);
+    return index === -1 ? DETAIL_SUBJECT_ORDER.length : index;
+  };
+  return [...list]
+    .sort((a, b) => rank(a.subject) - rank(b.subject))
+    .map((item) => item.subject)
+    .filter(Boolean);
 }
 
 function paperLabel(paper: RawPaperOption): string {
@@ -197,7 +208,8 @@ export default function RawScoreImportPage() {
   const papersReqId = useRef(0);
 
   const papersReady =
-    Boolean(batchId) && missingSubjects.length === 0 && duplicateSubjects.length === 0 && papers.length > 0;
+    Boolean(batchId) && duplicateSubjects.length === 0 && papers.length > 0;
+  const readySubjectText = orderedSubjects(papers).join("、");
   const overviewReady = overviewDone || Boolean(dbOverview?.imported);
 
   const errorColumns: ColumnsType<ScoreImportErrorRow> = useMemo(
@@ -212,7 +224,7 @@ export default function RawScoreImportPage() {
   const loadBatches = useCallback(async () => {
     setLoading(true);
     try {
-      const items = await educationApi.listRawImportBatches();
+      const items = await educationApi.listRawImportBatches(true);
       setBatches(items);
     } catch (err) {
       message.error(err instanceof Error ? err.message : "加载批次失败");
@@ -691,7 +703,7 @@ export default function RawScoreImportPage() {
             disabled: !canVisitStep(idx),
             description:
               idx === 0 && papersReady
-                ? "9 科齐全"
+                ? `已有 ${papers.length} 科试卷`
                 : idx === 1 && overviewReady
                   ? "已导入"
                   : s.description
@@ -702,7 +714,7 @@ export default function RawScoreImportPage() {
         {step === 0 ? (
           <div className={PANEL_CARD}>
             <div className="mb-4 rounded-xl border border-[#bfdbfe] bg-[#eff6ff] p-4 text-sm text-[#1d4ed8] dark:border-[#1e3a5f] dark:bg-[#1e3a5f]/40 dark:text-[#93c5fd]">
-              导入顺序：先导入成绩宽表，再逐科导入小题分。请先确认语数英物化生史政地 9 科试卷已建好。宽表成功后会扫描异常提醒，不会重算达线。
+              导入顺序：先导入成绩宽表，再按已有试卷导入小题分。批次里已建哪科试卷，就可以导入该科成绩；缺卷科目可以以后补。宽表成功后会扫描异常提醒，不会重算达线。
             </div>
             <Space direction="vertical" size="middle" className="w-full max-w-2xl">
               <div>
@@ -727,36 +739,32 @@ export default function RawScoreImportPage() {
                 <Alert type="info" showIcon message="正在加载试卷…" />
               ) : papersStatus === "failed" ? (
                 <Alert type="warning" showIcon message="试卷加载失败，请刷新后重试" />
-              ) : missingSubjects.length > 0 || duplicateSubjects.length > 0 ? (
+              ) : duplicateSubjects.length > 0 ? (
                 <Alert
                   type="error"
                   showIcon
-                  message="试卷不齐或存在同科多卷，无法进入宽表导入"
+                  message="存在同科多卷，无法进入宽表导入"
+                  description={<div>同科多卷：{duplicateSubjects.join("、")}</div>}
+                />
+              ) : papersReady ? (
+                <Alert
+                  type={missingSubjects.length > 0 ? "info" : "success"}
+                  showIcon
+                  message={
+                    overviewReady
+                      ? `已有${readySubjectText}试卷，宽表已导入，可以导入这些科目的小题分`
+                      : `已有${readySubjectText}试卷，可以导入成绩宽表和这些科目的小题分`
+                  }
                   description={
                     <div>
                       {missingSubjects.length > 0 ? (
                         <div>
-                          缺科：{missingSubjects.join("、")}。
-                          <Link href="/construct/education/exam-library/import">去试卷库导入</Link>
+                          尚未建卷：{missingSubjects.join("、")}。这些科目的小题分等试卷建好后再导入。
+                          <Link href="/construct/education/exam-library">去试卷库</Link>
                         </div>
                       ) : null}
-                      {duplicateSubjects.length > 0 ? (
-                        <div>同科多卷：{duplicateSubjects.join("、")}</div>
-                      ) : null}
+                      {overviewReady && dbOverview ? <div>{overviewImportedHint(dbOverview)}</div> : null}
                     </div>
-                  }
-                />
-              ) : papersReady ? (
-                <Alert
-                  type="success"
-                  showIcon
-                  message={
-                    overviewReady
-                      ? "9 科试卷齐全，宽表已导入，可直接去导入小题分"
-                      : "9 科试卷齐全，可以导入宽表"
-                  }
-                  description={
-                    overviewReady && dbOverview ? overviewImportedHint(dbOverview) : undefined
                   }
                 />
               ) : (

@@ -39,6 +39,7 @@ from src.agent.education.raw_import import (
     execute_raw_overview_import,
     preview_raw_detail_import,
     preview_raw_overview_import,
+    score_import_batch_allowed,
 )
 
 _SUBJECTS = ("语文", "数学", "英语", "物理", "化学", "生物", "历史", "政治", "地理")
@@ -213,6 +214,25 @@ def test_raw_import_role_rejects_teacher():
     assert teacher_err
     assert assert_raw_import_role_allowed(EduScope(edu_role="bureau_admin")) is None
     assert assert_raw_import_role_allowed(EduScope(edu_role="school_admin")) is None
+    assert assert_raw_import_role_allowed(EduScope(), privileged=True) is None
+
+
+def test_school_score_import_only_own_school_batch():
+    own = {"school_id": "GZ_A", "exam_type": "school"}
+    city = {"school_id": None, "exam_type": "city"}
+    other = {"school_id": "GZ_B", "exam_type": "school"}
+    school = dict(see_all=False, edu_role="school_admin", school_id="GZ_A")
+
+    assert score_import_batch_allowed(own, **school)
+    assert not score_import_batch_allowed(city, **school)
+    assert not score_import_batch_allowed(other, **school)
+    assert not score_import_batch_allowed(
+        {"school_id": None, "owner_id": "exvwji03", "exam_type": "city"},
+        **school,
+    )
+    assert score_import_batch_allowed(city, see_all=True, edu_role="bureau_admin", school_id="")
+    assert score_import_batch_allowed(own, see_all=True, edu_role="", school_id="")
+    assert not score_import_batch_allowed(own, see_all=False, edu_role="teacher", school_id="GZ_A")
 
 
 def test_parse_overview_basic_two_rows():

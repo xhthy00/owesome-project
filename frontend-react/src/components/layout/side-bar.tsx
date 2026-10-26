@@ -214,14 +214,15 @@ export default function SideBar() {
 
   const visibleResourceRoutes = useMemo(() => {
     const eduRole = currentUser?.edu_scope?.edu_role || "";
-    const canSeeScoreImport =
+    const canSeeScoreLibrary =
       isPlatformAdmin ||
       Boolean(currentUser?.is_super_admin) ||
-      eduRole === "bureau_admin";
+      eduRole === "bureau_admin" ||
+      eduRole === "school_admin";
     if (!isPlatformAdmin && menuVisibility.resource === false) return [];
     return resourceSubRoutes.filter((item) => {
       if (!isPlatformAdmin && menuVisibility[item.key] === false) return false;
-      if (!canSeeScoreImport && item.key === "raw-score-import") return false;
+      if (!canSeeScoreLibrary && item.key === "raw-score-import") return false;
       if (eduRole === "student" && item.key === "exam-library") return false;
       return true;
     });
