@@ -24,7 +24,10 @@ __all__ = [
     "bars_to_wide_row",
     "ensure_table",
     "exam_batch_id_from_bars",
+    "delete_fraction_bar",
+    "fraction_bar_access",
     "list_fraction_bars",
+    "match_fraction_batch",
     "recompute_exams",
     "recompute_if_bars_exist",
     "upsert_fraction_bar_and_recompute",
@@ -351,9 +354,13 @@ def _resolve_exam_batch(session, exam_batch_id: int) -> str:
 
 
 def _load_exam_batches(session) -> list[dict[str, Any]]:
+    from src.agent.education.exam_library import _ensure_batch_scope
+
+    _ensure_batch_scope(session)
     ok, rows, _ = _query_dicts(
         session,
-        "SELECT id, batch_name FROM tb_exam_batch ORDER BY id DESC LIMIT 500",
+        "SELECT id, batch_name, exam_type, school_id, owner_id FROM tb_exam_batch "
+        "ORDER BY exam_time DESC NULLS LAST, id DESC LIMIT 500",
     )
     if not ok:
         return []
@@ -363,8 +370,76 @@ def _load_exam_batches(session) -> list[dict[str, Any]]:
         name = _str(pick_col(row, "batch_name", "exam_name", "name"))
         if bid is None or not name:
             continue
-        out.append({"id": bid, "batch_name": name})
+        out.append(
+            {
+                "id": bid,
+                "batch_name": name,
+                "exam_type": _str(pick_col(row, "exam_type")) or None,
+                "school_id": _str(pick_col(row, "school_id")) or None,
+                "owner_id": _str(pick_col(row, "owner_id")) or None,
+            }
+        )
     return out
+
+
+def match_fraction_batch(
+    exam_name: str,
+    exam_batch_id: int | None,
+    batches: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """优先用仍存在的批次编号。编号悬空时再按批次名称对齐。"""
+    bid = _int_id(exam_batch_id)
+    if bid is not None:
+        for batch in batches:
+            if _int_id(batch.get("id")) == bid:
+                return batch
+    name = _str(exam_name)
+    if not name:
+        return None
+    for batch in batches:
+        if _str(batch.get("batch_name")) == name:
+            return batch
+    return None
+
+
+def fraction_bar_access(
+    exam_name: str,
+    exam_batch_id: int | None,
+    batches: list[dict[str, Any]],
+    actor: Any,
+) -> tuple[bool, bool]:
+    """返回 (visible, writable)。没有对应批次的分数线按统考查看，不能由学校账号维护。"""
+    if actor is None or getattr(actor, "see_all", False):
+        return True, True
+    batch = match_fraction_batch(exam_name, exam_batch_id, batches)
+    if batch is None:
+        if getattr(actor, "edu_role", "") in ("school_admin", "teacher"):
+            return True, False
+        return False, False
+    from src.agent.education.exam_library import batch_visible, batch_writable
+
+    return batch_visible(batch, actor), batch_writable(batch, actor)
+
+
+def _indicator_delete_sql(
+    exam_name: str,
+    stored_batch_id: int | None,
+    batch: dict[str, Any] | None,
+) -> tuple[str, tuple]:
+    """按考试名称清除指标。批次编号与名称一致时，一并清掉该批次编号下的指标。"""
+    exam = _str(exam_name)
+    linked = (
+        batch is not None
+        and stored_batch_id is not None
+        and _int_id(batch.get("id")) == stored_batch_id
+        and _str(batch.get("batch_name")) == exam
+    )
+    if linked:
+        return (
+            "DELETE FROM tb_score_indicator WHERE exam_name = %s OR exam_batch_id = %s",
+            (exam, int(stored_batch_id)),
+        )
+    return ("DELETE FROM tb_score_indicator WHERE exam_name = %s", (exam,))
 
 
 def _upsert_wide_fraction_bar(session, db_type: str, exam_name: str, wide: dict[str, Any], columns: list[str]) -> str:
@@ -492,7 +567,11 @@ def _recompute_one(
     }
 
 
-def list_fraction_bars(db_type: str, config: dict[str, Any]) -> dict[str, Any]:
+def list_fraction_bars(
+    db_type: str,
+    config: dict[str, Any],
+    actor: Any = None,
+) -> dict[str, Any]:
     from src.datasource.db.db import WriteDbSession
 
     with WriteDbSession(db_type, config) as session:
@@ -500,10 +579,27 @@ def list_fraction_bars(db_type: str, config: dict[str, Any]) -> dict[str, Any]:
         rows = _load_bar_rows(session)
         batches = _load_exam_batches(session)
     catalog = _line_catalog_for_columns(columns)
+    visible_batches = []
+    for batch in batches:
+        visible, writable = fraction_bar_access(batch["batch_name"], batch["id"], batches, actor)
+        if not visible:
+            continue
+        visible_batches.append(
+            {
+                "id": batch["id"],
+                "batch_name": batch["batch_name"],
+                "exam_type": batch.get("exam_type"),
+                "writable": writable,
+            }
+        )
     exams: list[dict[str, Any]] = []
     for row in rows:
         exam = _str(pick_col(row, "exam_name", "exam", "ksmc"))
         if not exam:
+            continue
+        batch_id = _int_id(pick_col(row, "exam_batch_id"))
+        visible, writable = fraction_bar_access(exam, batch_id, batches, actor)
+        if not visible:
             continue
         lines: list[dict[str, Any]] = []
         for col, val in row.items():
@@ -524,7 +620,8 @@ def list_fraction_bars(db_type: str, config: dict[str, Any]) -> dict[str, Any]:
         exams.append(
             {
                 "exam_name": exam,
-                "exam_batch_id": _int_id(pick_col(row, "exam_batch_id")),
+                "exam_batch_id": batch_id,
+                "writable": writable,
                 "lines": lines,
             }
         )
@@ -533,7 +630,7 @@ def list_fraction_bars(db_type: str, config: dict[str, Any]) -> dict[str, Any]:
         "columns": columns,
         "line_catalog": catalog,
         "exams": exams,
-        "batches": batches,
+        "batches": visible_batches,
     }
 
 
@@ -544,16 +641,23 @@ def upsert_fraction_bar_and_recompute(
     exam_name: str = "",
     lines: list[dict[str, Any]],
     exam_batch_id: int | None = None,
+    actor: Any = None,
 ) -> dict[str, Any]:
     from src.datasource.db.db import WriteDbSession
 
     with WriteDbSession(db_type, config) as session:
         exam = _str(exam_name)
         batch_id = _int_id(exam_batch_id)
+        batches = _load_exam_batches(session)
         if batch_id is not None:
             exam = _resolve_exam_batch(session, batch_id)
         if not exam:
             raise ValueError("请选择考试")
+        visible, writable = fraction_bar_access(exam, batch_id, batches, actor)
+        if actor is not None and not visible:
+            raise ValueError("考试批次不存在")
+        if actor is not None and not writable:
+            raise ValueError("无权维护这场考试的预测分数线")
         columns = _probe_columns(session, "tb_fraction_bar")
         if not columns:
             raise RuntimeError("无法读取 tb_fraction_bar 列")
@@ -566,13 +670,97 @@ def upsert_fraction_bar_and_recompute(
     return stats
 
 
+def _find_bar_row(
+    rows: list[dict[str, Any]],
+    exam_name: str,
+    exam_batch_id: int | None,
+) -> dict[str, Any] | None:
+    name = _str(exam_name)
+    bid = _int_id(exam_batch_id)
+    for row in rows:
+        row_name = _str(pick_col(row, "exam_name", "exam", "ksmc"))
+        row_bid = _int_id(pick_col(row, "exam_batch_id"))
+        if bid is not None and row_bid == bid and (not name or row_name == name):
+            return row
+    if name:
+        for row in rows:
+            if _str(pick_col(row, "exam_name", "exam", "ksmc")) == name:
+                return row
+    return None
+
+
+def _write_count(session, sql: str, params: tuple) -> int:
+    ok, msg, data = session.execute_write(sql, params)
+    if not ok:
+        raise RuntimeError(msg or "删除失败")
+    return int((data or {}).get("row_count") or 0)
+
+
+def delete_fraction_bar(
+    db_type: str,
+    config: dict[str, Any],
+    *,
+    exam_name: str = "",
+    exam_batch_id: int | None = None,
+    actor: Any = None,
+) -> dict[str, Any] | None:
+    """删除一条预测分数线，并清除 tb_score_indicator 中与该考试关联的指标。"""
+    from src.datasource.db.db import WriteDbSession
+
+    with WriteDbSession(db_type, config) as session:
+        columns = _probe_columns(session, "tb_fraction_bar")
+        exam_col = _exam_col(columns)
+        if not exam_col:
+            raise RuntimeError("无法读取 tb_fraction_bar 列")
+        rows = _load_bar_rows(session)
+        target = _find_bar_row(rows, exam_name, exam_batch_id)
+        if target is None:
+            return None
+        exam = _str(pick_col(target, "exam_name", "exam", "ksmc"))
+        stored_batch_id = _int_id(pick_col(target, "exam_batch_id"))
+        batches = _load_exam_batches(session)
+        visible, writable = fraction_bar_access(exam, stored_batch_id, batches, actor)
+        if actor is not None and not visible:
+            return None
+        if actor is not None and not writable:
+            raise ValueError("无权维护这场考试的预测分数线")
+        batch_col = _batch_id_col(columns)
+        removed = 0
+        if batch_col and stored_batch_id is not None:
+            removed = _write_count(
+                session,
+                f"DELETE FROM tb_fraction_bar WHERE {_quote(batch_col, db_type)} = %s "
+                f"AND {_quote(exam_col, db_type)} = %s",
+                (stored_batch_id, exam),
+            )
+        if not removed:
+            removed = _write_count(
+                session,
+                f"DELETE FROM tb_fraction_bar WHERE {_quote(exam_col, db_type)} = %s",
+                (exam,),
+            )
+        ensure_table(session, db_type)
+        batch = match_fraction_batch(exam, stored_batch_id, batches)
+        indicator_sql, indicator_params = _indicator_delete_sql(exam, stored_batch_id, batch)
+        indicator_rows = _write_count(session, indicator_sql, indicator_params)
+        session.commit()
+    return {
+        "exam_name": exam,
+        "exam_batch_id": stored_batch_id,
+        "removed": removed,
+        "indicator_rows": indicator_rows,
+    }
+
+
 def recompute_exams(
     db_type: str,
     config: dict[str, Any],
     exam_names: list[str] | None = None,
+    actor: Any = None,
 ) -> dict[str, Any]:
     from src.datasource.db.db import WriteDbSession
 
+    explicit = bool(exam_names)
     with WriteDbSession(db_type, config) as session:
         bar_rows = _load_bar_rows(session)
         bars_all = normalize_fraction_bars(bar_rows)
@@ -580,12 +768,25 @@ def recompute_exams(
         targets = [_str(x) for x in (exam_names or []) if _str(x)]
         if not targets:
             targets = available
+        batches = _load_exam_batches(session) if actor is not None else []
         results: list[dict[str, Any]] = []
         skipped: list[str] = []
         for exam in targets:
             if exam not in available:
                 skipped.append(exam)
                 continue
+            if actor is not None:
+                batch_id = exam_batch_id_from_bars(exam, bar_rows)
+                visible, writable = fraction_bar_access(exam, batch_id, batches, actor)
+                if not visible:
+                    if explicit:
+                        raise ValueError("预测分数线不存在")
+                    continue
+                if not writable:
+                    if explicit:
+                        raise ValueError("无权维护这场考试的预测分数线")
+                    skipped.append(exam)
+                    continue
             results.append(_recompute_one(session, db_type, exam, bar_rows=bar_rows))
         session.commit()
     return {

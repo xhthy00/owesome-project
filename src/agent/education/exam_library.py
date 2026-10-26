@@ -1,7 +1,7 @@
 """试卷库：列表、可见范围、试卷与题目维护。
 
 管理员和教育局可以维护全部考试批次和试卷。
-学校账号可以查看全市统考，维护自己创建的试卷，并维护本校的考试批次。
+学校账号可以查看全市统考，以及本校的学校自建考试和试卷，并维护本校的学校自建考试和试卷。
 """
 
 from __future__ import annotations
@@ -32,6 +32,7 @@ __all__ = [
     "delete_exam",
     "delete_exam_batch",
     "batch_writable",
+    "batch_visible",
     "can_create_batch",
     "can_create_exam",
     "exam_visible",
@@ -86,17 +87,34 @@ def can_create_batch(actor: ExamActor) -> bool:
     return actor.see_all or actor.edu_role == "school_admin"
 
 
-def batch_writable(batch: dict[str, Any], actor: ExamActor) -> bool:
-    """管理员和教育局维护全部批次。学校账号维护本校批次，以及自己创建的批次。"""
+def batch_visible(batch: dict[str, Any], actor: ExamActor) -> bool:
+    """学校账号只能看到全市统考，以及绑定本校的学校自建批次。"""
     if actor.see_all:
         return True
-    if actor.edu_role != "school_admin":
-        return False
-    school = str(batch.get("school_id") or "").strip()
-    if school and school == str(actor.school_id or "").strip():
+    if exam_kind(batch) == "city":
         return True
+    if actor.edu_role == "school_admin":
+        return exam_kind(batch) == "school" and _same_school(batch, actor)
     owner = str(batch.get("owner_id") or "").strip()
-    return bool(owner) and owner == str(actor.owner_id or "").strip()
+    return bool(actor.owner_id) and owner == actor.owner_id
+
+
+def batch_writable(batch: dict[str, Any], actor: ExamActor) -> bool:
+    """管理员和教育局维护全部批次。学校账号只维护绑定本校的学校自建批次。"""
+    if actor.see_all:
+        return True
+    if actor.edu_role != "school_admin" or exam_kind(batch) != "school":
+        return False
+    return _same_school(batch, actor)
+
+
+def _guard_batch_for_paper(actor: ExamActor, batch_type: str, batch_school: str | None) -> None:
+    """学校账号只能在本校学校自建批次下维护试卷。看不到的批次按不存在处理。"""
+    info = {"exam_type": batch_type, "school_id": batch_school}
+    if not batch_visible(info, actor):
+        raise ValueError("考试批次不存在")
+    if not batch_writable(info, actor):
+        raise ValueError("无权在这个考试批次下维护试卷")
 
 
 def new_batch_owner(actor: ExamActor) -> tuple[str | None, str | None]:
@@ -115,8 +133,8 @@ def new_batch_owner(actor: ExamActor) -> tuple[str | None, str | None]:
 def exam_visible(exam: dict[str, Any], actor: ExamActor) -> bool:
     if actor.see_all or exam_kind(exam) == "city":
         return True
-    if exam_kind(exam) == "school" and _same_school(exam, actor):
-        return True
+    if actor.edu_role == "school_admin":
+        return exam_kind(exam) == "school" and _same_school(exam, actor)
     owner_id = str(exam.get("owner_id") or "")
     return bool(actor.owner_id) and owner_id == actor.owner_id
 
@@ -124,8 +142,8 @@ def exam_visible(exam: dict[str, Any], actor: ExamActor) -> bool:
 def exam_writable(exam: dict[str, Any], actor: ExamActor) -> bool:
     if actor.see_all:
         return True
-    if exam_kind(exam) == "school" and _same_school(exam, actor):
-        return True
+    if actor.edu_role == "school_admin":
+        return exam_kind(exam) == "school" and _same_school(exam, actor)
     if exam_kind(exam) == "city":
         return False
     owner_id = str(exam.get("owner_id") or "")
@@ -355,10 +373,11 @@ def _visibility_sql(actor: ExamActor, alias: str = "") -> tuple[str, tuple]:
     if actor.edu_role == "school_admin" and actor.school_id:
         sql = (
             f"(COALESCE(NULLIF({prefix}exam_type, ''), 'city') = 'city' "
-            f"OR ({prefix}exam_type = 'school' AND {prefix}school_id = %s) "
-            f"OR ({prefix}owner_id = %s AND %s <> ''))"
+            f"OR ({prefix}exam_type = 'school' AND {prefix}school_id = %s))"
         )
-        return sql, (actor.school_id, actor.owner_id, actor.owner_id)
+        return sql, (actor.school_id,)
+    if actor.edu_role == "school_admin":
+        return f"COALESCE(NULLIF({prefix}exam_type, ''), 'city') = 'city'", ()
     sql = (
         f"(COALESCE(NULLIF({prefix}exam_type, ''), 'city') = 'city' "
         f"OR ({prefix}owner_id = %s AND %s <> ''))"
@@ -665,6 +684,7 @@ def create_exam(
         batch_name, batch_type, batch_school, batch_jc = _load_batch(
             session, payload["exam_batch_id"]
         )
+        _guard_batch_for_paper(actor, batch_type, batch_school)
         payload["exam_name"] = batch_name
         stamp_exam_from_batch(payload, batch_type, batch_school, actor)
         created = _one(
@@ -711,6 +731,7 @@ def update_exam(
         batch_name, batch_type, batch_school, batch_jc = _load_batch(
             session, payload["exam_batch_id"]
         )
+        _guard_batch_for_paper(actor, batch_type, batch_school)
         payload["exam_name"] = batch_name
         stamp_exam_from_batch(
             payload, batch_type, batch_school, actor, keep_owner=current.get("owner_id")
@@ -976,15 +997,34 @@ _BATCH_LIST_SQL = (
 )
 
 
+def _batch_visibility_sql(actor: ExamActor) -> tuple[str, tuple]:
+    if actor.see_all:
+        return "TRUE", ()
+    if actor.edu_role == "school_admin" and actor.school_id:
+        return (
+            "(COALESCE(NULLIF(b.exam_type, ''), 'city') = 'city' "
+            "OR (b.exam_type = 'school' AND b.school_id = %s))",
+            (actor.school_id,),
+        )
+    if actor.edu_role == "school_admin":
+        return "COALESCE(NULLIF(b.exam_type, ''), 'city') = 'city'", ()
+    return (
+        "(COALESCE(NULLIF(b.exam_type, ''), 'city') = 'city' "
+        "OR (b.owner_id = %s AND %s <> ''))",
+        (actor.owner_id, actor.owner_id),
+    )
+
+
 def list_exam_batches(
     db_type: str, config: dict[str, Any], actor: ExamActor
 ) -> list[dict[str, Any]]:
+    where, params = _batch_visibility_sql(actor)
     with WriteDbSession(db_type, config) as session:
         _ensure_batch_scope(session)
         rows = _all(
             session,
-            _BATCH_LIST_SQL + " ORDER BY b.exam_time DESC NULLS LAST, b.id DESC",
-            (),
+            _BATCH_LIST_SQL + f" WHERE {where} ORDER BY b.exam_time DESC NULLS LAST, b.id DESC",
+            params,
         )
     return [_batch_dict(row, actor) for row in rows]
 
@@ -996,6 +1036,8 @@ def create_exam_batch(
         raise ValueError("无权创建考试批次")
     name, when = normalize_batch_fields(data.get("batch_name"), data.get("exam_time"))
     kind = normalize_batch_exam_type(data.get("exam_type"))
+    if actor.edu_role == "school_admin" and not actor.see_all:
+        kind = "school"
     cohort = normalize_batch_jc(data.get("jc"))
     school_id, owner_id = new_batch_owner(actor)
     with WriteDbSession(db_type, config) as session:
@@ -1115,7 +1157,10 @@ def _require_batch_row(session: Any, batch_id: int, actor: ExamActor) -> tuple |
     )
     if current is None:
         return None
-    if not batch_writable({"school_id": current[2], "owner_id": current[3]}, actor):
+    info = {"school_id": current[2], "owner_id": current[3], "exam_type": current[4]}
+    if not batch_visible(info, actor):
+        return None
+    if not batch_writable(info, actor):
         raise ValueError("无权维护这个考试批次")
     return current
 
@@ -1133,6 +1178,8 @@ def update_exam_batch(
         if current is None:
             return None
         kind = normalize_batch_exam_type(data.get("exam_type") or current[4], default_city=True)
+        if actor.edu_role == "school_admin" and not actor.see_all:
+            kind = "school"
         cohort = normalize_batch_jc(data.get("jc"))
         _must_write(
             session,

@@ -616,6 +616,35 @@ export const educationApi = {
     return { ...body.data, message: body.message };
   },
 
+  async deleteFractionBar(payload: {
+    exam_name: string;
+    exam_batch_id?: number | null;
+  }): Promise<{ exam_name: string; indicator_rows: number }> {
+    const params = new URLSearchParams();
+    if (payload.exam_name) params.set("exam_name", payload.exam_name);
+    if (payload.exam_batch_id != null) params.set("exam_batch_id", String(payload.exam_batch_id));
+    const resp = await fetch(`${getApiBaseUrl()}/education/fraction-bar?${params.toString()}`, {
+      method: "DELETE",
+      headers: await authHeaders()
+    });
+    if (resp.status === 401) throw new Error("Unauthorized");
+    const body = (await resp.json()) as {
+      code?: number;
+      message?: string;
+      data?: { exam_name: string; indicator_rows: number };
+    };
+    if ((body.code ?? 200) === 403) {
+      throw new Error(body.message || "无权维护预测分数线");
+    }
+    if ((body.code ?? 200) === 404) {
+      throw new Error(body.message || "预测分数线不存在");
+    }
+    if ((body.code ?? 200) !== 200 || !body.data) {
+      throw new Error(body.message || "删除失败");
+    }
+    return body.data;
+  },
+
   async recomputeScoreIndicator(
     examName?: string
   ): Promise<{ indicator_rows: number; skipped?: string[] }> {
@@ -1026,6 +1055,7 @@ export interface FractionBarLineCatalog {
 export interface FractionBarExam {
   exam_name: string;
   exam_batch_id?: number | null;
+  writable?: boolean;
   lines: FractionBarLine[];
 }
 
@@ -1034,6 +1064,7 @@ export interface ExamBatchOption {
   batch_name: string;
   exam_time?: string | null;
   jc?: string | null;
+  writable?: boolean;
 }
 
 export interface PaperQuestionDraft {

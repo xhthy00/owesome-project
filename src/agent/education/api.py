@@ -1265,6 +1265,22 @@ def _exam_line_tool_context(current_user: UserResponse) -> tuple[int, int, Any]:
         return int(ds.id), int(ds.oid), scope
 
 
+def _exam_line_actor(current_user: UserResponse) -> tuple[int, int, Any, Any]:
+    """返回 (datasource_id, ds_oid, edu_scope, actor)。"""
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.agent.education.exam_library import build_actor
+    from src.common.core.database import get_db_session
+    from system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        ds = _require_exam_datasource(session)
+        user = get_user_by_id(session, int(current_user.id))
+        if user is None:
+            raise ForbiddenException("用户不存在")
+        scope = parse_edu_scope(user)
+        return int(ds.id), int(ds.oid), scope, build_actor(user, scope)
+
+
 def _deny_student_line_tools(scope: Any) -> dict | None:
     from src.agent.education.line_reach import can_access_line_reach
 
@@ -1284,12 +1300,12 @@ async def list_fraction_bar(
     from src.agent.resource.tool.business import _load_datasource
 
     _ = datasource_id, workspace_oid
-    ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
+    ds_id, ds_oid, scope, actor = _exam_line_actor(current_user)
     denied = _deny_student_line_tools(scope)
     if denied is not None:
         return denied
     db_type, config, _ = _load_datasource(ds_id, ds_oid)
-    data = await asyncio.to_thread(list_fraction_bars, db_type, config)
+    data = await asyncio.to_thread(list_fraction_bars, db_type, config, actor)
     return success_response(data)
 
 
@@ -1307,7 +1323,7 @@ async def upsert_fraction_bar(
     exam = (req.exam_name or "").strip()
     if req.exam_batch_id is None and not exam:
         raise BadRequestException("请选择考试")
-    ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
+    ds_id, ds_oid, scope, actor = _exam_line_actor(current_user)
     denied = _deny_student_line_tools(scope)
     if denied is not None:
         return denied
@@ -1321,6 +1337,7 @@ async def upsert_fraction_bar(
             exam_name=exam,
             lines=lines,
             exam_batch_id=req.exam_batch_id,
+            actor=actor,
         )
     except ValueError as exc:
         raise BadRequestException(str(exc)) from exc
@@ -1330,6 +1347,41 @@ async def upsert_fraction_bar(
     if stats.get("empty_scores"):
         message = "分数线已保存；该场暂无成绩，达线指标为空"
     return success_response(stats, message=message)
+
+
+@router.delete("/fraction-bar")
+async def delete_fraction_bar(
+    exam_name: str = Query(""),
+    exam_batch_id: int | None = Query(None),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    """删除一场考试的预测分数线，并清除关联的 tb_score_indicator。"""
+    from src.agent.education.score_indicator import delete_fraction_bar as remove_bar
+    from src.agent.resource.tool.business import _load_datasource
+
+    _ = workspace_oid
+    ds_id, ds_oid, scope, actor = _exam_line_actor(current_user)
+    denied = _deny_student_line_tools(scope)
+    if denied is not None:
+        return denied
+    db_type, config, _ = _load_datasource(ds_id, ds_oid)
+    try:
+        removed = await asyncio.to_thread(
+            remove_bar,
+            db_type,
+            config,
+            exam_name=exam_name,
+            exam_batch_id=exam_batch_id,
+            actor=actor,
+        )
+    except ValueError as exc:
+        raise BadRequestException(str(exc)) from exc
+    except RuntimeError as exc:
+        raise BadRequestException(str(exc)) from exc
+    if removed is None:
+        raise NotFoundException("预测分数线不存在")
+    return success_response(removed, message="预测分数线已删除")
 
 
 @router.post("/score-indicator/recompute")
@@ -1343,7 +1395,7 @@ async def recompute_score_indicator(
     from src.agent.resource.tool.business import _load_datasource
 
     _ = workspace_oid
-    ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
+    ds_id, ds_oid, scope, actor = _exam_line_actor(current_user)
     denied = _deny_student_line_tools(scope)
     if denied is not None:
         return denied
@@ -1351,7 +1403,11 @@ async def recompute_score_indicator(
     exam = (req.exam_name or "").strip()
     names = [exam] if exam else None
     try:
-        stats = await asyncio.to_thread(recompute_exams, db_type, config, names)
+        stats = await asyncio.to_thread(
+            recompute_exams, db_type, config, names, actor
+        )
+    except ValueError as exc:
+        raise BadRequestException(str(exc)) from exc
     except RuntimeError as exc:
         raise BadRequestException(str(exc)) from exc
     return success_response(stats, message="达线指标已重算")
@@ -1771,8 +1827,6 @@ async def list_raw_import_batches(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    from datasource.db.db import execute_sql
-
     _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
     if maintain:
         from src.agent.education.raw_import import list_writable_score_batches
@@ -1788,27 +1842,22 @@ async def list_raw_import_batches(
         except ValueError as exc:
             raise BadRequestException(str(exc)) from exc
         return success_response(data={"batches": rows})
-    ok, msg, data = execute_sql(
-        db_type,
-        config,
-        "SELECT id, batch_name, exam_time FROM tb_exam_batch ORDER BY exam_time DESC NULLS LAST, id DESC LIMIT 500",
+    from src.agent.education.exam_library import ExamActor, list_exam_batches
+
+    actor = ExamActor(
+        see_all=see_all,
+        school_id=str(getattr(scope, "school_id", "") or "").strip(),
+        owner_id="",
+        edu_role=str(getattr(scope, "edu_role", "") or "").strip(),
     )
-    if not ok:
-        raise BadRequestException(msg or "查询批次失败")
-    cols = list((data or {}).get("columns") or [])
-    rows = []
-    for row in (data or {}).get("rows") or []:
-        if isinstance(row, dict):
-            rec = row
-        else:
-            rec = {cols[i]: row[i] for i in range(min(len(cols), len(row)))}
-        rows.append(
-            {
-                "id": rec.get("id"),
-                "batch_name": rec.get("batch_name"),
-                "exam_time": rec.get("exam_time"),
-            }
-        )
+    try:
+        loaded = list_exam_batches(db_type, config, actor)
+    except ValueError as exc:
+        raise BadRequestException(str(exc)) from exc
+    rows = [
+        {"id": item["id"], "batch_name": item["batch_name"], "exam_time": item.get("exam_time")}
+        for item in loaded
+    ]
     return success_response(data={"batches": rows})
 
 

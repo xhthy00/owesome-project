@@ -299,7 +299,7 @@ export function PaperImportPage() {
 
   const loadBatches = useCallback(async () => {
     try {
-      setBatches(await educationApi.listRawImportBatches());
+      setBatches(await educationApi.listRawImportBatches(true));
     } catch (err) {
       message.error(err instanceof Error ? err.message : "加载批次失败");
     }

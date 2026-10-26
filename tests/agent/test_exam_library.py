@@ -4,8 +4,11 @@ import json
 
 from src.agent.education.exam_library import (
     ExamActor,
+    _batch_visibility_sql,
     _exam_name_is_this_batch,
     _exam_payload,
+    _visibility_sql,
+    batch_visible,
     batch_writable,
     can_create_batch,
     can_create_exam,
@@ -47,6 +50,9 @@ def test_school_user_sees_city_papers_and_owns_what_they_create():
     assert exam_visible(own, actor)
     assert exam_writable(own, actor)
     assert not exam_visible(other_school, actor)
+    leaked = {"exam_type": "school", "school_id": "B02", "owner_id": "school1"}
+    assert not exam_visible(leaked, actor)
+    assert not exam_writable(leaked, actor)
     assert exam_visible(other_school, bureau)
     assert exam_writable(city, bureau)
     assert exam_visible({"exam_type": None}, actor)
@@ -71,14 +77,19 @@ def test_school_user_cannot_assign_another_school_or_owner():
 
 def test_same_school_users_maintain_their_batch():
     school = "GZ_AADB4D1D"
-    own = {"school_id": school, "owner_id": "exvwji03"}
-    city = {"school_id": None, "owner_id": None}
+    own = {"exam_type": "school", "school_id": school, "owner_id": "exvwji03"}
+    city = {"exam_type": "city", "school_id": None, "owner_id": None}
     creator = _actor(edu_role="school_admin", school_id=school, owner_id="exvwji03")
     peer = _actor(edu_role="school_admin", school_id=school, owner_id="dvfort31")
     other = _actor(edu_role="school_admin", school_id="OTHER", owner_id="other")
     teacher = _actor(edu_role="teacher", school_id=school, owner_id="teacher1")
     bureau = _actor(see_all=True, edu_role="bureau_admin", owner_id="admin")
 
+    assert batch_visible(city, creator)
+    assert batch_visible(own, creator)
+    assert batch_visible(own, peer)
+    assert not batch_visible(own, other)
+    assert batch_visible(own, bureau)
     assert batch_writable(own, creator)
     assert batch_writable(own, peer)
     assert not batch_writable(city, creator)
@@ -90,7 +101,18 @@ def test_same_school_users_maintain_their_batch():
     assert not can_create_batch(teacher)
     assert new_batch_owner(creator) == (school, "exvwji03")
     assert new_batch_owner(bureau) == (None, None)
-    assert batch_writable({"school_id": None, "owner_id": "exvwji03"}, creator)
+    unbound = {"exam_type": "school", "school_id": None, "owner_id": "exvwji03"}
+    assert not batch_writable(unbound, creator)
+    foreign = {"exam_type": "school", "school_id": "OTHER", "owner_id": "exvwji03"}
+    assert not batch_visible(foreign, creator)
+    sql, params = _batch_visibility_sql(other)
+    assert "b.school_id = %s" in sql
+    assert "owner_id" not in sql
+    assert params == ("OTHER",)
+    paper_sql, paper_params = _visibility_sql(other)
+    assert "school_id = %s" in paper_sql
+    assert "owner_id" not in paper_sql
+    assert paper_params == ("OTHER",)
 
 
 def test_paper_type_follows_the_batch_not_the_form():

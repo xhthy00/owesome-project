@@ -98,13 +98,14 @@ export default function FractionBarPage() {
   }, [loadData]);
 
   const batchSelectOptions = useMemo(() => {
+    const source = editing ? batches : batches.filter((b) => b.writable !== false);
     const usedIds = new Set(
       exams
         .map((e) => e.exam_batch_id)
         .filter((id): id is number => typeof id === "number")
     );
     const usedNames = new Set(exams.map((e) => e.exam_name).filter(Boolean));
-    const opts = batches
+    const opts = source
       .filter((b) => {
         if (editing != null) return true;
         return !usedIds.has(b.id) && !usedNames.has(b.batch_name);
@@ -190,6 +191,33 @@ export default function FractionBarPage() {
     }
   };
 
+  const handleDelete = (row: FractionBarExam) => {
+    Modal.confirm({
+      title: `删除「${row.exam_name}」的预测分数线？`,
+      content: "将同时清除该考试在达线指标表中的数据，问数不再使用这些指标。",
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        try {
+          const res = await educationApi.deleteFractionBar({
+            exam_name: row.exam_name,
+            exam_batch_id: row.exam_batch_id
+          });
+          message.success(
+            res.indicator_rows
+              ? `已删除，并清除 ${res.indicator_rows} 条达线指标`
+              : "预测分数线已删除"
+          );
+          await loadData();
+        } catch (err) {
+          message.error(err instanceof Error ? err.message : "删除失败");
+          throw err;
+        }
+      }
+    });
+  };
+
   const handleRecompute = async (examName?: string) => {
     setLoading(true);
     try {
@@ -259,17 +287,34 @@ export default function FractionBarPage() {
     {
       title: "操作",
       key: "actions",
-      width: 148,
+      width: 168,
       fixed: "right",
       render: (_, row) => (
-        <Space size={4}>
-          <Button type="link" size="small" className="!px-1" onClick={() => openEdit(row)}>
+        <Space size={0}>
+          <Button
+            type="link"
+            size="small"
+            className="!px-1"
+            disabled={row.writable === false}
+            onClick={() => openEdit(row)}
+          >
             编辑
           </Button>
           <Button
             type="link"
             size="small"
+            danger
             className="!px-1"
+            disabled={row.writable === false}
+            onClick={() => handleDelete(row)}
+          >
+            删除
+          </Button>
+          <Button
+            type="link"
+            size="small"
+            className="!px-1"
+            disabled={row.writable === false}
             onClick={() => void handleRecompute(row.exam_name)}
           >
             重算
@@ -317,7 +362,7 @@ export default function FractionBarPage() {
               预测分数线
             </Typography.Title>
             <Typography.Text className="oc-muted">
-              每场考试一行分数线；保存后按该场成绩自动写入达线指标表，供问数查询
+              管理员和教育局可维护全部。学校账号可查看全市统考和本校学校自建，并维护本校学校自建。删除时一并清除达线指标。
             </Typography.Text>
           </div>
         </div>
@@ -325,11 +370,20 @@ export default function FractionBarPage() {
           <Button icon={<ReloadOutlined />} onClick={() => void loadData()} loading={loading}>
             刷新
           </Button>
-          <Button onClick={() => void handleRecompute()} loading={loading} disabled={!exams.length}>
+          <Button
+            onClick={() => void handleRecompute()}
+            loading={loading}
+            disabled={!exams.some((row) => row.writable !== false)}
+          >
             全部重算指标
           </Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-            新增考试
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={openCreate}
+            disabled={!batches.some((row) => row.writable !== false)}
+          >
+            新增切线
           </Button>
         </Space>
       </div>
@@ -340,7 +394,7 @@ export default function FractionBarPage() {
         <div className={PANEL_CARD}>
           {exams.length === 0 && !loading ? (
             <div className="py-16">
-              <Empty description="暂无预测分数线，点击右上角新增考试" />
+              <Empty description="暂无预测分数线，点击右上角新增切线" />
             </div>
           ) : (
             <Table<FractionBarExam>

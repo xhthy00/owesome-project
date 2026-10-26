@@ -455,7 +455,7 @@ export default function ExamLibraryPage() {
                   试卷库
                 </Typography.Title>
                 <Typography.Text type="secondary" className="text-[13px]">
-                  批次前的标记按优先级提示未关联题目、卷面总分异常、未关联知识点或尚有若干题未关联、未关联成绩；齐全时为绿色勾。管理员和教育局可维护全部批次与试卷；学校账号可查看全市统考，维护自己创建的试卷，并维护本校考试批次。
+                  批次前的标记按优先级提示未关联题目、卷面总分异常、未关联知识点或尚有若干题未关联、未关联成绩；齐全时为绿色勾。管理员和教育局可维护全部批次与试卷；学校账号可查看全市统考和本校学校自建，并维护本校学校自建。
                 </Typography.Text>
               </div>
             </div>
@@ -559,10 +559,15 @@ export default function ExamLibraryPage() {
               showSearch
               optionFilterProp="label"
               placeholder="选择考试批次"
-              options={batches.map((item) => ({
-                value: item.id,
-                label: item.batch_name
-              }))}
+              options={batches
+                .filter((item) => {
+                  if (canManageBatches || item.writable !== false) return true;
+                  return item.id === editing?.exam_batch_id;
+                })
+                .map((item) => ({
+                  value: item.id,
+                  label: item.batch_name
+                }))}
               onChange={(batchId) => applyBatchType(batchId)}
             />
           </Form.Item>
@@ -704,7 +709,14 @@ export default function ExamLibraryPage() {
             extra="同一批次下的各科试卷都使用这个类型。"
             rules={[{ required: true, message: "请选择考试类型" }]}
           >
-            <Select options={FORM_EXAM_TYPES} />
+            <Select
+              disabled={!canManageBatches}
+              options={
+                canManageBatches
+                  ? FORM_EXAM_TYPES
+                  : FORM_EXAM_TYPES.filter((item) => item.value === "school")
+              }
+            />
           </Form.Item>
           <Form.Item
             name="exam_time"

@@ -149,6 +149,10 @@ def save_paper_outline(
         batch_type = normalize_batch_exam_type(batch[3] if len(batch) > 3 else None, default_city=True)
         batch_school = str(batch[4]).strip() if len(batch) > 4 and batch[4] else ""
         batch_jc = str(batch[5]).strip() if len(batch) > 5 and batch[5] else None
+        if actor is not None:
+            from src.agent.education.exam_library import _guard_batch_for_paper
+
+            _guard_batch_for_paper(actor, batch_type, batch_school or None)
         existing = _all(
             session,
             "SELECT id FROM tb_exam WHERE exam_batch_id = %s AND subject = %s",

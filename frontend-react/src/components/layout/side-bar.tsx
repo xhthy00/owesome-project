@@ -8,7 +8,6 @@ import {
   GlobalOutlined,
   FileTextOutlined,
   HistoryOutlined,
-  LineChartOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MessageOutlined,
@@ -35,7 +34,6 @@ const routes = [
   { key: "line-reach", path: "/construct/education/line-reach", label: "达线看板", icon: <FundViewOutlined /> },
   { key: "report-history", path: "/construct/analysis/history", label: "报告历史", icon: <HistoryOutlined /> },
   { key: "resource", path: "/construct/database", label: "数据管理", icon: <FolderOutlined /> },
-  { key: "fraction-bar", path: "/construct/education/fraction-bar", label: "预测分数线", icon: <LineChartOutlined /> },
   { key: "anomaly-alerts", path: "/construct/education/anomaly-alerts", label: "异常提醒", icon: <AlertOutlined /> },
   { key: "anomaly-rules", path: "/construct/education/anomaly-rules", label: "异常规则", icon: <ControlOutlined /> },
   { key: "permission", path: "/construct/permission", label: "权限管理", icon: <SafetyCertificateOutlined /> },
@@ -47,7 +45,8 @@ const resourceSubRoutes = [
   { key: "datasource", path: "/construct/database", label: "数据源" },
   { key: "exam-library", path: "/construct/education/exam-library", label: "试卷库" },
   { key: "raw-score-import", path: "/construct/education/score-library", label: "成绩库" },
-  { key: "knowledge", path: "/construct/knowledge", label: "知识点" }
+  { key: "knowledge", path: "/construct/knowledge", label: "知识点" },
+  { key: "fraction-bar", path: "/construct/education/fraction-bar", label: "预测分数线" }
 ];
 
 const permissionSubRoutes = [
@@ -223,7 +222,9 @@ export default function SideBar() {
     return resourceSubRoutes.filter((item) => {
       if (!isPlatformAdmin && menuVisibility[item.key] === false) return false;
       if (!canSeeScoreLibrary && item.key === "raw-score-import") return false;
-      if (eduRole === "student" && item.key === "exam-library") return false;
+      if (eduRole === "student" && (item.key === "exam-library" || item.key === "fraction-bar")) {
+        return false;
+      }
       return true;
     });
   }, [
@@ -249,9 +250,7 @@ export default function SideBar() {
       list = list.filter((item) => item.key !== "anomaly-alerts");
     }
     if (eduRole === "student") {
-      list = list.filter(
-        (item) => item.key !== "line-reach" && item.key !== "fraction-bar"
-      );
+      list = list.filter((item) => item.key !== "line-reach");
     }
     return list;
   }, [
