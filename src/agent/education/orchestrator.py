@@ -557,6 +557,10 @@ class ReportOrchestrator:
         if spec.report_type == ReportType.CLASS_OVERVIEW and mapping.source == "config_edu":
             await self._fill_class_overview_rank(data, rows, spec, mapping, cfg)
             try:
+                await self._fill_class_overview_external_rank(data, spec, mapping)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("班级总览外部排名填充失败: %s", e)
+            try:
                 await self._fill_class_overview_weak_knowledge(data, spec, mapping, cfg)
             except Exception as e:  # noqa: BLE001
                 logger.warning("班级总览薄弱知识点填充失败: %s", e)
@@ -986,18 +990,17 @@ class ReportOrchestrator:
             "</ul>"
         )
 
-    async def _fill_grade_comparison_external_rank(
+    async def _compute_external_class_rank_snippet(
         self,
-        data: dict[str, Any],
         spec: ReportSpec,
-        mapping: ScoreSchemaMapping,
-    ) -> None:
-        """给横比总结追加外部定位：本校各班在同层次、全市同年级班级中的排名。
+        *,
+        class_names: list[str],
+    ) -> str:
+        """查 overview 班级池，返回同层次/全市排名 HTML（纯文本空串表示跳过）。
 
-        排名池读 ``tb_score_overview``（同场考试、在籍生、每班 ≥10 人、不含其他校）；
+        排名池：同场考试、在籍生、每班 ≥10 人、不含其他校；
         未选科目用六门总分 ``zf6m``，选了科目用该科分数列。
-        SQL 带 RANK 窗口，权限层会按全市排名池口径放行，不收窄到本校。
-        overview 无该场数据时静默跳过，保留原总结。
+        SQL 带 RANK 窗口，权限层按全市排名池口径放行。
         """
         from src.agent.education.bureau_analysis import (
             school_codes_from_lookup,
@@ -1011,19 +1014,19 @@ class ReportOrchestrator:
         subject = str(spec.filters.get("subject") or "").strip()
         exam_names = _split_exam_filter(str(spec.filters.get("exam_name") or ""))
         exam_name = exam_names[0] if exam_names else ""
-        class_names = [str(c) for c in (data.get("_gc_target_classes") or []) if str(c)]
-        if not school_name or not exam_name or not class_names:
-            return
+        names = [str(c) for c in (class_names or []) if str(c)]
+        if not school_name or not exam_name or not names:
+            return ""
         if subject:
             metric_col = SCORE_SUBJECTS.get(subject)
             if not metric_col:
-                return
+                return ""
             metric_label = subject
         else:
             metric_col = "zf6m"
             metric_label = "六门总分"
         grade_name = ""
-        for c in class_names:
+        for c in names:
             grade_name = parse_grade_from_class(c) or ""
             if grade_name:
                 break
@@ -1047,7 +1050,7 @@ class ReportOrchestrator:
         )
         pool_rows = sql_result_to_dicts(await self._execute_sql(sql))
         if not pool_rows:
-            return
+            return ""
 
         codes: set[str] = set()
         try:
@@ -1058,16 +1061,48 @@ class ReportOrchestrator:
         except Exception:  # noqa: BLE001
             codes = set()
 
-        snippet = _external_class_rank_summary(
+        return _external_class_rank_summary(
             pool_rows,
             school_name=school_name,
             school_codes=codes,
             grade_name=grade_name,
-            class_names=class_names,
+            class_names=names,
             metric_label=metric_label,
+        )
+
+    async def _fill_grade_comparison_external_rank(
+        self,
+        data: dict[str, Any],
+        spec: ReportSpec,
+        mapping: ScoreSchemaMapping,
+    ) -> None:
+        """给横比总结追加外部定位：本校各班在同层次、全市同年级班级中的排名。"""
+        _ = mapping  # 仅 config_edu 路径调用；保留签名与既有调用一致
+        class_names = [str(c) for c in (data.get("_gc_target_classes") or []) if str(c)]
+        snippet = await self._compute_external_class_rank_snippet(
+            spec, class_names=class_names
         )
         if snippet:
             data["SUMMARY"] = f"{data.get('SUMMARY') or ''}{snippet}"
+
+    async def _fill_class_overview_external_rank(
+        self,
+        data: dict[str, Any],
+        spec: ReportSpec,
+        mapping: ScoreSchemaMapping,
+    ) -> None:
+        """给单次学情诊断「年级排名」追加同层次 / 全市班级排名。"""
+        _ = mapping
+        class_name = str(spec.filters.get("class_name") or "").strip()
+        if not class_name:
+            class_name = str(data.get("CLASS_NAME") or "").strip()
+        if not class_name:
+            return
+        snippet = await self._compute_external_class_rank_snippet(
+            spec, class_names=[class_name]
+        )
+        if snippet:
+            data["RANK_INFO"] = f"{data.get('RANK_INFO') or ''}{snippet}"
 
     @staticmethod
     def _grade_ranking_table_html(ranked: list[dict[str, Any]]) -> str:
@@ -2771,22 +2806,34 @@ def _external_class_rank_summary(
             (str(row.get("xx") or ""), str(row.get("bj") or "")), "-"
         )
 
+    scope = (
+        f"外部定位（{metric_label}，同场同年级、每班不少于 10 人，"
+        f"全市池不含其他校）"
+    )
+    # 单班报告（如单次学情诊断）：不写「领先的 / 各班」
+    if len(ordered_targets) == 1:
+        peer_part = (
+            f"同层次（{peer_label}）第 {_peer_rank(top)}/{peer_total}，"
+            if tier
+            else ""
+        )
+        return (
+            f"<p>{scope}：<strong>{top.get('bj')}</strong>"
+            f"{peer_part}全市第 {_city_rank(top)}/{city_total}。</p>"
+        )
+
     top_peer = f"同层次（{peer_label}）第 {_peer_rank(top)}/{peer_total}，" if tier else ""
     head = (
-        f"<p>外部定位（{metric_label}，同场同年级、每班不少于 10 人，"
-        f"全市池不含其他校）：本校领先的<strong>{top.get('bj')}</strong>"
+        f"<p>{scope}：本校领先的<strong>{top.get('bj')}</strong>"
         f"{top_peer}全市第 {_city_rank(top)}/{city_total}"
     )
-    if len(ordered_targets) > 1:
-        bottom_peer = (
-            f"同层次第 {_peer_rank(bottom)}/{peer_total}，" if tier else ""
-        )
-        head += (
-            f"；末位<strong>{bottom.get('bj')}</strong>"
-            f"{bottom_peer}全市第 {_city_rank(bottom)}/{city_total}。</p>"
-        )
-    else:
-        head += "。</p>"
+    bottom_peer = (
+        f"同层次第 {_peer_rank(bottom)}/{peer_total}，" if tier else ""
+    )
+    head += (
+        f"；末位<strong>{bottom.get('bj')}</strong>"
+        f"{bottom_peer}全市第 {_city_rank(bottom)}/{city_total}。</p>"
+    )
     items = "、".join(
         f"{r.get('bj')}（{_rank_text(r)}）" for r in ordered_targets
     )

@@ -43,9 +43,9 @@ import {
   type MetaOptions
 } from "@/api/education";
 import { exportReportAsWord, sanitizeFileName } from "@/utils/exportReportWord";
+import { exportIframeReportPdf } from "@/utils/exportReportPdf";
 import {
   bindIframeWatermark,
-  captureElementWithWatermark,
   stampHtmlWatermark
 } from "@/utils/userWatermark";
 
@@ -648,34 +648,10 @@ export default function AnalysisToolPage() {
     }
     setExportingPdf(true);
     try {
-      const [{ default: html2canvas }, jspdfMod] = await Promise.all([
-        import("html2canvas"),
-        import("jspdf")
-      ]);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const JsPDF = (jspdfMod as any).jsPDF;
-      const canvas = await captureElementWithWatermark(doc.body, html2canvas, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: "#ffffff"
+      await exportIframeReportPdf({
+        doc,
+        filename: `${sanitizeName(reportTitle)}.pdf`
       });
-      const pdf = new JsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
-      const pageW = pdf.internal.pageSize.getWidth();
-      const pageH = pdf.internal.pageSize.getHeight();
-      const imgW = pageW;
-      const imgH = (canvas.height * imgW) / canvas.width;
-      let remaining = imgH;
-      let position = 0;
-      const imgData = canvas.toDataURL("image/png");
-      pdf.addImage(imgData, "PNG", 0, position, imgW, imgH);
-      remaining -= pageH;
-      while (remaining > 0) {
-        position -= pageH;
-        pdf.addPage();
-        pdf.addImage(imgData, "PNG", 0, position, imgW, imgH);
-        remaining -= pageH;
-      }
-      pdf.save(`${sanitizeName(reportTitle)}.pdf`);
       message.success("PDF 已导出");
     } catch (e) {
       message.error("PDF 导出失败");

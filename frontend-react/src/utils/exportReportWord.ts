@@ -5,7 +5,11 @@
  * 因此按「已渲染预览」截图嵌入文档，保证样式与 HTML/PDF 观感一致。
  */
 
-import { captureElementWithWatermark } from "@/utils/userWatermark";
+import {
+  computeSliceCuts,
+  sliceCanvasByCuts,
+  withReportCapture
+} from "./reportCapture";
 
 export function sanitizeFileName(name: string): string {
   return (name || "report").replace(/[\\/:*?"<>|]+/g, "_").trim() || "report";
@@ -48,30 +52,9 @@ function buildWordDocWithImages(title: string, imageDataUrls: string[]): string 
 </html>`;
 }
 
-/** 将超长截图按近似 A4 高度切片，避免单图过大导致 Word 打不开 */
-function sliceCanvasToDataUrls(canvas: HTMLCanvasElement, pageHeightPx: number): string[] {
-  const urls: string[] = [];
-  const totalH = canvas.height;
-  const w = canvas.width;
-  if (totalH <= pageHeightPx) {
-    urls.push(canvas.toDataURL("image/png"));
-    return urls;
-  }
-  let y = 0;
-  while (y < totalH) {
-    const sliceH = Math.min(pageHeightPx, totalH - y);
-    const slice = document.createElement("canvas");
-    slice.width = w;
-    slice.height = sliceH;
-    const ctx = slice.getContext("2d");
-    if (!ctx) break;
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, w, sliceH);
-    ctx.drawImage(canvas, 0, y, w, sliceH, 0, 0, w, sliceH);
-    urls.push(slice.toDataURL("image/png"));
-    y += sliceH;
-  }
-  return urls.length ? urls : [canvas.toDataURL("image/png")];
+/** 将超长截图按断点切片（断点避开图表/表格行），避免单图过大导致 Word 打不开 */
+function sliceCanvasToDataUrls(canvas: HTMLCanvasElement, cuts: number[]): string[] {
+  return sliceCanvasByCuts(canvas, cuts);
 }
 
 function downloadDoc(title: string, content: string): void {
@@ -107,25 +90,13 @@ export async function exportReportAsWord(options: {
     throw new Error("无法访问报告预览，请等预览加载完成后再导出 Word");
   }
 
-  // 等一帧，确保 ECharts 等异步绘制完成
-  await new Promise<void>((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-  });
-
   const { default: html2canvas } = await import("html2canvas");
-  const canvas = await captureElementWithWatermark(body, html2canvas, {
-    scale: 2,
-    useCORS: true,
-    allowTaint: true,
-    backgroundColor: "#ffffff",
-    logging: false,
-    windowWidth: body.scrollWidth,
-    windowHeight: body.scrollHeight
+  await withReportCapture(doc, html2canvas, 2, (canvas) => {
+    // ~A4 @2x：210mm ≈ 794px CSS，*2 scale ≈ 1600
+    const pageHeightPx = Math.max(1200, Math.floor(canvas.width * 1.414));
+    const cuts = computeSliceCuts(canvas, pageHeightPx, doc);
+    const imageDataUrls = sliceCanvasToDataUrls(canvas, cuts);
+    const content = buildWordDocWithImages(title, imageDataUrls);
+    downloadDoc(title, content);
   });
-
-  // ~A4 @2x：210mm ≈ 794px CSS，*2 scale ≈ 1600
-  const pageHeightPx = Math.max(1200, Math.floor(canvas.width * 1.414));
-  const imageDataUrls = sliceCanvasToDataUrls(canvas, pageHeightPx);
-  const content = buildWordDocWithImages(title, imageDataUrls);
-  downloadDoc(title, content);
 }
