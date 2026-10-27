@@ -292,3 +292,14 @@ COMMENT ON COLUMN tb_score_contribution.updated_at IS '最近一次写入时间'
 CREATE INDEX IF NOT EXISTS idx_score_contribution_exam ON tb_score_contribution (exam_name);
 CREATE INDEX IF NOT EXISTS idx_score_contribution_batch ON tb_score_contribution (exam_batch_id);
 CREATE INDEX IF NOT EXISTS idx_score_contribution_line ON tb_score_contribution (line_name);
+
+-- 学生中考成绩与届内名次。成绩宽表导入时写入；列已存在则跳过。
+-- tb_student 没有届次列。同一届用 tb_score_overview.jc，经 anon_stu_id 对应学生。
+-- zkcj 默认 0。Excel ZKCJ 为空或 0 时不覆盖已有值。zkmc 同分同名次，成绩为 0 的并列倒数第一。
+ALTER TABLE tb_student
+    ADD COLUMN IF NOT EXISTS zkcj DOUBLE PRECISION NOT NULL DEFAULT 0;
+ALTER TABLE tb_student
+    ADD COLUMN IF NOT EXISTS zkmc INTEGER NOT NULL DEFAULT 0;
+
+COMMENT ON COLUMN tb_student.zkcj IS '中考成绩，默认 0。成绩宽表 ZKCJ 为空或 0 时不覆盖已有值';
+COMMENT ON COLUMN tb_student.zkmc IS '同一届中考名次。届次来自 tb_score_overview.jc。同分同名次，中考成绩为 0 的并列倒数第一';

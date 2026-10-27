@@ -398,7 +398,9 @@ export default function RawScoreImportPage() {
         setOverviewMessage(
           `宽表导入成功：overview ${upserted}，学生 ${Number(
             summary.students_upserted || 0
-          )}，成绩 ${Number(summary.score_upserted || 0)}`
+          )}，成绩 ${Number(summary.score_upserted || 0)}，中考成绩 ${Number(
+            summary.zkcj_updated || 0
+          )}`
         );
         message.success("宽表导入成功，异常扫描已在后台进行");
       } else {

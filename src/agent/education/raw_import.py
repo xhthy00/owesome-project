@@ -1,4 +1,9 @@
-"""教科院原始成绩导入：匿名编码、班级解析、角色校验、宽表解析与写入。"""
+"""教科院原始成绩导入：匿名编码、班级解析、角色校验、宽表解析与写入。
+
+成绩宽表导入时，把 Excel 列 ``ZKCJ`` 写入 ``tb_student.zkcj``。空、数值 0、
+非数值或负数都不覆盖已有中考成绩，也不拦截该行其他成绩。再按同一届重算 ``zkmc``。
+届次取 ``tb_score_overview.jc``，学生用 ``anon_stu_id`` 对应 ``tb_student.id``。
+"""
 
 from __future__ import annotations
 
@@ -29,6 +34,7 @@ from src.agent.education.score_import import (
     _in_literals,
     _normalize_exam_row,
     _pick_existing_cols,
+    _quote_ident,
     _rows_to_dicts,
     _schema_columns,
     _table_names,
@@ -90,7 +96,7 @@ _SCORE_WRITE_COLS = (
     "exam_score",
     "exam_time",
 )
-_STUDENT_WRITE_COLS = ("id", "school_id", "class", "jc")
+_STUDENT_WRITE_COLS = ("id", "school_id", "batch", "class", "jc")
 _PREVIEW_HIDE_COLS = frozenset({"ry", "rykg", "ryzw"})
 # 与 edu.tb_score_overview 列注释对齐（库中无 tb_score_view）。
 _OVERVIEW_COL_COMMENTS = {
@@ -223,6 +229,8 @@ class RawOverviewRow:
     scores: dict[str, float | None]
     totals: dict[str, float | None]
     others: dict[str, Any] = field(default_factory=dict)
+    # 仅正数会覆盖 tb_student.zkcj。空、0、非数值、负数都是 None。
+    zkcj: float | None = None
 
 
 @dataclass
@@ -456,6 +464,34 @@ def _to_float_or_invalid(value: Any) -> float | None | object:
         return _INVALID
 
 
+def _parse_zkcj_cell(value: Any) -> float | None:
+    """解析要写入 ``tb_student.zkcj`` 的中考成绩。
+
+    只有正数会更新。空、0、非数值、负数都返回 ``None``，跳过更新。
+    """
+    text = _cell_text(value)
+    if not text:
+        return None
+    parsed = _to_float_or_invalid(value)
+    if parsed is _INVALID:
+        return None
+    score = float(parsed)  # type: ignore[arg-type]
+    if score <= 0:
+        return None
+    return score
+
+
+def _overview_zkcj_text(value: Any) -> str | None:
+    """宽表 ``zkcj`` 要落库的文本。非数值或负数记成 ``0``，避免整行成绩导入失败。"""
+    text = _cell_text(value)
+    if not text:
+        return None
+    parsed = _to_float_or_invalid(value)
+    if parsed is _INVALID or float(parsed) < 0:  # type: ignore[arg-type]
+        return "0"
+    return None
+
+
 def _parse_overview_excel(
     file_bytes: bytes,
 ) -> tuple[list[RawOverviewRow], list[ImportErrorRow], list[str]]:
@@ -517,6 +553,8 @@ def _parse_overview_excel(
                 row_bad = True
             else:
                 totals[col] = parsed  # type: ignore[assignment]
+        zkcj_raw = rec.get("ZKCJ")
+        zkcj_score = _parse_zkcj_cell(zkcj_raw)
         if row_bad:
             continue
         others: dict[str, Any] = {}
@@ -528,6 +566,9 @@ def _parse_overview_excel(
             if not text:
                 continue
             others[col] = text
+        overview_zkcj = _overview_zkcj_text(zkcj_raw)
+        if overview_zkcj is not None:
+            others["ZKCJ"] = overview_zkcj
         valid.append(
             RawOverviewRow(
                 row_num=row_num,
@@ -538,6 +579,7 @@ def _parse_overview_excel(
                 scores=scores,
                 totals=totals,
                 others=others,
+                zkcj=zkcj_score,
             )
         )
     return valid, errors, headers
@@ -1057,13 +1099,25 @@ def _resolve_overview_jc(explicit: Any = None, *names: str | None) -> str | None
     return None
 
 
+def _student_cohort_columns(available: set[str]) -> tuple[str, ...]:
+    """学生届次写在 ``batch``（列注释为「学生届次」）。个别库仍用 ``jc``。"""
+    if not available:
+        return ("batch",)
+    cols: list[str] = []
+    if "batch" in available:
+        cols.append("batch")
+    if "jc" in available:
+        cols.append("jc")
+    return tuple(cols)
+
+
 def _build_student_rows(
     rows: list[RawOverviewRow],
     dims: dict,
     available_student_cols: set[str],
     jc: str | None = None,
 ) -> list[dict]:
-    include_jc = (not available_student_cols) or ("jc" in available_student_cols)
+    cohort_cols = _student_cohort_columns(available_student_cols) if jc is not None else ()
     out: list[dict] = []
     seen: set[str] = set()
     for r in rows:
@@ -1072,10 +1126,164 @@ def _build_student_rows(
             continue
         seen.add(anon)
         rec: dict[str, Any] = {"id": anon, "school_id": token, "class": bj}
-        if include_jc and jc is not None:
-            rec["jc"] = jc
+        for col in cohort_cols:
+            rec[col] = jc
         out.append(_filter_available(rec, available_student_cols))
     return out
+
+
+def _student_zkcj_updates(
+    rows: list[RawOverviewRow],
+    dims: dict,
+) -> list[tuple[str, float]]:
+    """本文件中需要覆盖的中考成绩。空、0、非数值、负数都不更新已有分数。"""
+    updates: list[tuple[str, float]] = []
+    seen: set[str] = set()
+    for row in rows:
+        score = row.zkcj
+        if score is None or score <= 0:
+            continue
+        _token, anon, _bj = _token_and_anon(row, dims)
+        if not anon or anon in seen:
+            continue
+        seen.add(anon)
+        updates.append((anon, float(score)))
+    return updates
+
+
+def _overview_has_cohort(cols: set[str]) -> bool:
+    """宽表能标识届次和学生时才重算名次。探测不到列时仍尝试。"""
+    if not cols:
+        return True
+    return "jc" in cols and "anon_stu_id" in cols
+
+
+def _cohort_zkmc_sql(student_table: str, overview_table: str, db_type: str) -> str:
+    """同一届按中考成绩降序排名，同分同名次。
+
+    成绩为 0 的学生排在最后，并列倒数第一，名次是比他们分高的人数加 1。
+    ``tb_student`` 没有届次列。同一届是成绩宽表里 ``jc`` 相同、
+    ``anon_stu_id`` 能对上学生主键的那些人。
+    """
+    student = _quote_ident(student_table, db_type)
+    overview = _quote_ident(overview_table, db_type)
+    if db_type == "pg":
+        jc_pred = "btrim(ov.jc::text) = %s"
+    else:
+        jc_pred = "TRIM(CAST(ov.jc AS CHAR)) = %s"
+    ranked = (
+        "SELECT st.id, RANK() OVER (ORDER BY COALESCE(st.zkcj, 0) DESC) AS rk "
+        f"FROM {student} st "
+        "WHERE EXISTS ("
+        f"SELECT 1 FROM {overview} ov "
+        "WHERE ov.anon_stu_id = st.id "
+        f"AND ov.anon_stu_id IS NOT NULL AND {jc_pred}"
+        ")"
+    )
+    if db_type == "pg":
+        return (
+            f"UPDATE {student} AS s SET zkmc = ranked.rk "
+            f"FROM ({ranked}) AS ranked WHERE s.id = ranked.id"
+        )
+    return (
+        f"UPDATE {student} AS s JOIN ({ranked}) AS ranked ON s.id = ranked.id "
+        "SET s.zkmc = ranked.rk"
+    )
+
+
+def _must_session_write(session: Any, sql: str, params: tuple | None = None) -> None:
+    ok, msg, _result = session.execute_write(sql, params)
+    if not ok:
+        raise RuntimeError(msg)
+
+
+def _ensure_student_zk_columns(db_type: str, config: dict[str, Any], table: str) -> None:
+    """``tb_student.zkcj`` / ``zkmc`` 不存在时补上，已有列保持原定义。"""
+    cols = _schema_columns(db_type, config, table)
+    if cols and "zkcj" in cols and "zkmc" in cols:
+        return
+    if db_type != "pg" and not cols:
+        return
+    quoted = _quote_ident(table, db_type)
+    with WriteDbSession(db_type, config) as session:
+        if db_type == "pg":
+            if not cols or "zkcj" not in cols:
+                _must_session_write(
+                    session,
+                    f"ALTER TABLE {quoted} ADD COLUMN IF NOT EXISTS "
+                    "zkcj DOUBLE PRECISION NOT NULL DEFAULT 0",
+                )
+                _must_session_write(
+                    session,
+                    f"COMMENT ON COLUMN {quoted}.zkcj IS "
+                    "'中考成绩，默认 0。成绩宽表 ZKCJ 为空或 0 时不覆盖已有值'",
+                )
+            if not cols or "zkmc" not in cols:
+                _must_session_write(
+                    session,
+                    f"ALTER TABLE {quoted} ADD COLUMN IF NOT EXISTS "
+                    "zkmc INTEGER NOT NULL DEFAULT 0",
+                )
+                _must_session_write(
+                    session,
+                    f"COMMENT ON COLUMN {quoted}.zkmc IS "
+                    "'同一届中考名次。届次来自成绩宽表 jc。同分同名次，中考成绩为 0 的并列倒数第一'",
+                )
+        elif cols:
+            if "zkcj" not in cols:
+                _must_session_write(
+                    session,
+                    f"ALTER TABLE {quoted} ADD COLUMN zkcj DOUBLE NOT NULL DEFAULT 0",
+                )
+            if "zkmc" not in cols:
+                _must_session_write(
+                    session,
+                    f"ALTER TABLE {quoted} ADD COLUMN zkmc INT NOT NULL DEFAULT 0",
+                )
+        session.commit()
+
+
+def _sync_student_entrance_scores(
+    db_type: str,
+    config: dict[str, Any],
+    student_table: str,
+    rows: list[RawOverviewRow],
+    dims: dict,
+    jc: str | None,
+    overview_table: str,
+    available_overview_cols: set[str],
+) -> int:
+    """更新本文件中大于 0 的中考成绩，并按宽表届次重算该届全部学生的名次。"""
+    updates = _student_zkcj_updates(rows, dims)
+    rank_ready = bool(jc) and _overview_has_cohort(available_overview_cols)
+    if not updates and not rank_ready:
+        return 0
+    quoted = _quote_ident(student_table, db_type)
+    with WriteDbSession(db_type, config) as session:
+        if updates:
+            if db_type == "pg":
+                sql = (
+                    f"UPDATE {quoted} AS s SET zkcj = v.score::double precision "
+                    "FROM (VALUES %s) AS v(id, score) WHERE s.id = v.id"
+                )
+                ok, msg, _result = session.execute_values(sql, updates)
+                if not ok:
+                    raise RuntimeError(msg)
+            else:
+                for sid, score in updates:
+                    _must_session_write(
+                        session,
+                        f"UPDATE {quoted} SET zkcj = %s WHERE id = %s",
+                        (score, sid),
+                    )
+        if rank_ready:
+            _must_session_write(
+                session,
+                _cohort_zkmc_sql(student_table, overview_table, db_type),
+                (jc,),
+            )
+        session.commit()
+    return len(updates)
 
 
 def _build_score_rows(
@@ -1125,6 +1333,7 @@ def _write_overview_to_db(
     overview_table = tables.get("score_overview") or "tb_score_overview"
     student_table = tables.get("student") or "tb_student"
     score_table = tables.get("score") or "tb_score"
+    _ensure_student_zk_columns(db_type, config, student_table)
 
     ov_available = _schema_columns(db_type, config, overview_table)
     st_available = _schema_columns(db_type, config, student_table)
@@ -1153,10 +1362,14 @@ def _write_overview_to_db(
     score_upserted = _upsert_dict_rows(
         db_type, config, score_table, sc_cols, ("exam_id", "student_id"), sc_rows
     )
+    zkcj_updated = _sync_student_entrance_scores(
+        db_type, config, student_table, rows, dims, jc, overview_table, ov_available
+    )
     return {
         "overview_upserted": int(overview_upserted),
         "students_upserted": int(students_upserted),
         "score_upserted": int(score_upserted),
+        "zkcj_updated": int(zkcj_updated),
     }
 
 
@@ -1317,6 +1530,7 @@ def execute_raw_overview_import(
         "overview_upserted": int(counts.get("overview_upserted") or 0),
         "students_upserted": int(counts.get("students_upserted") or 0),
         "score_upserted": int(counts.get("score_upserted") or 0),
+        "zkcj_updated": int(counts.get("zkcj_updated") or 0),
     }
     return preview
 
