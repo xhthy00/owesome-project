@@ -16,6 +16,7 @@ const routes = [
 
 const resourceSubRoutes = [
   { key: "datasource", label: "数据源" },
+  { key: "school", label: "学校" },
   { key: "exam-library", label: "试卷库" },
   { key: "raw-score-import", label: "成绩库" },
   { key: "knowledge", label: "知识点" },

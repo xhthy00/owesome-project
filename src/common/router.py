@@ -8,6 +8,7 @@ from datasource.api.permission import router as ds_permission_router
 from src.agent.education.api import router as education_router
 from src.agent.education.exam_library_api import router as exam_library_router
 from src.agent.education.knowledge_api import router as knowledge_router
+from src.agent.education.school_api import router as school_router
 from src.agent.education.score_library_api import router as score_library_router
 from system.api.docs import router as system_docs_router
 from system.api.edu_permission import router as edu_permission_router
@@ -34,6 +35,7 @@ def get_all_routers() -> list:
         exam_library_router,
         score_library_router,
         knowledge_router,
+        school_router,
         audit_router,
     ]
 
