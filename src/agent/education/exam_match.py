@@ -483,16 +483,10 @@ def _user_prompt(question: dict[str, Any], candidates: list[dict[str, Any]]) -> 
 
 
 def _match_llm():
-    """核对只需要短 JSON。MiniMax-M3 默认会长时间思考，这里关掉并限制输出长度。"""
-    from src.common.core.config import get_settings
+    """使用知识点匹配的模型配置。输出长度和思考开关由 LLM_MATCH_* 决定。"""
     from src.llm.service import create_llm
 
-    settings = get_settings()
-    kwargs: dict[str, Any] = {"max_tokens": 512, "temperature": 0}
-    model = (settings.llm_model or "").lower()
-    if "minimax" in model or settings.llm_thinking:
-        kwargs["thinking"] = "disabled"
-    return create_llm(**kwargs)
+    return create_llm(module="match", temperature=0)
 
 
 def _ask_model(question: dict[str, Any], candidates: list[dict[str, Any]], llm: Any = None) -> dict[str, Any]:

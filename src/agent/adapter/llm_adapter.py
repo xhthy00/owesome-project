@@ -220,7 +220,7 @@ class LangChainLlmClient:
                         ) from exc
                     if self._is_network_error(exc):
                         raise RuntimeError(
-                            "LLM 网络连接失败：无法连接到模型服务。请检查 llm_base_url、网络代理与目标服务可达性。"
+                            "LLM 网络连接失败：无法连接到模型服务。请检查该模块的模型地址、网络代理与目标服务可达性。"
                         ) from exc
                     if self._is_transient_http_error(exc):
                         raise RuntimeError(

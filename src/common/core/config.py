@@ -34,16 +34,25 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 1440
 
-    # LLM
-    llm_base_url: Optional[str] = None
-    llm_api_key: Optional[str] = None
-    llm_model: str = "gpt-4o-mini"
-    # 单次请求输出上限。不设置时各服务商默认值不一（MiniMax 等偏小），长 <think>
-    # + 工具调用 JSON 会被中途截断，导致 ReAct 解析连续失败。显式给宽裕值。
-    llm_max_tokens: int = 8192
-    # 思考模式控制：``disabled`` / ``adaptive``。仅部分模型支持（如 MiniMax-M3；
-    # M2.x 不可关闭）。留空不发送该参数，其他网关（GLM/Qwen 等）不受影响。
-    llm_thinking: Optional[str] = None
+    # 智能问数。max_tokens 不设宽裕值时，部分服务商默认偏小，长思考和工具调用 JSON 会被截断。
+    llm_chat_base_url: Optional[str] = None
+    llm_chat_api_key: Optional[str] = None
+    llm_chat_model: Optional[str] = None
+    llm_chat_max_tokens: int = 8192
+    # 思考模式：``disabled`` / ``adaptive``。仅部分模型支持。留空不发送该参数。
+    llm_chat_thinking: Optional[str] = None
+    # 知识点匹配
+    llm_match_base_url: Optional[str] = None
+    llm_match_api_key: Optional[str] = None
+    llm_match_model: Optional[str] = None
+    llm_match_max_tokens: Optional[int] = None
+    llm_match_thinking: Optional[str] = None
+    # 试卷 AI 识别
+    llm_paper_base_url: Optional[str] = None
+    llm_paper_api_key: Optional[str] = None
+    llm_paper_model: Optional[str] = None
+    llm_paper_max_tokens: Optional[int] = None
+    llm_paper_thinking: Optional[str] = None
 
     # Team 模式编排：``legacy`` 为手写协程；``langgraph`` 为 LangGraph StateGraph（默认）。
     team_orchestrator: Literal["legacy", "langgraph"] = "langgraph"

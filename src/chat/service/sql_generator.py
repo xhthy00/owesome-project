@@ -67,7 +67,7 @@ class SQLGenerator:
     """Service for generating SQL from natural language based on SQLBot patterns."""
 
     def __init__(self, llm=None):
-        self.llm = llm or create_llm()
+        self.llm = llm or create_llm(module="chat")
 
     def generate_sql(
         self,
@@ -404,7 +404,7 @@ def generate_followup_questions(
         List of suggested follow-up questions
     """
     try:
-        llm = create_llm()
+        llm = create_llm(module="chat")
 
         system_prompt = f"""### 请使用语言：{lang} 回答，不需要输出深度思考过程
 

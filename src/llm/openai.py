@@ -4,11 +4,6 @@ from typing import Any, Dict, List, Optional
 
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
-from langchain_core.outputs import ChatGeneration
-
-from src.common.core.config import get_settings
-
-settings = get_settings()
 
 
 class OpenAILLM:
@@ -26,12 +21,12 @@ class OpenAILLM:
         **kwargs
     ):
         self.model = model or "gpt-4o-mini"
-        self.api_key = api_key or settings.llm_api_key or "dummy"
-        self.base_url = base_url or settings.llm_base_url
+        self.api_key = api_key or "dummy"
+        self.base_url = base_url
         self.temperature = temperature
         self.timeout = timeout
-        self.max_tokens = max_tokens if max_tokens is not None else settings.llm_max_tokens
-        self.thinking = thinking if thinking is not None else settings.llm_thinking
+        self.max_tokens = max_tokens
+        self.thinking = thinking
         self.extra_params = kwargs
 
         # Create LangChain chat model

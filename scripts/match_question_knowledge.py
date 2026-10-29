@@ -46,8 +46,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.agent.util.json_parser import parse_json_tolerant  # noqa: E402
-from src.common.core.config import get_settings  # noqa: E402
-from src.llm.service import create_llm  # noqa: E402
+from src.llm.service import create_llm, llm_profile  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # 常量
@@ -342,13 +341,12 @@ def main() -> int:
         logger.error("错误：未提供 --database-url，也未设置环境变量 DATABASE_URL")
         return 1
 
-    # 验证配置
-    settings = get_settings()
-    if not settings.llm_model:
-        logger.error("错误：未配置 LLM_MODEL")
+    # 验证配置。与 Web 端知识点核对使用同一组 LLM_MATCH_*。
+    if not llm_profile("match")["model"]:
+        logger.error("错误：未配置 LLM_MATCH_MODEL")
         return 1
 
-    llm = create_llm()
+    llm = create_llm(module="match")
     sleep_seconds = args.sleep_ms / 1000.0
 
     with _make_session(args.database_url) as session:

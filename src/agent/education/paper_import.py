@@ -1431,21 +1431,12 @@ def _ocr_images(images: list[bytes], on_progress: Any = None) -> str:
 
 
 def _vision_llm():
-    from src.common.core.config import get_settings
-    from src.llm.service import create_llm
+    from src.llm.service import create_llm, llm_profile
 
-    settings = get_settings()
-    if not (settings.llm_base_url and settings.llm_api_key):
+    profile = llm_profile("paper")
+    if not (profile["base_url"] and profile["api_key"]):
         raise ValueError("没有配置大模型，无法识别没有文字层的试卷")
-    kwargs: dict[str, Any] = {
-        "provider": "openai",
-        "timeout": 180,
-        "temperature": 0,
-        "max_tokens": 8192,
-    }
-    if "minimax" in (settings.llm_model or "").lower():
-        kwargs["thinking"] = "disabled"
-    return create_llm(**kwargs)
+    return create_llm(module="paper", provider="openai", timeout=180, temperature=0)
 
 
 def _vision_transcribe(

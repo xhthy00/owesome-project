@@ -4,10 +4,6 @@ from typing import Any, Dict, List, Optional
 
 from langchain_openai import ChatOpenAI
 
-from src.common.core.config import get_settings
-
-settings = get_settings()
-
 
 class OllamaLLM:
     """
@@ -29,11 +25,11 @@ class OllamaLLM:
     ):
         self.model = model or "qwen2.5"
         # Ollama's API is OpenAI-compatible at /v1 endpoint
-        self.base_url = base_url or settings.llm_base_url or "http://localhost:11434"
+        self.base_url = base_url or "http://localhost:11434"
         self.temperature = temperature
         self.timeout = timeout
-        self.max_tokens = max_tokens if max_tokens is not None else settings.llm_max_tokens
-        self.thinking = thinking if thinking is not None else settings.llm_thinking
+        self.max_tokens = max_tokens
+        self.thinking = thinking
         self.extra_params = kwargs
 
         # Create LangChain chat model using OpenAI client (Ollama compatible)
@@ -93,6 +89,8 @@ class OllamaLLM:
         natively support response_format.
         """
         import json
+
+        from langchain_core.messages import HumanMessage
 
         if response_format.get("type") == "json_object":
             schema = response_format.get("schema", {})
