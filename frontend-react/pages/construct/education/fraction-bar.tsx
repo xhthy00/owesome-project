@@ -362,7 +362,7 @@ export default function FractionBarPage() {
               预测分数线
             </Typography.Title>
             <Typography.Text className="oc-muted">
-              管理员和教育局可维护全部。学校账号可查看全市统考和本校学校自建，并维护本校学校自建。删除时一并清除达线指标。
+              管理员和教育局可维护全部。学校账号可查看模拟考试和本校学校自建，并维护本校学校自建。删除时一并清除达线指标。
             </Typography.Text>
           </div>
         </div>

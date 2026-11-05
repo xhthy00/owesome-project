@@ -13,11 +13,13 @@ from typing import Any
 from datasource.db.db import WriteDbSession
 
 EXAM_TYPES = ("city", "school", "teacher")
-EXAM_TYPE_LABELS = {"city": "全市统考", "school": "学校自建", "teacher": "教师自建"}
+EXAM_TYPE_LABELS = {"city": "模拟考试", "school": "学校自建", "teacher": "教师自建"}
 _TYPE_ALIASES = {
     "city": "city",
     "school": "school",
     "teacher": "teacher",
+    "模拟考试": "city",
+    "全市联考": "city",
     "全市统考": "city",
     "学校自建": "school",
     "教师自建": "teacher",

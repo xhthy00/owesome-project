@@ -3,6 +3,7 @@
 import json
 
 from src.agent.education.exam_library import (
+    EXAM_TYPE_LABELS,
     ExamActor,
     _batch_visibility_sql,
     _exam_name_is_this_batch,
@@ -137,6 +138,9 @@ def test_paper_type_follows_the_batch_not_the_form():
     assert city_form["exam_type"] == "school"
     assert city_form["school_id"] == "B02"
     assert normalize_batch_exam_type("全市统考") == "city"
+    assert normalize_batch_exam_type("全市联考") == "city"
+    assert normalize_batch_exam_type("模拟考试") == "city"
+    assert EXAM_TYPE_LABELS["city"] == "模拟考试"
     assert normalize_batch_jc("2027届高三10月月考") == "2027"
     assert normalize_batch_jc(2027) == "2027"
     try:

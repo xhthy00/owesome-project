@@ -42,7 +42,7 @@ const SUBJECT_SCORE: Record<string, number> = {
   地理: 100
 };
 const EXAM_TYPES = [
-  { value: "city", label: "全市统考" },
+  { value: "city", label: "模拟考试" },
   { value: "school", label: "学校自建" },
   { value: "teacher", label: "教师自建" }
 ];
@@ -455,7 +455,7 @@ export default function ExamLibraryPage() {
                   试卷库
                 </Typography.Title>
                 <Typography.Text type="secondary" className="text-[13px]">
-                  批次前的标记按优先级提示未关联题目、卷面总分异常、未关联知识点或尚有若干题未关联、未关联成绩；齐全时为绿色勾。管理员和教育局可维护全部批次与试卷；学校账号可查看全市统考和本校学校自建，并维护本校学校自建。
+                  批次前的标记按优先级提示未关联题目、卷面总分异常、未关联知识点或尚有若干题未关联、未关联成绩；齐全时为绿色勾。管理员和教育局可维护全部批次与试卷；学校账号可查看模拟考试和本校学校自建，并维护本校学校自建。
                 </Typography.Text>
               </div>
             </div>
@@ -622,7 +622,7 @@ export default function ExamLibraryPage() {
               title: "类型",
               dataIndex: "exam_type_label",
               width: 100,
-              render: (value) => value || "全市统考"
+              render: (value) => value || "模拟考试"
             },
             {
               title: "届次",
