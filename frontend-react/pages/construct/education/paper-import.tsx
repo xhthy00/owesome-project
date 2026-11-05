@@ -19,11 +19,13 @@ import type { ColumnsType } from "antd/es/table";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentUser } from "@/api/auth";
 import {
   educationApi,
   type ExamBatchOption,
   type PaperQuestionDraft
 } from "@/api/education";
+import { canCreateExam } from "@/api/examLibrary";
 
 const SUBJECTS = ["语文", "数学", "英语", "物理", "化学", "生物", "政治", "历史", "地理"];
 const SUBJECT_FULL_SCORE: Record<string, number> = {
@@ -306,8 +308,18 @@ export function PaperImportPage() {
   }, []);
 
   useEffect(() => {
+    void getCurrentUser()
+      .then((user) => {
+        if (!canCreateExam(user)) {
+          message.error("仅系统管理员可导入试卷");
+          router.replace("/construct/education/exam-library");
+        }
+      })
+      .catch(() => {
+        router.replace("/construct/education/exam-library");
+      });
     void loadBatches();
-  }, [loadBatches]);
+  }, [loadBatches, router]);
 
   useEffect(() => {
     if (!router.isReady || presetApplied.current) return;

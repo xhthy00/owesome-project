@@ -215,6 +215,11 @@ def test_raw_import_role_rejects_teacher():
     assert assert_raw_import_role_allowed(EduScope(edu_role="bureau_admin")) is None
     assert assert_raw_import_role_allowed(EduScope(edu_role="school_admin")) is None
     assert assert_raw_import_role_allowed(EduScope(), privileged=True) is None
+    write_err = assert_raw_import_role_allowed(EduScope(edu_role="school_admin"), write=True)
+    assert isinstance(write_err, str)
+    assert write_err
+    assert assert_raw_import_role_allowed(EduScope(edu_role="bureau_admin"), write=True)
+    assert assert_raw_import_role_allowed(EduScope(), privileged=True, write=True) is None
 
 
 def test_school_score_import_only_own_school_batch():

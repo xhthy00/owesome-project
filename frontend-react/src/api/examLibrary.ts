@@ -100,14 +100,11 @@ export interface MatchItem {
 
 export function canManageExamBatches(user: CurrentUser | null): boolean {
   if (!user) return false;
-  return Boolean(
-    user.is_platform_admin || user.is_super_admin || user.edu_scope?.edu_role === "bureau_admin"
-  );
+  return Boolean(user.is_platform_admin || user.is_super_admin);
 }
 
 export function canCreateExam(user: CurrentUser | null): boolean {
-  if (!user) return false;
-  return canManageExamBatches(user) || user.edu_scope?.edu_role === "school_admin";
+  return canManageExamBatches(user);
 }
 
 export function canCreateBatch(user: CurrentUser | null): boolean {
@@ -126,14 +123,8 @@ export function canMaintainBatch(
     | undefined
 ): boolean {
   if (!user || !batch) return false;
-  if (canManageExamBatches(user)) return true;
-  if (user.edu_scope?.edu_role !== "school_admin") return false;
-  if (batch.writable === false) return false;
-  if (batch.writable === true) return true;
-  if (batch.exam_type && batch.exam_type !== "school") return false;
-  const school = String(batch.school_id || "").trim();
-  const mine = String(user.edu_scope?.school_id || "").trim();
-  return Boolean(school && mine && school === mine);
+  if (!canManageExamBatches(user)) return false;
+  return batch.writable !== false;
 }
 
 export function canMaintainExam(
@@ -141,16 +132,7 @@ export function canMaintainExam(
   exam: { exam_type?: string | null; school_id?: string | null; owner_id?: string | null } | null | undefined
 ): boolean {
   if (!user || !exam) return false;
-  if (canManageExamBatches(user)) return true;
-  if (user.edu_scope?.edu_role === "school_admin") {
-    if (exam.exam_type !== "school") return false;
-    const school = String(exam.school_id || "").trim();
-    const mine = String(user.edu_scope?.school_id || "").trim();
-    return Boolean(school && mine && school === mine);
-  }
-  const owner = String(exam.owner_id || "").trim();
-  const account = String(user.account || "").trim();
-  return Boolean(owner && account && owner === account);
+  return canManageExamBatches(user);
 }
 
 export interface MatchTask {

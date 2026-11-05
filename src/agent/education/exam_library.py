@@ -1,7 +1,7 @@
 """试卷库：列表、可见范围、试卷与题目维护。
 
-管理员和教育局可以维护全部考试批次和试卷。
-学校账号可以查看全市统考，以及本校的学校自建考试和试卷，并维护本校的学校自建考试和试卷。
+超管和平台管理员可以维护考试批次、试卷和题目。
+教育局和学校账号可以查看对应范围的批次和试卷，不能改。
 """
 
 from __future__ import annotations
@@ -62,17 +62,20 @@ class ExamActor:
     school_id: str
     owner_id: str
     edu_role: str
+    can_maintain: bool = False
 
 
 def build_actor(user: Any, scope: Any) -> ExamActor:
     from system.authz import is_platform_admin
 
     role = str(getattr(scope, "edu_role", "") or "").strip()
+    privileged = bool(is_platform_admin(user))
     return ExamActor(
-        see_all=bool(is_platform_admin(user) or role == "bureau_admin"),
+        see_all=bool(privileged or role == "bureau_admin"),
         school_id=str(getattr(scope, "school_id", "") or "").strip(),
         owner_id=str(getattr(user, "account", "") or "").strip(),
         edu_role=role,
+        can_maintain=privileged,
     )
 
 
@@ -82,11 +85,11 @@ def exam_kind(exam: dict[str, Any]) -> str:
 
 
 def can_create_exam(actor: ExamActor) -> bool:
-    return actor.see_all or actor.edu_role == "school_admin"
+    return actor.can_maintain
 
 
 def can_create_batch(actor: ExamActor) -> bool:
-    return actor.see_all or actor.edu_role == "school_admin"
+    return actor.can_maintain
 
 
 def batch_visible(batch: dict[str, Any], actor: ExamActor) -> bool:
@@ -102,12 +105,9 @@ def batch_visible(batch: dict[str, Any], actor: ExamActor) -> bool:
 
 
 def batch_writable(batch: dict[str, Any], actor: ExamActor) -> bool:
-    """管理员和教育局维护全部批次。学校账号只维护绑定本校的学校自建批次。"""
-    if actor.see_all:
-        return True
-    if actor.edu_role != "school_admin" or exam_kind(batch) != "school":
-        return False
-    return _same_school(batch, actor)
+    """只有超管和平台管理员可以改批次。"""
+    _ = batch
+    return actor.can_maintain
 
 
 def _guard_batch_for_paper(actor: ExamActor, batch_type: str, batch_school: str | None) -> None:
@@ -142,14 +142,9 @@ def exam_visible(exam: dict[str, Any], actor: ExamActor) -> bool:
 
 
 def exam_writable(exam: dict[str, Any], actor: ExamActor) -> bool:
-    if actor.see_all:
-        return True
-    if actor.edu_role == "school_admin":
-        return exam_kind(exam) == "school" and _same_school(exam, actor)
-    if exam_kind(exam) == "city":
-        return False
-    owner_id = str(exam.get("owner_id") or "")
-    return bool(actor.owner_id) and owner_id == actor.owner_id
+    """只有超管和平台管理员可以改试卷和题目。"""
+    _ = exam
+    return actor.can_maintain
 
 
 def _same_school(exam: dict[str, Any], actor: ExamActor) -> bool:

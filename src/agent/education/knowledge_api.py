@@ -29,7 +29,7 @@ from src.agent.education.knowledge_admin import (
     update_knowledge,
 )
 from system.api.auth_deps import get_current_user
-from system.authz import is_super_admin
+from system.authz import is_platform_admin
 from system.schemas import UserResponse
 
 logger = logging.getLogger(__name__)
@@ -98,15 +98,15 @@ def _edu_connection() -> tuple[str, dict]:
 
 
 def _require_maintainer(current_user: UserResponse) -> str:
-    """写操作仅超级管理员账号 admin。查看接口不调用本函数。"""
+    """写操作仅超管和平台管理员。查看接口不调用本函数。"""
     from common.core.database import get_db_session
     from system.crud.crud_user import get_user_by_id
 
     with get_db_session() as session:
         user = get_user_by_id(session, int(current_user.id))
         account = str(getattr(user, "account", "") or current_user.account or "").strip()
-        if not can_maintain_knowledge(account=account, is_super_admin=is_super_admin(user)):
-            raise ForbiddenException("仅超级管理员 admin 可维护知识点")
+        if not can_maintain_knowledge(is_platform_admin=is_platform_admin(user)):
+            raise ForbiddenException("仅系统管理员可维护知识点")
     return account or "admin"
 
 

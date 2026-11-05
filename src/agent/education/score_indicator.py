@@ -408,9 +408,13 @@ def fraction_bar_access(
     batches: list[dict[str, Any]],
     actor: Any,
 ) -> tuple[bool, bool]:
-    """返回 (visible, writable)。没有对应批次的分数线按统考查看，不能由学校账号维护。"""
-    if actor is None or getattr(actor, "see_all", False):
+    """返回 (visible, writable)。只有超管和平台管理员可以改分数线。"""
+    if actor is None:
+        return True, False
+    if getattr(actor, "can_maintain", False):
         return True, True
+    if getattr(actor, "see_all", False):
+        return True, False
     batch = match_fraction_batch(exam_name, exam_batch_id, batches)
     if batch is None:
         if getattr(actor, "edu_role", "") in ("school_admin", "teacher"):

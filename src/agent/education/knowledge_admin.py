@@ -63,8 +63,6 @@ OPTIONAL_FIELDS = ("secondary", "secondary_no")
 
 CASCADE_LEVELS = ("stage", "grade", "subject", "module", "chapter", "secondary")
 
-_MAINTAINER_ACCOUNT = "admin"
-
 _LIST_COLUMNS = (
     "id",
     "knowledge_no",
@@ -150,9 +148,9 @@ def parse_edu_database_url(url: str) -> tuple[str, dict[str, Any]]:
     }
 
 
-def can_maintain_knowledge(*, account: str, is_super_admin: bool) -> bool:
-    """下载模板、导入、新增、编辑、删除仅开放给超级管理员账号 admin。"""
-    return bool(is_super_admin) and (account or "").strip() == _MAINTAINER_ACCOUNT
+def can_maintain_knowledge(*, is_platform_admin: bool) -> bool:
+    """下载模板、导入、新增、编辑、删除仅开放给超管和平台管理员。"""
+    return bool(is_platform_admin)
 
 
 def cell_text(value: Any) -> str:

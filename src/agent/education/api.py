@@ -79,6 +79,11 @@ def _require_platform_admin(current_user: UserResponse) -> None:
         raise ForbiddenException("仅系统管理员可配置异常规则")
 
 
+def _require_edu_maintainer(current_user: UserResponse) -> None:
+    if not is_platform_admin_user(current_user):
+        raise ForbiddenException("仅系统管理员可执行该操作")
+
+
 @router.get("/report-config")
 async def get_report_config(
     current_user: UserResponse = Depends(get_current_user),
@@ -1319,6 +1324,7 @@ async def upsert_fraction_bar(
     from src.agent.education.score_indicator import upsert_fraction_bar_and_recompute
     from src.agent.resource.tool.business import _load_datasource
 
+    _require_edu_maintainer(current_user)
     _ = workspace_oid
     exam = (req.exam_name or "").strip()
     if req.exam_batch_id is None and not exam:
@@ -1360,6 +1366,7 @@ async def delete_fraction_bar(
     from src.agent.education.score_indicator import delete_fraction_bar as remove_bar
     from src.agent.resource.tool.business import _load_datasource
 
+    _require_edu_maintainer(current_user)
     _ = workspace_oid
     ds_id, ds_oid, scope, actor = _exam_line_actor(current_user)
     denied = _deny_student_line_tools(scope)
@@ -1394,6 +1401,7 @@ async def recompute_score_indicator(
     from src.agent.education.score_indicator import recompute_exams
     from src.agent.resource.tool.business import _load_datasource
 
+    _require_edu_maintainer(current_user)
     _ = workspace_oid
     ds_id, ds_oid, scope, actor = _exam_line_actor(current_user)
     denied = _deny_student_line_tools(scope)
@@ -1437,7 +1445,7 @@ async def download_score_import_template(
     import_type: str,
     current_user: UserResponse = Depends(get_current_user),
 ) -> FileResponse:
-    _ = current_user
+    _require_edu_maintainer(current_user)
     from src.agent.education.score_import import template_path
 
     t = _parse_import_type(import_type)
@@ -1466,6 +1474,7 @@ async def preview_score_import(
     from src.common.core.database import get_db_session
     from system.crud.crud_user import get_user_by_id
 
+    _require_edu_maintainer(current_user)
     t = _parse_import_type(import_type)
     file_bytes = _read_upload_file(file)
 
@@ -1501,6 +1510,7 @@ async def execute_score_import(
     from src.common.core.database import get_db_session
     from system.crud.crud_user import get_user_by_id
 
+    _require_edu_maintainer(current_user)
     t = _parse_import_type(import_type)
     file_bytes = _read_upload_file(file)
 
@@ -1706,7 +1716,7 @@ async def confirm_anomaly_alert(
         return success_response(data, message="已确认处理")
 
 
-def _prepare_raw_import(current_user: UserResponse, workspace_oid: int):
+def _prepare_raw_import(current_user: UserResponse, workspace_oid: int, *, write: bool = False):
     from common.core.database import get_db_session
     from common.exceptions.base import ForbiddenException
     from datasource.service.edu_permission import parse_edu_scope
@@ -1727,7 +1737,7 @@ def _prepare_raw_import(current_user: UserResponse, workspace_oid: int):
         scope = parse_edu_scope(user)
         privileged = bool(is_platform_admin(user))
         see_all = privileged or scope.edu_role == "bureau_admin"
-        err = assert_raw_import_role_allowed(scope, privileged=privileged)
+        err = assert_raw_import_role_allowed(scope, privileged=privileged, write=write)
         if err:
             raise ForbiddenException(err)
     db_type, config, _ = _load_datasource(ds_id, workspace_oid)
@@ -1827,7 +1837,9 @@ async def list_raw_import_batches(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(
+        current_user, workspace_oid, write=maintain
+    )
     if maintain:
         from src.agent.education.raw_import import list_writable_score_batches
 
@@ -1877,7 +1889,7 @@ async def create_raw_import_batch(
     when = (exam_time or "").strip()
     if not name:
         raise BadRequestException("批次名称不能为空")
-    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid, write=True)
     from common.core.database import get_db_session
     from src.agent.education.exam_library import (
         build_actor,
@@ -1977,7 +1989,7 @@ async def list_raw_import_papers(
         _overview_import_status,
     )
 
-    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid, write=True)
     _require_score_import_batch(see_all, scope, db_type, config, int(exam_batch_id))
     ok, msg, data = execute_sql(
         db_type,
@@ -2047,7 +2059,7 @@ async def download_raw_import_template(
         load_raw_detail_template_meta,
     )
 
-    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid, write=True)
     name = (kind or "").strip().lower()
     if name == "overview":
         payload = build_raw_overview_template()
@@ -2103,7 +2115,7 @@ async def preview_raw_overview(
     from src.agent.education.raw_import import preview_raw_overview_import
 
     file_bytes = _read_raw_upload_file(file)
-    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid, write=True)
     _require_score_import_batch(see_all, scope, db_type, config, int(exam_batch_id))
     result = preview_raw_overview_import(
         file_bytes, exam_batch_id, scope, db_type, config, jc=jc, source_name=file.filename
@@ -2125,7 +2137,7 @@ async def execute_raw_overview(
     from src.agent.education.raw_import import execute_raw_overview_import
 
     file_bytes = _read_raw_upload_file(file)
-    ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
+    ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid, write=True)
     _require_score_import_batch(see_all, scope, db_type, config, int(exam_batch_id))
     result = await asyncio.to_thread(
         execute_raw_overview_import,
@@ -2166,7 +2178,7 @@ async def preview_raw_detail(
     from src.agent.education.raw_import import preview_raw_detail_import
 
     file_bytes = _read_raw_upload_file(file)
-    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid, write=True)
     _require_score_import_batch(see_all, scope, db_type, config, int(exam_batch_id))
     result = preview_raw_detail_import(file_bytes, exam_batch_id, exam_id, scope, db_type, config)
     return success_response(data=_raw_result_payload(result))
@@ -2185,7 +2197,7 @@ async def execute_raw_detail(
     from src.agent.education.raw_import import execute_raw_detail_import
 
     file_bytes = _read_raw_upload_file(file)
-    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config, see_all = _prepare_raw_import(current_user, workspace_oid, write=True)
     _require_score_import_batch(see_all, scope, db_type, config, int(exam_batch_id))
     result = execute_raw_detail_import(file_bytes, exam_batch_id, exam_id, scope, db_type, config)
     payload = _raw_result_payload(result)
@@ -2217,7 +2229,7 @@ async def paper_import_text_layer(
     """选择 PDF 时判断有没有可复制文字，供界面决定是否默认打开图像识别。"""
     from src.agent.education.paper_import import pdf_has_text_layer
 
-    _prepare_raw_import(current_user, workspace_oid)
+    _prepare_raw_import(current_user, workspace_oid, write=True)
     name = (file.filename or "").lower()
     if not name.endswith(".pdf"):
         raise BadRequestException("请上传 PDF")
@@ -2240,7 +2252,7 @@ async def preview_paper_import(
 ) -> dict:
     from src.agent.education.paper_import import preview_paper_file
 
-    _prepare_raw_import(current_user, workspace_oid)
+    _prepare_raw_import(current_user, workspace_oid, write=True)
     name = (file.filename or "").lower()
     if not name.endswith((".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp", ".bmp")):
         raise BadRequestException("请上传 PDF、Word（.docx）或图片")
@@ -2272,7 +2284,7 @@ async def preview_paper_import_stream(
 ) -> StreamingResponse:
     from src.agent.education.paper_import import preview_paper_file
 
-    _prepare_raw_import(current_user, workspace_oid)
+    _prepare_raw_import(current_user, workspace_oid, write=True)
     name = (file.filename or "").lower()
     if not name.endswith((".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp", ".bmp")):
         raise BadRequestException("请上传 PDF、Word（.docx）或图片")
@@ -2330,7 +2342,7 @@ async def execute_paper_import(
 ) -> dict:
     from src.agent.education.paper_import import save_paper_outline
 
-    _ds_id, scope, db_type, config, _see_all = _prepare_raw_import(current_user, workspace_oid)
+    _ds_id, scope, db_type, config, _see_all = _prepare_raw_import(current_user, workspace_oid, write=True)
     from common.core.database import get_db_session
     from src.agent.education.exam_library import build_actor
     from system.crud.crud_user import get_user_by_id

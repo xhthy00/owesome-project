@@ -27,7 +27,10 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import type { Dayjs } from "dayjs";
 import Link from "next/link";
+import { useRouter } from "next/router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentUser } from "@/api/auth";
+import { canCreateExam } from "@/api/examLibrary";
 import {
   educationApi,
   type ExamBatchOption,
@@ -193,6 +196,7 @@ function resolveExamId(
 }
 
 export default function RawScoreImportPage() {
+  const router = useRouter();
   const [step, setStep] = useState<WizardStep>(0);
   const [loading, setLoading] = useState(false);
   const [batches, setBatches] = useState<ExamBatchOption[]>([]);
@@ -271,8 +275,18 @@ export default function RawScoreImportPage() {
   }, []);
 
   useEffect(() => {
+    void getCurrentUser()
+      .then((user) => {
+        if (!canCreateExam(user)) {
+          message.error("仅系统管理员可导入成绩");
+          router.replace("/construct/education/score-library");
+        }
+      })
+      .catch(() => {
+        router.replace("/construct/education/score-library");
+      });
     void loadBatches();
-  }, [loadBatches]);
+  }, [loadBatches, router]);
 
   useEffect(() => {
     if (jcManual) return;

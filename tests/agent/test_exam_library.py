@@ -49,13 +49,15 @@ def test_school_user_sees_city_papers_and_owns_what_they_create():
     assert exam_visible(city, actor)
     assert not exam_writable(city, actor)
     assert exam_visible(own, actor)
-    assert exam_writable(own, actor)
+    assert not exam_writable(own, actor)
     assert not exam_visible(other_school, actor)
     leaked = {"exam_type": "school", "school_id": "B02", "owner_id": "school1"}
     assert not exam_visible(leaked, actor)
     assert not exam_writable(leaked, actor)
     assert exam_visible(other_school, bureau)
-    assert exam_writable(city, bureau)
+    assert not exam_writable(city, bureau)
+    admin = _actor(see_all=True, can_maintain=True, edu_role="")
+    assert exam_writable(city, admin)
     assert exam_visible({"exam_type": None}, actor)
 
 
@@ -71,9 +73,10 @@ def test_school_user_cannot_assign_another_school_or_owner():
         None,
     )
     assert normalize_ownership("school", "", "", bureau) == ("school", "A01", None)
-    assert can_create_exam(bureau)
-    assert can_create_exam(school)
+    assert not can_create_exam(bureau)
+    assert not can_create_exam(school)
     assert not can_create_exam(_actor(edu_role="teacher"))
+    assert can_create_exam(_actor(see_all=True, can_maintain=True, edu_role=""))
 
 
 def test_same_school_users_maintain_their_batch():
@@ -91,15 +94,19 @@ def test_same_school_users_maintain_their_batch():
     assert batch_visible(own, peer)
     assert not batch_visible(own, other)
     assert batch_visible(own, bureau)
-    assert batch_writable(own, creator)
-    assert batch_writable(own, peer)
+    assert not batch_writable(own, creator)
+    assert not batch_writable(own, peer)
     assert not batch_writable(city, creator)
     assert not batch_writable(own, other)
     assert not batch_writable(own, teacher)
-    assert batch_writable(city, bureau)
-    assert can_create_batch(creator)
-    assert can_create_batch(bureau)
+    assert not batch_writable(city, bureau)
+    admin = _actor(see_all=True, can_maintain=True, edu_role="")
+    assert batch_writable(city, admin)
+    assert batch_writable(own, admin)
+    assert not can_create_batch(creator)
+    assert not can_create_batch(bureau)
     assert not can_create_batch(teacher)
+    assert can_create_batch(admin)
     assert new_batch_owner(creator) == (school, "exvwji03")
     assert new_batch_owner(bureau) == (None, None)
     unbound = {"exam_type": "school", "school_id": None, "owner_id": "exvwji03"}

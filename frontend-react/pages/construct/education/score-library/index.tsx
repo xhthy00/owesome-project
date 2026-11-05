@@ -5,6 +5,7 @@ import { useRouter } from "next/router";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { educationApi, type ExamBatchOption } from "@/api/education";
 import { getCurrentUser } from "@/api/auth";
+import { canCreateExam } from "@/api/examLibrary";
 import {
   scoreLibraryApi,
   type ScoreDetailItem,
@@ -192,6 +193,7 @@ export default function ScoreLibraryPage() {
   const [rows, setRows] = useState<ScoreLibraryItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [schoolScoped, setSchoolScoped] = useState(false);
+  const [canImport, setCanImport] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailWho, setDetailWho] = useState("");
@@ -227,6 +229,7 @@ export default function ScoreLibraryPage() {
       .then((user) => {
         const role = user.edu_scope?.edu_role || "";
         setSchoolScoped(role === "school_admin" && !user.is_platform_admin && !user.is_super_admin);
+        setCanImport(canCreateExam(user));
       })
       .catch(() => setSchoolScoped(false));
   }, []);
@@ -381,13 +384,15 @@ export default function ScoreLibraryPage() {
               <div className="text-xs text-slate-500">共 {total} 名学生</div>
             </div>
           </div>
-          <Button
-            type="primary"
-            icon={<UploadOutlined />}
-            onClick={() => router.push("/construct/education/score-library/import")}
-          >
-            导入成绩
-          </Button>
+          {canImport ? (
+            <Button
+              type="primary"
+              icon={<UploadOutlined />}
+              onClick={() => router.push("/construct/education/score-library/import")}
+            >
+              导入成绩
+            </Button>
+          ) : null}
         </div>
         <div className={PANEL}>
           <div className="score-library-filters mb-4 flex flex-wrap items-end gap-x-3 gap-y-2 rounded-xl border border-[#e6eef8] bg-[#f7faff] px-3 py-2.5 dark:border-[#2a3344] dark:bg-[#1a2230]">

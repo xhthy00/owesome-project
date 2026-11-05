@@ -288,15 +288,17 @@ def _normalize_id_str(value: Any) -> str:
 
 
 def assert_raw_import_role_allowed(
-    scope: EduScope, *, privileged: bool = False
+    scope: EduScope, *, privileged: bool = False, write: bool = False
 ) -> str | None:
-    """原始成绩导入允许管理员、教育局和学校账号。教师与学生拒绝。"""
+    """查看成绩导入材料：管理员、教育局、学校。写入仅超管和平台管理员。"""
     if privileged:
         return None
+    if write:
+        return "仅系统管理员可导入成绩和试卷"
     if not scope.edu_role:
         return "未配置教育角色，无法导入原始成绩"
     if scope.edu_role not in _ALLOWED_RAW_IMPORT_ROLES:
-        return "仅局端管理员和校管理员可导入原始成绩"
+        return "仅局端管理员和校管理员可查看成绩导入"
     return None
 
 

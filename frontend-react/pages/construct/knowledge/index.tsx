@@ -132,7 +132,7 @@ export default function ConstructKnowledgePage() {
   useEffect(() => {
     void getCurrentUser()
       .then((user) => {
-        setCanMaintain(user.account === "admin" && Boolean(user.is_super_admin));
+        setCanMaintain(Boolean(user.is_platform_admin || user.is_super_admin));
       })
       .catch(() => setCanMaintain(false));
   }, []);

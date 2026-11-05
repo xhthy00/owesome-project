@@ -137,7 +137,7 @@ export default function ConstructSchoolsPage() {
     void getCurrentUser()
       .then((user) => {
         if (!active) return;
-        const ok = Boolean(user.is_platform_admin);
+        const ok = Boolean(user.is_platform_admin || user.is_super_admin);
         setAllowed(ok);
         if (!ok) return;
         void schoolApi.meta().then((meta) => {
