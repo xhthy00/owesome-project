@@ -54,6 +54,11 @@ class SemanticQueryError(ValueError):
 class SemanticViewDescriptionRequiredError(SemanticQueryError):
     """The caller can describe the view and resubmit the same SQL."""
 
+    def __init__(self, message: str, names: list[str] | None = None):
+        super().__init__(message)
+        # 宿主据此自动补读字段，省掉一轮模型往返。
+        self.names = list(names or [])
+
 
 class SemanticFieldError(SemanticQueryError):
     def __init__(self, message: str, detail: dict):
@@ -372,7 +377,8 @@ class SemanticQuery:
             if unread:
                 names = ", ".join(views[key] for key in sorted(unread))
                 raise SemanticViewDescriptionRequiredError(
-                    f"请先用 describe_semantic_model 读取视图 {names} 的输出字段，再提交语义 SQL。"
+                    f"请先用 describe_semantic_model 读取视图 {names} 的输出字段，再提交语义 SQL。",
+                    [views[key] for key in sorted(unread)],
                 )
             published_columns = {
                 name: ("视图", views[name], columns) for name, columns in described_views.items()

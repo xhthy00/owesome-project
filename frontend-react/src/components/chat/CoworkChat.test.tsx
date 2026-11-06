@@ -15,7 +15,8 @@ function chatState(overrides: Partial<Parameters<typeof CoworkChat>[0]["chat"]> 
     messages: [], loading: false, activity: "", send: vi.fn(), stop: vi.fn(), datasourceId: 4,
     setDatasourceId: vi.fn(), conversationId: undefined, conversationTitle: "",
     reports: [], queryResults: [], clarifyByRunId: {}, runMetrics: EMPTY_RUN_METRICS,
-    chartByRunId: {}, patchReport: vi.fn(), executionSteps: [], metricsByRunId: {}, taskPlanByRunId: {}, ...overrides,
+    chartByRunId: {}, patchReport: vi.fn(), executionSteps: [], metricsByRunId: {}, taskPlanByRunId: {},
+    thinkByRunId: {}, ...overrides,
   };
 }
 
@@ -34,6 +35,19 @@ it("keeps previously saved tool protocol out of the answer and execution log", (
   fireEvent.click(article.getByText(/执行记录/).closest("summary")!);
   expect(article.getByText("已读取口径。")).toBeVisible();
   expect(screen.queryByText(/minimax|private_field/)).not.toBeInTheDocument();
+});
+
+it("shows the streamed thinking above the answer", () => {
+  render(<CoworkChat chat={chatState({
+    messages: [
+      { id: "q", runId: "r", role: "user", content: "分析成绩" },
+      { id: "a", runId: "r", role: "assistant", content: "本次数学均分 82.5 分。" },
+    ],
+    loading: true,
+    thinkByRunId: { r: "先确认考试口径，再汇总均分。" },
+  })} />);
+  expect(screen.getByText("思考中")).toBeVisible();
+  expect(screen.getByText("先确认考试口径，再汇总均分。")).toBeVisible();
 });
 
 it("keeps IME confirmation local and submits the composed message with the selected datasource", () => {

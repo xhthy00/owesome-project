@@ -30,6 +30,7 @@ def llm_profile(module: LLMModule) -> dict[str, Any]:
         "model": field("model"),
         "max_tokens": field("max_tokens"),
         "thinking": field("thinking"),
+        "stream_usage": settings.llm_chat_stream_usage if module == "chat" else None,
     }
 
 
@@ -75,6 +76,8 @@ def create_llm(
         kwargs["max_tokens"] = profile["max_tokens"]
     if "thinking" not in kwargs and profile["thinking"]:
         kwargs["thinking"] = profile["thinking"]
+    if "stream_usage" not in kwargs and profile["stream_usage"] is not None:
+        kwargs["stream_usage"] = profile["stream_usage"]
 
     if provider == "auto" or not provider:
         provider = get_llm_provider(base_url)

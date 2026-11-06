@@ -52,10 +52,15 @@ class Settings(BaseSettings):
         None, validation_alias=AliasChoices("llm_chat_model", "llm_model")
     )
     llm_chat_max_tokens: int = 8192
+    # 可选单轮问数上限，默认不限制（沿用 DeepAgents 的图执行上限）。
+    # 设置后用于收敛失控长尾；留空表示不限。
     chat_max_steps: int | None = Field(default=None, ge=1)
     chat_max_total_tokens: int | None = Field(default=None, ge=1)
     # 思考模式：``disabled`` / ``adaptive``。仅部分模型支持。留空不发送该参数。
     llm_chat_thinking: Optional[str] = None
+    # 流式回复时向服务商索取 usage 分片（stream_options.include_usage）。
+    # 个别网关不支持该参数时置 false，代价是本轮 token 统计改用估算值。
+    llm_chat_stream_usage: bool = True
     # 知识点匹配
     llm_match_base_url: Optional[str] = None
     llm_match_api_key: Optional[str] = None

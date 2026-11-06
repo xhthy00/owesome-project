@@ -160,6 +160,8 @@ type StreamHandlers = {
     row_count?: number;
   }) => void;
   onReasoning?: (text: string) => void;
+  /** 模型思考流增量（reasoning_content / <think>），在结论之前到达 */
+  onReasoningDelta?: (text: string) => void;
   onSql?: (sql: string, chartType: string) => void;
   onResult?: (result: { columns: string[]; rows: unknown[][]; row_count: number }) => void;
   onAgentThought?: (payload: { text: string; sub_task_index?: number }) => void;
@@ -175,6 +177,10 @@ type StreamHandlers = {
     elapsed_ms?: number;
   }) => void;
   onFinalAnswer?: (content: string) => void;
+  /** 结论正文增量；在 summary 之前到达，用于边生成边展示 */
+  onAnswerDelta?: (text: string) => void;
+  /** 作废当前已展示的草稿（该轮其实是工具调用，不是最终结论） */
+  onAnswerDiscard?: () => void;
   onSummary?: (content: string) => void;
   onUsage?: (payload: {
     prompt_tokens?: number;
@@ -286,6 +292,9 @@ export async function sendMessageStream(
         case "reasoning":
           handlers.onReasoning?.((data.text as string) ?? "");
           break;
+        case "reasoning_delta":
+          handlers.onReasoningDelta?.((data.text as string) ?? "");
+          break;
         case "sql":
           handlers.onSql?.((data.sql as string) ?? "", (data.chart_type as string) ?? "table");
           break;
@@ -321,6 +330,12 @@ export async function sendMessageStream(
           break;
         case "final_answer":
           handlers.onFinalAnswer?.((data.text as string) ?? (data.content as string) ?? "");
+          break;
+        case "answer_delta":
+          handlers.onAnswerDelta?.((data.text as string) ?? "");
+          break;
+        case "answer_discard":
+          handlers.onAnswerDiscard?.();
           break;
         case "agent_speak":
           handlers.onAgentSpeak?.({

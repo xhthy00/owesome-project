@@ -43,14 +43,15 @@ def _planning_call():
     }])
 
 
-def test_preflight_stops_after_three_unusable_responses(monkeypatch):
+def test_context_is_preloaded_without_a_forced_model_round(monkeypatch):
+    """发布目录随系统提示下发：直接作答只花一次调用，不再空转三轮读上下文。"""
     events = []
     model = ToolCallingModel(responses=[AIMessage(content="直接回答") for _ in range(4)])
     monkeypatch.setattr(semantic_query.SemanticQuery, "context", lambda _self: {})
     monkeypatch.setattr(
         semantic_query.SemanticQuery,
         "run",
-        lambda *_a, **_kw: pytest.fail("SQL ran before context"),
+        lambda *_a, **_kw: pytest.fail("prompt-free answer should not query"),
     )
     monkeypatch.setattr(deepagents_runtime, "edu_scope_dict_for_user_id", lambda _uid: {})
     settings = Settings(_env_file=None, chat_max_steps=None)
@@ -71,8 +72,38 @@ def test_preflight_stops_after_three_unusable_responses(monkeypatch):
         )
     )
 
-    assert result == 0 and model.i == 3
-    assert any(event == "error" and "未能读取" in data["error"] for event, data in events)
+    assert result == 0 and model.i == 1
+    assert any(
+        event == "error" and "未取得 DataSemantic" in data["error"] for event, data in events
+    )
+
+
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("总人数是多少", False),
+        ("解释一下什么是均分", False),
+        ("最近一次考试各年级的总分平均分和及格率是多少？", True),
+        ("对比各校语文均分排名", True),
+        ("语文和数学谁更高？英语呢？", True),
+    ],
+)
+def test_planning_only_for_complex_questions(question, expected):
+    """简单查询不再强制发布计划，只有多步骤/多维度问题才要求 write_todos。"""
+    assert deepagents_runtime._planning_required(question) is expected
+
+
+def test_tool_choice_prefers_named_function_when_gateway_supports_it():
+    class Model:
+        def __init__(self, base_url):
+            self.openai_api_base = base_url
+
+    minimax = Model("https://api.minimaxi.com/v1")
+    moonshot = Model("https://api.moonshot.cn/v1")
+    other = Model("https://llm.example.com/v1")
+    assert deepagents_runtime._tool_choice_for(minimax, "write_todos") == "write_todos"
+    assert deepagents_runtime._tool_choice_for(moonshot, "write_todos") == "required"
+    assert deepagents_runtime._tool_choice_for(other, "write_todos") == "auto"
 
 
 def test_view_query_can_be_resubmitted_after_reading_fields(monkeypatch):
@@ -176,6 +207,64 @@ def test_view_query_can_be_resubmitted_after_reading_fields(monkeypatch):
     assert any(event == "sql" and payload["sql"] == sql for event, payload in events)
 
 
+def test_view_query_auto_reads_fields_without_another_model_round(monkeypatch):
+    """直接查询视图时宿主自动补读字段并重试，模型不必再单独跑一轮 describe。"""
+    sql = "SELECT average_score FROM exam_summary"
+    described, events = [], []
+
+    def describe(_self, name):
+        described.append(name)
+        return {"name": name, "columns": [{"name": "average_score"}]}
+
+    def run_query(_self, submitted_sql, *, execute):
+        if not described:
+            raise semantic_query.SemanticViewDescriptionRequiredError(
+                "请先用 describe_semantic_model 读取视图字段。", ["exam_summary"]
+            )
+        return {"sql": submitted_sql, "tables": ["tb_score"]}
+
+    model = ToolCallingModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "query_semantic", "args": {"sql": sql}, "id": "q"}],
+            ),
+            AIMessage(content="完成"),
+        ]
+    )
+    monkeypatch.setattr(semantic_query.SemanticQuery, "context", lambda _self: {})
+    monkeypatch.setattr(semantic_query.SemanticQuery, "describe", describe)
+    monkeypatch.setattr(semantic_query.SemanticQuery, "run", run_query)
+    monkeypatch.setattr(deepagents_runtime, "edu_scope_dict_for_user_id", lambda _uid: {})
+    monkeypatch.setattr(deepagents_runtime, "log_tool_call_fire_and_forget", lambda **_kw: None)
+    settings = Settings(_env_file=None, chat_max_steps=None)
+    monkeypatch.setattr(deepagents_runtime, "get_settings", lambda: settings)
+
+    async def emit(event, payload):
+        events.append((event, payload))
+
+    asyncio.run(
+        deepagents_runtime.run_chat_stream(
+            request=ChatRequest(datasource_id=4, question="语文均分是多少"),
+            current_user_id=7,
+            workspace_oid=1,
+            emit=emit,
+            checkpointer=InMemorySaver(),
+            model=model,
+            execute=False,
+        )
+    )
+
+    assert described == ["exam_summary"]
+    assert sum(
+        event == "tool_call" and payload["tool"] == "query_semantic" for event, payload in events
+    ) == 1
+    assert any(event == "sql" and payload["sql"] == sql for event, payload in events)
+    assert not any(
+        event == "tool_result" and payload.get("success") is False for event, payload in events
+    )
+
+
 def test_deepagent_streams_question_and_resumes_same_thread():
     async def run():
         model = ToolCallingModel(
@@ -220,6 +309,191 @@ def test_deepagent_streams_question_and_resumes_same_thread():
         assert followup["messages"][-1].content == "继续分析数学成绩"
 
     asyncio.run(run())
+
+
+def _query_turn(responses):
+    """一次完整的问数轮：读上下文、发布计划、查一次、给出结论。"""
+    return [
+        context_call("context"),
+        _planning_call(),
+        AIMessage(
+            content="",
+            tool_calls=[{"name": "query_semantic", "args": {"sql": "SELECT metric FROM exam_facts"}, "id": "q"}],
+        ),
+        *responses,
+    ]
+
+
+def _install_query_mocks(monkeypatch):
+    async def persist(**_record):
+        return 0
+
+    monkeypatch.setattr(
+        semantic_query.SemanticQuery,
+        "run",
+        lambda _self, sql, *, execute: {
+            "sql": sql,
+            "tables": ["exam_facts"],
+            "bundle_id": "edu",
+            "manifest_hash": "a" * 64,
+            "columns": ["value"],
+            "rows": [[12]],
+        },
+    )
+    monkeypatch.setattr(semantic_query.SemanticQuery, "context", lambda _self: {})
+    monkeypatch.setattr(deepagents_runtime, "edu_scope_dict_for_user_id", lambda _uid: {})
+    monkeypatch.setattr(deepagents_runtime, "log_tool_call_fire_and_forget", lambda **_kw: None)
+    monkeypatch.setattr(deepagents_runtime, "persist_turn", persist)
+    settings = Settings(_env_file=None, chat_max_steps=None, chat_max_total_tokens=None)
+    monkeypatch.setattr(deepagents_runtime, "get_settings", lambda: settings)
+
+
+def test_final_answer_streams_as_answer_deltas(monkeypatch):
+    """结论正文边生成边下发，summary 仍作为最终全文。"""
+    answer = "本次考试全年级数学平均分为 82.5 分，及格率为 91%。"
+    _install_query_mocks(monkeypatch)
+    model = ToolCallingModel(responses=_query_turn([AIMessage(content=answer)]))
+    events = []
+
+    async def emit(event, payload):
+        events.append((event, payload))
+
+    asyncio.run(
+        deepagents_runtime.run_chat_stream(
+            request=ChatRequest(datasource_id=4, question="本次考试数学均分和及格率是多少"),
+            current_user_id=7,
+            workspace_oid=1,
+            emit=emit,
+            checkpointer=InMemorySaver(),
+            model=model,
+        )
+    )
+
+    deltas = "".join(payload["text"] for event, payload in events if event == "answer_delta")
+    assert deltas == answer
+    assert not any(event == "answer_discard" for event, _ in events)
+    assert ("summary", {"content": answer}) in events
+
+
+def test_tool_turn_preamble_discards_streamed_draft(monkeypatch):
+    """已有结果后的追加查询会先说一句思路：先下发，随后作废，再流式给结论。"""
+    preamble = "我先查一次各班的平均分，然后再核对及格率口径是否一致。"
+    answer = "本次考试全年级数学平均分为 82.5 分，及格率为 91%。"
+    _install_query_mocks(monkeypatch)
+    model = ToolCallingModel(
+        responses=[
+            context_call("context"),
+            _planning_call(),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "query_semantic", "args": {"sql": "SELECT metric FROM exam_facts"}, "id": "q1"}
+                ],
+            ),
+            AIMessage(
+                content=preamble,
+                tool_calls=[
+                    {"name": "query_semantic", "args": {"sql": "SELECT rate FROM exam_facts"}, "id": "q2"}
+                ],
+            ),
+            AIMessage(content=answer),
+        ]
+    )
+    events = []
+
+    async def emit(event, payload):
+        events.append((event, payload))
+
+    asyncio.run(
+        deepagents_runtime.run_chat_stream(
+            request=ChatRequest(datasource_id=4, question="本次考试数学均分和及格率是多少"),
+            current_user_id=7,
+            workspace_oid=1,
+            emit=emit,
+            checkpointer=InMemorySaver(),
+            model=model,
+        )
+    )
+
+    kinds = [event for event, _ in events]
+    assert "answer_delta" in kinds and "answer_discard" in kinds
+    assert kinds.index("answer_discard") > kinds.index("answer_delta")
+    assert ("summary", {"content": answer}) in events
+
+
+def test_inline_think_streams_into_reasoning(monkeypatch):
+    """正文里的 <think> 块走思考流，正文只保留结论。"""
+    answer = "本次考试全年级数学平均分为 82.5 分，及格率为 91%。"
+    _install_query_mocks(monkeypatch)
+    model = ToolCallingModel(
+        responses=_query_turn(
+            [AIMessage(content=f"<think>先核对总分口径，再看及格线</think>{answer}")]
+        )
+    )
+    events = []
+
+    async def emit(event, payload):
+        events.append((event, payload))
+
+    asyncio.run(
+        deepagents_runtime.run_chat_stream(
+            request=ChatRequest(datasource_id=4, question="本次考试数学均分和及格率是多少"),
+            current_user_id=7,
+            workspace_oid=1,
+            emit=emit,
+            checkpointer=InMemorySaver(),
+            model=model,
+        )
+    )
+
+    reasoning = "".join(p["text"] for event, p in events if event == "reasoning_delta")
+    deltas = "".join(p["text"] for event, p in events if event == "answer_delta")
+    assert "先核对总分口径" in reasoning
+    assert "think" not in deltas.lower()
+    assert deltas == answer
+    assert ("summary", {"content": answer}) in events
+
+
+def test_drain_think_handles_tags_split_across_chunks():
+    reasoning, answer = [], []
+    carry, in_think = "", False
+    for char in "<think>先看口径</think>最终结论":
+        think_part, answer_part, carry, in_think = deepagents_runtime._drain_think(
+            carry + char, in_think
+        )
+        reasoning.append(think_part)
+        answer.append(answer_part)
+    assert "".join(reasoning) == "先看口径"
+    assert "".join(answer) == "最终结论"
+    assert carry == ""
+
+
+def test_provider_reasoning_content_streams(monkeypatch):
+    """服务商单独下发的 reasoning_content 同样进入思考流。"""
+    _install_query_mocks(monkeypatch)
+    model = ToolCallingModel(
+        responses=_query_turn(
+            [AIMessage(content="", additional_kwargs={"reasoning_content": "先确认口径再汇总"})]
+        )
+    )
+    events = []
+
+    async def emit(event, payload):
+        events.append((event, payload))
+
+    asyncio.run(
+        deepagents_runtime.run_chat_stream(
+            request=ChatRequest(datasource_id=4, question="本次考试数学均分是多少"),
+            current_user_id=7,
+            workspace_oid=1,
+            emit=emit,
+            checkpointer=InMemorySaver(),
+            model=model,
+        )
+    )
+
+    reasoning = "".join(p["text"] for event, p in events if event == "reasoning_delta")
+    assert reasoning == "先确认口径再汇总"
 
 
 @pytest.mark.parametrize("max_steps", [None, 4])
@@ -370,7 +644,10 @@ def test_chat_sse_resumes_deepagents_across_requests(monkeypatch, max_steps):
     }
     if max_steps is None:
         assert followup.text.count("event: task_plan") == 2
-        assert "先核对缺考人数" in followup.text and "internal" not in followup.text
+        assert "先核对缺考人数" in followup.text
+        # 思考内容只走 reasoning_delta，不进入最终结论
+        assert "event: reasoning_delta" in followup.text
+        assert "internal" not in followup.text.split("event: summary", 1)[1]
         assert records[2]["plans"] == ["查询缺考人数"]
         assert records[2]["plan_states"] == [{"index": 0, "state": "ok"}]
         assert next(c for c in records[2]["tool_calls"] if c["tool"] == "query_semantic")["sub_task_index"] == 0
@@ -427,23 +704,8 @@ def test_deepagent_model_call_budget(monkeypatch, caplog, max_steps, query_succe
     monkeypatch.setattr(deepagents_runtime, "get_settings", lambda: settings)
 
     async def run():
-        preflight = [context_call("context")]
-        if max_steps is None:
-            preflight.insert(
-                0,
-                AIMessage(
-                    content="",
-                    tool_calls=[
-                        {
-                            "name": "query_semantic",
-                            "args": {"sql": "SELECT bypass FROM exam_facts"},
-                            "id": "bypass",
-                        }
-                    ],
-                ),
-            )
         model = ToolCallingModel(
-            responses=preflight + [_planning_call()]
+            responses=[context_call("context"), _planning_call()]
             + [
                 AIMessage(
                     content="",
@@ -470,12 +732,11 @@ def test_deepagent_model_call_budget(monkeypatch, caplog, max_steps, query_succe
             model=model,
         )
         assert record_id == 42
-        assert model.i == (34 if max_steps is None else max_steps)
+        assert model.i == (33 if max_steps is None else max_steps)
 
     asyncio.run(run())
 
     assert "DeepAgents exhausted the LangGraph step limit" not in caplog.text
-    assert all("bypass" not in sql for sql in queries)
     assert records[0]["is_success"] is (query_succeeds and max_steps is None)
     if query_succeeds:
         assert len(queries) == (30 if max_steps is None else max_steps - 2)
@@ -537,8 +798,9 @@ def test_planned_parallel_queries_have_no_fixed_cap(monkeypatch, final_answer):
     ))
 
     assert result == 42 and model.i == (6 if final_answer == _RAW_MINIMAX_CALL else 5)
-    assert sorted(queries) == sorted(statements)
-    assert sum(event == "result" for event, _ in events) == 64
+    # 目录已内联进系统提示，首轮直接查询不再被预检拦截
+    assert sorted(queries) == sorted([*statements, "SELECT bypass FROM exam_facts"])
+    assert sum(event == "result" for event, _ in events) == 65
     assert records[0]["plan_states"] == [{"index": 0, "state": "running"}]
     if final_answer in {"", _RAW_MINIMAX_CALL}:
         assert not records[0]["is_success"]

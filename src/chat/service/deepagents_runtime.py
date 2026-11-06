@@ -42,6 +42,7 @@ from src.chat.service.semantic_query import (
     SemanticFieldError,
     SemanticQuery,
     SemanticQueryError,
+    SemanticViewDescriptionRequiredError,
 )
 from src.chat.service.turn_records import persist_turn
 from src.common.core.config import get_settings
@@ -51,9 +52,19 @@ from src.llm.service import get_default_llm
 logger = logging.getLogger(__name__)
 
 _STEP_LIMIT_MESSAGE = "本轮分析已达到执行步数上限。"
-_CONTEXT_TOOL = "get_analysis_context"
-_CONTEXT_INSTRUCTION = "先调用 get_analysis_context 读取 DataSemantic 上下文，再规划查询。"
-_CONTEXT_FAILURE = "当前模型未能读取已配置的 DataSemantic 上下文，请重试或更换支持工具调用的模型。"
+# 支持用工具名强制 tool_choice 的 OpenAI 兼容网关。
+_NAMED_TOOL_CHOICE_HOSTS = frozenset(
+    {
+        None,
+        "api.openai.com",
+        "api.deepseek.com",
+        "api.minimaxi.com",
+        "api.minimax.chat",
+        "api.minimax.io",
+    }
+)
+# 只接受 "required" 的网关（不接受具名对象）。
+_REQUIRED_TOOL_CHOICE_HOSTS = frozenset({"api.moonshot.ai", "api.moonshot.cn"})
 _MINIMAX_MARKER = "]<]minimax[>["
 _TOOL_PROTOCOL_BLOCK = re.compile(
     rf"(?:{re.escape(_MINIMAX_MARKER)})?<(?:minimax:)?tool_call\b[^>]*>.*?"
@@ -61,12 +72,16 @@ _TOOL_PROTOCOL_BLOCK = re.compile(
 )
 _PLAN_FAILURE = "当前模型未能发布步骤规划，请重试或更换支持工具调用的模型。"
 _MODEL_REPLY_FAILURE = "本轮未能生成分析结论。"
+# 先缓冲少量正文再开始下发：工具调用轮次常以一句短说明开头，
+# 缓冲区可避免它先闪现再被 answer_discard 清掉。
+_STREAM_PREFIX_CHARS = 24
 _PROMPT = (
     "你是 Awesome-DB 的数据分析助手。用工具查询数据，按工具返回的范围和口径作答。"
     "业务事实和数值必须来自本轮 query_semantic 返回的数据。"
-    "先调用 get_analysis_context 读取发布目录。每个查询阶段按需选出相关对象，"
+    "发布目录已在系统提示中给出。每个查询阶段按需选出相关对象，"
     "通过 describe_semantic_model 的 names 一次读取新对象的字段、说明和关联，复用本轮已读描述。"
-    "首次使用视图必须先读取字段。先确认指标、筛选条件和关联键的来源，再提交 query_semantic。"
+    "首次使用视图建议先读取字段；直接查询时宿主会自动补读，以报错信息里的可用字段为准。"
+    "先确认指标、筛选条件和关联键的来源，再提交 query_semantic。"
     "只使用发布目录中不带 schema 的逻辑名称和已确认的字段；禁止查询系统目录、物理表或用 SELECT * 探查。"
     "跨模型查询用来源别名限定字段。收到 FIELD_WRONG_SOURCE 或 FIELD_NOT_PUBLISHED 时，"
     "根据候选的字段说明和关联只修正出错的引用。避免原样重提。口径无法确认时请澄清。"
@@ -83,19 +98,107 @@ _PROMPT = (
 )
 
 
+def _tool_choice_for(model, forced_tool: str) -> str:
+    """按网关能力选择 tool_choice：具名强制 / required / auto。"""
+    hostname = urlsplit(str(getattr(model, "openai_api_base", None) or "")).hostname
+    if hostname in _NAMED_TOOL_CHOICE_HOSTS:
+        return forced_tool
+    if hostname in _REQUIRED_TOOL_CHOICE_HOSTS:
+        return "required"
+    return "auto"
+
+
 def _visible_model_text(text: str) -> str:
     text = re.sub(r"<think\b[^>]*>.*?(?:</think>|$)", "", text, flags=re.I | re.S)
     return _TOOL_PROTOCOL_BLOCK.sub("", text).split(_MINIMAX_MARKER, 1)[0].strip()
 
 
+def _chunk_text(chunk) -> str:
+    """提取流式分片里的正文；思考内容和工具参数分片不计入答案。"""
+    content = getattr(chunk, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") in {"text", "text_delta"}:
+                parts.append(str(block.get("text") or ""))
+        return "".join(parts)
+    return ""
+
+
+def _chunk_reasoning(chunk) -> str:
+    """服务商单独下发的思考分片（MiniMax/DeepSeek 的 reasoning_content）。"""
+    kwargs = getattr(chunk, "additional_kwargs", None) or {}
+    for key in ("reasoning_content", "reasoning"):
+        value = kwargs.get(key)
+        if isinstance(value, str) and value:
+            return value
+    content = getattr(chunk, "content", None)
+    if isinstance(content, list):
+        return "".join(
+            str(block.get("text") or "")
+            for block in content
+            if isinstance(block, dict) and block.get("type") in {"reasoning", "reasoning_content"}
+        )
+    return ""
+
+
+_THINK_TAG = "<think"
+_THINK_END_TAG = "</think"
+
+
+def _drain_think(buf: str, in_think: bool) -> tuple[str, str, str, bool]:
+    """把正文流切成 (思考, 正文)，并保留可能是半个标签的尾巴。
+
+    兼容 ``<think>`` / ``</think>`` 被分片切开的情况；未闭合时余下内容都算思考。
+    """
+    reasoning: list[str] = []
+    answer: list[str] = []
+    while buf:
+        tag = _THINK_END_TAG if in_think else _THINK_TAG
+        index = buf.lower().find(tag)
+        if index < 0:
+            head = buf.lower()
+            keep = 0
+            for size in range(1, len(tag)):
+                if head.endswith(tag[:size]):
+                    keep = size
+            segment = buf[:-keep] if keep else buf
+            (reasoning if in_think else answer).append(segment)
+            buf = buf[-keep:] if keep else ""
+            break
+        (reasoning if in_think else answer).append(buf[:index])
+        close = buf.find(">", index + len(tag))
+        if close < 0:
+            buf = buf[index:]
+            break
+        buf = buf[close + 1:]
+        in_think = not in_think
+    return "".join(reasoning), "".join(answer), buf, in_think
+
+
 def _planning_required(text: str) -> bool:
+    """只有多步骤/多维度的问题才强制发布计划，简单查询直接作答。"""
     value = text.strip()
     if re.fullmatch(r"(?:你好|您好|早上好|晚上好|谢谢|感谢|再见|hi|hello|thanks)[！!。.?？\s]*", value, re.I):
         return False
     if len(value) <= 200 and re.match(r"^(?:解释|介绍|什么是|为什么|what is\b|explain\b)", value, re.I):
         if not re.search(r"附件|文件|生成|创建|修改|保存|搜索|检索|最新|查询|运行|执行|删除|发送|报告|file|create|write|search|run|delete|send", value, re.I):
             return False
-    return True
+    if value.count("？") + value.count("?") >= 2:
+        return True
+    if len(value) >= 40:
+        return True
+    return bool(
+        re.search(
+            r"分别|逐个|对比|比较|趋势|排名|排序|报告|归因|各科|各校|各班|各年级|"
+            r"多个|以及|同时|并且|然后再|分阶段",
+            value,
+        )
+    )
 
 
 class _ChatState(AgentState):
@@ -250,8 +353,6 @@ async def _run_turn(
             for item in context.get(kind, [])
         ]
     context_json = json.dumps(directory, ensure_ascii=False, sort_keys=True)
-    context_ready = False
-    context_attempts = 0
     preparation_error = ""
     protocol_retried = False
     model_reply_error = ""
@@ -278,9 +379,7 @@ async def _run_turn(
 
     @tool
     async def get_analysis_context() -> str:
-        """读取当前发布的模型和视图目录。用 describe_semantic_model 读取所选对象的字段及关联。"""
-        nonlocal context_ready
-        context_ready = True
+        """重新读取当前发布的模型和视图目录。目录通常已随系统提示给出，仅在需要核对时调用。"""
         return context_json
 
     @tool
@@ -319,7 +418,17 @@ async def _run_turn(
         await emit("tool_call", dict(call))
         started = monotonic()
         try:
-            result = await asyncio.to_thread(semantic.run, sql, execute=execute)
+            try:
+                result = await asyncio.to_thread(semantic.run, sql, execute=execute)
+            except SemanticViewDescriptionRequiredError as exc:
+                # 同批 describe+query 或直接查询视图：宿主补读字段后重试一次，省掉一轮模型往返。
+                unread_views = list(exc.names)
+                if not unread_views:
+                    raise
+                await asyncio.to_thread(
+                    lambda: [semantic.describe(name) for name in unread_views]
+                )
+                result = await asyncio.to_thread(semantic.run, sql, execute=execute)
         except SemanticQueryError as exc:
             query_error = str(exc)
             result = {"error": query_error}
@@ -438,54 +547,39 @@ async def _run_turn(
         return {"todos": []}
 
     @after_model(can_jump_to=["model", "end"])
-    async def require_context_call(state, runtime):
+    async def require_plan_or_repair(state, runtime):
+        """只在需要计划时补一次规划；不再强制先读上下文。"""
         nonlocal preparation_error
         nonlocal model_reply_error, protocol_retried
         message = state["messages"][-1]
-        if limit_message or preparation_error:
+        if limit_message or preparation_error or not isinstance(message, AIMessage):
             return None
-        if context_ready:
-            if isinstance(message, AIMessage):
-                if not message.tool_calls and (
-                    message.invalid_tool_calls
-                    or _MINIMAX_MARKER in message.text
-                    or _TOOL_PROTOCOL_BLOCK.search(message.text)
-                ):
-                    update = {"messages": [RemoveMessage(id=message.id)]}
-                    if protocol_retried:
-                        model_reply_error = _MODEL_REPLY_FAILURE
-                        return {**update, "jump_to": "end"}
-                    protocol_retried = True
-                    return {**update, "jump_to": "model"}
-                if needs_plan and not state.get("todos") and (
-                    not message.tool_calls or any(
-                        call["name"] not in {"write_todos", "ask_human"}
-                        for call in message.tool_calls
-                    )
-                ):
-                    update = {"messages": [RemoveMessage(id=message.id)]}
-                    if planning_attempts >= 3:
-                        preparation_error = _PLAN_FAILURE
-                        return {**update, "jump_to": "end"}
-                    return {**update, "jump_to": "model"}
-            return None
-        if (
-            isinstance(message, AIMessage)
-            and message.tool_calls
-            and all(call["name"] == _CONTEXT_TOOL for call in message.tool_calls)
+        if not message.tool_calls and (
+            message.invalid_tool_calls
+            or _MINIMAX_MARKER in message.text
+            or _TOOL_PROTOCOL_BLOCK.search(message.text)
         ):
-            return None
-        update = (
-            {"messages": [RemoveMessage(id=message.id)]} if isinstance(message, AIMessage) else {}
-        )
-        if context_attempts >= 3:
-            preparation_error = _CONTEXT_FAILURE
-            return {**update, "jump_to": "end"}
-        return {**update, "jump_to": "model"}
+            update = {"messages": [RemoveMessage(id=message.id)]}
+            if protocol_retried:
+                model_reply_error = _MODEL_REPLY_FAILURE
+                return {**update, "jump_to": "end"}
+            protocol_retried = True
+            return {**update, "jump_to": "model"}
+        if needs_plan and not state.get("todos") and (
+            not message.tool_calls or any(
+                call["name"] not in {"write_todos", "ask_human"} for call in message.tool_calls
+            )
+        ):
+            update = {"messages": [RemoveMessage(id=message.id)]}
+            if planning_attempts >= 3:
+                preparation_error = _PLAN_FAILURE
+                return {**update, "jump_to": "end"}
+            return {**update, "jump_to": "model"}
+        return None
 
     @wrap_model_call(state_schema=_ChatState)
     async def restrict_model_tools(model_request, handler):
-        nonlocal context_attempts, limit_message, preparation_error, planning_attempts
+        nonlocal limit_message, preparation_error, planning_attempts
         if budget is not None and budget.limit is not None and budget.calls >= budget.limit:
             limit_message = budget.message
             return AIMessage(content=limit_message)
@@ -493,50 +587,27 @@ async def _run_turn(
         if model_request.state["remaining_steps"] <= 3:
             limit_message = _STEP_LIMIT_MESSAGE
             return AIMessage(content=limit_message)
-        if context_ready:
-            model_tools = [t for t in model_request.tools if t.name in allowed]
-            if needs_plan and not model_request.state.get("todos"):
-                planning_attempts += 1
-                if planning_attempts > 3:
-                    preparation_error = _PLAN_FAILURE
-                    return AIMessage(content=preparation_error)
-                hostname = urlsplit(str(getattr(model_request.model, "openai_api_base", None) or "")).hostname
-                if hostname in {None, "api.openai.com", "api.deepseek.com"}:
-                    choice = "write_todos"
-                elif hostname in {"api.moonshot.ai", "api.moonshot.cn"}:
-                    choice = "required"
-                else:
-                    choice = "auto"
-                plan_tools = {"write_todos"} if choice == "write_todos" else {"write_todos", "ask_human"}
-                model_request = model_request.override(
-                    tools=[t for t in model_tools if t.name in plan_tools],
-                    tool_choice=choice,
-                    system_prompt=(
-                        f"{model_request.system_prompt}\n请先调用 write_todos 发布至少一个计划步骤。"
-                        "如果当前工具列表包含 ask_human，缺少关键条件时可先向用户澄清。"
-                    ),
-                )
-            else:
-                planning_attempts = 0
-                model_request = model_request.override(tools=model_tools)
-        else:
-            if context_attempts >= 3:
-                preparation_error = _CONTEXT_FAILURE
+        model_tools = [t for t in model_request.tools if t.name in allowed]
+        if needs_plan and not model_request.state.get("todos"):
+            planning_attempts += 1
+            if planning_attempts > 3:
+                preparation_error = _PLAN_FAILURE
                 return AIMessage(content=preparation_error)
-            context_attempts += 1
-            hostname = urlsplit(
-                str(getattr(model_request.model, "openai_api_base", None) or "")
-            ).hostname
-            tool_choice = "auto"
-            if hostname in {None, "api.openai.com", "api.deepseek.com"}:
-                tool_choice = _CONTEXT_TOOL
-            elif hostname in {"api.moonshot.ai", "api.moonshot.cn"}:
-                tool_choice = "required"
-            model_request = model_request.override(
-                tools=[t for t in model_request.tools if t.name == _CONTEXT_TOOL],
-                tool_choice=tool_choice,
-                system_prompt=f"{model_request.system_prompt}\n{_CONTEXT_INSTRUCTION}",
+            choice = _tool_choice_for(model_request.model, "write_todos")
+            plan_tools = (
+                {"write_todos"} if choice == "write_todos" else {"write_todos", "ask_human"}
             )
+            model_request = model_request.override(
+                tools=[t for t in model_tools if t.name in plan_tools],
+                tool_choice=choice,
+                system_prompt=(
+                    f"{model_request.system_prompt}\n请先调用 write_todos 发布至少一个计划步骤。"
+                    "如果当前工具列表包含 ask_human，缺少关键条件时可先向用户澄清。"
+                ),
+            )
+        else:
+            planning_attempts = 0
+            model_request = model_request.override(tools=model_tools)
         if protocol_retried:
             model_request = model_request.override(system_prompt=(
                 f"{model_request.system_prompt}\n请用正常文字作答。若还需要且当前允许调用工具，"
@@ -563,10 +634,8 @@ async def _run_turn(
         last_message = tool_request.state["messages"][-1]
         calls = last_message.tool_calls if isinstance(last_message, AIMessage) else []
         asking = any(call["name"] == "ask_human" for call in calls)
-        if (
-            (not context_ready and name != _CONTEXT_TOOL)
-            or name not in allowed
-            or (asking and (len(calls) != 1 or any(c["tool"] == "query_semantic" for c in tool_calls)))
+        if name not in allowed or (
+            asking and (len(calls) != 1 or any(c["tool"] == "query_semantic" for c in tool_calls))
         ):
             return ToolMessage(
                 content="此操作不可用。若已查询且仍缺信息，请直接询问用户。",
@@ -577,12 +646,6 @@ async def _run_turn(
             if any(call["name"] == "write_todos" for call in calls):
                 return ToolMessage(
                     content="请等待任务计划更新后，再为当前阶段提交查询。",
-                    tool_call_id=tool_request.tool_call["id"],
-                    status="error",
-                )
-            if any(call["name"] == "describe_semantic_model" for call in calls):
-                return ToolMessage(
-                    content="请等待 describe_semantic_model 返回字段和关联后，再提交语义 SQL。",
                     tool_call_id=tool_request.tool_call["id"],
                     status="error",
                 )
@@ -606,13 +669,16 @@ async def _run_turn(
         await emit("tool_result", dict(call))
         return result
 
-    prompt = _PROMPT + f"\n当前授权范围参考：{scope}。"
-    middleware = [require_context_call, restrict_model_tools, restrict_tool_call]
+    prompt = (
+        f"{_PROMPT}\n当前授权范围参考：{scope}。\n"
+        f"已发布目录（bundle_id / manifest_hash / dialect / models / views）：{context_json}"
+    )
+    middleware = [require_plan_or_repair, restrict_model_tools, restrict_tool_call]
     if execute:
         prompt += (
-            "\n需要规划时，读取语义上下文后先用 write_todos 发布具体计划，首步设为 in_progress，"
+            "\n复杂问题先用 write_todos 发布具体计划，首步设为 in_progress，"
             "后续步骤设为 pending。每完成一个阶段就更新清单，并开始下一阶段；只把已核实的阶段设为 completed，"
-            "完成最后一次更新后再发最终答复。"
+            "完成最后一次更新后再发最终答复。简单问题不必发布计划，直接查询作答。"
         )
         middleware = [TodoListMiddleware(), reset_task_plan, *middleware]
     if request.report_audience:
@@ -676,16 +742,6 @@ async def _run_turn(
         if budget is not None:
             budget.calls = snapshot.values.get("chat_model_calls", 0)
             budget.tokens = snapshot.values.get("chat_model_tokens", 0)
-        for message in reversed(history):
-            if isinstance(message, HumanMessage):
-                break
-            if (
-                isinstance(message, ToolMessage)
-                and message.name == _CONTEXT_TOOL
-                and message.content in (context_json, json.dumps(context, ensure_ascii=False, sort_keys=True))
-            ):
-                context_ready = True
-                break
         payload = Command(resume={pending_interrupt.id: request.question})
         todos = snapshot.values.get("todos") or []
         if todos:
@@ -710,8 +766,70 @@ async def _run_turn(
     await emit("step", preparation_step)
     answer = ""
     pending = None
+    # 已下发给前端的草稿正文；工具调用轮次结束后用 answer_discard 清掉。
+    streamed_text = ""
+    buffered_text = ""
+    # <think> 标签可能被分片切开，carry 保存待续的半截标签。
+    think_carry = ""
+    in_think = False
+    reasoning_started = False
+    reasoning_in_call = False
+    usage_reported = False
+
+    def answer_streamable() -> bool:
+        """已有查询结果、计划就绪后的正文才下发。
+
+        先有 evidence 再流式，可避免把寒暄类答复先刷出来、再被“未取得查询结果”覆盖。
+        """
+        return bool(
+            execute
+            and evidence
+            and not limit_message
+            and not preparation_error
+            and (not needs_plan or todos)
+        )
+
     try:
-        async for update in graph.astream(payload, config, stream_mode="updates"):
+        async for mode, update in graph.astream(
+            payload, config, stream_mode=["updates", "messages"]
+        ):
+            if mode == "messages":
+                chunk, meta = update
+                if (meta or {}).get("langgraph_node") != "model":
+                    continue
+                # 流式回复的 usage 由末尾分片携带；拿不到时退回 updates 里的整条消息。
+                if usage_info := getattr(chunk, "usage_metadata", None):
+                    usage_reported = True
+                    await usage.record(
+                        usage_info.get("input_tokens") or 0,
+                        usage_info.get("output_tokens") or 0,
+                        usage_info.get("total_tokens") or 0,
+                    )
+                if getattr(chunk, "tool_call_chunks", None):
+                    # 工具调用参数不属于答案正文，丢弃尚未下发的缓冲。
+                    buffered_text = ""
+                    continue
+                reasoning = _chunk_reasoning(chunk) if execute else ""
+                text = _chunk_text(chunk)
+                if text:
+                    inline_think, text, think_carry, in_think = _drain_think(
+                        think_carry + text, in_think
+                    )
+                    reasoning = f"{reasoning}{inline_think}"
+                if reasoning:
+                    # 新一轮模型调用的思考另起一段，便于阅读整轮推理轨迹。
+                    separator = "\n\n" if reasoning_started and not reasoning_in_call else ""
+                    await emit("reasoning_delta", {"text": f"{separator}{reasoning}"})
+                    reasoning_started = True
+                    reasoning_in_call = True
+                if not text or not answer_streamable():
+                    continue
+                buffered_text += text
+                if streamed_text or len(buffered_text) >= _STREAM_PREFIX_CHARS:
+                    await emit("answer_delta", {"text": buffered_text})
+                    streamed_text += buffered_text
+                    buffered_text = ""
+                continue
             if update.get("__interrupt__"):
                 pending = update["__interrupt__"][0]
                 continue
@@ -724,13 +842,14 @@ async def _run_turn(
                 for message in node.get("messages", []):
                     if not isinstance(message, AIMessage):
                         continue
-                    if message.usage_metadata:
+                    if message.usage_metadata and not usage_reported:
                         usage_info = message.usage_metadata
                         await usage.record(
                             usage_info["input_tokens"],
                             usage_info["output_tokens"],
                             usage_info["total_tokens"],
                         )
+                    usage_reported = False
                     if not message.tool_calls:
                         answer = _visible_model_text(message.text)
                     elif execute:
@@ -742,6 +861,19 @@ async def _run_turn(
                             }
                             steps.append(step)
                             await emit("step", step)
+                    # 这一次模型调用结束：草稿要么成为结论，要么作废，不能带到下一次调用。
+                    buffered_text = ""
+                    think_carry = ""
+                    in_think = False
+                    reasoning_in_call = False
+                    if streamed_text and (
+                        message.tool_calls
+                        or message.invalid_tool_calls
+                        or _MINIMAX_MARKER in message.text
+                        or _TOOL_PROTOCOL_BLOCK.search(message.text)
+                    ):
+                        await emit("answer_discard", {})
+                        streamed_text = ""
     except _ModelCallLimitError as exc:
         limit_message = str(exc)
     except GraphRecursionError:

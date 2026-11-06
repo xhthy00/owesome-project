@@ -96,6 +96,17 @@
 @keyframes cowork-orb-spin { to { transform: rotate(360deg); } }
 @keyframes cowork-shimmer { to { background-position: -120% center; } }
 @keyframes cowork-status-enter { from { opacity: .6; transform: translateY(3px); } }
+@keyframes cowork-think-pulse { 50% { opacity: .25; } }
+.cowork-think { margin: 6px 0; border: 1px solid var(--cowork-border); border-radius: 12px; background: var(--cowork-card); }
+.cowork-think-toggle { display: flex; width: 100%; min-height: 38px; align-items: center; gap: 8px; padding: 0 12px; border: 0; background: none; color: var(--cowork-muted); font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.cowork-think-toggle > .anticon:first-child { flex: none; color: var(--cowork-action); }
+.cowork-think-caret { flex: none; margin-left: auto; font-size: 10px; transition: transform 160ms ease; }
+.cowork-think-caret.is-open { transform: rotate(180deg); }
+.cowork-think-live .cowork-think-toggle { color: var(--cowork-brand-ink); }
+.cowork-think-live .cowork-think-toggle span::after { content: ""; display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%; background: currentColor; vertical-align: middle; animation: cowork-think-pulse 1.1s ease-in-out infinite; }
+.cowork-think-body { max-height: 240px; overflow: auto; margin: 0; padding: 0 12px 10px; color: var(--cowork-muted); font-family: inherit; font-size: 12.5px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cowork-think-body::-webkit-scrollbar { width: 6px; }
+.cowork-think-body::-webkit-scrollbar-thumb { border-radius: 3px; background: var(--cowork-border); }
 .cowork-artifacts { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
 .cowork-artifacts button, .cowork-question { border: 1px solid var(--cowork-border); border-radius: 12px; background: var(--cowork-card); }
 .cowork-artifacts button { display: inline-flex; min-height: 44px; align-items: center; gap: 8px; padding: 6px 12px; text-align: start; }
@@ -178,7 +189,9 @@ summary.cowork-stage-row::after { content: ""; flex: none; width: 5px; height: 5
   .cowork-hero { width: 92px; height: 92px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .cowork-orb, .cowork-shimmer, .cowork-live-label, .cowork-worklog-live > span { animation: none; }
+  .cowork-orb, .cowork-shimmer, .cowork-live-label, .cowork-worklog-live > span,
+  .cowork-think-live .cowork-think-toggle span::after { animation: none; }
   .cowork-shimmer { background: none; -webkit-text-fill-color: currentColor; }
-  .cowork-progress-track > span, .cowork-worklog > summary::after, .cowork-task-section > summary::after { transition: none; }
+  .cowork-progress-track > span, .cowork-worklog > summary::after, .cowork-task-section > summary::after,
+  .cowork-think-caret { transition: none; }
 }

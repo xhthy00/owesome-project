@@ -6,6 +6,37 @@ from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
 
 
+class ReasoningChatOpenAI(ChatOpenAI):
+    """保留流式 delta 里的 reasoning_content。
+
+    langchain-openai 不提取 ``reasoning_content``（MiniMax / DeepSeek 等兼容网关用它
+    下发思考过程），这里补回到 ``additional_kwargs``，供上层作为思考流下发；
+    该字段不会被回传给模型（``_convert_message_to_dict`` 只取 content/tool_calls）。
+    """
+
+    def _convert_chunk_to_generation_chunk(
+        self,
+        chunk: dict,
+        default_chunk_class: type,
+        base_generation_info: dict | None,
+    ):
+        generation = super()._convert_chunk_to_generation_chunk(
+            chunk, default_chunk_class, base_generation_info
+        )
+        if generation is None:
+            return generation
+        choices = chunk.get("choices") or (chunk.get("chunk") or {}).get("choices") or []
+        delta = (choices[0] or {}).get("delta") if choices else None
+        reasoning = delta.get("reasoning_content") if isinstance(delta, dict) else None
+        if reasoning:
+            message = generation.message
+            message.additional_kwargs = {
+                **(message.additional_kwargs or {}),
+                "reasoning_content": reasoning,
+            }
+        return generation
+
+
 class OpenAILLM:
     """OpenAI-compatible LLM using LangChain (supports vLLM, Groq, etc.)."""
 
@@ -18,6 +49,7 @@ class OpenAILLM:
         timeout: int = 120,
         max_tokens: Optional[int] = None,
         thinking: Optional[str] = None,
+        stream_usage: Optional[bool] = None,
         **kwargs
     ):
         self.model = model or "gpt-4o-mini"
@@ -27,6 +59,7 @@ class OpenAILLM:
         self.timeout = timeout
         self.max_tokens = max_tokens
         self.thinking = thinking
+        self.stream_usage = stream_usage
         self.extra_params = kwargs
 
         # Create LangChain chat model
@@ -36,7 +69,11 @@ class OpenAILLM:
         # thinking 是 MiniMax-M3 等模型的专有参数，显式配置才发送，避免其他网关 400。
         if self.thinking in ("disabled", "adaptive"):
             llm_kwargs["extra_body"] = {"thinking": {"type": self.thinking}}
-        self._llm = ChatOpenAI(
+        # 流式输出要在末尾追加 usage 分片，否则 chat 的 token 统计会丢。
+        # 个别网关不支持 stream_options，可用 LLM_CHAT_STREAM_USAGE=false 关闭。
+        if self.stream_usage is not None:
+            llm_kwargs["stream_usage"] = self.stream_usage
+        self._llm = ReasoningChatOpenAI(
             model=self.model,
             api_key=self.api_key,
             base_url=self.base_url,

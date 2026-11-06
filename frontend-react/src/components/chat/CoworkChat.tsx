@@ -1,5 +1,5 @@
 import {
-  ApartmentOutlined, ArrowDownOutlined, ArrowUpOutlined, CheckOutlined, CloseCircleOutlined, CopyOutlined,
+  ApartmentOutlined, ArrowDownOutlined, ArrowUpOutlined, BulbOutlined, CheckOutlined, CloseCircleOutlined, CopyOutlined,
   DatabaseOutlined, EyeOutlined, FileTextOutlined, LeftOutlined, MessageOutlined,
   PlusOutlined, QuestionCircleOutlined, RightOutlined, RobotOutlined,
 } from "@ant-design/icons";
@@ -16,18 +16,38 @@ import { ASSISTANT_AVATAR, ASSISTANT_WELCOME_TITLE, getAssistantSuggestions } fr
 import { eduMarkdownComponents } from "@/new-components/chat/content/eduMarkdownComponents";
 import { snippetConversationTitle } from "@/utils/conversationTitle";
 import { formatTokenCount } from "@/utils/runMetrics";
-import { splitThinkContent } from "@/utils/toolLabels";
+import { extractThinkFromSteps, extractThinkFromText, mergeThinkText, splitThinkContent } from "@/utils/toolLabels";
 
 const markdownPlugins = [remarkGfm];
 
 type ChatViewState = Pick<ReturnType<typeof useChat>,
   "messages" | "loading" | "send" | "stop" | "datasourceId" | "setDatasourceId" | "conversationId" |
   "conversationTitle" | "reports" | "queryResults" | "clarifyByRunId" | "runMetrics" | "chartByRunId" |
-  "patchReport" | "executionSteps" | "metricsByRunId" | "activity" | "taskPlanByRunId"
+  "patchReport" | "executionSteps" | "metricsByRunId" | "activity" | "taskPlanByRunId" | "thinkByRunId"
 >;
 
 function visibleMessage(item: Message) {
   return item.role === "assistant" ? splitThinkContent(item.content).plain : item.content;
+}
+
+/** 思考流折叠区：流式期间默认展开并自动滚到底部，结束后可折叠回看。 */
+function ThinkBlock({ text, live }: { text: string; live: boolean }) {
+  const [open, setOpen] = useState(live);
+  const body = useRef<HTMLPreElement>(null);
+  useEffect(() => {
+    if (open && body.current) body.current.scrollTop = body.current.scrollHeight;
+  }, [text, open]);
+  return (
+    <div className={`cowork-think ${live ? "cowork-think-live" : ""}`}>
+      <button type="button" className="cowork-think-toggle" aria-expanded={open}
+        title={open ? "折叠思考过程" : "展开思考过程"} onClick={() => setOpen((value) => !value)}>
+        <BulbOutlined aria-hidden="true" />
+        <span>{live ? "思考中" : "思考过程"}</span>
+        <ArrowDownOutlined className={`cowork-think-caret ${open ? "is-open" : ""}`} aria-hidden="true" />
+      </button>
+      {open && <pre ref={body} className="cowork-think-body">{text}</pre>}
+    </div>
+  );
 }
 
 function CopyRow({ item }: { item: Message }) {
@@ -195,12 +215,17 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
               const reports = chat.reports.filter((item) => item.runId === runId);
               const results = chat.queryResults.filter((item) => item.runId === runId);
               const answer = assistant ? visibleMessage(assistant) : "";
+              const thinkText = (chat.thinkByRunId[runId] || "").trim() || mergeThinkText(
+                assistant ? extractThinkFromText(assistant.content) : "",
+                extractThinkFromSteps(steps)
+              );
               return (
                 <article key={user.id} className="cowork-turn">
                   <div className="cowork-user">{user.content}</div>
                   <CopyRow item={user} />
                   <ChatWorkLog key={running ? "running" : "settled"} running={running} steps={steps} metrics={running ? chat.runMetrics : chat.metricsByRunId[runId]}
                     activity={activity} planned={Boolean(activeStage)} />
+                  {thinkText ? <ThinkBlock text={thinkText} live={running} /> : null}
                   {assistant?.content && (!pending || latestRun !== runId) && <>
                     <div className="cowork-answer">
                       <ReactMarkdown components={eduMarkdownComponents} remarkPlugins={markdownPlugins}>

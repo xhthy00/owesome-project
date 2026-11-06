@@ -273,6 +273,7 @@ export function useChat() {
   const [executionSteps, setExecutionSteps] = useState<ExecutionStep[]>([]);
   const [summary, setSummary] = useState("");
   const [summaryByRunId, setSummaryByRunId] = useState<Record<string, string>>({});
+  const [thinkByRunId, setThinkByRunId] = useState<Record<string, string>>({});
   const [reports, setReports] = useState<ReportPayload[]>([]);
   const [queryResults, setQueryResults] = useState<QueryResult[]>([]);
   const [chartByRunId, setChartByRunId] = useState<Record<string, ChartRecommendation>>({});
@@ -451,6 +452,56 @@ export function useChat() {
         latest = content;
         setMessages((prev) => prev.map((msg) => (msg.id === assistantId ? { ...msg, content, createdAt: Date.now() } : msg)));
       };
+      /** 流式增量：追加到当前助手消息，不覆盖已生成正文 */
+      const appendAssistant = (delta: string) => {
+        if (!delta) return;
+        latest += delta;
+        writeAssistant(latest);
+      };
+      // 逐 token 到达时分片很多，合并到 ~60ms 一批再渲染，避免长会话里频繁重绘
+      let deltaBuffer = "";
+      let deltaTimer: ReturnType<typeof setTimeout> | null = null;
+      const flushDeltas = () => {
+        if (deltaTimer) {
+          clearTimeout(deltaTimer);
+          deltaTimer = null;
+        }
+        if (!deltaBuffer) return;
+        const chunk = deltaBuffer;
+        deltaBuffer = "";
+        appendAssistant(chunk);
+      };
+      const queueDelta = (text: string) => {
+        if (!text) return;
+        deltaBuffer += text;
+        if (deltaTimer) return;
+        deltaTimer = setTimeout(() => {
+          deltaTimer = null;
+          flushDeltas();
+        }, 60);
+      };
+      // 思考流同样合并渲染，但节奏可以更疏
+      let thinkBuffer = "";
+      let thinkTimer: ReturnType<typeof setTimeout> | null = null;
+      const flushThink = () => {
+        if (thinkTimer) {
+          clearTimeout(thinkTimer);
+          thinkTimer = null;
+        }
+        if (!thinkBuffer) return;
+        const chunk = thinkBuffer;
+        thinkBuffer = "";
+        setThinkByRunId((prev) => ({ ...prev, [runId]: (prev[runId] || "") + chunk }));
+      };
+      const queueThink = (text: string) => {
+        if (!text) return;
+        thinkBuffer += text;
+        if (thinkTimer) return;
+        thinkTimer = setTimeout(() => {
+          thinkTimer = null;
+          flushThink();
+        }, 120);
+      };
       /** 收束本轮仍为 running 的步骤（如 Planner: start），避免左侧一直转圈 */
       const finalizeRunSteps = () => {
         setExecutionSteps((prev) =>
@@ -495,6 +546,11 @@ export function useChat() {
                 }
               ]);
               setActivity("助手正在梳理分析思路…");
+            },
+            onReasoningDelta: (text) => {
+              const delta = asText(text);
+              if (!delta) return;
+              queueThink(delta);
             },
             onTaskPlan: (stages) => {
               setTaskPlanByRunId((prev) => ({ ...prev, [runId]: stages }));
@@ -823,9 +879,25 @@ export function useChat() {
               const safeContent = asText(content);
               if (safeContent.trim()) writeAssistant(safeContent);
             },
+            onAnswerDelta: (text) => {
+              const delta = asText(text);
+              if (!delta) return;
+              setActivity("助手正在输出结论…");
+              queueDelta(delta);
+            },
+            onAnswerDiscard: () => {
+              // 该轮实际是工具调用，丢弃已展示的草稿
+              deltaBuffer = "";
+              if (deltaTimer) {
+                clearTimeout(deltaTimer);
+                deltaTimer = null;
+              }
+              writeAssistant("");
+            },
             onSummary: (content) => {
               const safeContent = asText(content);
               if (safeContent.trim()) {
+                deltaBuffer = "";
                 refreshProgress({ hasSummary: true, summarizerDone: true });
                 setActivity("助手正在整理分析结论…");
                 writeAssistant(safeContent);
@@ -1006,6 +1078,18 @@ export function useChat() {
           writeAssistant(`请求失败：${asText(msg)}`);
         }
       } finally {
+        // 收尾：丢弃未渲染的流式分片（结论以 summary 为准），避免定时器在流结束后再改气泡
+        if (deltaTimer) {
+          clearTimeout(deltaTimer);
+          deltaTimer = null;
+        }
+        deltaBuffer = "";
+        // 思考流是用户可见内容，收尾时补发最后一段
+        if (thinkTimer) {
+          clearTimeout(thinkTimer);
+          thinkTimer = null;
+        }
+        flushThink();
         if (abortRef.current === controller) {
           abortRef.current = null;
         }
@@ -1202,6 +1286,7 @@ export function useChat() {
     setExecutionSteps(nextSteps);
     setSummary(nextSummary);
     setSummaryByRunId(nextSummaryByRunId);
+    setThinkByRunId({});
     setMetricsByRunId(nextMetricsByRunId);
     setRunMetrics(EMPTY_RUN_METRICS);
     setReports(nextReports);
@@ -1221,6 +1306,7 @@ export function useChat() {
     setExecutionSteps([]);
     setSummary("");
     setSummaryByRunId({});
+    setThinkByRunId({});
     setMetricsByRunId({});
     setReports([]);
     setQueryResults([]);
@@ -1313,6 +1399,7 @@ export function useChat() {
     executionSteps,
     summary,
     summaryByRunId,
+    thinkByRunId,
     reports,
     queryResults,
     chartByRunId,
