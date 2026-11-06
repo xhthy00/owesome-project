@@ -1,16 +1,8 @@
-"""/api/v1/chat/chat-stream 的路由回归：确保 ``agent_mode`` 分流不会悄悄串台。
-
-这不是一个业务功能测试（业务由 test_agent_runner / test_team_runner 覆盖），
-**只**验证：
-- 缺省进入 agent 分支；
-- ``agent_mode="agent"`` 进入 agent 分支，legacy / team 代码 **绝不** 被触发；
-- ``agent_mode="team"``  进入 team 分支，agent / legacy 代码 **绝不** 被触发；
-- ``agent_mode="legacy"`` 进入 legacy 分支，agent / team 代码 **绝不** 被触发；
-- 非法值被 Pydantic 拒绝（422）。
-"""
+"""Chat stream compatibility and permission checks around the DeepAgents entry point."""
 
 from __future__ import annotations
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -25,7 +17,9 @@ def _build_app(monkeypatch) -> FastAPI:
         lambda *_a, **_k: None,
     )
     app = FastAPI()
+    app.state.chat_checkpointer = object()
     app.include_router(chat_router, prefix="/api/v1")
+    monkeypatch.setattr("src.chat.api.chat._edu_out_of_scope_message", lambda *_a, **_kw: None)
 
     class _AuthUser:
         id = 1
@@ -37,43 +31,13 @@ def _build_app(monkeypatch) -> FastAPI:
     return app
 
 
-def _patch_agent(monkeypatch, flag: dict) -> None:
-    async def _fake_agent(**kwargs):
-        flag["agent_called"] = True
-        emit = kwargs["emit"]
-        await emit("final_answer", {"text": "stubbed-agent"})
+def _patch_agent(monkeypatch, calls: list) -> None:
+    async def fake_runtime(**kwargs):
+        calls.append(kwargs["request"].agent_mode)
+        await kwargs["emit"]("summary", {"content": "stubbed-deepagents"})
         return 0
 
-    async def _fake_team(**kwargs):
-        flag["team_called"] = True
-        flag["enable_tool_agent"] = kwargs.get("enable_tool_agent")
-        emit = kwargs["emit"]
-        await emit("summary", {"content": "stubbed-team"})
-        return 0
-
-    import src.chat.service.agent_runner as runner_mod
-
-    monkeypatch.setattr(runner_mod, "run_agent_stream", _fake_agent)
-    monkeypatch.setattr(runner_mod, "run_team_stream", _fake_team)
-
-
-def _patch_legacy(monkeypatch, flag: dict) -> None:
-    class _FakeGenerator:
-        def generate_sql(self, **kwargs):
-            flag["legacy_called"] = True
-            return {
-                "is_valid": False,
-                "sql": "",
-                "error": "stubbed-legacy",
-                "chart_type": "table",
-                "tables": [],
-                "steps": [],
-                "reasoning": "",
-            }
-
-    import src.chat.api.chat as chat_api_mod
-
-    monkeypatch.setattr(chat_api_mod, "SQLGenerator", _FakeGenerator)
+    monkeypatch.setattr("src.chat.service.deepagents_runtime.run_chat_stream", fake_runtime)
 
 
 def _stream_body(client: TestClient, payload: dict) -> str:
@@ -91,103 +55,40 @@ def _stream_response(client: TestClient, payload: dict) -> tuple[str, dict[str, 
     return body, headers
 
 
-def _fresh_flag() -> dict:
-    return {
-        "agent_called": False,
-        "team_called": False,
-        "legacy_called": False,
-        "enable_tool_agent": None,
-    }
+@pytest.mark.parametrize("mode", [None, "agent", "team", "legacy"])
+def test_compatible_modes_use_deepagents(monkeypatch, mode):
+    calls = []
+    _patch_agent(monkeypatch, calls)
+    payload = {"question": "hi", "datasource_id": 1}
+    if mode is not None:
+        payload.update(agent_mode=mode, enable_tool_agent=False)
+    body = _stream_body(TestClient(_build_app(monkeypatch)), payload)
+
+    assert calls == ["agent"]
+    assert "stubbed-deepagents" in body
+    assert "event: done" in body
 
 
-def test_agent_mode_defaults_to_agent_branch(monkeypatch):
-    flag = _fresh_flag()
-    _patch_agent(monkeypatch, flag)
-    _patch_legacy(monkeypatch, flag)
+@pytest.mark.parametrize("path,execute", [("generate-sql", False), ("execute-sql", True)])
+def test_sql_endpoints_use_semantic_runtime(monkeypatch, path, execute):
+    async def runtime(**kwargs):
+        assert kwargs["execute"] == execute
+        await kwargs["emit"]("sql", {"sql": "SELECT score FROM scores", "bundle_id": "edu"})
+        if execute:
+            await kwargs["emit"]("result", {"columns": ["score"], "rows": [[12]]})
+        return 0
 
-    body = _stream_body(
-        TestClient(_build_app(monkeypatch)),
-        {"question": "hi", "datasource_id": 1},
+    monkeypatch.setattr("src.chat.service.deepagents_runtime.run_chat_stream", runtime)
+    response = TestClient(_build_app(monkeypatch)).post(
+        f"/api/v1/chat/{path}", json={"question": "查询分数", "datasource_id": 1},
     )
-
-    assert flag["agent_called"] is True
-    assert flag["team_called"] is False
-    assert flag["legacy_called"] is False
-    assert "stubbed-agent" in body
-    assert "final_answer" in body
-    assert "done" in body
-
-
-def test_agent_mode_explicit_team_routes_to_team_runner(monkeypatch):
-    flag = _fresh_flag()
-    _patch_agent(monkeypatch, flag)
-    _patch_legacy(monkeypatch, flag)
-
-    body = _stream_body(
-        TestClient(_build_app(monkeypatch)),
-        {"question": "hi", "datasource_id": 1, "agent_mode": "team"},
-    )
-
-    assert flag["team_called"] is True
-    assert flag["agent_called"] is False
-    assert flag["legacy_called"] is False
-    assert flag["enable_tool_agent"] is True
-    assert "stubbed-team" in body
-
-
-def test_team_mode_can_disable_tool_agent(monkeypatch):
-    flag = _fresh_flag()
-    _patch_agent(monkeypatch, flag)
-    _patch_legacy(monkeypatch, flag)
-
-    _stream_body(
-        TestClient(_build_app(monkeypatch)),
-        {
-            "question": "hi",
-            "datasource_id": 1,
-            "agent_mode": "team",
-            "enable_tool_agent": False,
-        },
-    )
-    assert flag["team_called"] is True
-    assert flag["enable_tool_agent"] is False
-
-
-def test_agent_mode_explicit_legacy_routes_to_sql_generator(monkeypatch):
-    flag = _fresh_flag()
-    _patch_agent(monkeypatch, flag)
-    _patch_legacy(monkeypatch, flag)
-
-    body = _stream_body(
-        TestClient(_build_app(monkeypatch)),
-        {"question": "hi", "datasource_id": 1, "agent_mode": "legacy"},
-    )
-
-    assert flag["legacy_called"] is True
-    assert flag["agent_called"] is False
-    assert flag["team_called"] is False
-    assert "stubbed-legacy" in body
-
-
-def test_legacy_mode_does_not_enter_clarification_gate(monkeypatch):
-    flag = _fresh_flag()
-    _patch_agent(monkeypatch, flag)
-    _patch_legacy(monkeypatch, flag)
-
-    async def _unexpected_gate(**_kwargs):
-        raise AssertionError("legacy must not enter HITL clarification")
-
-    monkeypatch.setattr(
-        "src.chat.service.clarification_gate.maybe_clarify_turn",
-        _unexpected_gate,
-    )
-    body = _stream_body(
-        TestClient(_build_app(monkeypatch)),
-        {"question": "模糊教育问题", "datasource_id": 1, "agent_mode": "legacy"},
-    )
-
-    assert flag["legacy_called"] is True
-    assert "stubbed-legacy" in body
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["bundle_id"] == "edu" and not data["error"]
+    if execute:
+        assert data["result"]["rows"] == [[12]]
+    else:
+        assert data["is_valid"] is True
 
 
 def test_chat_stream_rejects_foreign_conversation(monkeypatch):
@@ -221,23 +122,21 @@ def test_chat_stream_rejects_conversation_datasource_mismatch(monkeypatch):
 
 
 def test_agent_mode_rejects_unknown_value(monkeypatch):
-    flag = _fresh_flag()
-    _patch_agent(monkeypatch, flag)
-    _patch_legacy(monkeypatch, flag)
+    calls = []
+    _patch_agent(monkeypatch, calls)
 
     resp = TestClient(_build_app(monkeypatch)).post(
         "/api/v1/chat/chat-stream",
         json={"question": "hi", "datasource_id": 1, "agent_mode": "wizard"},
     )
     assert resp.status_code == 422
-    assert not any(flag.values())
+    assert not calls
 
 
 def test_chat_stream_emits_x_trace_id_header(monkeypatch):
     """每个 chat-stream 响应都应带 ``X-Trace-Id`` 响应头；不同请求的 trace_id 不同。"""
-    flag = _fresh_flag()
-    _patch_agent(monkeypatch, flag)
-    _patch_legacy(monkeypatch, flag)
+    calls = []
+    _patch_agent(monkeypatch, calls)
     client = TestClient(_build_app(monkeypatch))
 
     _, headers_1 = _stream_response(client, {"question": "q1", "datasource_id": 1})
@@ -253,10 +152,12 @@ def test_chat_stream_emits_x_trace_id_header(monkeypatch):
 
 def test_chat_stream_denies_teacher_other_class_before_runner(monkeypatch):
     from src.agent.education.scope_guard import OUT_OF_SCOPE_MESSAGE
+    from src.chat.api.chat import _edu_out_of_scope_message
 
-    flag = _fresh_flag()
-    _patch_agent(monkeypatch, flag)
-    _patch_legacy(monkeypatch, flag)
+    app = _build_app(monkeypatch)
+    monkeypatch.setattr("src.chat.api.chat._edu_out_of_scope_message", _edu_out_of_scope_message)
+    calls = []
+    _patch_agent(monkeypatch, calls)
     monkeypatch.setattr(
         "datasource.service.edu_permission.edu_scope_dict_for_user_id",
         lambda _uid: {
@@ -266,11 +167,9 @@ def test_chat_stream_denies_teacher_other_class_before_runner(monkeypatch):
         },
     )
     body = _stream_body(
-        TestClient(_build_app(monkeypatch)),
+        TestClient(app),
         {"question": "高一(3)班数学均分", "datasource_id": 1, "agent_mode": "team"},
     )
-    assert flag["team_called"] is False
-    assert flag["agent_called"] is False
-    assert flag["legacy_called"] is False
+    assert not calls
     assert OUT_OF_SCOPE_MESSAGE in body
     assert "event: error" in body

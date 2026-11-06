@@ -7,7 +7,6 @@ import asyncio
 import pytest
 
 from src.agent.resource.tool.base import BaseTool, ToolParameter, ToolResult
-from src.agent.resource.tool.builtin import TERMINATE_TOOL_NAME, TerminateTool
 from src.agent.resource.tool.function_tool import FunctionTool, tool
 
 
@@ -94,15 +93,6 @@ def test_tool_openai_schema():
     assert props["n"]["type"] == "integer"
     assert props["double"]["type"] == "boolean"
     assert schema["parameters"]["required"] == ["n"]
-
-
-def test_terminate_tool_is_final():
-    t = TerminateTool()
-    assert t.name == TERMINATE_TOOL_NAME
-    result = _run(t.execute(final_answer="all done"))
-    assert result.is_final is True
-    assert result.content == "all done"
-    assert result.data == {"final_answer": "all done"}
 
 
 def test_base_tool_requires_name():

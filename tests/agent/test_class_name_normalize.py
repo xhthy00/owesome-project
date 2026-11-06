@@ -1,7 +1,6 @@
 from src.agent.education.clarification import extract_filled_slots
 from src.agent.education.orchestrator import _extract_class_name
 from src.agent.education.query_parse import extract_class_target, normalize_fullwidth_parentheses
-from src.agent.expand.planner import _subject_strength_fact_hint
 
 _CID930 = "扬州中学高三 (5) 班的薄弱学科是哪个"
 
@@ -24,14 +23,6 @@ def test_extract_class_from_spaced_cid930_question():
     assert _extract_class_name(_CID930) == "高三(5)班"
     filled = extract_filled_slots(_CID930)
     assert filled.get("class_name") == "高三(5)班"
-
-
-def test_subject_strength_hint_uses_class_rank_when_class_present():
-    cls = _extract_class_name(_CID930) or ""
-    hint = _subject_strength_fact_hint(cls)
-    assert "对照池班级排名" in hint
-    assert "GROUP BY xx,bj" in hint
-    assert "GROUP BY xx 后" not in hint
 
 
 def test_admin_also_extracts_spaced_class_and_named_school():

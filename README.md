@@ -28,7 +28,7 @@
 
 - 自然语言到 SQL 的端到端链路开箱即用
 - 兼容多种 LLM 接入方式（OpenAI/Ollama 等）
-- 提供 `legacy` / `agent` / `team` 三种对话执行模式
+- DeepAgents 提供多轮问数和可恢复的澄清追问
 - 后端与前端分层清晰，便于二次开发与插件化扩展
 
 ## 核心能力
@@ -37,13 +37,13 @@
 - 数据源管理：数据源增删改查、连接测试、配置加解密
 - 智能问数：自然语言生成 SQL、校验 SQL、格式化 SQL、执行 SQL
 - 对话管理：会话 CRUD、历史记录持久化、最近问题检索
-- 流式交互：`/api/v1/chat/chat-stream` 支持 `legacy` / `agent` / `team` 模式
+- 流式交互：`/api/v1/chat/chat-stream` 返回分析进度、结果、图表和追问
 - 前端控制台：提供聊天界面与数据源管理界面（`frontend/`）
 
 ## 技术栈
 
 - 后端：`FastAPI`、`SQLModel`、`SQLAlchemy`、`Alembic`
-- AI/Agent：`LangChain`、`LangGraph`、OpenAI/Ollama 兼容接入
+- AI/Agent：DeepAgents、LangGraph、DataSemantic，兼容 OpenAI/Ollama 模型接口
 - 数据库：PostgreSQL（默认），并支持多种数据源连接
 - 前端：Vue 3 + TypeScript + Vite + Element Plus + Pinia
 - 工具链：`uv`、`pytest`、`ruff`
@@ -71,55 +71,16 @@
 
 ## 请求链路
 
-```text
-User Question
-    ↓
-Prompt + Schema Construction
-    ↓
-LLM Generates SQL
-    ↓
-SQL Validation / Formatting
-    ↓
-Execute SQL on Datasource
-    ↓
-Return Result (JSON / SSE Events)
-```
-
-## AWEL 架构
-```
-┌─────────────────────────────────────────────────────────────────────────────────┐
-│ POST /api/v1/chat/chat-stream  ← 统一入口（agent_mode: single | team）            │
-└─────────────────────────────────────┬───────────────────────────────────────────┘
-                                      │
-          ┌───────────────────────────┴───────────────────────────┐
-          ▼ agent_mode=single                                      ▼ agent_mode=team
-   ┌──────────────┐                                       ┌───────────────────────┐
-   │ SQLGenerator │ (legacy)                              │    ChatAwelTeam       │
-   └──────────────┘                                       │ (AWELBaseManager)     │
-                                                          └──────────┬────────────┘
-                                                                     │
-                        ┌──────────────┬──────────────┬──────────────┼──────────────┐
-                        ▼              ▼              ▼              ▼              ▼
-                     Planner     DataAnalyst      Charter      Summarizer   [ToolAgent*]
-                   (PlanAction) (QuerySqlAction) (ChartAction) (SummaryAct) (ToolAction)
-                        │              │              │              │              │
-                        └──────────────┴──────────────┴──────────────┴──────────────┘
-                                       │                        │
-                                       ▼                        ▼
-                      ┌────────────────────────────┐  ┌────────────────────┐
-                      │  ResourcePack (per-agent)  │  │  ToolPack(registry)│
-                      │  ├─ DatasourceResource     │  │  ├─ schema_tool    │
-                      │  └─ ToolPack               │──┤  ├─ calc_tool      │
-                      └────────────────────────────┘  │  ├─ embedding_tool │
-                                                      │  └─ ... (@tool)    │
-                                                      └────────────────────┘
-                                       │
-                                       ▼
-                              GptsMemory(plans)  AgentMemory(short-term)
-                                       │
-                                       ▼
-                        gpts_plan / gpts_message / tool_registry(DB)
-
+```mermaid
+flowchart LR
+    UI[聊天客户端] --> API[FastAPI 问数接口]
+    API --> Agent[DeepAgents]
+    Agent <--> Checkpoint[(PostgreSQL Checkpointer)]
+    Agent --> Semantic[DataSemantic 语义规划]
+    Semantic --> Permissions[原有数据权限检查]
+    Permissions --> DB[(数据源)]
+    DB --> Agent
+    Agent --> UI
 ```
 
 ## 项目结构
@@ -131,7 +92,7 @@ awesome-project/
 │   ├── system/              # 认证与用户模块
 │   ├── datasource/          # 数据源管理与 SQL 执行
 │   ├── chat/                # 问数接口、会话管理、SSE 流
-│   ├── agent/               # ReAct/Team Agent 相关能力
+│   ├── agent/               # 教育分析工具、图表和用量记录
 │   └── common/              # 配置、数据库、异常、路由聚合等
 ├── tests/                   # 后端测试
 ├── frontend/                # Vue 前端
@@ -161,10 +122,12 @@ APP_NAME=awesome-project
 DEBUG=false
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/awesome
 JWT_SECRET_KEY=your-secret-key-change-in-production
-LLM_BASE_URL=http://localhost:11434/v1
-LLM_API_KEY=ollama
-LLM_MODEL=qwen2.5
+LLM_CHAT_BASE_URL=http://localhost:11434/v1
+LLM_CHAT_API_KEY=ollama
+LLM_CHAT_MODEL=qwen2.5
 ```
+
+问数数据源的 DataSemantic 发布绑定见 [配置示例](.env.example)。
 
 ## Quick Start (5 分钟)
 

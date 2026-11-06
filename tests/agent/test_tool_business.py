@@ -2,7 +2,6 @@
 
 所有底层数据库调用通过 monkeypatch 拦截，工具逻辑在内存里验证：
 - schema 格式化 / 采样 / SQL 执行 / 错误路径
-- bindings 注入后 LLM 视角看不到 datasource_id / user_id
 - SQL 执行失败返回正常 ToolResult（LLM observation 驱动自修正），而非抛异常
 """
 
@@ -626,48 +625,6 @@ def test_recent_questions_empty(monkeypatch):
     result = _run(biz.recent_questions.execute(datasource_id=1, user_id=1))
     assert "暂无历史问题" in result.content
     assert result.data == []
-
-
-def test_build_default_toolpack_binds_and_hides_params(monkeypatch):
-    pack = biz.build_default_toolpack(datasource_id=7, user_id=42)
-
-    assert pack.bindings == {"datasource_id": 7, "user_id": 42, "workspace_oid": 1}
-    assert "list_tables" in pack
-    assert "find_related_tables" in pack
-    assert "execute_sql" in pack
-    assert "calculate" in pack
-    assert "terminate" in pack
-    assert "resolve_score_schema" in pack
-    assert "compute_score_stats_tool" in pack
-    assert "query_certified_metric_tool" in pack
-    assert len(pack) >= 17
-
-    prompt = pack.render_prompt()
-    assert "datasource_id(" not in prompt
-    assert "user_id(" not in prompt
-    assert "list_tables:" in prompt
-    assert "terminate:" in prompt
-    comprehensive_prompt = prompt.split(
-        "- build_comprehensive_report_data_tool:", 1
-    )[1].split("\n- ", 1)[0]
-    student_prompt = prompt.split(
-        "- build_student_exam_report_data_tool:", 1
-    )[1].split("\n- ", 1)[0]
-    for heavy in ("records(", "rows(", "columns(", "report_data(", "tool_runtime_ctx("):
-        assert heavy not in comprehensive_prompt
-        assert heavy not in student_prompt
-
-
-def test_build_default_toolpack_without_terminate():
-    pack = biz.build_default_toolpack(datasource_id=1, include_terminate=False)
-    assert "terminate" not in pack
-    assert len(pack) >= 16
-    assert "query_certified_metric_tool" in pack
-
-
-def test_build_default_toolpack_no_bindings():
-    pack = biz.build_default_toolpack()
-    assert pack.bindings == {"workspace_oid": 1}
 
 
 def test_missing_datasource_raises_framework_error(monkeypatch):

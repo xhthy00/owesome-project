@@ -76,18 +76,15 @@ cd ../related-edu-offline && npm install && npm run dev   # launch offline app
 ## Architecture
 
 ### Backend layout (`src/`)
-Each top-level module under `src/` is a feature package exposing `api/`, `crud/`, `models/`, `service/` layers. The FastAPI app is built in `src/main.py` (logging + trace_id factory installed at module import; DB init and Agent resource registration happen in the `lifespan`).
+Each top-level module under `src/` is a feature package exposing `api/`, `crud/`, `models/`, `service/` layers. The FastAPI app is built in `src/main.py` (logging + trace_id factory installed at module import; DB initialization and checkpointer setup happen in the `lifespan`).
 
 - `system/` — auth (register/login/me), JWT, plus `permission`, `workspace`, `user` routers added on this branch.
 - `datasource/` — datasource CRUD, connection testing (`db/db.py`), config encryption/decryption (AES), SQL execution across many DB types (PostgreSQL, MySQL, ClickHouse, Elasticsearch, Oracle, SQL Server, Redshift). Service layer (`service/`) adds row/column-level permission enforcement (`execute_with_permission.py`) and LLM-SQL auto-fix (`sql_auto_fix.py`).
-- `chat/` — NL2SQL endpoints (`generate-sql`, `execute-sql`, `chat-stream`), conversation CRUD/history. `service/team_graph/` holds the LangGraph StateGraph team orchestrator.
+- `chat/` — NL2SQL endpoints (`generate-sql`, `execute-sql`, `chat-stream`), conversation CRUD/history. `service/deepagents_runtime.py` runs DeepAgents and `service/semantic_query.py` plans and executes queries against published DataSemantic bundles.
 - `agent/` — the AI/agent layer:
-  - `awel/` — DAG + operator abstractions (DB-GPT-style AWEL).
-  - `core/` — `base_agent.py` (ConversableAgent with 5-stage loop: thinking → review → act → verify → self-optimization), `agent.py` (AgentMessage, AgentGenerateContext), `profile.py` (ProfileConfig dataclass for agent identity), `action/base.py` (Action, ActionOutput), `memory/` (AgentMemory).
-  - `resource/` — `ResourceManager` + `ToolPack` registry; `tool/` has `pack.py`, `builtin`, `business` (6 production tools: sample_rows, execute_sql, chart builder, stats calculator, report renderer, etc.), `calc`, `function_tool`. `manager.py::install_default_resources()` is called from lifespan (kept out of module import so tests can import `main` without side effects).
-  - `expand/` — team agents: `PlannerAgent`, `DataAnalystAgent`, `CharterAgent`, `SummarizerAgent`, `UserProxyAgent`, `EchoAgent`, `ToolAgent`. Wired through `ChatAwelTeam` route decision.
-  - `adapter/llm_adapter.py` — bridges `src.llm.service` to the agent `LlmClient` protocol (message format conversion, observation truncation, MiniMax content-safety error handling).
-  - `education/` — branch-specific student-exam analysis: `orchestrator.py` (ReportOrchestrator, ReportIntentResolver), `student_exam.py`, `comprehensive.py`, `charts.py`, `stats.py` (pure-function KPI computation), `query_parse.py`, `schema_mapping.py`, `report_types.py`, `templates.py`, `config_store.py`, `tools.py` (ReAct tools for LLM), `config.py`, `anomaly_persistence.py`, `models_anomaly.py`, `data_adapter.py`, `prompt_context.py`, `capability.py`, `cross_analysis.py`, `dimension_parse.py`, `aggregation.py`, `school_intervention.py`, `group_feature.py`, `trend_tracking.py`, `subject_diagnosis.py`, `knowledge_tier.py`, `diagnostic_report.py`, `score_import.py`, plus `api.py` (the `education_router`).
+  - `resource/` — domain tools and report templates.
+  - `adapter/usage_sink.py` — token and latency metrics for chat turns.
+  - `education/` — branch-specific student-exam analysis: `orchestrator.py` (ReportOrchestrator, ReportIntentResolver), `student_exam.py`, `comprehensive.py`, `charts.py`, `stats.py` (pure-function KPI computation), `query_parse.py`, `schema_mapping.py`, `report_types.py`, `templates.py`, `config_store.py`, `tools.py` (education tools), `config.py`, `anomaly_persistence.py`, `models_anomaly.py`, `data_adapter.py`, `prompt_context.py`, `capability.py`, `cross_analysis.py`, `dimension_parse.py`, `aggregation.py`, `school_intervention.py`, `group_feature.py`, `trend_tracking.py`, `subject_diagnosis.py`, `knowledge_tier.py`, `diagnostic_report.py`, `score_import.py`, plus `api.py` (the `education_router`).
   - `audit/tool_call_log.py` — records every agent tool invocation.
   - `smoke.py` — CLI smoke test for end-to-end Agent + LLM + datasource verification.
   - `util/` — `function_utils.py`, `json_parser.py`.
@@ -96,13 +93,8 @@ Each top-level module under `src/` is a feature package exposing `api/`, `crud/`
 - `audit/` — operation-level audit logging with three endpoints (access, operation, login logs) under `api/audit.py`, plus CRUD in `crud/audit.py`, service in `service/`, models in `models/`.
 - `db/`, `templates/` — SQL-gen helpers and Jinja2 prompt templates (`templates/sql_gen_prompt.py`).
 
-### Chat execution modes
-`POST /api/v1/chat/chat-stream` is the unified entry point. `agent_mode` selects:
-- **legacy** (`single`) → `SQLGenerator` hand-written coroutine.
-- **agent** → single ReAct agent.
-- **team** → `ChatAwelTeam` (AWELBaseManager) with `Planner → DataAnalyst → Charter → Summarizer (→ ToolAgent)` agents, each backed by a `ResourcePack` (DatasourceResource + ToolPack) and `GptsMemory`/`AgentMemory` (persisted to `gpts_plan`/`gpts_message`/`tool_registry`).
-
-`Settings.team_orchestrator` switches the team implementation: `"langgraph"` (default, StateGraph in `chat/service/team_graph/`) vs `"legacy"` (hand-written coroutines). Pick via env var `TEAM_ORCHESTRATOR`.
+### Chat runtime
+`chat-stream`, `generate-sql`, and `execute-sql` use DeepAgents and DataSemantic. PostgreSQL checkpoints store thread state. When DeepAgents requests clarification, clients send the returned interrupt ID with the next chat request.
 
 ### Router registration
 All routers are centralized in `common/router.py::register_routers()`. Each feature module exposes a `router` (e.g. `system.api.system.router`), imported there and registered under `/api/v1`. **Never** call `app.include_router` directly in feature modules.
@@ -112,16 +104,7 @@ To add a new API router:
 2. Import and append it to the list in `common/router.py::get_all_routers()`.
 
 ### Agent tooling
-Tools are `@tool`-decorated functions collected into a `ToolPack` via `build_default_toolpack()`. The template pack is registered with `ResourceManager` during `lifespan`. Each request binds runtime context (datasource_id, user_id) via `pack.bind(...)` — the template pack remains read-only shared.
-
-**Design philosophy** (from `business.py`):
-- **Business failures don't raise**: SQL errors, empty results, missing tables return a normal `ToolResult` so the LLM sees the error in its ReAct observation and self-corrects. Only framework-level errors (datasource not found, illegal params) throw, letting `ToolAction` classify as `is_exe_success=False` and trigger a retry.
-- **SQL safety**: `_validate_read_only_select()` uses `sqlglot` AST parsing to reject any non-SELECT statement, blocking INSERT/UPDATE/DELETE/DDL via `;` injection or CTE tricks.
-- Tools open their own short-lived DB transactions (`with get_db_session() as s`), never cross threads.
-
-New tools should be:
-1. Registered via `@tool` decorator / FunctionTool in `agent/resource/tool/business.py`.
-2. Automatically included in `build_default_toolpack()` (or a new pack registered via `install_default_resources()`).
+The tools available to chat are declared in `chat/service/deepagents_runtime.py`. Queries run through `chat/service/semantic_query.py` with the existing datasource permission checks.
 
 ### Education module architecture
 The `agent/education/` module implements a deterministic report pipeline (Phase 3+):
@@ -138,7 +121,7 @@ User question → ReportIntentResolver (rule-based, no LLM) → ReportSpec
 Report types map to `_fill_*` methods on `ReportOrchestrator`:
 `CLASS_OVERVIEW`, `GRADE_COMPARISON`, `SUBJECT_DIAGNOSIS`, `STUDENT_PROFILE`, `TREND_TRACKING`, `TIER_ALERT`, `GROUP_FEATURE`, `COMPREHENSIVE`, `DIAGNOSTIC_REPORT`.
 
-ReAct-agent-accessible tools live in `tools.py` (wrapping `stats.py`, `charts.py`, `schema_mapping.py`, `templates.py`) — LLM calls these via `@tool()` decorator rather than performing computation inline.
+Education report helpers in `tools.py` reuse `stats.py`, `charts.py`, `schema_mapping.py` and `templates.py`.
 
 Key patterns:
 - **`ReportIntentResolver`** maps natural language to `ReportSpec` via keyword matching — no LLM overhead. Falls back to `class_overview`.
@@ -155,15 +138,6 @@ Key patterns:
 3. Process-level override cache in `config_store.py` with thread lock.
 4. API at `GET/PUT /api/v1/education/report-config`.
 
-### LangGraph team graph
-When `team_orchestrator=langgraph` (default), the team is a compiled `StateGraph` in `chat/service/team_graph/`:
-```
-START → planner → sub_tasks_loop → charter → summarizer → persist_success → END
-                        ↓ (on failure)
-                   persist_failure → END
-```
-Each node is a LangChain `Runnable` that reads/writes `TeamState` (a `TypedDict` with `messages`, `plans`, `plan_items`, `sub_phases`, `chart_config`, `summary_text`, `upstream_report_data`, `overall_error`, `record_id`, and `constraints_ctx` — see `chat/service/team_graph/state.py`).
-
 ### Logging / tracing
 `common/core/trace.py` installs a `LogRecord` factory so every log line carries a `[trace_id]`. Logging is configured once at module import in `main.py` (format `%(asctime)s %(levelname)s [%(trace_id)s] %(name)s: %(message)s`, `force=True`). Uvicorn's own loggers are not overridden.
 
@@ -173,7 +147,7 @@ The `audit/` module enriches this with operation-level audit logging: `@audit_ac
 A `fastapi-mcp` server is mounted via `fastapi-mcp` dependency — the FastAPI app exposes tools for external MCP clients (e.g. Claude Desktop). Configured in `main.py`.
 
 ### Configuration
-All runtime config comes from `.env` via `common/core/config.py::Settings` (loaded by `get_settings()`, cached). Key vars: `DATABASE_URL` (PostgreSQL default), `JWT_SECRET_KEY`/`JWT_ALGORITHM`/`JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `LLM_BASE_URL`/`LLM_API_KEY`/`LLM_MODEL`, `TEAM_ORCHESTRATOR`. Copy `.env.example` → `.env`.
+All runtime config comes from `.env` via `common/core/config.py::Settings` (loaded by `get_settings()`, cached). Key vars: `DATABASE_URL` (PostgreSQL default), `JWT_SECRET_KEY`/`JWT_ALGORITHM`/`JWT_ACCESS_TOKEN_EXPIRE_MINUTES`, `LLM_BASE_URL`/`LLM_API_KEY`/`LLM_MODEL`, `DATASEMANTIC_BINDINGS`. Copy `.env.example` → `.env`.
 
 ### Workspace / permission model
 Multi-tenant via workspace (`oid`). Users belong to one or more workspaces (`sys_user_ws`). Data sources are scoped per workspace. Permission APIs (`system/api/permission.py`, `datasource/api/permission.py`) enforce access at datasource, table, and field levels. The `edu_permission` extension (`system/api/edu_permission.py`, `datasource/service/edu_permission.py`) scopes education data by school and class list.
@@ -186,9 +160,8 @@ Auth helpers in `system/authz.py` — `is_platform_admin()`, `is_workspace_admin
 - **Tests**: pytest, `testpaths=["tests"]`, `pythonpath=["."]`. Tests live under `tests/<module>/` mirroring `src/`. Test files are named `test_<module>.py`. The agent layer has broad coverage — when adding agent/education behavior, prefer adding a test under `tests/agent/`.
 - **Test patterns**: tests use `pytest-asyncio` for async tests; `conftest.py` fixtures in `tests/audit/` set up DB tables. Education tests use `MockOrchestrator` with mocked `execute_sql`/`resolve_schema` callbacks. A regression test file (`test_education_regression.py`) guards known edge cases.
 - **Routers**: every public API router is wired through `common/router.py::register_routers()` under `/api/v1`. Don't call `app.include_router` directly in feature modules.
-- **Agent tooling**: register new tools as `@tool`-decorated functions / ToolPacks and let `install_default_resources()` pick them up rather than invoking LLM-based tools ad hoc. Importing `main` must not trigger tool registration (it lives in `lifespan`).
 - **Education module**: add new report types by extending `ReportType` enum in `report_types.py`, adding a keyword entry in `ReportIntentResolver`, implementing a `_fill_*` method in `ReportOrchestrator`, and creating the corresponding Jinja2 template in `agent/resource/templates/education/`.
-- **`__all__`**: public API modules and key domain modules are expected to expose `__all__` for their public symbols (as seen in `orchestrator.py`, `config_store.py`, `manager.py`).
+- **`__all__`**: public API modules and key domain modules are expected to expose `__all__` for their public symbols (as seen in `orchestrator.py`, `config_store.py`).
 - **Audit decorator**: use `@audit_access(...)` from `audit/service/decorators.py` on endpoints that need operation audit logs.
 - **Database migrations**: Alembic migrations live in `alembic/versions/`, named with date prefix (`20260721_01_edu_anomaly_config.py`). The `init_db()` function in `common/core/database.py` also runs lightweight column-level migrations via `_ensure_columns()` for dev environments.
 - **`get_settings()`**: always use `from common.core.config import get_settings` — the function is `lru_cache`d, never instantiate `Settings()` directly.

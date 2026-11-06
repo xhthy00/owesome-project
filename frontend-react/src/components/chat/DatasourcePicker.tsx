@@ -9,9 +9,10 @@ type DatasourcePickerProps = {
   onChange: (id: number) => void;
   /** 聊天栏内嵌样式（更紧凑） */
   compact?: boolean;
+  disabled?: boolean;
 };
 
-export default function DatasourcePicker({ value, onChange, compact = false }: DatasourcePickerProps) {
+export default function DatasourcePicker({ value, onChange, compact = false, disabled = false }: DatasourcePickerProps) {
   const router = useRouter();
   const [datasources, setDatasources] = useState<DatasourceItem[]>([]);
   const [open, setOpen] = useState(false);
@@ -30,10 +31,10 @@ export default function DatasourcePicker({ value, onChange, compact = false }: D
   }, []);
 
   useEffect(() => {
-    if (datasources.length && !datasources.some((item) => item.id === value)) {
+    if (!disabled && datasources.length && !datasources.some((item) => item.id === value)) {
       onChange(datasources[0].id);
     }
-  }, [datasources, value, onChange]);
+  }, [datasources, value, onChange, disabled]);
 
   const selected = useMemo(() => datasources.find((item) => item.id === value), [datasources, value]);
 
@@ -102,6 +103,8 @@ export default function DatasourcePicker({ value, onChange, compact = false }: D
   const trigger = (
     <button
       type="button"
+      disabled={disabled}
+      aria-label="选择数据源"
       className={`truncate text-left text-xs text-[#64748b] dark:text-[#a2aec2] ${
         compact ? "max-w-[160px]" : "max-w-[240px]"
       }`}
@@ -114,7 +117,7 @@ export default function DatasourcePicker({ value, onChange, compact = false }: D
     return (
       <div className="ml-1 flex h-7 items-center gap-1.5 rounded-full border border-[#e5eaf3] bg-[#f6f8fc] px-2.5 dark:border-[#3a404d] dark:bg-[#242834]">
         <DatabaseOutlined className="text-[11px] text-[#64748b] dark:text-[#a2aec2]" />
-        <Popover trigger="click" placement="topLeft" open={open} onOpenChange={setOpen} content={panel} overlayClassName="db-picker-overlay">
+        <Popover trigger="click" placement="topLeft" open={open && !disabled} onOpenChange={setOpen} content={panel} overlayClassName="db-picker-overlay">
           {trigger}
         </Popover>
       </div>
@@ -124,7 +127,7 @@ export default function DatasourcePicker({ value, onChange, compact = false }: D
   return (
     <div className="flex h-8 items-center gap-2 rounded-full border border-[#e5eaf3] bg-[#f6f8fc] px-3 text-[#64748b] dark:border-[#3a404d] dark:bg-[#242834] dark:text-[#a2aec2]">
       <DatabaseOutlined className="text-sm" />
-      <Popover trigger="click" placement="topLeft" open={open} onOpenChange={setOpen} content={panel} overlayClassName="db-picker-overlay">
+      <Popover trigger="click" placement="topLeft" open={open && !disabled} onOpenChange={setOpen} content={panel} overlayClassName="db-picker-overlay">
         {trigger}
       </Popover>
     </div>

@@ -1,10 +1,4 @@
-"""Tool 抽象基类与数据结构。
-
-与 DB-GPT 的 Tool 体系对齐但大幅简化：
-- 不做"工具包树"，ToolPack 就是扁平列表 + 命名索引；
-- 不做本地/远程运行时分离，所有 Tool 都在本进程 async 执行；
-- 不做权限模型，接到 ToolPack 就能用（审计在 Phase E 再加）。
-"""
+"""Shared types for business and education tools."""
 
 from __future__ import annotations
 

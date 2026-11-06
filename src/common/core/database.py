@@ -35,8 +35,7 @@ def init_db() -> None:
     # 确保教育配置表注册进 metadata（create_all 才会建表）
     from src.agent.education.models_alert import EduAnomalyAlert  # noqa: F401
     from src.agent.education.models_anomaly import EduAnomalyConfig  # noqa: F401
-    from src.chat.models.agent_run import ChatAgentMessage, ChatAgentRun  # noqa: F401
-    from src.chat.models.conversation import ConversationLog  # noqa: F401
+    from src.chat.models.conversation import Conversation, ConversationRecord  # noqa: F401
     from system.models.edu_privacy import SysEduPrivacy  # noqa: F401
 
     SQLModel.metadata.create_all(bind=engine)

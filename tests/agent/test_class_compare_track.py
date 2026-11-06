@@ -7,18 +7,6 @@ from src.agent.education.class_track import (
     track_of_xkkm,
 )
 from src.agent.education.config import EducationConfig
-from src.agent.education.direction_choice import (
-    compute_pending_choices,
-    is_fact_metric_unresolved,
-    is_report_type_unresolved,
-)
-from src.agent.education.intent_router import (
-    ReportRoute,
-    fallback_classify_report_intent,
-    plan_items_for_route,
-)
-from src.agent.education.query_parse import is_school_class_comparison_query
-from src.agent.education.report_types import ReportType
 from src.agent.education.school_intervention import (
     build_class_compare_table_html,
     build_school_intervention_insights,
@@ -107,54 +95,6 @@ def test_single_track_does_not_split() -> None:
             school_stats=insights.get("stats"),
         )
     )
-
-
-def test_school_class_compare_does_not_ask_fact_metric() -> None:
-    q = "对比本校各班成绩。补充：考试=2026届高三1月期末"
-    route = ReportRoute(needs_report=False, report_type=None, confidence=0.2, reason="fact")
-    assert not is_fact_metric_unresolved(q, route)
-    assert not is_fact_metric_unresolved("对比本校各班成绩", route)
-    blob = " ".join(str(it.get("sub_task") or "") for it in plan_items_for_route(route, q))
-    assert "待确认口径" not in blob
-    assert "用 SQL 直接回答" in blob
-    assert not is_school_class_comparison_query("对比本校各班成绩")
-
-
-def _assert_own_school_class_compare_plan(q: str) -> None:
-    assert is_school_class_comparison_query(q)
-    route = fallback_classify_report_intent(q)
-    assert route.needs_report is True
-    assert route.report_type == ReportType.GRADE_COMPARISON
-    assert not is_report_type_unresolved(q, route)
-    assert compute_pending_choices(q, route) == []
-    blob = " ".join(str(it.get("sub_task") or "") for it in plan_items_for_route(route, q))
-    assert "待确认口径" not in blob
-    assert "question" not in blob
-    assert "build_subject_diagnosis_sections_tool" in blob
-    assert "禁止传 class_name" in blob
-
-
-def test_own_school_horizontal_compare_skips_report_type_question() -> None:
-    _assert_own_school_class_compare_plan(
-        "本校高三各班2026届高三1月期末数学横向对比"
-    )
-    _assert_own_school_class_compare_plan(
-        "我校高三各班2026届高三1月期末数学横向对比"
-    )
-    _assert_own_school_class_compare_plan(
-        "扬大附中高三各班2026届高三1月期末数学横向对比"
-    )
-    assert not is_school_class_comparison_query(
-        "高三各班2026届高三1月期末数学横向对比"
-    )
-    # 本校单班学情 / 无横向口径：不能抬成各班对比
-    assert not is_school_class_comparison_query(
-        "生成2026届高三1月期末本校高三(3)班综合学情分析"
-    )
-    assert not is_school_class_comparison_query("2026届高三1月各校考试分析")
-    assert not is_school_class_comparison_query("2026届高三1月各区县总分10分段统计")
-    _assert_own_school_class_compare_plan("本校各班数学横向分析")
-    _assert_own_school_class_compare_plan("我校高三班级横向对比")
 
 
 def test_both_tracks_keep_each_chart_json_valid() -> None:

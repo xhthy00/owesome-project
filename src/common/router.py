@@ -2,7 +2,6 @@
 
 from audit.api.audit import router as audit_router
 from chat.api.chat import router as chat_router
-from chat.api.question import router as question_router
 from datasource.api.datasource import router as datasource_router
 from datasource.api.permission import router as ds_permission_router
 from src.agent.education.api import router as education_router
@@ -30,7 +29,6 @@ def get_all_routers() -> list:
         datasource_router,
         ds_permission_router,
         chat_router,
-        question_router,
         education_router,
         exam_library_router,
         score_library_router,

@@ -4,10 +4,16 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal, Optional
 
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _ENV_FILE = _REPO_ROOT / ".env"
+
+
+class DataSemanticBinding(BaseModel):
+    bundle_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+    manifest_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 class Settings(BaseSettings):
@@ -17,6 +23,7 @@ class Settings(BaseSettings):
         env_file=str(_ENV_FILE) if _ENV_FILE.is_file() else ".env",
         env_file_encoding="utf-8",
         case_sensitive=False,
+        hide_input_in_errors=True,
     )
 
     # App
@@ -26,7 +33,7 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "postgresql://postgres:postgres@localhost:5432/awesome"
-    # 学情业务库。知识点管理只读这一条，不使用数据源表里的连接。
+    # 学情业务库。聊天问数及学校、知识点等管理功能使用这一条连接。
     database_edu_url: str = ""
 
     # JWT
@@ -35,10 +42,18 @@ class Settings(BaseSettings):
     jwt_access_token_expire_minutes: int = 1440
 
     # 智能问数。max_tokens 不设宽裕值时，部分服务商默认偏小，长思考和工具调用 JSON 会被截断。
-    llm_chat_base_url: Optional[str] = None
-    llm_chat_api_key: Optional[str] = None
-    llm_chat_model: Optional[str] = None
+    llm_chat_base_url: Optional[str] = Field(
+        None, validation_alias=AliasChoices("llm_chat_base_url", "llm_base_url")
+    )
+    llm_chat_api_key: Optional[str] = Field(
+        None, validation_alias=AliasChoices("llm_chat_api_key", "llm_api_key")
+    )
+    llm_chat_model: Optional[str] = Field(
+        None, validation_alias=AliasChoices("llm_chat_model", "llm_model")
+    )
     llm_chat_max_tokens: int = 8192
+    chat_max_steps: int | None = Field(default=None, ge=1)
+    chat_max_total_tokens: int | None = Field(default=None, ge=1)
     # 思考模式：``disabled`` / ``adaptive``。仅部分模型支持。留空不发送该参数。
     llm_chat_thinking: Optional[str] = None
     # 知识点匹配
@@ -54,26 +69,42 @@ class Settings(BaseSettings):
     llm_paper_max_tokens: Optional[int] = None
     llm_paper_thinking: Optional[str] = None
 
-    # Team 模式编排：``legacy`` 为手写协程；``langgraph`` 为 LangGraph StateGraph（默认）。
-    team_orchestrator: Literal["legacy", "langgraph"] = "langgraph"
-
-    # 多轮对话：按用户提问轮数截取 chat_log 历史（对齐 SQLBot GENERATE_SQL_QUERY_HISTORY_ROUND_COUNT）
-    generate_sql_query_history_round_count: int = 3
-
-    # 教育澄清：用 LLM 抽取意图槽位（对标 DB-GPT IntentDetection）。关掉则只走规则抽槽。
-    edu_llm_slot_extraction: bool = True
-    # 教育槽位流水线：legacy=旧字典合并；shadow=新旧并跑、旧结果执行；
-    # semantic=语义帧驱动执行。灰度期间可随时回切 legacy。
-    edu_slot_mode: Literal["legacy", "shadow", "semantic"] = "semantic"
     # DataAnalyst 口径分叉 HITL：off=不声明；shadow=声明并打日志、不弹窗；
     # on=ReAct 中用 question 工具让用户选择。
     edu_da_question_mode: Literal["off", "shadow", "on"] = "shadow"
+
+    # Bind datasource IDs to reviewed DataSemantic publications.
+    datasemantic_bindings: dict[int, DataSemanticBinding] = Field(default_factory=dict)
+    datasemantic_url: str = ""
+    datasemantic_token: str = ""
+    datasemantic_datasource_id: int | None = None
+    datasemantic_bundle_id: str = ""
+    datasemantic_manifest_hash: str = ""
 
     # 侧边栏「系统文档」。留空则用代码内默认地址，修改后重启服务生效。
     edu_doc_commitment_url: str = ""
     edu_doc_training_url: str = ""
     edu_doc_manual_url: str = ""
 
+    @field_validator("chat_max_steps", "chat_max_total_tokens", mode="before")
+    @classmethod
+    def empty_chat_budget(cls, value):
+        return None if value == "" else value
+
+    @model_validator(mode="before")
+    @classmethod
+    def ignore_retired_runtime_settings(cls, values):
+        # Existing .env files may still contain settings from the previous chat runtime.
+        if isinstance(values, dict):
+            for key in (
+                "team_orchestrator",
+                "generate_sql_query_history_round_count",
+                "edu_llm_slot_extraction",
+                "edu_slot_mode",
+                "chat_max_queries",
+            ):
+                values.pop(key, None)
+        return values
 
 
 @lru_cache

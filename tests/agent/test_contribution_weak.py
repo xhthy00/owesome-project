@@ -16,7 +16,6 @@ from src.agent.education.query_parse import (
     is_contribution_weak_query,
     is_subject_strength_query,
 )
-from src.agent.expand.planner import build_fact_query_plan_items
 
 
 def test_gate_contribution_weak_not_rank_or_report() -> None:
@@ -175,28 +174,6 @@ def test_pick_school_filter_skips_cipher_id() -> None:
     assert pick_school_filter_token(
         named="", arg="GZ_E62620B2", bound_name="", looked_up=[]
     ) == ""
-
-
-def test_pick_class_prefers_supplement() -> None:
-    from src.agent.education.contribution_weak import pick_class_filter_token
-    from src.agent.education.query_parse import extract_class_target
-
-    q = "2026届高三3月 高三(11)班贡献分薄弱学科。补充：班级=高三(10)班"
-    assert extract_class_target(q) == "高三(11)班"
-    assert pick_class_filter_token(q, "高三(11)班") == "高三(10)班"
-    items = build_fact_query_plan_items(q)
-    assert "class_name='高三(10)班'" in items[0]["sub_task"]
-    assert "class_name='高三(11)班'" not in items[0]["sub_task"]
-
-
-def test_planner_calls_contribution_weak_tool() -> None:
-    items = build_fact_query_plan_items("安宜中学3月贡献分薄弱学科")
-    assert items
-    assert "query_contribution_weak_tool" in items[0]["sub_task"]
-    assert "execute_sql" in items[0]["sub_task"]
-    no_name = build_fact_query_plan_items("2026届高三3月 贡献分薄弱学科")
-    assert "query_contribution_weak_tool" in no_name[0]["sub_task"]
-    assert "GZ_" not in no_name[0]["sub_task"]
 
 
 def test_apply_verdict_pins_tool_output() -> None:

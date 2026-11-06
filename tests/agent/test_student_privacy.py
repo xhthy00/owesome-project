@@ -7,7 +7,6 @@ from src.agent.education.student_privacy import (
     rewrite_sql_student_name_cols,
     strip_student_names_from_query_result,
 )
-from src.agent.expand.planner import build_fact_query_plan_items
 
 
 def test_filter_schema_hides_xm():
@@ -48,36 +47,6 @@ def test_strip_xm_from_result_rows():
     assert "xm" not in [str(c).lower() for c in out["columns"]]
     assert all("xm" not in r for r in out["rows"])
     assert out["rows"][0]["student_id"] == "STU001"
-
-
-def test_fact_query_plan_forbids_plaintext_names():
-    plans = build_fact_query_plan_items("高二(6)班数学成绩最好的学生是谁")
-    blob = plans[0]["sub_task"]
-    assert "student_id" in blob
-    assert "禁止" in blob
-    assert "xm" in blob or "姓名" in blob
-    # 不得引导 SELECT 姓名
-    assert "student_id、姓名" not in blob
-    assert "、姓名、" not in blob
-    assert "参考人数" in blob
-    assert "学情总判" in blob
-
-
-def test_fact_query_plan_allows_plaintext_when_anonymize_off():
-    from src.agent.education.privacy_mode import (
-        clear_anonymize_display_cache,
-        set_anonymize_display_cached,
-    )
-
-    set_anonymize_display_cached(False)
-    try:
-        plans = build_fact_query_plan_items("高二(6)班数学成绩最好的学生是谁")
-        blob = plans[0]["sub_task"]
-        assert "已关闭匿名脱敏" in blob
-        assert "xm" in blob
-        assert "禁止写中文姓名" not in blob
-    finally:
-        clear_anonymize_display_cache()
 
 
 def test_scrub_fact_answer_removes_fake_class_size():

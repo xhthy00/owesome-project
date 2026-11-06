@@ -9,10 +9,6 @@ from src.agent.education.query_parse import (
 from src.agent.education.report_types import ReportType
 from src.agent.education.orchestrator import ReportIntentResolver
 from src.agent.education.trend_tracking import build_trend_tracking_data
-from src.agent.expand.planner import (
-    build_trend_tracking_plan_items,
-    coerce_plan_items_if_needed,
-)
 
 
 def _sample_records():
@@ -76,20 +72,6 @@ def test_comprehensive_query_still_comprehensive():
     q = "扬州中学高三(10)班所有数学考试综合分析"
     assert is_trend_tracking_query(q) is False
     assert is_multi_exam_class_analysis_query(q) is True
-
-
-def test_coerce_plan_uses_trend_tool():
-    q = "高三(10)班数学历次成绩趋势报告"
-    plans = coerce_plan_items_if_needed(q, [{"sub_task": q, "sub_task_agent": "DataAnalyst"}])
-    blob = " ".join(p["sub_task"] for p in plans)
-    assert "build_trend_tracking_report_data_tool" in blob
-    assert "调 build_comprehensive_report_data_tool" not in blob
-
-
-def test_build_trend_tracking_plan_items_shape():
-    items = build_trend_tracking_plan_items("扬州中学高三(10)班数学成绩趋势")
-    assert len(items) == 2
-    assert "build_trend_tracking_report_data_tool" in items[1]["sub_task"]
 
 
 def test_trend_tracking_tool_renders_html():

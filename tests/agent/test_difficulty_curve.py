@@ -21,7 +21,6 @@ from src.agent.education.query_parse import (
     is_score_band_report_query,
 )
 from src.agent.education.report_types import ReportType
-from src.agent.expand.planner import build_fact_query_plan_items, coerce_plan_items_if_needed
 
 
 def test_extract_question_target_variants():
@@ -136,28 +135,6 @@ def test_difficulty_analysis_and_paper_rate_route_to_curve_report():
 def test_knowledge_score_rate_is_not_difficulty_curve():
     q = "2026届高三5月数学知识点得分率分析"
     assert is_difficulty_curve_report_query(q) is False
-
-
-def test_item_query_is_fact_and_calls_tool_with_question_no():
-    q = "2026届高三3月数学第15题难度曲线"
-    assert extract_question_target(q) == "15"
-    assert is_item_difficulty_curve_query(q) is True
-    assert is_difficulty_curve_report_query(q) is False
-    route = classify_report_intent_sync(q)
-    assert route.needs_report is False
-    blob = build_fact_query_plan_items(q)[0]["sub_task"]
-    assert "build_difficulty_curve_report_data_tool" in blob
-    assert "question_no" in blob
-    wrong = [
-        {
-            "sub_task": "调 build_subject_diagnosis_sections_tool(render=true)",
-            "sub_task_agent": "ToolExpert",
-        },
-    ]
-    fixed = coerce_plan_items_if_needed(q, wrong)
-    fixed_blob = " ".join(p["sub_task"] for p in fixed)
-    assert "build_subject_diagnosis_sections_tool" not in fixed_blob
-    assert "build_difficulty_curve_report_data_tool" in fixed_blob
 
 
 def test_paper_without_items_still_has_curve():

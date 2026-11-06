@@ -4,7 +4,6 @@ from src.agent.education.line_offset import (
     needs_line_offset_hint,
 )
 from src.agent.education.prompt_context import build_education_sql_hint_text
-from src.agent.expand.planner import _track_xkkm_not_xkqk_hint
 from src.templates.sql_gen_prompt import education_terminologies_block
 
 _Q_WITHIN = "新华中学 2026届高三1月期末考试 特招线线上15分以内(包括15分)在 2026届高三3月 考试中有多少未达到特招线"
@@ -33,13 +32,6 @@ def test_hint_keeps_bare_above_and_opens_within() -> None:
     assert "禁止写成" not in text
     assert "那是压线" not in text
     assert "达线本身仍是" in text
-
-
-def test_track_hint_stays_xkkm_only() -> None:
-    track = _track_xkkm_not_xkqk_hint()
-    assert "xkkm" in track
-    assert "线上N分" not in track
-    assert "禁止写成" not in track
 
 
 def test_prompt_context_injects_table_on_within() -> None:

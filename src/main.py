@@ -6,7 +6,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from agent.resource.manager import install_default_resources
 from common.core.config import get_settings
 from common.core.database import init_db
 from common.core.trace import TraceIdMiddleware, install_trace_log_factory
@@ -44,11 +43,11 @@ async def lifespan(app: FastAPI):
         ensure_exam_batch_subject_index()
     except Exception:
         logging.getLogger(__name__).exception("启动时建立 tb_exam 唯一索引失败")
-    # 幂等注册 Agent ToolPack 模板。放在 lifespan 里有两点好处：
-    # (1) 测试场景可以 import main 而不触发工具注册，方便单独测 ResourceManager；
-    # (2) 万一将来注册涉及 I/O（比如从配置加载自定义 pack），也不会阻塞模块导入。
-    install_default_resources()
-    yield
+    from src.chat.service.deepagents_runtime import open_chat_checkpointer
+
+    async with open_chat_checkpointer(settings.database_url) as checkpointer:
+        app.state.chat_checkpointer = checkpointer
+        yield
 
 
 app = FastAPI(

@@ -13,7 +13,6 @@ import {
   Chat,
   ChatInfo,
   ChatRecord as ChatRecordModel,
-  type AgentMode,
   type ChatMessage,
   type PlanState,
   type ToolCallRecord,
@@ -24,8 +23,6 @@ const datasources = ref<DatasourceItem[]>([])
 const active = ref<ChatInfo | null>(null)
 const messages = ref<ChatMessage[]>([])
 const selectedDsId = ref<number | undefined>(undefined)
-const agentMode = ref<AgentMode>('team')
-const enableToolAgent = ref(true)
 const loading = ref(false)
 const scrollRef = ref()
 const inputRef = ref<InstanceType<typeof ChatInput>>()
@@ -198,7 +195,6 @@ const onSend = async (text: string) => {
     create_time: now,
     reasoning: '',
     steps: [],
-    agent_mode: agentMode.value,
     plans: undefined,
     plan_states: [],
     tool_calls: [],
@@ -269,8 +265,6 @@ const onSend = async (text: string) => {
         question: text,
         datasource_id: selectedDsId.value,
         conversation_id: conv.id,
-        agent_mode: agentMode.value,
-        enable_tool_agent: enableToolAgent.value,
       },
       {
         onStep: (step) => {
@@ -398,8 +392,6 @@ onBeforeUnmount(() => {
     <section class="chat-main">
       <ChatHeader
         v-model:selected-ds-id="selectedDsId"
-        v-model:agent-mode="agentMode"
-        v-model:enable-tool-agent="enableToolAgent"
         :datasources="datasources"
         :datasource-locked="datasourceLocked"
         :has-messages="hasMessages"

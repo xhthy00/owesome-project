@@ -1,14 +1,4 @@
-"""业务工具集：DataAnalyst 在 ReAct 循环里可用的六把刀。
-
-设计约束（回顾 PR 决策）：
-- ``datasource_id`` / ``user_id`` 由 ToolPack.bindings 注入，LLM 不可决定；
-- 每个工具内部开自己的短事务（``with get_db_session() as s``），不跨线程；
-- SQL / 库访问一律使用现有同步函数，通过 ``FunctionTool`` 自动 ``asyncio.to_thread``；
-- **工具内的"业务失败"（SQL 执行报错、表不存在、……）不抛异常**：返回正常
-  ``ToolResult``，让 LLM 在 ReAct observation 里看到错误并自修正；只有"框架级
-  错误"（找不到数据源、参数非法到无法执行）才抛，交给 ToolAction 归类为
-  ``is_exe_success=False`` 触发主循环重试。
-"""
+"""Datasource access and shared business report helpers."""
 
 from __future__ import annotations
 
@@ -19,10 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.agent.resource.tool.base import ToolResult
-from src.agent.resource.tool.builtin import TerminateTool
-from src.agent.resource.tool.calc import calculate
-from src.agent.resource.tool.function_tool import FunctionTool, tool
-from src.agent.resource.tool.pack import ToolPack
+from src.agent.resource.tool.function_tool import tool
 
 _SAFE_IDENT_RE = re.compile(r"^[A-Za-z0-9_]+(\.[A-Za-z0-9_]+)*$")
 
@@ -2356,94 +2343,3 @@ def recent_questions(datasource_id: int, user_id: int, limit: int = 10) -> ToolR
         return ToolResult(content="该数据源暂无历史问题。", data=[])
     content = "近期历史问题：\n" + "\n".join(f"- {q}" for q in questions)
     return ToolResult(content=content, data=list(questions))
-
-
-def default_business_tools() -> list[FunctionTool | TerminateTool]:
-    """返回默认业务工具的全新实例列表（不含 bindings）。
-
-    当前清单（14 件）：
-    - ``list_tables`` / ``find_related_tables`` / ``describe_table`` / ``sample_rows``
-      / ``execute_sql``：对接数据源的 Schema 探查 & SQL 执行；
-    - ``find_related_datasources``：多数据源场景的"选源"启发式；
-    - ``recent_questions``：看自己在该数据源的历史问题，启发追问；
-    - ``calculate``：**纯算术沙盒**（asteval），用于百分比/同比/均值等后处理
-      运算——LLM 心算容易错，剥离给确定性求值器；
-    - ``render_html_report``：HTML 报告生成（模板/文件/内联三模式）；
-    - ``resolve_score_schema`` / ``compute_score_stats_tool`` /
-      ``compute_rankings_tool`` / ``identify_at_risk_students_tool`` /
-      ``build_chart_option_tool`` / ``select_report_template_tool``：
-      教育学情领域工具（见 ``src/agent/education/tools.py``）。
-
-    每次调用返回新 list，避免在多会话场景下共享同一组引用造成状态串扰。
-    """
-    # 教育学情工具延迟导入，避免 education 包在测试 mock business 时循环引用。
-    from src.agent.education.tools import EDUCATION_TOOLS
-
-    return [
-        list_tables,
-        find_related_tables,
-        describe_table,
-        sample_rows,
-        execute_sql,
-        find_related_datasources,
-        recent_questions,
-        calculate,
-        render_html_report,
-        *EDUCATION_TOOLS,
-    ]
-
-
-def build_default_toolpack(
-    *,
-    datasource_id: int | None = None,
-    user_id: int | None = None,
-    workspace_oid: int | None = 1,
-    include_terminate: bool = True,
-    report_data: dict[str, Any] | None = None,
-    sub_task: str = "",
-    tool_runtime_ctx: dict[str, Any] | None = None,
-) -> ToolPack:
-    """构造默认业务 ToolPack，并按需绑定运行时参数。
-
-    Args:
-        datasource_id: 绑定当前会话的数据源 ID；为 None 则工具必须由 LLM
-            自行通过 ``find_related_datasources`` 选择。
-        user_id: 当前用户 ID，``recent_questions`` 需要。
-        include_terminate: 是否挂载 ``terminate`` 工具（ReAct 终止信号）。
-    """
-    tools: list[Any] = list(default_business_tools())
-    if include_terminate:
-        tools.append(TerminateTool())
-    heavy_report_args = {
-        "records",
-        "rows",
-        "columns",
-        "exec_result",
-        "score_rows",
-        "fetch_data",
-        "item_rows",
-        "knowledge_rows",
-        "report_data",
-        "tool_runtime_ctx",
-    }
-    pack = ToolPack(tools=tools).hide_parameters(
-        {
-            "build_comprehensive_report_data_tool": heavy_report_args,
-            "build_student_exam_report_data_tool": heavy_report_args,
-        }
-    )
-
-    bindings: dict[str, Any] = {}
-    if datasource_id is not None:
-        bindings["datasource_id"] = datasource_id
-    if user_id is not None:
-        bindings["user_id"] = user_id
-    if workspace_oid is not None:
-        bindings["workspace_oid"] = workspace_oid
-    if report_data is not None:
-        bindings["report_data"] = report_data
-    if sub_task:
-        bindings["sub_task"] = sub_task
-    if tool_runtime_ctx is not None:
-        bindings["tool_runtime_ctx"] = tool_runtime_ctx
-    return pack.bind(**bindings) if bindings else pack

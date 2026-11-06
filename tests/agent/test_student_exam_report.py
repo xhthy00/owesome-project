@@ -37,81 +37,15 @@ def test_student_personal_portrait_routes_to_student_profile():
     """「生成学生: xxx的个人画像」→ 学生学情报告，而非科目诊断。"""
     from src.agent.education.intent_router import (
         classify_report_intent_sync,
-        plan_items_for_route,
-        should_use_deterministic_report_plan,
     )
     from src.agent.education.query_parse import is_individual_student_analysis_query
     from src.agent.education.report_types import ReportType
-    from src.agent.expand.planner import coerce_plan_items_if_needed
 
     q = "生成学生: GZ_19D9D68D_466917B9的个人画像"
     assert is_individual_student_analysis_query(q) is True
     route = classify_report_intent_sync(q)
     assert route.needs_report is True
     assert route.report_type == ReportType.STUDENT_PROFILE
-    assert should_use_deterministic_report_plan(q, route) is True
-    plans = plan_items_for_route(route, q)
-    blob = " ".join(p["sub_task"] for p in plans)
-    assert "build_student_exam_report_data_tool" in blob
-    assert "build_subject_diagnosis_sections_tool" in blob  # 禁止文案
-    assert "禁止" in blob
-    wrong = [
-        {"sub_task": "查成绩", "sub_task_agent": "DataAnalyst"},
-        {
-            "sub_task": "调 build_subject_diagnosis_sections_tool(render=true)",
-            "sub_task_agent": "ToolExpert",
-        },
-    ]
-    fixed = coerce_plan_items_if_needed(q, wrong)
-    fixed_blob = " ".join(p["sub_task"] for p in fixed)
-    assert "build_student_exam_report_data_tool" in fixed_blob
-    assert "调 build_subject_diagnosis_sections_tool(render=true)" not in fixed_blob
-
-
-def test_top_student_who_is_not_student_profile():
-    """「高二(6)班数学成绩最好的学生是谁」→ needs_report=false，事实计划。"""
-    from src.agent.education.intent_router import (
-        classify_report_intent_sync,
-        plan_items_for_route,
-        should_use_deterministic_report_plan,
-    )
-    from src.agent.education.orchestrator import ReportIntentResolver
-    from src.agent.education.query_parse import (
-        is_individual_student_analysis_query,
-        is_top_student_lookup_query,
-    )
-    from src.agent.education.report_types import ReportType
-    from src.agent.expand.planner import coerce_plan_items_if_needed
-
-    q = "高二(6)班数学成绩最好的学生是谁"
-    assert is_top_student_lookup_query(q) is True
-    assert extract_student_target(q) is None
-    assert is_individual_student_analysis_query(q) is False
-    route = classify_report_intent_sync(q)
-    assert route.needs_report is False
-    assert route.report_type is None
-    assert should_use_deterministic_report_plan(q, route) is True
-    plans = plan_items_for_route(route, q)
-    assert len(plans) == 1
-    assert plans[0]["sub_task_agent"] == "DataAnalyst"
-    blob = plans[0]["sub_task"]
-    assert "高二(6)班" in blob
-    assert "禁止" in blob and "报告" in blob
-    assert "build_class_overview" not in blob
-    wrong = [
-        {"sub_task": "查成绩", "sub_task_agent": "DataAnalyst"},
-        {
-            "sub_task": "调 build_class_overview_report_data_tool(class_name=高二(6)班, render=true)",
-            "sub_task_agent": "ToolExpert",
-        },
-    ]
-    fixed = coerce_plan_items_if_needed(q, wrong)
-    assert len(fixed) == 1
-    assert "build_class_overview" not in fixed[0]["sub_task"]
-    spec = ReportIntentResolver().resolve(q)
-    assert spec.report_type != ReportType.STUDENT_PROFILE
-    assert spec.filters.get("class_name") == "高二(6)班"
-    assert spec.filters.get("subject") == "数学"
 
 
 def test_extract_student_id_target():
@@ -125,33 +59,6 @@ def test_extract_student_id_target():
     assert extract_student_target(q) == "STU20240003"
     assert is_individual_student_analysis_query(q) is True
     assert is_individual_student_analysis_query("帮我分析全市数学成绩") is False
-
-
-def test_extract_long_student_id_and_score_query_is_individual():
-    from src.agent.education.query_parse import (
-        extract_exam_name_hint,
-        extract_student_id_target,
-        extract_student_target,
-        is_individual_student_analysis_query,
-    )
-    from src.agent.expand.planner import (
-        build_individual_student_exam_plan_items,
-        should_replace_with_individual_student_plan,
-    )
-
-    q = "查询学生2024_STU20260052_YZZX_3884在连淮扬镇考试中的得分情况"
-    assert extract_student_id_target(q) == "2024_STU20260052_YZZX_3884"
-    assert extract_student_target(q) == "2024_STU20260052_YZZX_3884"
-    assert extract_exam_name_hint(q) == "连淮扬镇"
-    assert is_individual_student_analysis_query(q) is True
-
-    plan = build_individual_student_exam_plan_items(q)
-    assert len(plan) == 2
-    assert plan[0]["sub_task_agent"] == "DataAnalyst"
-    assert plan[1]["sub_task_agent"] == "ToolExpert"
-    assert "build_student_subject_diagnosis_tool" in plan[1]["sub_task"]
-    assert "2024_STU20260052_YZZX_3884" in plan[1]["sub_task"]
-    assert should_replace_with_individual_student_plan(q, [{"sub_task": q, "sub_task_agent": "DataAnalyst"}])
 
 
 def test_extract_date_style_student_id_without_stu():
@@ -291,23 +198,6 @@ def test_extract_exam_name_hint_rejects_vague_zhe_jici():
         assert refers_to_unspecified_exam(f"{reference}扬州中学达线人数") is True
         assert extract_exam_name_hint(f"{reference}扬州中学达线人数") is None
     assert is_vague_exam_name("连淮扬镇") is False
-
-
-def test_multi_exam_student_plan_uses_exam_report_tool():
-    from src.agent.education.query_parse import is_multi_exam_student_analysis_query
-    from src.agent.expand.planner import build_individual_student_exam_plan_items
-
-    q = "分析学生2024_STU20260002_YZZX_8955这几次的数学考试成绩"
-    assert is_multi_exam_student_analysis_query(q) is True
-    plan = build_individual_student_exam_plan_items(q)
-    assert len(plan) == 2
-    assert "build_student_exam_report_data_tool" in plan[1]["sub_task"]
-    assert plan[1]["sub_task"].index("build_student_exam_report_data_tool") < plan[1]["sub_task"].index("禁止")
-    assert "数学" in plan[0]["sub_task"] or "subject_name=数学" in plan[1]["sub_task"]
-    # exam_name 不应作为这几次传入正调用参数区
-    call_part = plan[1]["sub_task"].split("禁止")[0]
-    assert "exam_name=这几次" not in call_part
-    assert "这几次" not in call_part or "禁止" in plan[1]["sub_task"]
 
 
 def test_build_student_multi_exam_overview_html():

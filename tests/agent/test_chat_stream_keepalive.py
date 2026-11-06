@@ -28,6 +28,7 @@ from system.workspace_scope import get_workspace_oid
 
 def _build_app() -> FastAPI:
     app = FastAPI()
+    app.state.chat_checkpointer = object()
     app.include_router(chat_router, prefix="/api/v1")
 
     class _AuthUser:
@@ -60,10 +61,9 @@ def _patch_slow_agent(monkeypatch, *, pre_idle: float, mid_idle: float) -> dict:
         await emit("agent_thought", {"text": "second"})
         return 0
 
-    import src.chat.service.agent_runner as runner_mod
+    import src.chat.service.deepagents_runtime as runner_mod
 
-    monkeypatch.setattr(runner_mod, "run_agent_stream", _fake_agent)
-    monkeypatch.setattr(runner_mod, "run_team_stream", _fake_agent)
+    monkeypatch.setattr(runner_mod, "run_chat_stream", _fake_agent)
     return flag
 
 
@@ -119,10 +119,9 @@ def test_sse_keepalive_silent_when_events_flow(monkeypatch):
         await emit("agent_thought", {"text": "y"})
         return 0
 
-    import src.chat.service.agent_runner as runner_mod
+    import src.chat.service.deepagents_runtime as runner_mod
 
-    monkeypatch.setattr(runner_mod, "run_agent_stream", _fast_agent)
-    monkeypatch.setattr(runner_mod, "run_team_stream", _fast_agent)
+    monkeypatch.setattr(runner_mod, "run_chat_stream", _fast_agent)
 
     body = _stream_body(
         TestClient(_build_app()),

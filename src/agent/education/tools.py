@@ -1321,7 +1321,7 @@ def build_subject_diagnosis_report_tool(
     LEFT JOIN 确定（掌握度按 weight 归一化拆分），**不会臆造**。
 
     Args:
-        datasource_id: 数据源 ID（由 ToolPack bindings 自动注入，LLM 无需填写）。
+        datasource_id: 数据源 ID，由业务调用方提供。
         school_name: 学校名（如「南京市第一中学」），必填。
         subject_name: 科目名（如「数学」），必填。
         exam_name: 考试名关键字（如「期末质量检测」），可选，用于过滤。
@@ -8185,50 +8185,7 @@ def query_certified_metric_tool(
     )
 
 
-# 暴露给 ``build_default_toolpack`` 的列表（与 business.py 工具并列）。
-EDUCATION_TOOLS = [
-    resolve_score_schema,
-    peek_edu_filter_values,
-    query_certified_metric_tool,
-    query_school_vs_city_avg_tool,
-    query_contribution_weak_tool,
-    compute_score_stats_tool,
-    compute_rankings_tool,
-    identify_at_risk_students_tool,
-    build_chart_option_tool,
-    select_report_template_tool,
-    build_comprehensive_report_data_tool,
-    build_tier_alert_report_data_tool,
-    build_group_feature_report_data_tool,
-    build_class_overview_report_data_tool,
-    build_trend_tracking_report_data_tool,
-    build_student_exam_report_data_tool,
-    build_student_subject_diagnosis_tool,
-    fetch_subject_diagnosis_data_tool,
-    build_subject_diagnosis_sections_tool,
-    build_subject_diagnosis_report_tool,
-    aggregate_dimension_tool,
-    cross_analyze_tool,
-    build_citywide_exam_analysis_report_tool,
-    build_diagnostic_report_data_tool,
-    build_line_reach_report_data_tool,
-    build_subject_research_report_data_tool,
-    build_subject_avg_report_data_tool,
-    build_assign_grade_report_data_tool,
-    build_rank_bucket_report_data_tool,
-    build_contribution_report_data_tool,
-    build_combo_reach_report_data_tool,
-    build_elite_roster_report_data_tool,
-    build_score_band_report_data_tool,
-    build_difficulty_curve_report_data_tool,
-    build_knowledge_tier_sections_tool,
-    compare_knowledge_cohort_tool,
-    build_class_weak_subject_report_data_tool,
-]
-
-
 __all__ = [
-    "EDUCATION_TOOLS",
     "aggregate_dimension_tool",
     "build_chart_option_tool",
     "build_comprehensive_report_data_tool",

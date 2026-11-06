@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from typing import Any
 
 from src.agent.education.query_parse import (
@@ -22,6 +23,8 @@ from src.agent.education.query_parse import (
 
 OUT_OF_SCOPE_MESSAGE = "当前数据无权限访问"
 CROSS_TIER_MESSAGE = "不能跨层次比较其他校类的学校或班级"
+
+ConnectionFactory = Callable[[], tuple[str, dict[str, Any]]]
 
 _SCHOOL_SCOPED_ROLES = frozenset({"teacher", "school_admin"})
 _SCHOOL_CODE_RE = re.compile(r"^[A-Za-z]\d{2}")
@@ -76,6 +79,7 @@ def out_of_scope_question(
     school_labels: list[str] | None = None,
     datasource_id: int | None = None,
     workspace_oid: int | None = None,
+    connection_factory: ConnectionFactory | None = None,
 ) -> str | None:
     """点名越权班/校时返回拒绝文案，否则 None。"""
     edu = edu_scope if isinstance(edu_scope, dict) else {}
@@ -96,7 +100,10 @@ def out_of_scope_question(
         and asked_schools
     ):
         labels = lookup_bound_school_labels(
-            bound_id, datasource_id=datasource_id, workspace_oid=workspace_oid
+            bound_id,
+            datasource_id=datasource_id,
+            workspace_oid=workspace_oid,
+            connection_factory=connection_factory,
         )
     if role == "teacher" and _class_out_of_scope(edu, q):
         return OUT_OF_SCOPE_MESSAGE
@@ -112,6 +119,7 @@ def out_of_scope_question(
                 extra_labels=labels,
                 datasource_id=datasource_id,
                 workspace_oid=workspace_oid,
+                connection_factory=connection_factory,
             )
         if bound_type and named_type != bound_type:
             return CROSS_TIER_MESSAGE
@@ -143,6 +151,7 @@ def lookup_bound_school_type(
     extra_labels: list[str] | None = None,
     datasource_id: int | None = None,
     workspace_oid: int | None = None,
+    connection_factory: ConnectionFactory | None = None,
 ) -> str | None:
     """用 tb_school.type / overview.xxlb 还原绑定校层次。失败返回空。"""
     if not datasource_id:
@@ -158,7 +167,11 @@ def lookup_bound_school_type(
         from src.agent.resource.tool.business import _load_datasource
         from src.datasource.db.db import execute_sql
 
-        db_type, config, _name = _load_datasource(int(datasource_id), workspace_oid)
+        db_type, config = (
+            connection_factory()
+            if connection_factory is not None
+            else _load_datasource(int(datasource_id), workspace_oid)[:2]
+        )
         for tok in tokens:
             lit = tok.replace("'", "''")
             ok, _msg, result = execute_sql(
@@ -214,6 +227,7 @@ def lookup_bound_school_labels(
     *,
     datasource_id: int | None = None,
     workspace_oid: int | None = None,
+    connection_factory: ConnectionFactory | None = None,
 ) -> list[str]:
     """用 tb_school 把权限校 ID 还原成展示名（如 A01扬州中学）。失败返回空。"""
     sid = str(school_id or "").strip()
@@ -223,7 +237,11 @@ def lookup_bound_school_labels(
         from src.agent.resource.tool.business import _load_datasource
         from src.datasource.db.db import execute_sql
 
-        db_type, config, _name = _load_datasource(int(datasource_id), workspace_oid)
+        db_type, config = (
+            connection_factory()
+            if connection_factory is not None
+            else _load_datasource(int(datasource_id), workspace_oid)[:2]
+        )
         lit = sid.replace("'", "''")
         ok, _msg, result = execute_sql(
             db_type,

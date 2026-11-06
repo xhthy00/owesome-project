@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from src.agent.education.intent_router import (
-    classify_report_intent_sync,
-    plan_items_for_route,
-)
 from src.agent.education.knowledge_cohort import (
     build_knowledge_cohort_report_data,
     compare_knowledge_by_cohort,
@@ -146,17 +142,6 @@ def test_is_knowledge_cohort_gap_query():
     assert is_knowledge_cohort_gap_query("中位数与知识点") is False
 
 
-def test_route_forces_compare_knowledge_cohort_tool():
-    route = classify_report_intent_sync(DEMO_Q)
-    assert route.needs_report is True
-    plans = plan_items_for_route(route, DEMO_Q)
-    blob = " ".join(p["sub_task"] for p in plans)
-    assert "compare_knowledge_cohort_tool" in blob
-    assert "禁止" in blob and "build_subject_diagnosis_sections_tool" in blob
-    assert "class_name=高二(6)班" in blob
-    assert "subject_name=数学" in blob
-
-
 def test_exam_extract_not_class_subject_garbage():
     """「高二(6)班数学期末考试…」不得抽成「班数学期末考试」。"""
     from src.agent.education.orchestrator import _extract_exam
@@ -164,17 +149,8 @@ def test_exam_extract_not_class_subject_garbage():
         _clean_exam_name_candidate,
         extract_exam_name_hint,
     )
-    from src.agent.education.tools import exam_name_like_candidates
-    from src.agent.expand.planner import _plan_exam_name, build_knowledge_cohort_plan_items
 
     q = "高二(6)班数学期末考试最后十名与中位数在知识点掌握方面的差距"
     assert _clean_exam_name_candidate("班数学期末考试") == "期末考试"
     assert _extract_exam(q) in {"期末", "期末考试"}
     assert extract_exam_name_hint(q) in {"期末", "期末考试"}
-    assert _plan_exam_name(q) in {"期末", "期末考试"}
-    blob = " ".join(p["sub_task"] for p in build_knowledge_cohort_plan_items(q))
-    assert "班数学期末考试" not in blob
-    assert "exam_name=期末" in blob or "exam_name=期末考试" in blob
-    cands = exam_name_like_candidates("班数学期末考试")
-    assert "期末" in cands
-    assert "期末考试" in cands

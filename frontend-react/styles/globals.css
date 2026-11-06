@@ -1,5 +1,6 @@
 @import "./theme.css";
 @import "./opencode-theme.css";
+@import "./cowork-chat.css";
 
 @tailwind base;
 @tailwind components;

@@ -106,18 +106,10 @@ async def _run(
     max_rounds: int | None,
     full: bool,
 ) -> int:
-    import src.chat.service.agent_runner as runner_mod
+    from langgraph.checkpoint.memory import InMemorySaver
+
     from src.chat.schemas import ChatRequest
-    from src.chat.service.agent_runner import run_agent_stream
-
-    if max_rounds is not None:
-        orig_factory = runner_mod.build_data_analyst
-
-        def _capped_factory(*args: Any, **kwargs: Any):
-            kwargs.setdefault("max_react_rounds", max_rounds)
-            return orig_factory(*args, **kwargs)
-
-        runner_mod.build_data_analyst = _capped_factory  # type: ignore[assignment]
+    from src.chat.service.deepagents_runtime import run_chat_stream
 
     req = ChatRequest(question=question, datasource_id=datasource_id)
 
@@ -130,7 +122,7 @@ async def _run(
         elapsed_ms = int((now - event_t0["t"]) * 1000)
         event_t0["t"] = now
         print(_fmt(event, _render_payload(event, data, full), elapsed_ms), flush=True)
-        if event == "final_answer":
+        if event == "summary" and data.get("content"):
             terminated_ok["ok"] = True
 
     print(f"→ question   : {question}")
@@ -139,11 +131,13 @@ async def _run(
     print("-" * 80)
 
     try:
-        await run_agent_stream(
+        await run_chat_stream(
             request=req,
             current_user_id=user_id,
+            workspace_oid=1,
             emit=emit,
-            persist=False,
+            checkpointer=InMemorySaver(),
+            recursion_limit=2 * max_rounds + 1 if max_rounds is not None else 25,
         )
     except KeyboardInterrupt:
         print("\n[interrupted]", file=sys.stderr)
@@ -161,12 +155,12 @@ async def _run(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="python -m src.agent.smoke",
-        description="Smoke-test DataAnalystAgent against a real LLM / datasource.",
+        description="Smoke-test DeepAgents against a real LLM / datasource.",
     )
     parser.add_argument("question", nargs="+", help="Natural-language question (quoted)")
     parser.add_argument("-d", "--datasource-id", type=int, required=True)
     parser.add_argument("-u", "--user-id", type=int, default=1)
-    parser.add_argument("--max-rounds", type=int, default=None, help="Override ReAct round cap")
+    parser.add_argument("--max-rounds", type=int, default=None, help="Limit model and tool rounds")
     parser.add_argument("--full", action="store_true", help="Do not truncate content/thought")
     args = parser.parse_args(argv)
 

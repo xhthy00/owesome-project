@@ -53,17 +53,20 @@ export type Conversation = {
 export type ConversationRecord = {
   id: number;
   question: string;
+  create_time?: string;
+  finish_time?: string;
   reasoning?: string;
   summary?: string;
   total_tokens?: number | null;
   elapsed_ms?: number | null;
-  steps?: Array<{ name?: string; label?: string; status?: string; elapsed_ms?: number; detail?: string; sub_task_index?: number }>;
+  steps?: Array<{ name?: string; label?: string; status?: string; elapsed_ms?: number; detail?: string; sub_task_index?: number; round?: number }>;
   tool_calls?: Array<{
     round?: number;
     tool?: string;
     success?: boolean;
     content?: string;
     elapsed_ms?: number;
+    sub_task?: string;
     sub_task_index?: number;
     data?: {
       output_type?: string;
@@ -82,7 +85,7 @@ export type ConversationRecord = {
     };
   }>;
   sql?: string;
-  exec_result?: { columns?: string[]; rows?: unknown[][]; row_count?: number } | null;
+  exec_result?: (ClarifyPayload & { columns?: string[]; rows?: unknown[][]; row_count?: number; clarify?: boolean }) | null;
   chart_type?: string;
   chart_config?: { x?: string; y?: string[]; title?: string };
   reports?: Array<{
@@ -99,7 +102,7 @@ export type ConversationRecord = {
     index: number;
     sub_task?: string;
     sub_task_agent?: string;
-    state: "running" | "ok" | "error";
+    state: "pending" | "running" | "ok" | "error";
     error?: string;
     row_count?: number;
   }>;
@@ -111,15 +114,20 @@ export type ConversationDetail = Conversation & {
   records: ConversationRecord[];
 };
 
+export type TaskPlanStage = {
+  content: string;
+  status: "pending" | "in_progress" | "completed" | "failed";
+};
+
 export type ChatStreamPayload = {
   question: string;
   datasource_id: number;
   conversation_id?: number;
-  agent_mode?: "agent" | "team" | "legacy";
-  enable_tool_agent?: boolean;
+  resume_interrupt_id?: string;
 };
 
 export type ClarifyPayload = {
+  interrupt_id?: string;
   prompt?: string;
   missing?: string[];
   options?: Record<string, string[]> | string[];
@@ -128,27 +136,9 @@ export type ClarifyPayload = {
   report_type?: string | null;
 };
 
-export type QuestionOption = {
-  label: string;
-  description?: string;
-};
-
-export type QuestionInfo = {
-  question: string;
-  header?: string;
-  options: QuestionOption[];
-  multiple?: boolean;
-  custom?: boolean;
-};
-
-export type Question = {
-  request_id: string;
-  conv_id: string;
-  questions: QuestionInfo[];
-};
-
 type StreamHandlers = {
-  onStep?: (step: { name?: string; label?: string; status?: string; elapsed_ms?: number; detail?: string }) => void;
+  onStep?: (step: NonNullable<ConversationRecord["steps"]>[number]) => void;
+  onTaskPlan?: (stages: TaskPlanStage[]) => void;
   onAgentSpeak?: (payload: { agent?: string; status?: string; error?: string }) => void;
   onChart?: (payload: { chart_type?: string; chart_config?: Record<string, unknown> }) => void;
   onReport?: (payload: {
@@ -173,13 +163,14 @@ type StreamHandlers = {
   onSql?: (sql: string, chartType: string) => void;
   onResult?: (result: { columns: string[]; rows: unknown[][]; row_count: number }) => void;
   onAgentThought?: (payload: { text: string; sub_task_index?: number }) => void;
-  onToolCall?: (payload: { tool: string; args?: Record<string, unknown>; round?: number; sub_task_index?: number }) => void;
+  onToolCall?: (payload: { tool: string; args?: Record<string, unknown>; round?: number; sub_task?: string; sub_task_index?: number }) => void;
   onToolResult?: (payload: {
     tool: string;
     success: boolean;
     content?: string;
     data?: Record<string, unknown>;
     round?: number;
+    sub_task?: string;
     sub_task_index?: number;
     elapsed_ms?: number;
   }) => void;
@@ -194,8 +185,6 @@ type StreamHandlers = {
   onError?: (msg: string) => void;
   onDone?: (recordId: number) => void;
   onClarify?: (payload: ClarifyPayload) => void;
-  onQuestionAsked?: (payload: Question) => void;
-  onQuestionRejected?: (payload: Pick<Question, "request_id" | "conv_id">) => void;
 };
 
 export async function createConversation(payload: { title?: string; datasource_id: number }) {
@@ -258,19 +247,6 @@ export async function replaceRecordReports(payload: {
   );
 }
 
-export async function replyQuestion(requestId: string, answers: string[][]) {
-  return apiRequest<{ request_id: string }>(`/chat/question/${requestId}/reply`, {
-    method: "POST",
-    body: JSON.stringify({ answers })
-  });
-}
-
-export async function rejectQuestion(requestId: string) {
-  return apiRequest<{ request_id: string }>(`/chat/question/${requestId}/reject`, {
-    method: "POST"
-  });
-}
-
 export async function sendMessageStream(
   payload: ChatStreamPayload,
   handlers: StreamHandlers,
@@ -285,7 +261,10 @@ export async function sendMessageStream(
       const data = (evt.data ?? {}) as Record<string, unknown>;
       switch (evt.event) {
         case "step":
-          handlers.onStep?.(data as { name?: string; label?: string; status?: string; elapsed_ms?: number; detail?: string });
+          handlers.onStep?.(data);
+          break;
+        case "task_plan":
+          if (Array.isArray(data.stages)) handlers.onTaskPlan?.(data.stages as TaskPlanStage[]);
           break;
         case "plan":
           handlers.onPlan?.({
@@ -324,6 +303,7 @@ export async function sendMessageStream(
             tool: (data.tool as string) ?? "tool",
             args: (data.args as Record<string, unknown>) ?? {},
             round: typeof data.round === "number" ? (data.round as number) : undefined,
+            sub_task: typeof data.sub_task === "string" ? data.sub_task : undefined,
             sub_task_index: typeof data.sub_task_index === "number" ? (data.sub_task_index as number) : undefined
           });
           break;
@@ -334,6 +314,7 @@ export async function sendMessageStream(
             content: (data.content as string) ?? "",
             data: (data.data as Record<string, unknown>) ?? undefined,
             round: typeof data.round === "number" ? (data.round as number) : undefined,
+            sub_task: typeof data.sub_task === "string" ? data.sub_task : undefined,
             sub_task_index: typeof data.sub_task_index === "number" ? (data.sub_task_index as number) : undefined,
             elapsed_ms: typeof data.elapsed_ms === "number" ? (data.elapsed_ms as number) : undefined
           });
@@ -378,25 +359,13 @@ export async function sendMessageStream(
           break;
         case "clarify":
           handlers.onClarify?.({
+            ...(typeof data.interrupt_id === "string" ? { interrupt_id: data.interrupt_id } : {}),
             prompt: (data.prompt as string) ?? "",
             missing: Array.isArray(data.missing) ? (data.missing as string[]) : [],
             options: (data.options as ClarifyPayload["options"]) ?? {},
             filled: (data.filled as Record<string, string>) ?? {},
             original_question: (data.original_question as string) ?? "",
             report_type: (data.report_type as string) ?? null
-          });
-          break;
-        case "question.asked":
-          handlers.onQuestionAsked?.({
-            request_id: (data.request_id as string) ?? "",
-            conv_id: (data.conv_id as string) ?? "",
-            questions: Array.isArray(data.questions) ? (data.questions as QuestionInfo[]) : []
-          });
-          break;
-        case "question.rejected":
-          handlers.onQuestionRejected?.({
-            request_id: (data.request_id as string) ?? "",
-            conv_id: (data.conv_id as string) ?? ""
           });
           break;
         case "error":

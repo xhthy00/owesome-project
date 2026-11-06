@@ -2,21 +2,16 @@
 import { computed } from 'vue'
 import { Connection, Plus, ArrowDown, Bottom } from '@element-plus/icons-vue'
 import type { DatasourceItem } from '@/api/datasource'
-import type { AgentMode } from './typed'
 
 const props = defineProps<{
   datasources: DatasourceItem[]
   selectedDsId?: number
   datasourceLocked?: boolean
-  agentMode: AgentMode
-  enableToolAgent: boolean
   hasMessages: boolean
 }>()
 
 const emit = defineEmits<{
   'update:selectedDsId': [v: number | undefined]
-  'update:agentMode': [v: AgentMode]
-  'update:enableToolAgent': [v: boolean]
   create: []
   scrollBottom: []
 }>()
@@ -24,16 +19,6 @@ const emit = defineEmits<{
 const dsModel = computed({
   get: () => props.selectedDsId,
   set: (v) => emit('update:selectedDsId', v),
-})
-
-const modeModel = computed({
-  get: () => props.agentMode,
-  set: (v: AgentMode) => emit('update:agentMode', v),
-})
-
-const toolAgentModel = computed({
-  get: () => props.enableToolAgent,
-  set: (v: boolean) => emit('update:enableToolAgent', v),
 })
 
 const selectedDs = computed(() =>
@@ -73,26 +58,6 @@ const selectedDs = computed(() =>
         <el-icon v-if="!datasourceLocked" :size="12" class="caret"><ArrowDown /></el-icon>
       </div>
 
-      <el-segmented
-        v-model="modeModel"
-        :options="[
-          { label: $t('chat.agent_mode.team'), value: 'team' },
-          { label: $t('chat.agent_mode.agent'), value: 'agent' },
-        ]"
-        class="mode-tab"
-      />
-
-      <div class="tool-toggle">
-        <span class="toggle-label">{{ $t('chat.tool_agent_toggle') }}</span>
-        <el-switch
-          v-model="toolAgentModel"
-          size="small"
-          :disabled="modeModel !== 'team'"
-          inline-prompt
-          :active-text="$t('chat.enabled')"
-          :inactive-text="$t('chat.disabled')"
-        />
-      </div>
     </div>
 
     <div class="right-block">
@@ -196,64 +161,6 @@ const selectedDs = computed(() =>
       }
     }
 
-    .mode-tab {
-      flex-shrink: 0;
-      min-width: 170px;
-      :deep(.el-segmented) {
-        background: linear-gradient(180deg, #f5f7fb 0%, #eef2f7 100%);
-        border: 1px solid #e4e7ec;
-        border-radius: 16px;
-        padding: 2px;
-      }
-      :deep(.el-segmented__item-selected) {
-        z-index: 0;
-        border-radius: 14px;
-        background: linear-gradient(180deg, #ffffff 0%, #f8faff 100%);
-        box-shadow:
-          0 1px 2px rgba(16, 24, 40, 0.06),
-          0 0 0 1px rgba(59, 130, 246, 0.12) inset;
-      }
-      :deep(.el-segmented__item) {
-        position: relative;
-        z-index: 1;
-        border-radius: 14px;
-        height: 30px;
-        padding: 0 12px;
-        font-size: 12.5px;
-        color: #667085;
-        transition: color 0.15s ease;
-      }
-      :deep(.el-segmented__item:hover) {
-        color: #344054;
-      }
-      :deep(.el-segmented__item-label) {
-        position: relative;
-        z-index: 2;
-      }
-      :deep(.el-segmented__item.is-selected) {
-        background: transparent;
-        color: #175cd3;
-        font-weight: 600;
-        text-shadow: 0 0 0 rgba(0, 0, 0, 0);
-      }
-    }
-
-    .tool-toggle {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      height: 34px;
-      padding: 0 10px;
-      background: #fff;
-      border: 1px solid var(--border-color);
-      border-radius: 16px;
-      flex-shrink: 0;
-
-      .toggle-label {
-        font-size: 12px;
-        color: #475467;
-      }
-    }
   }
 
   .right-block {

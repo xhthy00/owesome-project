@@ -853,6 +853,13 @@ export function summarizeRun(
   return { planCount, toolCount, reportCount, label, hasError, doneCount, totalCount };
 }
 
+/** 清除部分兼容接口放进正文的工具协议，包括未闭合的调用块。 */
+export function stripToolProtocol(text: string): string {
+  return text
+    .replace(/(?:\]<\]minimax\[>\[)?<(?:minimax:)?tool_call\b[^>]*>[\s\S]*?(?:<\/(?:minimax:)?tool_call\s*>|$)/gi, "")
+    .split("]<]minimax[>[", 1)[0].trim();
+}
+
 /** 拆出 &lt;think&gt; 块与对外正文（支持未闭合标签） */
 export function splitThinkContent(raw: string): { thinkBlocks: string[]; plain: string } {
   const text = raw || "";
@@ -867,7 +874,7 @@ export function splitThinkContent(raw: string): { thinkBlocks: string[]; plain: 
     .replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, "")
     .replace(/<\/?think>/gi, "")
     .trim();
-  return { thinkBlocks, plain };
+  return { thinkBlocks, plain: stripToolProtocol(plain) };
 }
 
 function clampThink(joined: string, max = 1200): string {

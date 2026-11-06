@@ -526,9 +526,6 @@ void props
         <div class="turn-body">
           <div class="agent-name">
             <span>智能问数助手</span>
-            <span v-if="msg.record?.agent_mode" class="mode-tag">
-              {{ msg.record.agent_mode === 'team' ? '团队协作' : '单体分析' }}
-            </span>
           </div>
 
           <div class="assistant-card">
@@ -1024,15 +1021,6 @@ void props
       font-size: 12.5px;
       font-weight: 600;
       color: #344054;
-
-      .mode-tag {
-        padding: 1px 8px;
-        font-size: 11px;
-        font-weight: 500;
-        color: var(--el-color-primary);
-        background: var(--el-color-primary-light-9);
-        border-radius: 10px;
-      }
     }
 
     .assistant-card {

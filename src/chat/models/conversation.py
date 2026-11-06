@@ -1,15 +1,10 @@
 """Chat models for conversation history storage."""
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
 
-from sqlalchemy import JSON, BigInteger, Boolean, Column, DateTime, Integer, Text
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import BigInteger, Boolean, Column, DateTime, Integer, Text
 from sqlmodel import Field, SQLModel
-
-# SQLBot-aligned operate values for chat_conversation_log
-OPERATE_GENERATE_SQL = "GENERATE_SQL"
-OPERATE_GENERATE_CHART = "GENERATE_CHART"
 
 
 class Conversation(SQLModel, table=True):
@@ -62,33 +57,3 @@ class ConversationRecord(SQLModel, table=True):
     reports: Optional[str] = Field(default=None, sa_column=Column(Text))
     total_tokens: Optional[int] = Field(default=None, sa_column=Column(Integer, nullable=True))
     elapsed_ms: Optional[int] = Field(default=None, sa_column=Column(Integer, nullable=True))
-
-
-class ConversationLog(SQLModel, table=True):
-    """LLM messages snapshot per turn (SQLBot chat_log equivalent)."""
-
-    __tablename__ = "chat_conversation_log"
-
-    id: Optional[int] = Field(default=None, sa_column=Column(BigInteger, primary_key=True, autoincrement=True))
-    operate: str = Field(default=OPERATE_GENERATE_SQL, sa_column=Column(Text, nullable=False, index=True))
-    pid: Optional[int] = Field(
-        default=None,
-        sa_column=Column(BigInteger, nullable=True, index=True),
-        description="chat_conversation_record.id",
-    )
-    conversation_id: int = Field(default=0, sa_column=Column(BigInteger, nullable=False, index=True))
-    messages: Optional[list[dict[str, Any]]] = Field(
-        default=None,
-        sa_column=Column(JSON().with_variant(JSONB(), "postgresql"), nullable=True),
-    )
-    reasoning_content: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
-    token_usage: Optional[dict[str, Any]] = Field(
-        default=None,
-        sa_column=Column(JSON().with_variant(JSONB(), "postgresql"), nullable=True),
-    )
-    start_time: Optional[datetime] = Field(
-        default_factory=datetime.now, sa_column=Column(DateTime(timezone=False), nullable=True)
-    )
-    finish_time: Optional[datetime] = Field(default=None, sa_column=Column(DateTime(timezone=False), nullable=True))
-    error: bool = Field(default=False, sa_column=Column(Boolean, nullable=False))
-    ai_model_name: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))

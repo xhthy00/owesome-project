@@ -308,8 +308,10 @@ async def _run_one(
     workspace_oid: int,
     timeout_sec: float,
 ) -> dict[str, Any]:
+    from langgraph.checkpoint.memory import InMemorySaver
+
     from src.chat.schemas import ChatRequest
-    from src.chat.service.agent_runner import run_team_stream
+    from src.chat.service.deepagents_runtime import run_chat_stream
 
     question = str(case.get("question") or "").strip()
     route = _route_snapshot(question)
@@ -324,18 +326,15 @@ async def _run_one(
     req = ChatRequest(
         question=question,
         datasource_id=datasource_id,
-        agent_mode="team",
-        enable_tool_agent=True,
     )
     try:
         await asyncio.wait_for(
-            run_team_stream(
+            run_chat_stream(
                 request=req,
                 current_user_id=user_id,
                 emit=emit,
-                persist=False,
-                enable_tool_agent=True,
                 workspace_oid=workspace_oid,
+                checkpointer=InMemorySaver(),
             ),
             timeout=timeout_sec,
         )

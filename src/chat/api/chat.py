@@ -3,8 +3,7 @@
 import asyncio
 import json
 import logging
-import time
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -24,11 +23,11 @@ from chat.schemas import (
     SQLFormatRequest,
     SQLValidationRequest,
 )
-from chat.service.sql_generator import SQLGenerator
 from common.core.database import get_session
 from common.core.trace import new_trace_id, set_trace_id
 from common.exceptions.base import NotFoundException
 from common.schemas.response import success_response
+from src.datasource.edu_connection import edu_db_connection
 from system.api.auth_deps import get_current_user
 from system.schemas import UserResponse
 from system.workspace_scope import assert_datasource_accessible, get_workspace_oid
@@ -60,6 +59,7 @@ def _edu_out_of_scope_message(
         question,
         datasource_id=datasource_id,
         workspace_oid=workspace_oid,
+        connection_factory=edu_db_connection,
     )
 
 
@@ -382,419 +382,8 @@ def replace_record_reports(
 
 # ============== SQL Generation & Execution ==============
 
-@router.post("/generate-sql")
-@audit_access(datasource_id_arg="chat_request.datasource_id", query_arg="chat_request.question")
-def generate_sql(
-    chat_request: ChatRequest,
-    http_request: Request,
-    session: Session = Depends(get_session),
-    current_user: UserResponse = Depends(get_current_user),
-    workspace_oid: int = Depends(get_workspace_oid),
-):
-    """
-    Generate SQL from natural language question.
-
-    This endpoint:
-    1. Fetches the datasource schema
-    2. Builds a prompt with schema information using SQLBot patterns
-    3. Calls LLM to generate SQL
-    4. Validates the generated SQL
-    5. Returns the result with chart type and tables info
-    """
+def _assert_query_scope(session, current_user, workspace_oid, chat_request):
     assert_datasource_accessible(session, current_user, chat_request.datasource_id, workspace_oid)
-
-    generator = SQLGenerator()
-    gen_kwargs: dict = {}
-    from src.agent.education.prompt_context import (
-        build_education_prompt_extras,
-        is_education_question,
-    )
-    if is_education_question(chat_request.question):
-        term, training = build_education_prompt_extras(chat_request.question)
-        gen_kwargs["terminologies"] = term
-        gen_kwargs["data_training"] = training
-        peek_instr = _legacy_edu_peek_instructions(
-            question=chat_request.question,
-            datasource_id=int(chat_request.datasource_id),
-            workspace_oid=workspace_oid,
-            user_id=int(current_user.id),
-        )
-        if peek_instr:
-            gen_kwargs["instructions"] = peek_instr
-
-    result = generator.generate_sql(
-        question=chat_request.question,
-        datasource_id=chat_request.datasource_id,
-        session=session,
-        need_title=True,
-        user_id=current_user.id,
-        **gen_kwargs,
-    )
-
-    if not result["is_valid"]:
-        return success_response(
-            data={
-                "sql": result["sql"],
-                "is_valid": False,
-                "error": result["error"],
-                "formatted_sql": "",
-                "tables": result.get("tables", []),
-                "chart_type": result.get("chart_type", "table"),
-                "brief": result.get("brief", ""),
-            },
-            message="SQL generation failed"
-        )
-
-    return success_response(
-        data={
-            "sql": result["sql"],
-            "is_valid": True,
-            "error": "",
-            "formatted_sql": result["formatted_sql"],
-            "tables": result.get("tables", []),
-            "chart_type": result.get("chart_type", "table"),
-            "brief": result.get("brief", ""),
-        },
-        message="SQL generated successfully"
-    )
-
-
-@router.post("/execute-sql", summary="Generate and execute SQL")
-@audit_access(datasource_id_arg="chat_request.datasource_id", query_arg="chat_request.question")
-def execute_sql(
-    chat_request: ChatRequest,
-    http_request: Request,
-    session: Session = Depends(get_session),
-    current_user: UserResponse = Depends(get_current_user),
-    workspace_oid: int = Depends(get_workspace_oid),
-):
-    """
-    Generate and execute SQL from natural language question.
-
-    This endpoint:
-    1. Generates SQL using LLM with SQLBot patterns
-    2. Executes the SQL on the target database
-    3. Returns the results
-    """
-
-    from common.utils.aes import decrypt_conf
-    from datasource.db.db import execute_sql as db_execute_sql
-    from datasource.service.query_permission import (
-        apply_permissions_for_execute,
-        filter_exec_result_by_column_permissions,
-        validate_sql_column_permissions,
-    )
-
-    datasource = assert_datasource_accessible(session, current_user, chat_request.datasource_id, workspace_oid)
-
-    config = decrypt_conf(datasource.configuration) if datasource.configuration else {}
-
-    # Generate SQL
-    generator = SQLGenerator()
-    result = generator.generate_sql(
-        question=chat_request.question,
-        datasource_id=chat_request.datasource_id,
-        session=session,
-        need_title=False,
-        user_id=current_user.id,
-    )
-
-    reasoning = result.get("reasoning", "")
-    steps = list(result.get("steps", []))
-
-    if not result["is_valid"]:
-        record_id = _persist_record(
-            session=session,
-            current_user_id=current_user.id,
-            chat_request=chat_request,
-            question=chat_request.question,
-            sql=result.get("sql", ""),
-            sql_error=result.get("error", ""),
-            exec_result=None,
-            chart_type=result.get("chart_type", "table"),
-            is_success=False,
-            reasoning=reasoning,
-            steps=steps,
-            workspace_oid=workspace_oid,
-            agent_mode="legacy",
-        )
-        return success_response(
-            data={
-                "record_id": record_id,
-                "sql": result["sql"],
-                "result": None,
-                "error": result["error"],
-                "chart_type": result.get("chart_type", "table"),
-                "reasoning": reasoning,
-                "steps": steps,
-            },
-            message="SQL generation failed"
-        )
-
-    sql_exec = apply_permissions_for_execute(
-        session,
-        current_user,
-        int(datasource.id),
-        datasource.type or "pg",
-        result["sql"],
-        result.get("tables"),
-    )
-    col_perm_err = validate_sql_column_permissions(
-        session,
-        current_user,
-        int(datasource.id),
-        datasource.type or "pg",
-        sql_exec,
-    )
-    if col_perm_err:
-        steps.append(
-            {
-                "name": "execute",
-                "label": "执行 SQL",
-                "status": "error",
-                "elapsed_ms": 0,
-                "detail": col_perm_err,
-            }
-        )
-        record_id = _persist_record(
-            session=session,
-            current_user_id=current_user.id,
-            chat_request=chat_request,
-            question=chat_request.question,
-            sql=sql_exec,
-            sql_error=col_perm_err,
-            exec_result=None,
-            chart_type=result.get("chart_type", "table"),
-            is_success=False,
-            reasoning=reasoning,
-            steps=steps,
-            workspace_oid=workspace_oid,
-            agent_mode="legacy",
-        )
-        return success_response(
-            data={
-                "record_id": record_id,
-                "sql": sql_exec,
-                "result": None,
-                "error": col_perm_err,
-                "chart_type": result.get("chart_type", "table"),
-                "reasoning": reasoning,
-                "steps": steps,
-            },
-            message="SQL violates column permission",
-        )
-
-    _t_exec = time.time()
-    success, message, exec_result = db_execute_sql(
-        db_type=datasource.type,
-        config=config,
-        sql=sql_exec,
-    )
-    if success and isinstance(exec_result, dict):
-        exec_result = filter_exec_result_by_column_permissions(
-            session,
-            current_user,
-            int(datasource.id),
-            datasource.type or "pg",
-            sql_exec,
-            exec_result,
-        )
-    steps.append({
-        "name": "execute",
-        "label": "执行 SQL",
-        "status": "ok" if success else "error",
-        "elapsed_ms": int((time.time() - _t_exec) * 1000),
-        "detail": (
-            f"返回 {exec_result.get('row_count', 0)} 行" if success and isinstance(exec_result, dict)
-            else (message or "执行失败")
-        ),
-    })
-
-    record_id = _persist_record(
-        session=session,
-        current_user_id=current_user.id,
-        chat_request=chat_request,
-        question=chat_request.question,
-        sql=sql_exec,
-        sql_error=None if success else message,
-        exec_result=exec_result if success else None,
-        chart_type=result.get("chart_type", "table"),
-        is_success=success,
-        reasoning=reasoning,
-        steps=steps,
-        workspace_oid=workspace_oid,
-        agent_mode="legacy",
-    )
-
-    if not success:
-        return success_response(
-            data={
-                "record_id": record_id,
-                "sql": sql_exec,
-                "result": None,
-                "error": message,
-                "chart_type": result.get("chart_type", "table"),
-                "reasoning": reasoning,
-                "steps": steps,
-            },
-            message="SQL execution failed"
-        )
-
-    return success_response(
-        data={
-            "record_id": record_id,
-            "sql": sql_exec,
-            "result": exec_result,
-            "error": "",
-            "chart_type": result.get("chart_type", "table"),
-            "reasoning": reasoning,
-            "steps": steps,
-        },
-        message="Query executed successfully"
-    )
-
-
-# ============== Persistence helper ==============
-
-def _legacy_edu_peek_instructions(
-    *,
-    question: str,
-    datasource_id: int,
-    workspace_oid: int | None,
-    user_id: int | None,
-) -> str:
-    """教育问句：注入本库考试/区县候选；失败则返回空串。"""
-    try:
-        from src.agent.education.filter_peek import format_peek_payload, peek_edu_filter_values
-        from src.agent.education.query_parse import extract_exam_name_hint
-        from src.agent.education.tools import _run_edu_sql
-        from src.agent.expand.planner import _plan_exam_name
-
-        hint = (_plan_exam_name(question) or extract_exam_name_hint(question) or "").strip()
-
-        def _exec(sql: str):
-            ok, msg, result, _ = _run_edu_sql(
-                sql,
-                datasource_id=int(datasource_id),
-                workspace_oid=int(workspace_oid) if workspace_oid is not None else None,
-                user_id=int(user_id) if user_id is not None else None,
-            )
-            return ok, msg, result if isinstance(result, dict) else None
-
-        payload = peek_edu_filter_values(
-            _exec, exam_hint=hint, table="tb_score_indicator"
-        )
-        if payload.get("error") and not (
-            payload.get("exam_names") or payload.get("districts")
-        ):
-            return ""
-        text = format_peek_payload(payload)
-        return (
-            "以下为本库过滤维值候选，生成 SQL 时 WHERE 字面量必须来自候选或使用 LIKE：\n"
-            + text
-        )
-    except Exception:
-        return ""
-
-
-def _persist_record(
-    session: Session,
-    current_user_id: int,
-    chat_request: ChatRequest,
-    question: str,
-    sql: Optional[str],
-    sql_error: Optional[str],
-    exec_result,
-    chart_type: str,
-    is_success: bool,
-    reasoning: str,
-    steps,
-    workspace_oid: int,
-    agent_mode: Optional[str] = None,
-    plans: Optional[list[str]] = None,
-    sub_task_agents: Optional[list[str]] = None,
-    plan_states: Optional[list[dict]] = None,
-    tool_calls: Optional[list[dict]] = None,
-    summary: Optional[str] = None,
-    reports: Optional[list[dict]] = None,
-) -> int:
-    """Persist a conversation record. Returns record_id (0 if no conversation)."""
-    if not chat_request.conversation_id:
-        return 0
-    try:
-        from src.chat.utils.report_payload import coalesce_record_reports
-
-        record = chat_crud.create_conversation_record(
-            session=session,
-            conversation_id=chat_request.conversation_id,
-            user_id=current_user_id,
-            question=question,
-            resolved_question=question,
-            turn_type="standalone",
-            context_summary=str(summary or reasoning or sql_error or "")[:400] or None,
-            sql=sql,
-            sql_error=sql_error,
-            exec_result=exec_result,
-            chart_type=chart_type or "table",
-            is_success=is_success,
-            reasoning=reasoning or None,
-            steps=steps or None,
-            agent_mode=agent_mode,
-            plans=plans,
-            sub_task_agents=sub_task_agents,
-            plan_states=plan_states,
-            tool_calls=tool_calls,
-            summary=summary,
-            reports=coalesce_record_reports(reports, tool_calls),
-            workspace_oid=workspace_oid,
-        )
-        return record.id or 0
-    except Exception as e:
-        logger.warning(f"Failed to persist record: {e}")
-        return 0
-
-
-# ============== Streaming Chat ==============
-
-@router.post("/chat-stream", summary="Chat with streaming output")
-@audit_access(datasource_id_arg="chat_request.datasource_id", query_arg="chat_request.question")
-async def chat_stream(
-    chat_request: ChatRequest,
-    http_request: Request,
-    session: Session = Depends(get_session),
-    current_user: UserResponse = Depends(get_current_user),
-    workspace_oid: int = Depends(get_workspace_oid),
-):
-    """
-    Chat endpoint with Server-Sent Events (SSE) streaming output.
-
-    Backends (switched by ``chat_request.agent_mode``):
-      - "agent"  (default): ReAct DataAnalystAgent with tools
-      - "team"            : DataAnalyst → Charter → Summarizer 线性 DAG
-      - "legacy"          : single-shot SQLGenerator pipeline
-
-    Event vocabulary (agent/team add the ``*`` rows, legacy uses the rest):
-      step           → pipeline / ReAct step status
-      reasoning      → LLM natural-language reasoning (legacy only)
-      sql            → final SQL + chart_type (both modes)
-      result         → execution result {columns, rows, row_count} (both modes)
-      agent_thought* → each ReAct round's raw LLM output
-      tool_call*     → before a tool runs
-      tool_result*   → after a tool runs (success / failure both)
-      final_answer*  → terminate tool emitted
-      agent_speak†   → (team only) 下游 Agent 开始/结束的广播
-      chart†         → (team only) Charter 推荐的 chart_type + chart_config
-      summary†       → (team only) Summarizer 生成的最终中文结论
-      error          → terminal failure
-      done           → terminates the stream, payload {record_id}
-
-    Response header ``X-Trace-Id`` 带有本次请求的 trace_id；同一 trace_id 会
-    出现在后端所有日志里（``[<trace_id>]`` 前缀），便于前端与后端对齐排查。
-    """
-    trace_id = new_trace_id()
-    set_trace_id(trace_id)
-    if chat_request.datasource_id:
-        assert_datasource_accessible(session, current_user, chat_request.datasource_id, workspace_oid)
     if chat_request.conversation_id:
         conversation = chat_crud.get_conversation_by_id(
             session,
@@ -812,6 +401,106 @@ async def chat_stream(
                 status_code=409,
                 detail="Conversation datasource does not match the request",
             )
+
+async def _semantic_sql_response(chat_request, http_request, session, current_user, workspace_oid, *, execute):
+    from src.chat.service.deepagents_runtime import run_chat_stream
+
+    _assert_query_scope(session, current_user, workspace_oid, chat_request)
+    denied = _edu_out_of_scope_message(
+        current_user.id, chat_request.question, datasource_id=chat_request.datasource_id,
+        workspace_oid=workspace_oid,
+    )
+    events = {}
+    steps = []
+    record_id = 0
+
+    async def emit(event, data):
+        if event == "step":
+            steps.append(data)
+        else:
+            events[event] = data
+
+    if denied:
+        events["error"] = {"error": denied}
+    else:
+        request = chat_request if execute else chat_request.model_copy(
+            update={"conversation_id": None, "resume_interrupt_id": None},
+        )
+        try:
+            record_id = await run_chat_stream(
+                request=request, current_user_id=current_user.id, workspace_oid=workspace_oid,
+                emit=emit, checkpointer=http_request.app.state.chat_checkpointer, execute=execute,
+            )
+        except Exception:
+            logger.exception("DataSemantic SQL request failed")
+            events["error"] = {"error": "语义问数执行失败，请稍后重试。"}
+
+    plan = events.get("sql", {})
+    clarification = events.get("clarify")
+    error = events.get("error", {}).get("error", "")
+    if not plan and not error:
+        error = clarification["prompt"] if clarification else "本轮未生成 DataSemantic 查询计划。"
+    data = {
+        "sql": plan.get("sql", ""), "error": error, "chart_type": "table",
+        **{key: plan[key] for key in ("bundle_id", "manifest_hash", "plan_request_id") if key in plan},
+    }
+    if execute:
+        data.update(
+            record_id=record_id, result=events.get("result"), steps=steps,
+            reasoning=events.get("summary", {}).get("content", ""),
+        )
+        if clarification:
+            data["clarify"] = clarification
+    else:
+        data.update(
+            is_valid=bool(plan) and not error, formatted_sql=data["sql"],
+            tables=plan.get("tables", []), brief="",
+        )
+    return success_response(data=data)
+
+
+@router.post("/generate-sql")
+@audit_access(datasource_id_arg="chat_request.datasource_id", query_arg="chat_request.question")
+async def generate_sql(
+    chat_request: ChatRequest,
+    http_request: Request,
+    session: Session = Depends(get_session),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+):
+    return await _semantic_sql_response(
+        chat_request, http_request, session, current_user, workspace_oid, execute=False,
+    )
+
+
+@router.post("/execute-sql", summary="Generate and execute semantic SQL")
+@audit_access(datasource_id_arg="chat_request.datasource_id", query_arg="chat_request.question")
+async def execute_sql(
+    chat_request: ChatRequest,
+    http_request: Request,
+    session: Session = Depends(get_session),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+):
+    return await _semantic_sql_response(
+        chat_request, http_request, session, current_user, workspace_oid, execute=True,
+    )
+
+
+@router.post("/chat-stream", summary="Chat with streaming output")
+@audit_access(datasource_id_arg="chat_request.datasource_id", query_arg="chat_request.question")
+async def chat_stream(
+    chat_request: ChatRequest,
+    http_request: Request,
+    session: Session = Depends(get_session),
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+):
+    """Stream a DeepAgents turn, retaining the chat API and SSE event contract."""
+    trace_id = new_trace_id()
+    set_trace_id(trace_id)
+    if chat_request.datasource_id or chat_request.conversation_id:
+        _assert_query_scope(session, current_user, workspace_oid, chat_request)
 
     logger.info(
         "chat_stream start mode=%s ds=%s conv=%s user=%s q_len=%d",
@@ -842,291 +531,31 @@ async def chat_stream(
         )
 
     queue: asyncio.Queue = asyncio.Queue()
-    loop = asyncio.get_event_loop()
     sentinel = object()
-
-    def push(event: str, data: dict) -> None:
-        loop.call_soon_threadsafe(queue.put_nowait, (event, data))
 
     async def emit_async(event: str, data: dict) -> None:
         queue.put_nowait((event, data))
 
-    async def finalize_active_run(state: str) -> None:
-        if chat_request.agent_mode == "legacy" or not chat_request.conversation_id:
-            return
+    async def run() -> None:
+        from src.chat.service.deepagents_runtime import run_chat_stream
 
-        def _sync() -> None:
-            from src.chat.crud.agent_run import get_last_agent_run, update_agent_run
-            from src.chat.models.agent_run import RUN_RUNNING
-            from src.common.core.database import get_db_session
-
-            with get_db_session() as cleanup_session:
-                run = get_last_agent_run(
-                    cleanup_session,
-                    conversation_id=int(chat_request.conversation_id),
-                    user_id=current_user_id,
-                    workspace_oid=workspace_oid,
-                )
-                if run is not None and run.state == RUN_RUNNING:
-                    update_agent_run(
-                        cleanup_session,
-                        run,
-                        state=state,
-                        clear_pending=True,
-                    )
-
-        await asyncio.to_thread(_sync)
-
-    async def run_agent_branch(team: bool) -> None:
-        """单 Agent 或 team 模式的 SSE 执行入口。
-
-        ``team=True`` 时调 :func:`run_team_stream`，跑 DataAnalyst → Charter →
-        Summarizer；否则走单 Agent 路径。两者对外的 SSE 事件集是 team 超集
-        agent，前端可以只订阅 agent 的那套也能跑。
-        """
         record_id = 0
         try:
-            from src.chat.service.agent_runner import (
-                run_agent_stream,
-                run_team_stream,
-            )
-
-            runner = run_team_stream if team else run_agent_stream
-            record_id = await runner(
+            record_id = await run_chat_stream(
                 request=chat_request,
                 current_user_id=current_user_id,
-                emit=emit_async,
-                enable_tool_agent=chat_request.enable_tool_agent,
                 workspace_oid=workspace_oid,
+                emit=emit_async,
+                checkpointer=http_request.app.state.chat_checkpointer,
             )
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"Agent chat stream error: {e}")
-            from src.chat.models.agent_run import RUN_FAILED
-
-            await finalize_active_run(RUN_FAILED)
-            await emit_async("error", {"error": str(e)})
+        except Exception:
+            logger.exception("DeepAgents chat stream failed")
+            await emit_async("error", {"error": "问数执行失败，请稍后重试。"})
         finally:
             await emit_async("done", {"record_id": record_id})
             queue.put_nowait(sentinel)
 
-    def run_legacy_pipeline() -> None:
-        from src.chat.service.message_history import persist_generate_sql_log
-        from src.common.core.database import get_db_session
-        from src.common.utils.aes import decrypt_conf
-        from src.datasource.crud import crud_datasource
-        from src.datasource.db.db import execute_sql as db_execute_sql
-        from src.datasource.service.query_permission import (
-            apply_permissions_for_execute,
-            filter_exec_result_by_column_permissions,
-            validate_sql_column_permissions,
-        )
-        from src.system.crud.crud_user import get_user_by_id
-
-        steps_acc = []
-        reasoning_text = ""
-        record_id = 0
-        uid = current_user_id
-        persist_q = chat_request.question
-        try:
-            with get_db_session() as session:
-                generator = SQLGenerator()
-
-                def on_step(step):
-                    steps_acc.append(step)
-                    push("step", step)
-
-                def on_reasoning(text):
-                    nonlocal reasoning_text
-                    reasoning_text = text
-                    push("reasoning", {"text": text})
-
-                gen_kwargs: dict = {}
-                from src.agent.education.prompt_context import (
-                    build_education_prompt_extras,
-                    is_education_question,
-                )
-                if is_education_question(chat_request.question):
-                    term, training = build_education_prompt_extras(chat_request.question)
-                    gen_kwargs["terminologies"] = term
-                    gen_kwargs["data_training"] = training
-                    peek_instr = _legacy_edu_peek_instructions(
-                        question=chat_request.question,
-                        datasource_id=int(chat_request.datasource_id),
-                        workspace_oid=workspace_oid,
-                        user_id=uid,
-                    )
-                    if peek_instr:
-                        gen_kwargs["instructions"] = peek_instr
-
-                result = generator.generate_sql(
-                    question=chat_request.question,
-                    datasource_id=chat_request.datasource_id,
-                    session=session,
-                    need_title=False,
-                    step_callback=on_step,
-                    reasoning_callback=on_reasoning,
-                    user_id=uid,
-                    conversation_id=chat_request.conversation_id,
-                    **gen_kwargs,
-                )
-
-                steps_acc = list(result.get("steps", steps_acc))
-                reasoning_text = result.get("reasoning", reasoning_text) or reasoning_text
-                log_messages = list(result.get("log_messages") or [])
-
-                def _save_log(rid: int, *, error: bool) -> None:
-                    if not chat_request.conversation_id or not log_messages:
-                        return
-                    persist_generate_sql_log(
-                        conversation_id=int(chat_request.conversation_id),
-                        record_id=rid or None,
-                        messages=log_messages,
-                        reasoning_content=reasoning_text or None,
-                        error=error,
-                    )
-
-                if not result["is_valid"]:
-                    record_id = _persist_record(
-                        session=session,
-                        current_user_id=current_user_id,
-                        chat_request=chat_request,
-                        question=persist_q,
-                        sql=result.get("sql", ""),
-                        sql_error=result.get("error", ""),
-                        exec_result=None,
-                        chart_type=result.get("chart_type", "table"),
-                        is_success=False,
-                        reasoning=reasoning_text,
-                        steps=steps_acc,
-                        workspace_oid=workspace_oid,
-                        agent_mode="legacy",
-                    )
-                    _save_log(record_id, error=True)
-                    push("error", {"error": result["error"]})
-                    return
-
-                datasource = crud_datasource.get_datasource_by_id(session, chat_request.datasource_id)
-                if not datasource:
-                    push("error", {"error": "Datasource not found"})
-                    return
-
-                config = decrypt_conf(datasource.configuration) if datasource.configuration else {}
-
-                user_row = get_user_by_id(session, uid)
-                sql_exec = apply_permissions_for_execute(
-                    session,
-                    user_row,
-                    int(datasource.id),
-                    datasource.type or "pg",
-                    result["sql"],
-                    result.get("tables"),
-                )
-                push("sql", {
-                    "sql": sql_exec,
-                    "formatted_sql": result.get("formatted_sql", ""),
-                    "tables": result.get("tables", []),
-                    "chart_type": result.get("chart_type", "table"),
-                })
-                col_perm_err = validate_sql_column_permissions(
-                    session,
-                    user_row,
-                    int(datasource.id),
-                    datasource.type or "pg",
-                    sql_exec,
-                )
-                if col_perm_err:
-                    exec_step = {
-                        "name": "execute",
-                        "label": "执行 SQL",
-                        "status": "error",
-                        "elapsed_ms": 0,
-                        "detail": col_perm_err,
-                    }
-                    steps_acc.append(exec_step)
-                    push("step", exec_step)
-                    record_id = _persist_record(
-                        session=session,
-                        current_user_id=current_user_id,
-                        chat_request=chat_request,
-                        question=persist_q,
-                        sql=sql_exec,
-                        sql_error=col_perm_err,
-                        exec_result=None,
-                        chart_type=result.get("chart_type", "table"),
-                        is_success=False,
-                        reasoning=reasoning_text,
-                        steps=steps_acc,
-                        workspace_oid=workspace_oid,
-                        agent_mode="legacy",
-                    )
-                    _save_log(record_id, error=True)
-                    push("error", {"error": col_perm_err})
-                    return
-
-                t_exec = time.time()
-                success, message, exec_result = db_execute_sql(
-                    db_type=datasource.type,
-                    config=config,
-                    sql=sql_exec,
-                )
-                if success and isinstance(exec_result, dict):
-                    exec_result = filter_exec_result_by_column_permissions(
-                        session,
-                        user_row,
-                        int(datasource.id),
-                        datasource.type or "pg",
-                        sql_exec,
-                        exec_result,
-                    )
-                exec_step = {
-                    "name": "execute",
-                    "label": "执行 SQL",
-                    "status": "ok" if success else "error",
-                    "elapsed_ms": int((time.time() - t_exec) * 1000),
-                    "detail": (
-                        f"返回 {exec_result.get('row_count', 0)} 行"
-                        if success and isinstance(exec_result, dict)
-                        else (message or "执行失败")
-                    ),
-                }
-                steps_acc.append(exec_step)
-                push("step", exec_step)
-
-                record_id = _persist_record(
-                    session=session,
-                    current_user_id=current_user_id,
-                    chat_request=chat_request,
-                    question=persist_q,
-                    sql=sql_exec,
-                    sql_error=None if success else message,
-                    exec_result=exec_result if success else None,
-                    chart_type=result.get("chart_type", "table"),
-                    is_success=success,
-                    reasoning=reasoning_text,
-                    steps=steps_acc,
-                    workspace_oid=workspace_oid,
-                    agent_mode="legacy",
-                )
-                _save_log(record_id, error=not success)
-
-                if not success:
-                    push("error", {"error": message})
-                    return
-
-                push("result", exec_result)
-        except Exception as e:
-            logger.error(f"Chat stream pipeline error: {e}")
-            push("error", {"error": str(e)})
-        finally:
-            push("done", {"record_id": record_id})
-            loop.call_soon_threadsafe(queue.put_nowait, sentinel)
-
-    if chat_request.agent_mode == "legacy":
-        background_task = asyncio.create_task(asyncio.to_thread(run_legacy_pipeline))
-    else:
-        background_task = asyncio.create_task(
-            run_agent_branch(team=chat_request.agent_mode == "team")
-        )
+    background_task = asyncio.create_task(run())
 
     async def event_stream() -> AsyncGenerator[str, None]:
         try:
@@ -1147,14 +576,6 @@ async def chat_stream(
             if not background_task.done():
                 background_task.cancel()
                 await asyncio.gather(background_task, return_exceptions=True)
-                if chat_request.agent_mode != "legacy" and chat_request.conversation_id:
-                    from src.chat.models.agent_run import RUN_CANCELLED
-                    from src.chat.service.question_manager import get_question_manager
-
-                    get_question_manager().remove_for_conversation(
-                        str(chat_request.conversation_id)
-                    )
-                    await finalize_active_run(RUN_CANCELLED)
 
     return StreamingResponse(
         event_stream(),

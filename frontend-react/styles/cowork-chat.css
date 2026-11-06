@@ -1,0 +1,184 @@
+/* Conversation surfaces and dimensions adapted from MyCowork's airy theme. */
+.cowork-chat {
+  --cowork-bg: #f5fbff;
+  --cowork-card: #fff;
+  --cowork-text: #233e50;
+  --cowork-muted: #526c7e;
+  --cowork-border: #d4e2ec;
+  --cowork-soft: #e8f3fa;
+  --cowork-action: #007ac5;
+  --cowork-brand-ink: #006ba7;
+  --cowork-success: #167659;
+  --cowork-danger: #b42336;
+  --cowork-shadow: 0 6px 28px rgba(35, 62, 80, .08);
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--cowork-bg);
+  color: var(--cowork-text);
+}
+.dark .cowork-chat {
+  --cowork-bg: #141f2a;
+  --cowork-card: #1d2a37;
+  --cowork-text: #edf5fc;
+  --cowork-muted: #a8bfd1;
+  --cowork-border: #3c5164;
+  --cowork-soft: #263b4f;
+  --cowork-action: #1676bc;
+  --cowork-brand-ink: #87c9f7;
+  --cowork-success: #8bd7b6;
+  --cowork-danger: #bb2b43;
+  --cowork-shadow: 0 6px 28px rgba(0, 0, 0, .25);
+}
+.cowork-main { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
+.cowork-welcome { align-items: flex-start; overflow-y: auto; }
+.cowork-welcome-inner { width: min(100%, 832px); margin: auto; padding: 24px 16px; text-align: center; }
+.cowork-hero { display: block; width: 128px; height: 128px; margin: 0 auto 12px; border-radius: 50%; }
+.cowork-welcome h1 { margin: 0 0 20px; font-size: 22px; font-weight: 700; line-height: 1.35; }
+.cowork-header, .cowork-preview-header { display: flex; flex: none; min-height: 44px; align-items: center; justify-content: space-between; gap: 12px; padding: 0 12px; }
+.cowork-header h1 { min-width: 0; overflow: hidden; margin: 0; color: var(--cowork-muted); font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.cowork-header > div { display: flex; flex: none; gap: 4px; }
+.cowork-header { border-bottom: 1px solid var(--cowork-border); }
+.cowork-messages { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 16px 20px 24px; }
+.cowork-transcript, .cowork-dock-inner { width: 100%; max-width: 720px; margin-inline: auto; }
+.cowork-transcript { display: flex; flex-direction: column; gap: 20px; }
+.cowork-turn { display: flex; min-width: 0; flex-direction: column; gap: 4px; }
+.cowork-user { align-self: flex-end; max-width: min(85%, 600px); border-radius: 16px 16px 4px 16px; padding: 10px 14px; background: var(--cowork-soft); font-size: 16px; line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap; }
+.cowork-copy { display: flex; align-items: center; gap: 4px; color: var(--cowork-muted); font-size: 12px; }
+.cowork-copy-right { justify-content: flex-end; }
+.cowork-answer { min-width: 0; margin: 8px 0 0; font-size: 15px; line-height: 1.7; overflow-wrap: anywhere; }
+.cowork-answer > :first-child { margin-top: 0; }
+.cowork-answer h1, .cowork-answer h2, .cowork-answer h3 { margin: 1em 0 .45em; font-weight: 650; }
+.cowork-answer h1 { font-size: 1.35em; }
+.cowork-answer h2 { font-size: 1.2em; }
+.cowork-answer h3 { font-size: 1.08em; }
+.cowork-answer p, .cowork-answer ul, .cowork-answer ol, .cowork-answer pre { margin: .5em 0; }
+.cowork-answer ul { list-style: disc; padding-inline-start: 1.5em; }
+.cowork-answer ol { list-style: decimal; padding-inline-start: 1.5em; }
+.cowork-answer pre { overflow-x: auto; border-radius: 8px; padding: 12px; background: var(--cowork-soft); }
+.cowork-answer a { text-decoration: underline; }
+.cowork-worklog { width: 100%; margin: 8px 0; color: var(--cowork-muted); font-size: 14px; }
+.cowork-worklog > summary, .cowork-task-section > summary { display: flex; min-height: 44px; align-items: center; gap: 8px; cursor: pointer; list-style: none; }
+.cowork-worklog summary::-webkit-details-marker, .cowork-task-panel summary::-webkit-details-marker, .cowork-task-body summary::-webkit-details-marker { display: none; }
+.cowork-worklog > summary::after, .cowork-task-section > summary::after { content: ""; flex: none; width: 7px; height: 7px; margin-left: auto; margin-right: 3px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 160ms ease; }
+.cowork-worklog[open] > summary::after, .cowork-task-section[open] > summary::after { transform: rotate(45deg); }
+.cowork-worklog-live { display: grid; gap: 2px; padding: 2px 0 5px; }
+.cowork-worklog-live > span, .cowork-live-label { animation: cowork-status-enter 180ms ease-out; }
+.cowork-worklog-live small, .cowork-live-label small { color: var(--cowork-muted); font-size: 12px; }
+.cowork-trace-list { display: grid; gap: 2px; margin: 0; padding: 4px 0 8px; list-style: none; }
+.cowork-trace-list > li { min-width: 0; overflow-wrap: anywhere; }
+.cowork-trace-line { display: flex; min-width: 0; min-height: 28px; align-items: center; gap: 8px; padding: 3px 6px; }
+.cowork-trace-line > .anticon { flex: none; }
+.cowork-trace-tool { border-radius: 7px; }
+.cowork-trace-list > li[data-status="running"] .cowork-trace-tool { background: var(--cowork-soft); }
+.cowork-trace-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cowork-trace-list p { margin: 0 0 4px 27px; font-size: 12px; line-height: 1.55; white-space: pre-wrap; }
+.cowork-trace-group { border: 1px solid var(--cowork-border); border-radius: 8px; }
+.cowork-trace-group > summary { min-height: 32px; cursor: pointer; list-style: none; }
+.cowork-trace-group > summary::after { content: ""; flex: none; width: 5px; height: 5px; margin-right: 4px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); }
+.cowork-trace-group[open] > summary::after { transform: rotate(45deg); }
+.cowork-trace-group > ol { padding: 0 5px 4px; }
+.cowork-trace-dot { flex: none; width: 6px; height: 6px; margin-inline: 3px; border-radius: 50%; background: currentColor; opacity: .55; }
+.cowork-trace-status { flex: none; font-size: 11px; white-space: nowrap; }
+.cowork-trace-list > li[data-status="error"] .cowork-trace-status { color: var(--cowork-danger); }
+.cowork-orb { flex: none; width: 17px; height: 17px; border: 2px dotted currentColor; border-left-color: transparent; border-radius: 50%; color: var(--cowork-muted); animation: cowork-orb-spin 1.8s linear infinite; }
+.cowork-shimmer { background: linear-gradient(110deg, currentColor 30%, var(--cowork-brand-ink) 48%, currentColor 66%) 120% / 240% 100%; animation: cowork-shimmer 2.3s ease-in-out infinite; }
+@supports (background-clip: text) {
+  .cowork-shimmer { background-clip: text; -webkit-text-fill-color: transparent; }
+}
+@supports not (background-clip: text) {
+  .cowork-shimmer { background: none; }
+}
+@keyframes cowork-orb-spin { to { transform: rotate(360deg); } }
+@keyframes cowork-shimmer { to { background-position: -120% center; } }
+@keyframes cowork-status-enter { from { opacity: .6; transform: translateY(3px); } }
+.cowork-artifacts { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+.cowork-artifacts button, .cowork-question { border: 1px solid var(--cowork-border); border-radius: 12px; background: var(--cowork-card); }
+.cowork-artifacts button { display: inline-flex; min-height: 44px; align-items: center; gap: 8px; padding: 6px 12px; text-align: start; }
+.cowork-dock { flex: none; padding: 0 16px max(8px, env(safe-area-inset-bottom)); }
+.cowork-dock-inner { position: relative; }
+.cowork-composer { border: 1px solid var(--cowork-border); border-radius: 18px; background: var(--cowork-card); box-shadow: var(--cowork-shadow); text-align: left; }
+.cowork-composer:focus-within { border-color: var(--cowork-action); }
+.cowork-editor { padding: 10px 12px 0; }
+.cowork-composer-welcome .cowork-editor { padding: 16px 14px 0; }
+.cowork-editor textarea { display: block; width: 100%; max-height: 200px; resize: none; border: 0; padding: 0 2px; outline: none; background: transparent; color: var(--cowork-text); font: inherit; font-size: 14px; line-height: 1.55; }
+.cowork-composer-welcome textarea { font-size: 16px; }
+.cowork-editor textarea::placeholder { color: var(--cowork-muted); }
+.cowork-composer-toolbar, .cowork-composer-footer, .cowork-live, .cowork-question-header { display: flex; align-items: center; gap: 8px; }
+.cowork-composer-toolbar { justify-content: space-between; }
+.cowork-composer-footer { min-height: 40px; flex-wrap: wrap; padding: 0 12px 4px; color: var(--cowork-muted); font-size: 12px; }
+.cowork-mode { display: inline-flex; align-items: center; gap: 5px; }
+.cowork-token { margin-left: auto; font-variant-numeric: tabular-nums; }
+.cowork-send, .cowork-icon { display: inline-flex; min-width: 32px; min-height: 32px; flex: none; align-items: center; justify-content: center; border-radius: 8px; padding-inline: 6px; }
+.cowork-icon { color: var(--cowork-muted); }
+.cowork-send { border-radius: 50%; background: var(--cowork-action); color: white; font-size: 16px; }
+.cowork-stop { background: #e60019; }
+.cowork-stop-mark { width: 12px; height: 12px; border: 1.5px solid currentColor; border-radius: 2px; }
+.cowork-stop .cowork-stop-mark { background: currentColor; }
+.cowork-chat button:disabled { cursor: default; opacity: .45; }
+.cowork-chat button:focus-visible, .cowork-chat summary:focus-visible { outline: 2px solid var(--cowork-action); outline-offset: 2px; }
+.cowork-chat .cowork-icon:hover:not(:disabled), .cowork-artifacts button:hover { background: var(--cowork-soft); }
+.cowork-to-bottom { position: absolute; z-index: 1; top: -49px; left: 50%; width: 40px; height: 40px; transform: translateX(-50%); border: 1px solid var(--cowork-border); border-radius: 50%; background: var(--cowork-card); box-shadow: var(--cowork-shadow); }
+.cowork-live { min-height: 44px; margin-bottom: 5px; padding: 2px 4px; color: var(--cowork-muted); font-size: 13px; }
+.cowork-live-label { flex: 1; min-width: 0; }
+.cowork-live-label > * { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cowork-live time { flex: none; white-space: nowrap; font-size: 11px; font-variant-numeric: tabular-nums; }
+.cowork-question { max-height: min(36vh, 240px); overflow-y: auto; margin-bottom: 8px; padding: 4px 12px 8px; font-size: 14px; }
+.cowork-question-header button { margin-left: auto; }
+.cowork-question p { margin: 2px 0 4px; white-space: pre-wrap; }
+.cowork-preview { display: flex; width: min(48%, 680px); min-width: 360px; flex-direction: column; border-left: 1px solid var(--cowork-border); background: var(--cowork-card); }
+.cowork-preview-header { border-bottom: 1px solid var(--cowork-border); }
+.cowork-preview-body { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
+.cowork-task-panel, .cowork-task-rail { flex: none; border-left: 1px solid var(--cowork-border); background: var(--cowork-card); }
+.cowork-task-panel { display: flex; width: clamp(288px, 31%, 390px); min-height: 0; flex-direction: column; }
+.cowork-task-panel > header { display: flex; min-height: 44px; flex: none; align-items: center; gap: 8px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--cowork-border); }
+.cowork-task-panel > header > button { margin-left: auto; }
+.cowork-task-rail { padding-top: 6px; }
+.cowork-task-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; color: var(--cowork-text); background: var(--cowork-card); font-size: 13px; }
+.cowork-task-section { border-bottom: 1px solid var(--cowork-border); }
+.cowork-task-section > summary { padding: 0 14px; font-size: 14px; font-weight: 650; }
+.cowork-task-section > summary > span { border-radius: 999px; padding: 2px 8px; background: var(--cowork-soft); color: var(--cowork-brand-ink); font-size: 12px; font-variant-numeric: tabular-nums; }
+.cowork-task-section-body { padding: 0 12px 12px; }
+.cowork-progress-overview { display: grid; gap: 8px; padding: 10px 12px; border: 1px solid var(--cowork-border); border-radius: 12px; background: linear-gradient(110deg, var(--cowork-soft), var(--cowork-card)); }
+.cowork-progress-overview > div:first-child { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 8px; color: var(--cowork-muted); }
+.cowork-progress-overview strong { color: var(--cowork-brand-ink); font-variant-numeric: tabular-nums; }
+.cowork-progress-track { height: 6px; overflow: hidden; border-radius: 999px; background: var(--cowork-border); }
+.cowork-progress-track > span { display: block; width: 100%; height: 100%; transform-origin: left; border-radius: inherit; background: var(--cowork-action); transition: transform 240ms ease-out; }
+.cowork-progress-empty { margin: 0; padding: 6px 2px; color: var(--cowork-muted); }
+.cowork-stage-list { display: grid; gap: 7px; margin: 9px 0 0; padding: 0; list-style: none; }
+.cowork-stage { min-width: 0; border: 1px solid var(--cowork-border); border-radius: 12px; }
+.cowork-stage[data-status="in_progress"] { border-color: var(--cowork-action); background: linear-gradient(110deg, var(--cowork-soft), var(--cowork-card)); }
+.cowork-stage-row { display: flex; min-height: 52px; align-items: center; gap: 8px; padding: 8px 9px; list-style: none; }
+summary.cowork-stage-row { cursor: pointer; }
+summary.cowork-stage-row::after { content: ""; flex: none; width: 5px; height: 5px; margin-right: 2px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); }
+.cowork-stage details[open] > summary::after { transform: rotate(45deg); }
+.cowork-stage-index { display: grid; width: 26px; height: 26px; flex: none; place-items: center; border: 1px solid var(--cowork-border); border-radius: 8px; color: var(--cowork-muted); font-weight: 650; font-variant-numeric: tabular-nums; }
+.cowork-stage[data-status="in_progress"] .cowork-stage-index { border-color: var(--cowork-action); background: var(--cowork-action); color: white; }
+.cowork-stage-title { flex: 1; min-width: 0; overflow-wrap: anywhere; font-weight: 600; line-height: 1.45; }
+.cowork-stage-status { flex: none; border-radius: 999px; padding: 2px 6px; background: var(--cowork-soft); color: var(--cowork-muted); font-size: 11px; }
+.cowork-stage[data-status="in_progress"] .cowork-stage-title, .cowork-stage[data-status="in_progress"] .cowork-stage-status { color: var(--cowork-brand-ink); }
+.cowork-stage[data-status="completed"] .cowork-stage-status, .cowork-stage[data-status="completed"] .cowork-stage-index { color: var(--cowork-success); }
+.cowork-stage[data-status="failed"] .cowork-stage-status { color: var(--cowork-danger); }
+.cowork-task-section > .cowork-trace-list, .cowork-stage .cowork-trace-list { padding-inline: 12px; color: var(--cowork-muted); }
+.cowork-task-context-label { color: var(--cowork-muted); font-size: 12px; }
+.cowork-task-context-list { display: grid; gap: 3px; margin: 4px 0 0; padding: 0; list-style: none; }
+.cowork-task-context-list li { display: flex; align-items: center; gap: 8px; padding: 5px 1px; }
+.cowork-task-context-list .anticon { color: var(--cowork-muted); }
+.cowork-examples { display: flex; max-width: min(290px, 72vw); flex-direction: column; gap: 4px; }
+.cowork-examples button { display: flex; min-height: 44px; align-items: baseline; gap: 8px; border-radius: 8px; padding: 6px 8px; text-align: left; }
+.cowork-examples button:hover, .cowork-examples button:focus-visible { background: rgba(0, 122, 197, .12); }
+@media (max-width: 640px) {
+  .cowork-messages { padding-inline: 12px; }
+  .cowork-dock { padding-inline: 8px; }
+  .cowork-send, .cowork-icon { min-height: 44px; min-width: 44px; }
+  .cowork-hero { width: 92px; height: 92px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cowork-orb, .cowork-shimmer, .cowork-live-label, .cowork-worklog-live > span { animation: none; }
+  .cowork-shimmer { background: none; -webkit-text-fill-color: currentColor; }
+  .cowork-progress-track > span, .cowork-worklog > summary::after, .cowork-task-section > summary::after { transition: none; }
+}

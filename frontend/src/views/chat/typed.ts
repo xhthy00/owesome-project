@@ -15,7 +15,7 @@ export interface ReasoningStep {
   sub_task_index?: number
 }
 
-/** 后端可选的 agent_mode；legacy 走老 SQLGenerator，agent 走单 DataAnalyst，team 走多 Agent DAG。 */
+/** 历史会话记录可能保存的 Agent 模式。 */
 export type AgentMode = 'agent' | 'team' | 'legacy'
 
 /** Team 模式下 Planner 拆出的每个 sub_task 的执行状态。 */
@@ -82,7 +82,7 @@ export class ChatRecord {
   create_time?: Date | string
   reasoning?: string = ''
   steps?: ReasoningStep[] = []
-  /** 本条 record 使用的 agent_mode；用于前端按模式展示不同 UI。 */
+  /** 本条历史记录保存的 Agent 模式。 */
   agent_mode?: AgentMode
   plans?: string[]
   sub_task_agents?: string[]

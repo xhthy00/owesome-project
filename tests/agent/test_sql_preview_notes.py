@@ -10,9 +10,6 @@ from src.agent.education.summary_context import (
     looks_like_keepable_result_table,
     sql_result_preview_limit,
 )
-from src.agent.expand.data_analyst import DATA_ANALYST_DESC
-from src.agent.expand.planner import _elective_subject_avg_hint
-from src.agent.expand.summarizer import _FACT_WRITING_BRIEF, _REPORT_WRITING_BRIEF
 
 
 def test_preview_limit_shows_full_table_when_small():
@@ -57,27 +54,6 @@ def test_tiny_table_notes_skip_distribution_warning():
     )
     assert "GROUP BY" not in note
     assert "参考人数" in note
-
-
-def test_analyst_and_summarizer_prompts_forbid_preview_agg():
-    assert "PREVIEW_ROWS < AUTHORITATIVE_ROW_COUNT" in DATA_ANALYST_DESC
-    assert "GROUP BY" in DATA_ANALYST_DESC
-    assert "心算" in DATA_ANALYST_DESC
-    assert "COALESCE(名次, 99999)>N" in DATA_ANALYST_DESC
-    assert "末位分" in DATA_ANALYST_DESC
-    assert "禁止 terminate「我重新写SQL」过程稿" in DATA_ANALYST_DESC
-    assert "完整名单" in DATA_ANALYST_DESC
-    assert "完整名单" in _FACT_WRITING_BRIEF
-    assert "前20人样本" in _FACT_WRITING_BRIEF
-    assert "GROUP BY" in _FACT_WRITING_BRIEF
-    assert "明细已省略" in _FACT_WRITING_BRIEF
-    assert "末位分" in _FACT_WRITING_BRIEF
-    assert "GROUP BY" in _REPORT_WRITING_BRIEF
-    assert "末位分" in _REPORT_WRITING_BRIEF
-    assert "宽表禁止手抄重写" in _REPORT_WRITING_BRIEF
-    assert "宽表禁止手抄重写" in _FACT_WRITING_BRIEF
-    hint = _elective_subject_avg_hint()
-    assert "COALESCE(名次, 99999)>N" in hint
 
 
 def test_keepable_rules_unchanged_for_student_roster():
@@ -210,4 +186,3 @@ def test_lint_allows_display_score_coalesce():
         "WHERE ov.xsxz='在籍生'"
     )
     assert _weak_subject_lint(sql) == []
-

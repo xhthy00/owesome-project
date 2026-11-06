@@ -3,13 +3,11 @@ import {
   createConversation,
   getConversationDetail,
   syncWorkspaceOid,
-  rejectQuestion as rejectQuestionRequest,
-  replyQuestion as replyQuestionRequest,
   sendMessageStream,
   updateReportReview,
   replaceRecordReports,
   type ClarifyPayload,
-  type Question
+  type TaskPlanStage
 } from "@/api/adapter/chatAdapter";
 import { notifyConversationChanged, snippetConversationTitle } from "@/utils/conversationTitle";
 import { genUUID } from "@/utils/uuid";
@@ -28,6 +26,7 @@ export type Message = {
   role: "user" | "assistant";
   content: string;
   runId?: string;
+  createdAt?: number;
 };
 
 export type ExecutionStep = {
@@ -41,6 +40,10 @@ export type ExecutionStep = {
   round?: number;
   progressPct?: number;
   rowCount?: number;
+  elapsedMs?: number;
+  toolName?: string;
+  stageContent?: string;
+  kind?: "thought";
 };
 
 export type ReportPayload = {
@@ -80,19 +83,10 @@ export type ChartRecommendation = {
   chartConfig?: ChartConfig;
 };
 
-export type AgentMode = "agent" | "team" | "legacy";
-
 type SendOptions = {
   datasourceId?: number;
   reportAudience?: string;
-  agentMode?: AgentMode;
 };
-
-const DEFAULT_AGENT_MODE: AgentMode = (() => {
-  const raw = (process.env.NEXT_PUBLIC_AGENT_MODE || "team").toLowerCase();
-  if (raw === "agent" || raw === "team" || raw === "legacy") return raw;
-  return "team";
-})();
 
 const asText = (value: unknown): string => {
   if (typeof value === "string") return value;
@@ -287,13 +281,13 @@ export function useChat() {
   const [runMetrics, setRunMetrics] = useState<RunMetrics>(EMPTY_RUN_METRICS);
   const [metricsByRunId, setMetricsByRunId] = useState<Record<string, RunMetrics>>({});
   const [clarifyByRunId, setClarifyByRunId] = useState<Record<string, ClarifyPayload>>({});
-  const [pendingQuestion, setPendingQuestion] = useState<Question | undefined>(undefined);
-  const [questionSubmitting, setQuestionSubmitting] = useState(false);
-  const [questionError, setQuestionError] = useState<string | null>(null);
+  const [taskPlanByRunId, setTaskPlanByRunId] = useState<Record<string, TaskPlanStage[]>>({});
   const [conversationId, setConversationId] = useState<number | undefined>(undefined);
-  /** 当前进行中的一轮 runId；供专家条计时按「每一问」清零 */
+  const [conversationTitle, setConversationTitle] = useState("");
+  /** 当前进行中的一轮 runId，用于隔离各轮流式事件。 */
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const interruptRef = useRef<{ conversationId: number; id: string } | undefined>(undefined);
   const sendingRef = useRef(false);
   const activeRunIdRef = useRef<string | null>(null);
   const metricsTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -312,14 +306,13 @@ export function useChat() {
   const planDoneIdxRef = useRef<Set<number>>(new Set());
   const defaultDatasourceId = Number(process.env.NEXT_PUBLIC_DEFAULT_DATASOURCE_ID ?? 1);
   const [datasourceId, setDatasourceIdState] = useState<number>(defaultDatasourceId);
-  // team：多 Agent 协作；agent：单 DataAnalyst。默认取 NEXT_PUBLIC_AGENT_MODE，可在界面切换。
-  const [agentMode, setAgentMode] = useState<AgentMode>(DEFAULT_AGENT_MODE);
   const [reportAudience, setReportAudience] = useState<string | undefined>(undefined);
 
   const setDatasourceId = useCallback((id: number) => {
     setDatasourceIdState((prev) => {
       if (prev !== id) {
         setConversationId(undefined);
+        setConversationTitle("");
       }
       return id;
     });
@@ -352,16 +345,13 @@ export function useChat() {
     clearMetricsTimer();
     setLoading(false);
     setActivity("");
-    setPendingQuestion(undefined);
-    setQuestionSubmitting(false);
-    setQuestionError(null);
     setRunMetrics((prev) => {
       const next: RunMetrics = {
         ...prev,
         elapsedMs: prev.runStartedAt ? Date.now() - prev.runStartedAt : prev.elapsedMs,
         elapsedKnown: Boolean(prev.runStartedAt) || prev.elapsedKnown,
         progressPct: Math.max(prev.progressPct, 0),
-        // 结束本轮后清掉，避免专家条 timerEpoch 仍挂在上一问
+        // 停止本轮计时。
         runStartedAt: null
       };
       if (stoppedRunId) {
@@ -374,13 +364,16 @@ export function useChat() {
     });
   }, [clearMetricsTimer]);
 
-  const ensureConversation = useCallback(async (targetDatasourceId: number, question: string) => {
+  const ensureConversation = useCallback(async (targetDatasourceId: number, question: string, signal: AbortSignal) => {
     if (conversationId) return conversationId;
     const created = await createConversation({
       title: snippetConversationTitle(question),
       datasource_id: targetDatasourceId
     });
-    setConversationId(created.id);
+    if (!signal.aborted) {
+      setConversationId(created.id);
+      setConversationTitle(created.title || snippetConversationTitle(question));
+    }
     notifyConversationChanged();
     return created.id;
   }, [conversationId]);
@@ -392,13 +385,12 @@ export function useChat() {
       sendingRef.current = true;
       const targetDatasourceId = options?.datasourceId ?? datasourceId;
       const targetAudience = options?.reportAudience ?? reportAudience;
-      const targetAgentMode = options?.agentMode ?? agentMode;
       stop();
       // stop() 会清 sendingRef；立刻重新占住，避免 effect 重跑时同一问再发一遍
       sendingRef.current = true;
       const runId = genUUID();
       activeRunIdRef.current = runId;
-      const userMsg: Message = { id: genUUID(), role: "user", content: asText(input), runId };
+      const userMsg: Message = { id: genUUID(), role: "user", content: asText(input), runId, createdAt: Date.now() };
       const assistantId = genUUID();
       setMessages((prev) => [...prev, userMsg, { id: assistantId, role: "assistant", content: "", runId }]);
       setLoading(true);
@@ -457,7 +449,7 @@ export function useChat() {
       const withRun = <T extends object>(item: T): T & { runId: string } => ({ ...item, runId });
       const writeAssistant = (content: string) => {
         latest = content;
-        setMessages((prev) => prev.map((msg) => (msg.id === assistantId ? { ...msg, content } : msg)));
+        setMessages((prev) => prev.map((msg) => (msg.id === assistantId ? { ...msg, content, createdAt: Date.now() } : msg)));
       };
       /** 收束本轮仍为 running 的步骤（如 Planner: start），避免左侧一直转圈 */
       const finalizeRunSteps = () => {
@@ -470,18 +462,19 @@ export function useChat() {
 
       let streamAborted = false;
       try {
-        const convId = await ensureConversation(targetDatasourceId, input);
+        const convId = await ensureConversation(targetDatasourceId, input, controller.signal);
         if (activeRunIdRef.current !== runId) {
           streamAborted = true;
           return;
         }
+        const interrupt = interruptRef.current?.conversationId === convId ? interruptRef.current.id : undefined;
+        let nextInterrupt: string | undefined;
         const streamResult = await sendMessageStream(
           {
             question: input,
             datasource_id: targetDatasourceId,
             conversation_id: convId,
-            agent_mode: targetAgentMode,
-            enable_tool_agent: true,
+            resume_interrupt_id: interrupt,
             ...(targetAudience ? { report_audience: targetAudience } : {})
           },
           {
@@ -493,7 +486,8 @@ export function useChat() {
                 ...prev,
                 {
                   id: genUUID(),
-                  title: "Agent 思考",
+                  title: "分析思路",
+                  kind: "thought",
                   detail: safeText,
                   status: "running",
                   runId,
@@ -501,6 +495,9 @@ export function useChat() {
                 }
               ]);
               setActivity("助手正在梳理分析思路…");
+            },
+            onTaskPlan: (stages) => {
+              setTaskPlanByRunId((prev) => ({ ...prev, [runId]: stages }));
             },
             onPlan: ({ plans, sub_task_agents }) => {
               if (!plans?.length) return;
@@ -595,13 +592,20 @@ export function useChat() {
             },
             onStep: (step) => {
               if (!step?.label) return;
+              if (step.name === "deepagents_model") {
+                setActivity(step.label);
+                return;
+              }
+              if (step.name === "deepagents") return;
               setExecutionSteps((prev) => [
                 ...stripBootstrap(prev),
                 {
                   id: genUUID(),
                   title: asText(step.label),
+                  kind: step.name === "analysis_update" ? "thought" : undefined,
                   detail: asText(step.detail),
-                  status: step.status === "error" ? "error" : "done",
+                  status: step.status === "error" ? "error" : step.status === "running" ? "running" : "done",
+                  round: step.round,
                   runId,
                   section: "step"
                 }
@@ -690,7 +694,8 @@ export function useChat() {
                 ...prev,
                 {
                   id: genUUID(),
-                  title: "Agent 思考",
+                  title: "分析思路",
+                  kind: "thought",
                   detail: safeText,
                   status: "running",
                   runId,
@@ -699,14 +704,15 @@ export function useChat() {
                 }
               ]);
             },
-            onToolCall: ({ tool, args, round, sub_task_index }) => {
+            onToolCall: ({ tool, round, sub_task, sub_task_index }) => {
               setActivity(humanizeTool(asText(tool), "running"));
               setExecutionSteps((prev) => [
                 ...stripBootstrap(prev),
                 {
                   id: `tool-${runId}-${sub_task_index ?? -1}-${round ?? prev.length}-${tool}`,
                   title: `调用工具: ${asText(tool)}`,
-                  detail: asText(args),
+                  toolName: asText(tool),
+                  stageContent: sub_task,
                   status: "running",
                   runId,
                   section: "step",
@@ -715,7 +721,7 @@ export function useChat() {
                 }
               ]);
             },
-            onToolResult: ({ tool, success, content, data, round, sub_task_index, elapsed_ms }) => {
+            onToolResult: ({ tool, success, data, round, sub_task, sub_task_index, elapsed_ms }) => {
               const safeTool = asText(tool);
               const rowCount =
                 data && typeof data === "object" && typeof data.row_count === "number"
@@ -764,7 +770,8 @@ export function useChat() {
                       ? {
                           ...step,
                           title: `工具结果: ${safeTool}`,
-                          detail: `${asText(content)}${elapsed_ms ? `\n耗时: ${elapsed_ms}ms` : ""}`.trim(),
+                          toolName: safeTool,
+                          elapsedMs: elapsed_ms,
                           status: success ? "done" : "error",
                           runId,
                           section: "result",
@@ -778,7 +785,9 @@ export function useChat() {
                   {
                     id,
                     title: `工具结果: ${safeTool}`,
-                    detail: `${asText(content)}${elapsed_ms ? `\n耗时: ${elapsed_ms}ms` : ""}`.trim(),
+                    toolName: safeTool,
+                    stageContent: sub_task,
+                    elapsedMs: elapsed_ms,
                     status: success ? "done" : "error",
                     runId,
                     section: "result",
@@ -790,14 +799,7 @@ export function useChat() {
               });
             },
             onSql: (sql) => {
-              const safeSql = asText(sql);
-              latestSql = safeSql;
-              // SQL 原文只进右侧工作台步骤，不进左侧对话气泡
-              setActivity(humanizeTool("sql", "done"));
-              setExecutionSteps((prev) => [
-                ...stripBootstrap(prev),
-                { id: genUUID(), title: "生成 SQL", detail: safeSql, status: "done", runId, section: "result" }
-              ]);
+              latestSql = asText(sql);
             },
             onResult: (result) => {
               const rowCount = result?.row_count ?? 0;
@@ -816,10 +818,6 @@ export function useChat() {
                 ]);
               }
               setActivity(humanizeTool("execute_sql", "done", { rowCount }));
-              setExecutionSteps((prev) => [
-                ...stripBootstrap(prev),
-                { id: genUUID(), title: "执行 SQL", detail: `返回 ${rowCount} 行`, status: "done", runId, section: "result" }
-              ]);
             },
             onFinalAnswer: (content) => {
               const safeContent = asText(content);
@@ -836,6 +834,7 @@ export function useChat() {
               }
             },
             onClarify: (payload) => {
+              nextInterrupt = payload.interrupt_id;
               const prompt = asText(payload.prompt);
               if (prompt.trim()) {
                 writeAssistant(prompt);
@@ -844,26 +843,6 @@ export function useChat() {
               }
               setClarifyByRunId((prev) => ({ ...prev, [runId]: payload }));
               setActivity("请补充分析范围");
-            },
-            onQuestionAsked: (payload) => {
-              setPendingQuestion((current) => {
-                if (current && current.request_id !== payload.request_id) {
-                  console.warn(
-                    `Replacing pending question ${current.request_id} with ${payload.request_id}`
-                  );
-                }
-                return payload;
-              });
-              setQuestionSubmitting(false);
-              setQuestionError(null);
-              setActivity("需要您的确认");
-            },
-            onQuestionRejected: ({ request_id }) => {
-              setPendingQuestion((current) =>
-                current?.request_id === request_id ? undefined : current
-              );
-              setQuestionSubmitting(false);
-              setQuestionError(null);
             },
             onUsage: (payload) => {
               const total =
@@ -883,7 +862,7 @@ export function useChat() {
               writeAssistant(`请求失败：${safeMsg}`);
               setExecutionSteps((prev) => [
                 ...stripBootstrap(prev).map((step) =>
-                  step.section === "plan" && step.status === "running"
+                  step.runId === runId && step.status === "running"
                     ? { ...step, status: "error" as const, detail: safeMsg || step.detail }
                     : step
                 ),
@@ -898,11 +877,9 @@ export function useChat() {
               ]);
             },
             onDone: async (recordId) => {
+              interruptRef.current = nextInterrupt && convId ? { conversationId: convId, id: nextInterrupt } : undefined;
               finalizeRunSteps();
               clearMetricsTimer();
-              setPendingQuestion(undefined);
-              setQuestionSubmitting(false);
-              setQuestionError(null);
               progressRef.current = { ...progressRef.current, finished: true };
               setRunMetrics((prev) => {
                 const next: RunMetrics = {
@@ -1065,55 +1042,21 @@ export function useChat() {
       stop,
       ensureConversation,
       datasourceId,
-      agentMode,
       reportAudience,
       clearMetricsTimer,
       refreshProgress
     ]
   );
 
-  const replyQuestion = useCallback(
-    async (answers: string[][]) => {
-      if (!pendingQuestion || questionSubmitting) return;
-      const requestId = pendingQuestion.request_id;
-      setQuestionSubmitting(true);
-      setQuestionError(null);
-      try {
-        await replyQuestionRequest(requestId, answers);
-        setPendingQuestion((current) =>
-          current?.request_id === requestId ? undefined : current
-        );
-      } catch (err) {
-        setQuestionError(err instanceof Error ? err.message : String(err));
-      } finally {
-        setQuestionSubmitting(false);
-      }
-    },
-    [pendingQuestion, questionSubmitting]
-  );
-
-  const rejectQuestion = useCallback(async () => {
-    if (!pendingQuestion || questionSubmitting) return;
-    const requestId = pendingQuestion.request_id;
-    setQuestionSubmitting(true);
-    setQuestionError(null);
-    try {
-      await rejectQuestionRequest(requestId);
-      setPendingQuestion((current) =>
-        current?.request_id === requestId ? undefined : current
-      );
-    } catch (err) {
-      setQuestionError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setQuestionSubmitting(false);
-    }
-  }, [pendingQuestion, questionSubmitting]);
-
   const loadConversation = useCallback(async (targetConversationId: number) => {
     stop();
     const detail = await getConversationDetail(targetConversationId);
+    const records = detail.records ?? [];
+    const interrupt = records[records.length - 1]?.exec_result?.interrupt_id;
+    interruptRef.current = interrupt ? { conversationId: detail.id, id: interrupt } : undefined;
     syncWorkspaceOid(detail.oid);
     setConversationId(detail.id);
+    setConversationTitle(detail.title);
     if (detail.datasource_id) {
       setDatasourceIdState(detail.datasource_id);
     }
@@ -1125,11 +1068,17 @@ export function useChat() {
     const nextMetricsByRunId: Record<string, RunMetrics> = {};
     const nextReports: ReportPayload[] = [];
     const nextQueryResults: QueryResult[] = [];
+    const nextClarifyByRunId: Record<string, ClarifyPayload> = {};
+    const nextTaskPlanByRunId: Record<string, TaskPlanStage[]> = {};
     const nextChartByRunId: Record<string, ChartRecommendation> = {};
     const queryResultSignatures = new Set<string>();
 
     detail.records?.forEach((record) => {
       const recordRunId = `record-${record.id}`;
+      const createdAt = record.create_time ? Date.parse(record.create_time) : undefined;
+      const finishedAt = record.finish_time ? Date.parse(record.finish_time) : createdAt;
+      if (record.exec_result?.clarify) nextClarifyByRunId[recordRunId] = record.exec_result;
+
       nextMetricsByRunId[recordRunId] = metricsFromPersisted(record.total_tokens, record.elapsed_ms);
       const loadedChart = asChartConfig(record.chart_config);
       if (record.chart_type || loadedChart) {
@@ -1139,11 +1088,11 @@ export function useChat() {
         };
       }
       if (asText(record.question).trim()) {
-        nextMessages.push({ id: `u-${record.id}`, role: "user", content: asText(record.question), runId: recordRunId });
+        nextMessages.push({ id: `u-${record.id}`, role: "user", content: asText(record.question), runId: recordRunId, createdAt });
       }
       const answer = asText(record.summary || record.reasoning || "").trim();
       if (answer) {
-        nextMessages.push({ id: `a-${record.id}`, role: "assistant", content: answer, runId: recordRunId });
+        nextMessages.push({ id: `a-${record.id}`, role: "assistant", content: answer, runId: recordRunId, createdAt: finishedAt });
       }
       if (asText(record.summary).trim()) {
         nextSummary = asText(record.summary);
@@ -1163,8 +1112,8 @@ export function useChat() {
         ? record.exec_result.columns.map((col) => asText(col))
         : [];
       const execRows = Array.isArray(record.exec_result?.rows) ? record.exec_result.rows : [];
-      if (sqlText && execColumns.length && execRows.length) {
-        const signature = `${sqlText}|${execColumns.join(",")}|${record.exec_result?.row_count ?? execRows.length}`;
+      if (sqlText && execColumns.length && Array.isArray(record.exec_result?.rows)) {
+        const signature = `${recordRunId}|${sqlText}|${execColumns.join(",")}|${record.exec_result?.row_count ?? execRows.length}`;
         if (!queryResultSignatures.has(signature)) {
           queryResultSignatures.add(signature);
           nextQueryResults.push({
@@ -1179,41 +1128,36 @@ export function useChat() {
       }
 
       if (record.plans?.length) {
-        record.plans.forEach((p, idx) => {
-          const ps = record.plan_states?.find((s) => s.index === idx);
-          nextSteps.push({
-            id: `plan-${record.id}-${idx}`,
-            title: `计划 ${idx + 1}: ${p}`,
-            detail: ps?.sub_task_agent ? `执行角色: ${asText(ps.sub_task_agent)}` : "",
-            status: ps?.state === "ok" ? "done" : ps?.state === "error" ? "error" : "running",
-            runId: recordRunId,
-            section: "plan",
-            subTaskIndex: idx,
-            progressPct: ps?.state === "ok" ? 100 : 0,
-            rowCount: ps?.row_count
-          });
+        nextTaskPlanByRunId[recordRunId] = record.plans.map((content, index) => {
+          const state = record.plan_states?.find((stage) => stage.index === index)?.state;
+          const status = state === "ok" ? "completed" : state === "running" ? "in_progress" : state === "error" ? "failed" : "pending";
+          return { content, status };
         });
       }
 
+      const traceStart = nextSteps.length;
       record.tool_calls?.forEach((tc, idx) => {
         nextSteps.push({
           id: `tool-${record.id}-${idx}`,
           title: `工具结果: ${asText(tc.tool) || "tool"}`,
-          detail: `${asText(tc.content)}${tc.elapsed_ms ? `\n耗时: ${tc.elapsed_ms}ms` : ""}`.trim(),
+          toolName: asText(tc.tool),
+          stageContent: tc.sub_task,
+          elapsedMs: tc.elapsed_ms,
+          rowCount: tc.data?.row_count ?? tc.data?.rows?.length,
           status: tc.success === false ? "error" : "done",
           runId: recordRunId,
           section: "result",
           subTaskIndex: tc.sub_task_index,
           round: tc.round
         });
-        if (asText(tc.tool) === "execute_sql" && tc.data && typeof tc.data === "object") {
+        if (["execute_sql", "query_semantic"].includes(asText(tc.tool)) && tc.data && typeof tc.data === "object") {
           const rawColumns = Array.isArray(tc.data.columns) ? tc.data.columns : [];
           const rawRows = Array.isArray(tc.data.rows) ? tc.data.rows : [];
           const safeColumns = rawColumns.map((col) => asText(col));
-          if (safeColumns.length && rawRows.length) {
+          if (safeColumns.length && Array.isArray(tc.data.rows)) {
             const sql = asText(tc.data.sql);
             const rowCount = typeof tc.data.row_count === "number" ? tc.data.row_count : rawRows.length;
-            const signature = `${sql}|${safeColumns.join(",")}|${rowCount}`;
+            const signature = `${recordRunId}|${sql}|${safeColumns.join(",")}|${rowCount}`;
             if (!queryResultSignatures.has(signature)) {
               queryResultSignatures.add(signature);
               nextQueryResults.push({
@@ -1230,16 +1174,28 @@ export function useChat() {
       });
 
       record.steps?.forEach((st, idx) => {
+        const title = asText(st.label || st.name || "步骤");
+        if (/^(?:(?:生成|执行)\s*SQL|(?:generate|execute)_sql)$/i.test(title.trim())) return;
+        if (st.name?.startsWith("agent_round_") && record.tool_calls?.some((call) => call.tool === "query_semantic")) return;
         nextSteps.push({
           id: `step-${record.id}-${idx}`,
-          title: asText(st.label || st.name || "步骤"),
+          title,
           detail: asText(st.detail),
+          kind: st.name === "analysis_update" ? "thought" : undefined,
+          round: st.round,
           status: st.status === "error" ? "error" : "done",
           runId: recordRunId,
           section: "step",
           subTaskIndex: st.sub_task_index
         });
       });
+      if (record.steps?.some((step) => step.name === "prepare_agent")) {
+        const trace = nextSteps.splice(traceStart);
+        nextSteps.push(...trace.sort((a, b) => {
+          const order = (a.round ?? Infinity) - (b.round ?? Infinity);
+          return order || Number(Boolean(a.toolName)) - Number(Boolean(b.toolName));
+        }));
+      }
     });
 
     setMessages(nextMessages);
@@ -1251,16 +1207,16 @@ export function useChat() {
     setReports(nextReports);
     setQueryResults(nextQueryResults);
     setChartByRunId(nextChartByRunId);
-    setClarifyByRunId({});
-    setPendingQuestion(undefined);
-    setQuestionSubmitting(false);
-    setQuestionError(null);
+    setClarifyByRunId(nextClarifyByRunId);
+    setTaskPlanByRunId(nextTaskPlanByRunId);
     setLoading(false);
   }, [stop]);
 
   const clearConversation = useCallback(() => {
     stop();
+    interruptRef.current = undefined;
     setConversationId(undefined);
+    setConversationTitle("");
     setMessages([]);
     setExecutionSteps([]);
     setSummary("");
@@ -1270,9 +1226,7 @@ export function useChat() {
     setQueryResults([]);
     setChartByRunId({});
     setClarifyByRunId({});
-    setPendingQuestion(undefined);
-    setQuestionSubmitting(false);
-    setQuestionError(null);
+    setTaskPlanByRunId({});
     setLoading(false);
     setActivity("");
     clearMetricsTimer();
@@ -1367,22 +1321,17 @@ export function useChat() {
     runMetrics,
     metricsByRunId,
     clarifyByRunId,
-    pendingQuestion,
-    questionSubmitting,
-    questionError,
-    replyQuestion,
-    rejectQuestion,
+    taskPlanByRunId,
     send,
     stop,
     loadConversation,
     clearConversation,
     patchReport,
     conversationId,
+    conversationTitle,
     reportAudience,
     setReportAudience,
     datasourceId,
-    setDatasourceId,
-    agentMode,
-    setAgentMode
+    setDatasourceId
   };
 }

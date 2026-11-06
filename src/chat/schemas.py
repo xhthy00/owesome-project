@@ -131,21 +131,14 @@ class ChatRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=1000, description="User's natural language question")
     datasource_id: int = Field(..., description="ID of the datasource to query")
     conversation_id: Optional[int] = Field(None, description="Conversation ID for context")
-    agent_mode: Literal["agent", "team", "legacy"] = Field(
+    resume_interrupt_id: Optional[str] = Field(None, max_length=128, description="Pending Ask Human interrupt")
+    agent_mode: Literal["agent"] = Field(
         default="agent",
-        description=(
-            "Which backend runs the chat-stream: "
-            "'agent' (default, ReAct DataAnalyst), "
-            "'team' (DataAnalyst → Charter → Summarizer 线性 DAG), "
-            "或 'legacy' (single-shot SQLGenerator)."
-        ),
+        description="Single-agent DeepAgents chat mode. Legacy values are normalized for old clients.",
     )
     enable_tool_agent: bool = Field(
         default=True,
-        description=(
-            "Only for team mode. True: allow Planner to route sub-task to ToolExpert; "
-            "False: force all sub-tasks to DataAnalyst (Phase C compatible)."
-        ),
+        description="Retained for clients that submitted this flag to the former team mode.",
     )
     report_audience: Optional[str] = Field(
         default=None,
@@ -155,6 +148,11 @@ class ChatRequest(BaseModel):
         ),
     )
 
+    @field_validator("agent_mode", mode="before")
+    @classmethod
+    def normalize_agent_mode(cls, value):
+        return "agent" if value in ("team", "legacy") else value
+
     @field_validator("question")
     @classmethod
     def _normalize_class_parentheses(cls, v: str) -> str:
@@ -162,12 +160,6 @@ class ChatRequest(BaseModel):
         from src.agent.education.query_parse import normalize_fullwidth_parentheses
 
         return normalize_fullwidth_parentheses(v or "")
-
-
-class QuestionReplyRequest(BaseModel):
-    """Answers for one pending Agentic question request."""
-
-    answers: List[List[str]] = Field(..., min_length=1)
 
 
 class SQLValidationRequest(BaseModel):
