@@ -377,6 +377,17 @@ async def _run_turn(
     def active_stage_index():
         return next((i for i, todo in enumerate(todos) if todo["status"] == "in_progress"), None)
 
+    # 同一子任务（无计划时按整轮）的查询次数，达到上限后收敛作答。
+    stage_query_count: dict[int | None, int] = {}
+    # 已就“预算用尽”提醒过推进计划的阶段，避免模型不理会时反复空转。
+    advance_requested: set[int | None] = set()
+    query_limit = settings.chat_max_queries_per_stage
+
+    def stage_query_exhausted() -> bool:
+        if query_limit is None:
+            return False
+        return stage_query_count.get(active_stage_index(), 0) >= query_limit
+
     @tool
     async def get_analysis_context() -> str:
         """重新读取当前发布的模型和视图目录。目录通常已随系统提示给出，仅在需要核对时调用。"""
@@ -400,9 +411,17 @@ async def _run_turn(
     async def query_semantic(sql: str) -> str:
         """提交一条只读语义 SQL，显式列出已确认的字段。DataSemantic 负责物理规划，宿主按权限执行。"""
         nonlocal query_error, last_sql, last_result
+        stage_index = active_stage_index()
+        used = stage_query_count.get(stage_index, 0)
+        if query_limit is not None and used >= query_limit:
+            return (
+                f"当前子任务已提交 {query_limit} 次查询，达到收敛上限。"
+                "请基于已返回的数据作答；仍缺关键数据时说明缺口，或先更新任务计划进入下一阶段。"
+            )
+        stage_query_count[stage_index] = used + 1
         round_number = len(tool_calls) + 1
         meta = {"tool": "query_semantic", "round": round_number, "agent": "DeepAgents"}
-        if (stage_index := active_stage_index()) is not None:
+        if stage_index is not None:
             meta["sub_task_index"] = stage_index
             meta["sub_task"] = todos[stage_index]["content"]
         call = {**meta, "args": {"sql": sql}}
@@ -607,7 +626,34 @@ async def _run_turn(
             )
         else:
             planning_attempts = 0
-            model_request = model_request.override(tools=model_tools)
+            if stage_query_exhausted():
+                stage_key = active_stage_index()
+                pending_stage = next(
+                    (i for i, todo in enumerate(todos) if todo["status"] == "pending"), None
+                )
+                if pending_stage is not None and stage_key not in advance_requested:
+                    # 还有后续阶段：先推进计划继续执行，不要提前收尾跳过剩余阶段。
+                    advance_requested.add(stage_key)
+                    model_request = model_request.override(
+                        tools=[t for t in model_tools if t.name == "write_todos"],
+                        tool_choice=_tool_choice_for(model_request.model, "write_todos"),
+                        system_prompt=(
+                            f"{model_request.system_prompt}\n当前子任务已提交 {query_limit} 次查询，"
+                            "达到收敛上限。请更新任务计划：把当前阶段标记为 completed 并写明缺口，"
+                            "立刻把下一阶段置为 in_progress；不要跳过或提前把后续阶段标记为 completed。"
+                        ),
+                    )
+                else:
+                    model_tools = [t for t in model_tools if t.name != "query_semantic"]
+                    model_request = model_request.override(
+                        tools=model_tools,
+                        system_prompt=(
+                            f"{model_request.system_prompt}\n当前子任务已提交 {query_limit} 次查询，"
+                            "请基于已返回数据作答；仍缺数据时说明缺口。"
+                        ),
+                    )
+            else:
+                model_request = model_request.override(tools=model_tools)
         if protocol_retried:
             model_request = model_request.override(system_prompt=(
                 f"{model_request.system_prompt}\n请用正常文字作答。若还需要且当前允许调用工具，"
@@ -680,6 +726,11 @@ async def _run_turn(
             "后续步骤设为 pending。每完成一个阶段就更新清单，并开始下一阶段；只把已核实的阶段设为 completed，"
             "完成最后一次更新后再发最终答复。简单问题不必发布计划，直接查询作答。"
         )
+        if query_limit is not None:
+            prompt += (
+                f"\n同一个子任务最多提交 {query_limit} 次 query_semantic；"
+                "达到上限后请基于已有数据作答并说明缺口。"
+            )
         middleware = [TodoListMiddleware(), reset_task_plan, *middleware]
     if request.report_audience:
         prompt += f"\n报告受众：{request.report_audience}。"

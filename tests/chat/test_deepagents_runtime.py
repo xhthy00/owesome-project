@@ -106,6 +106,223 @@ def test_tool_choice_prefers_named_function_when_gateway_supports_it():
     assert deepagents_runtime._tool_choice_for(other, "write_todos") == "auto"
 
 
+def _query_budget_mocks(monkeypatch, runs, limit):
+    def run_query(_self, sql, *, execute):
+        runs.append(sql)
+        return {
+            "sql": sql,
+            "tables": ["tb_score"],
+            "bundle_id": "edu",
+            "manifest_hash": "a" * 64,
+            "columns": ["value"],
+            "rows": [[1]],
+        }
+
+    monkeypatch.setattr(semantic_query.SemanticQuery, "context", lambda _self: {})
+    monkeypatch.setattr(semantic_query.SemanticQuery, "run", run_query)
+    monkeypatch.setattr(deepagents_runtime, "edu_scope_dict_for_user_id", lambda _uid: {})
+    monkeypatch.setattr(deepagents_runtime, "log_tool_call_fire_and_forget", lambda **_kw: None)
+    settings = Settings(
+        _env_file=None, chat_max_steps=None, chat_max_queries_per_stage=limit
+    )
+    monkeypatch.setattr(deepagents_runtime, "get_settings", lambda: settings)
+
+
+def test_query_budget_converges_within_a_sub_task(monkeypatch):
+    """同一子任务超出查询预算后不再执行，模型需基于已有数据作答。"""
+    runs, events = [], []
+
+    async def emit(event, payload):
+        events.append((event, payload))
+
+    _query_budget_mocks(monkeypatch, runs, limit=2)
+    model = ToolCallingModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "write_todos",
+                    "id": "plan",
+                    "args": {"todos": [{"content": "核对考试趋势", "status": "in_progress"}]},
+                }],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "query_semantic",
+                        "args": {"sql": f"SELECT {index} FROM exam_facts"},
+                        "id": f"q{index}",
+                    }
+                    for index in range(3)
+                ],
+            ),
+            AIMessage(content="基于已有数据作答"),
+        ]
+    )
+
+    asyncio.run(
+        deepagents_runtime.run_chat_stream(
+            request=ChatRequest(datasource_id=4, question="历年考试趋势如何"),
+            current_user_id=7,
+            workspace_oid=1,
+            emit=emit,
+            checkpointer=InMemorySaver(),
+            model=model,
+        )
+    )
+
+    assert len(runs) == 2
+    assert ("summary", {"content": "基于已有数据作答"}) in events
+
+
+def test_query_budget_resets_for_the_next_sub_task(monkeypatch):
+    """进入下一个子任务后预算重新计算。"""
+    runs, events = [], []
+
+    async def emit(event, payload):
+        events.append((event, payload))
+
+    _query_budget_mocks(monkeypatch, runs, limit=1)
+    model = ToolCallingModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "write_todos",
+                    "id": "plan",
+                    "args": {"todos": [{"content": "先查均分", "status": "in_progress"}]},
+                }],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "query_semantic",
+                    "args": {"sql": "SELECT 1 FROM exam_facts"},
+                    "id": "q1",
+                }],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "write_todos",
+                    "id": "plan-2",
+                    "args": {
+                        "todos": [
+                            {"content": "先查均分", "status": "completed"},
+                            {"content": "再查排名", "status": "in_progress"},
+                        ]
+                    },
+                }],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "query_semantic",
+                    "args": {"sql": "SELECT 2 FROM exam_facts"},
+                    "id": "q2",
+                }],
+            ),
+            AIMessage(content="两个阶段都完成"),
+        ]
+    )
+
+    asyncio.run(
+        deepagents_runtime.run_chat_stream(
+            request=ChatRequest(datasource_id=4, question="历年考试趋势如何"),
+            current_user_id=7,
+            workspace_oid=1,
+            emit=emit,
+            checkpointer=InMemorySaver(),
+            model=model,
+        )
+    )
+
+    assert runs == ["SELECT 1 FROM exam_facts", "SELECT 2 FROM exam_facts"]
+
+
+def test_query_budget_defaults_to_twelve():
+    assert Settings(_env_file=None).chat_max_queries_per_stage == 12
+
+
+def test_budget_exhaustion_advances_to_next_stage_instead_of_skipping(monkeypatch):
+    """预算用尽且还有后续阶段时，宿主只提供 write_todos 并要求推进，而不是直接收尾。"""
+    runs, bound, events = [], [], []
+
+    async def emit(event, payload):
+        events.append((event, payload))
+
+    _query_budget_mocks(monkeypatch, runs, limit=1)
+
+    class RecordingModel(ToolCallingModel):
+        def bind_tools(self, tools, **kwargs):
+            bound.append([tool.name for tool in tools])
+            return self
+
+    model = RecordingModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "write_todos",
+                    "id": "plan",
+                    "args": {
+                        "todos": [
+                            {"content": "先查均分", "status": "in_progress"},
+                            {"content": "再查排名", "status": "pending"},
+                        ]
+                    },
+                }],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "query_semantic",
+                    "args": {"sql": "SELECT 1 FROM exam_facts"},
+                    "id": "q1",
+                }],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "write_todos",
+                    "id": "advance",
+                    "args": {
+                        "todos": [
+                            {"content": "先查均分", "status": "completed"},
+                            {"content": "再查排名", "status": "in_progress"},
+                        ]
+                    },
+                }],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[{
+                    "name": "query_semantic",
+                    "args": {"sql": "SELECT 2 FROM exam_facts"},
+                    "id": "q2",
+                }],
+            ),
+            AIMessage(content="两个阶段都完成"),
+        ]
+    )
+
+    asyncio.run(
+        deepagents_runtime.run_chat_stream(
+            request=ChatRequest(datasource_id=4, question="历年考试趋势如何"),
+            current_user_id=7,
+            workspace_oid=1,
+            emit=emit,
+            checkpointer=InMemorySaver(),
+            model=model,
+        )
+    )
+
+    assert runs == ["SELECT 1 FROM exam_facts", "SELECT 2 FROM exam_facts"]
+    assert ["write_todos"] in bound
+    assert ("summary", {"content": "两个阶段都完成"}) in events
+
+
 def test_view_query_can_be_resubmitted_after_reading_fields(monkeypatch):
     sql = "SELECT average_score FROM exam_summary"
     bad_sql = "SELECT avg_score FROM exam_summary"
@@ -700,7 +917,7 @@ def test_deepagent_model_call_budget(monkeypatch, caplog, max_steps, query_succe
     monkeypatch.setattr(deepagents_runtime, "_thread_lock", lambda *_a: nullcontext())
     monkeypatch.setattr(deepagents_runtime, "persist_turn", persist)
     monkeypatch.setenv("CHAT_MAX_STEPS", str(max_steps) if max_steps is not None else "")
-    settings = Settings(_env_file=None)
+    settings = Settings(_env_file=None, chat_max_queries_per_stage=None)
     monkeypatch.setattr(deepagents_runtime, "get_settings", lambda: settings)
 
     async def run():
@@ -783,7 +1000,7 @@ def test_planned_parallel_queries_have_no_fixed_cap(monkeypatch, final_answer):
         *([AIMessage(content=_RAW_MINIMAX_CALL)] if final_answer == _RAW_MINIMAX_CALL else []),
         AIMessage(content="不应继续执行"),
     ])
-    settings = Settings(_env_file=None, chat_max_steps=None)
+    settings = Settings(_env_file=None, chat_max_steps=None, chat_max_queries_per_stage=None)
     monkeypatch.setattr(deepagents_runtime, "get_settings", lambda: settings)
     monkeypatch.setattr(semantic_query.SemanticQuery, "context", lambda _self: {"dialect": "postgres"})
     monkeypatch.setattr(semantic_query.SemanticQuery, "run", run_query)
