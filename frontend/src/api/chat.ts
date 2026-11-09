@@ -12,8 +12,11 @@ import {
   type ToolCallRecord,
 } from '@/views/chat/typed'
 import { streamSSE } from '@/utils/sse'
+import { useCache } from '@/utils/useCache'
+import { humanQuestionText } from '@/utils/humanQuestions'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000/api/v1'
+const pendingInterrupts = new Map<number, string>()
 
 export interface ChatListResult {
   total: number
@@ -44,6 +47,9 @@ export const chatApi = {
   },
   get: async (id: number): Promise<ChatInfo> => {
     const data: any = await request.get(`/chat/conversations/${id}`)
+    const interrupt = data.records?.[data.records.length - 1]?.exec_result?.interrupt_id
+    if (typeof interrupt === 'string') pendingInterrupts.set(id, interrupt)
+    else pendingInterrupts.delete(id)
     return new ChatInfo(data)
   },
   create: async (payload: { title?: string; datasource_id?: number }): Promise<Chat> => {
@@ -94,6 +100,7 @@ export const chatApi = {
       datasource_id: number
       conversation_id?: number
       agent_mode?: AgentMode
+      resume_interrupt_id?: string
       enable_tool_agent?: boolean
     },
     handlers: {
@@ -102,7 +109,7 @@ export const chatApi = {
       onSql?: (sql: string, chartType: string) => void
       onResult?: (result: { columns: string[]; rows: any[][]; row_count: number }) => void
       onError?: (msg: string) => void
-      onDone?: (recordId: number) => void
+      onDone?: (recordId: number) => void | Promise<void>
       // Agent / Team 共享：DataAnalyst ReAct 循环
       onToolCall?: (payload: ToolCallRecord & { agent?: string }) => void
       onToolResult?: (payload: ToolCallRecord & { agent?: string }) => void
@@ -123,11 +130,20 @@ export const chatApi = {
     },
     signal?: AbortSignal
   ): Promise<void> => {
+    const token = useCache().wsCache.get('user.token')
+    let answer = ''
+    let nextInterrupt: string | undefined
+    let clarificationText: string | undefined
+    let preserveInterrupt = false
     return streamSSE({
       url: `${API_BASE_URL}/chat/chat-stream`,
-      body: payload,
+      body: { ...payload, resume_interrupt_id: payload.resume_interrupt_id ??
+        (payload.conversation_id ? pendingInterrupts.get(payload.conversation_id) : undefined) },
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      requireDoneEvent: true,
       signal,
-      onEvent: (evt) => {
+      onEvent: async (evt) => {
+        if (signal?.aborted) return
         const data = evt.data || {}
         switch (evt.event) {
           // --------------------- 兼容层 ---------------------
@@ -135,6 +151,7 @@ export const chatApi = {
             handlers.onStep?.(data as ReasoningStep)
             break
           case 'reasoning':
+          case 'reasoning_delta':
             handlers.onReasoning?.(data?.text || '')
             break
           case 'sql':
@@ -144,10 +161,18 @@ export const chatApi = {
             handlers.onResult?.(data)
             break
           case 'error':
+            preserveInterrupt = data?.preserve_interrupt === true
             handlers.onError?.(data?.error || 'Unknown error')
             break
+          case 'human.answered':
+          case 'human.cancelled':
+            if (payload.conversation_id && pendingInterrupts.get(payload.conversation_id) === data?.interrupt_id) {
+              pendingInterrupts.delete(payload.conversation_id)
+            }
+            break
           case 'done':
-            handlers.onDone?.(data?.record_id || 0)
+            if (payload.conversation_id && !nextInterrupt && !preserveInterrupt) pendingInterrupts.delete(payload.conversation_id)
+            await handlers.onDone?.(data?.record_id || 0)
             break
           // --------------------- Agent / Team ---------------------
           case 'tool_call':
@@ -182,8 +207,31 @@ export const chatApi = {
             })
             break
           case 'summary':
-            handlers.onSummary?.(data?.content || '')
+            handlers.onSummary?.(clarificationText ?? data?.content ?? '')
             break
+          case 'answer_delta':
+            answer += data?.text || ''
+            handlers.onSummary?.(answer)
+            break
+          case 'answer_discard':
+            answer = ''
+            handlers.onSummary?.('')
+            break
+          case 'clarify':
+            nextInterrupt = data?.interrupt_id
+            if (payload.conversation_id && nextInterrupt) pendingInterrupts.set(payload.conversation_id, nextInterrupt)
+            clarificationText = humanQuestionText(data)
+            handlers.onSummary?.(clarificationText)
+            break
+          case 'task_plan': {
+            const stages = Array.isArray(data?.stages) ? data.stages : []
+            handlers.onPlan?.({ plans: stages.map((stage: any) => stage.content) })
+            stages.forEach((stage: any, index: number) => handlers.onPlanUpdate?.({
+              index, sub_task: stage.content,
+              state: stage.status === 'completed' ? 'ok' : stage.status === 'failed' ? 'error' : 'running',
+            }))
+            break
+          }
           case 'report':
             handlers.onReport?.({
               title: data?.title || 'Report',
@@ -195,7 +243,7 @@ export const chatApi = {
             break
         }
       },
-      onError: (err) => handlers.onError?.((err && err.message) || String(err)),
+      onError: (err) => handlers.onError?.(err instanceof Error ? err.message : String(err)),
     })
   },
 }

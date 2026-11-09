@@ -8,6 +8,7 @@ const toolNames: Record<string, string> = {
   get_analysis_context: "读取语义模型",
   describe_semantic_model: "查看语义模型字段",
   query_semantic: "查询数据",
+  lookup_question_context: "确认分析范围",
   execute_sql: "查询数据",
   chart_semantic_result: "生成图表",
   ask_human: "向用户确认信息",

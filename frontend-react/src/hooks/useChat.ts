@@ -86,6 +86,7 @@ export type ChartRecommendation = {
 type SendOptions = {
   datasourceId?: number;
   reportAudience?: string;
+  resumeInterruptId?: string;
 };
 
 const asText = (value: unknown): string => {
@@ -512,14 +513,19 @@ export function useChat() {
       };
 
       let streamAborted = false;
+      let streamCompleted = false;
       try {
         const convId = await ensureConversation(targetDatasourceId, input, controller.signal);
         if (activeRunIdRef.current !== runId) {
           streamAborted = true;
           return;
         }
-        const interrupt = interruptRef.current?.conversationId === convId ? interruptRef.current.id : undefined;
+        const interrupt = options?.resumeInterruptId ?? (
+          interruptRef.current?.conversationId === convId ? interruptRef.current.id : undefined
+        );
         let nextInterrupt: string | undefined;
+        let preserveInterrupt = false;
+        let interruptResolved = false;
         const streamResult = await sendMessageStream(
           {
             question: input,
@@ -925,10 +931,26 @@ export function useChat() {
               setRunMetrics((prev) => ({
                 ...prev,
                 totalTokens: total,
-                tokenKnown: true
+                tokenKnown: true,
+                contextUsage: payload.context_tokens == null ? prev.contextUsage : {
+                  context_tokens: payload.context_tokens,
+                  context_limit: payload.context_limit,
+                  context_model: payload.context_model,
+                  context_key: payload.context_key,
+                  context_estimated: payload.context_estimated
+                }
               }));
             },
-            onError: (msg) => {
+            onHumanResolved: (payload) => {
+              if (activeRunIdRef.current !== runId) return;
+              if (payload.interrupt_id === interrupt) interruptResolved = true;
+              if (interruptRef.current?.id === payload.interrupt_id) interruptRef.current = undefined;
+              setClarifyByRunId((prev) => Object.fromEntries(Object.entries(prev).map(([key, question]) => [
+                key, question.interrupt_id === payload.interrupt_id ? { ...question, status: payload.status, answer: payload.answer } : question
+              ])));
+            },
+            onError: (msg, metadata) => {
+              preserveInterrupt = metadata?.preserveInterrupt === true;
               const safeMsg = asText(msg);
               setActivity("本轮分析遇到问题，请查看右侧详情");
               writeAssistant(`请求失败：${safeMsg}`);
@@ -949,7 +971,18 @@ export function useChat() {
               ]);
             },
             onDone: async (recordId) => {
-              interruptRef.current = nextInterrupt && convId ? { conversationId: convId, id: nextInterrupt } : undefined;
+              if (activeRunIdRef.current !== runId) return;
+              streamCompleted = true;
+              if (recordId > 0 && interrupt && !interruptResolved) {
+                const cancelled = /^(换个问题|换一个问题|新问题|另外问|重新提问|忽略上面)/.test(input.trim());
+                setClarifyByRunId((prev) => Object.fromEntries(Object.entries(prev).map(([key, question]) => [
+                  key, question.interrupt_id === interrupt ? {
+                    ...question, status: cancelled ? "cancelled" : "answered", answer: cancelled ? undefined : input
+                  } : question
+                ])));
+              }
+              if (nextInterrupt && convId) interruptRef.current = { conversationId: convId, id: nextInterrupt };
+              else if (!preserveInterrupt) interruptRef.current = undefined;
               finalizeRunSteps();
               clearMetricsTimer();
               progressRef.current = { ...progressRef.current, finished: true };
@@ -988,13 +1021,14 @@ export function useChat() {
               if (recordId > 0 && convId) {
                 try {
                   const detail = await getConversationDetail(convId);
+                  if (activeRunIdRef.current !== runId) return;
                   const record =
                     detail.records?.find((r) => r.id === recordId) ??
                     detail.records?.[detail.records.length - 1];
                   if (record) {
                     // 优先用服务端落库的 token/耗时覆盖本轮指标（与刷新历史一致）
                     if (record.total_tokens != null || record.elapsed_ms != null) {
-                      const persisted = metricsFromPersisted(record.total_tokens, record.elapsed_ms);
+                      const persisted = metricsFromPersisted(record.total_tokens, record.elapsed_ms, record.exec_result?.context_usage);
                       setMetricsByRunId((m) => ({ ...m, [runId]: persisted }));
                       setRunMetrics((prev) => ({
                         ...prev,
@@ -1102,6 +1136,12 @@ export function useChat() {
           // 主动中止：保留步骤原状态，由 stop() 负责 UI
           return;
         }
+        if (!streamCompleted) {
+          setExecutionSteps((prev) => prev.map((step) =>
+            step.runId === runId && step.status === "running"
+              ? { ...step, status: "error" as const, detail: "连接中断，本轮未确认完成" } : step
+          ));
+        }
         // 步骤收口交给 onDone（finalizeRunSteps）；此处只停表并解除 loading。
         // 若在 finally 里把 running→done，会把「准备执行计划」误显示成「已制定路径」。
         clearMetricsTimer();
@@ -1114,7 +1154,7 @@ export function useChat() {
           };
           setMetricsByRunId((m) => ({
             ...m,
-            [runId]: { ...next, progressPct: Math.max(next.progressPct, 100) }
+            [runId]: { ...next, progressPct: streamCompleted ? 100 : next.progressPct }
           }));
           return next;
         });
@@ -1136,7 +1176,9 @@ export function useChat() {
     stop();
     const detail = await getConversationDetail(targetConversationId);
     const records = detail.records ?? [];
-    const interrupt = records[records.length - 1]?.exec_result?.interrupt_id;
+    const latestResult = records[records.length - 1]?.exec_result;
+    const interrupt = latestResult?.clarify && latestResult.status !== "answered" && latestResult.status !== "cancelled"
+      ? latestResult.interrupt_id : undefined;
     interruptRef.current = interrupt ? { conversationId: detail.id, id: interrupt } : undefined;
     syncWorkspaceOid(detail.oid);
     setConversationId(detail.id);
@@ -1161,9 +1203,24 @@ export function useChat() {
       const recordRunId = `record-${record.id}`;
       const createdAt = record.create_time ? Date.parse(record.create_time) : undefined;
       const finishedAt = record.finish_time ? Date.parse(record.finish_time) : createdAt;
-      if (record.exec_result?.clarify) nextClarifyByRunId[recordRunId] = record.exec_result;
+      const previousPending = Object.values(nextClarifyByRunId).reverse().find((question) => question.status === "pending");
+      const repliedId = record.exec_result?.human_reply_to ?? (record.turn_type === "retry"
+        ? previousPending?.interrupt_id
+        : undefined);
+      // Older standalone records predate lifecycle metadata. Such a turn could
+      // only be persisted after ending the preceding wait; don't reopen it.
+      const cancelledId = record.exec_result?.human_cancelled_to ?? (!repliedId ? previousPending?.interrupt_id : undefined);
+      if (repliedId || cancelledId) {
+        for (const question of Object.values(nextClarifyByRunId)) {
+          if (question.interrupt_id === (cancelledId || repliedId)) {
+            question.status = cancelledId ? "cancelled" : "answered";
+            question.answer = cancelledId ? undefined : record.exec_result?.human_answer ?? record.question;
+          }
+        }
+      }
+      if (record.exec_result?.clarify) nextClarifyByRunId[recordRunId] = { ...record.exec_result, status: record.exec_result.status ?? "pending" };
 
-      nextMetricsByRunId[recordRunId] = metricsFromPersisted(record.total_tokens, record.elapsed_ms);
+      nextMetricsByRunId[recordRunId] = metricsFromPersisted(record.total_tokens, record.elapsed_ms, record.exec_result?.context_usage);
       const loadedChart = asChartConfig(record.chart_config);
       if (record.chart_type || loadedChart) {
         nextChartByRunId[recordRunId] = {
@@ -1288,7 +1345,7 @@ export function useChat() {
     setSummaryByRunId(nextSummaryByRunId);
     setThinkByRunId({});
     setMetricsByRunId(nextMetricsByRunId);
-    setRunMetrics(EMPTY_RUN_METRICS);
+    setRunMetrics(Object.values(nextMetricsByRunId).at(-1) ?? EMPTY_RUN_METRICS);
     setReports(nextReports);
     setQueryResults(nextQueryResults);
     setChartByRunId(nextChartByRunId);

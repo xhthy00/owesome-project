@@ -75,6 +75,8 @@ class UsageSink:
         self.started_at = time.monotonic()
         self._last_emit_total = -1
         self._last_emit_at = 0.0
+        self.context: dict[str, Any] = {}
+        self.estimated = False
 
     def snapshot_for_persist(self) -> dict[str, int]:
         elapsed_ms = int(max(0.0, time.monotonic() - self.started_at) * 1000)
@@ -83,14 +85,20 @@ class UsageSink:
             "elapsed_ms": elapsed_ms,
         }
 
-    async def record(self, prompt: int, completion: int, total: int) -> None:
+    async def record(
+        self, prompt: int, completion: int, total: int, *,
+        context: dict[str, Any] | None = None, estimated: bool = False,
+    ) -> None:
         self.prompt_tokens += max(0, int(prompt))
         self.completion_tokens += max(0, int(completion))
         delta = max(0, int(total))
         if delta <= 0:
             delta = max(0, int(prompt)) + max(0, int(completion))
         self.total_tokens += delta
-        await self._maybe_emit(delta_total=delta)
+        self.estimated = self.estimated or estimated
+        if context is not None:
+            self.context = context
+        await self._maybe_emit(delta_total=delta, force=context is not None)
 
     async def _maybe_emit(self, *, delta_total: int, force: bool = False) -> None:
         now = time.monotonic()
@@ -111,6 +119,8 @@ class UsageSink:
                 "completion_tokens": self.completion_tokens,
                 "total_tokens": self.total_tokens,
                 "delta_total": delta_total,
+                "estimated": self.estimated,
+                **self.context,
             },
         )
 

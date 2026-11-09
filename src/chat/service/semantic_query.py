@@ -446,7 +446,10 @@ class SemanticQuery:
                     secured = secured.limit(_MAX_ROWS + 1)
                 sql_run = secured.sql(dialect=dialect)
                 outcome = run_sql_with_auto_fix(
-                    sql_run, db_type=db_type, config=config, max_fix_attempts=0
+                    sql_run, db_type=db_type, config={
+                        **config, "read_only": True,
+                        "query_timeout_seconds": self.settings.chat_query_timeout_seconds,
+                    }, max_fix_attempts=0
                 )
                 if not outcome.success or not isinstance(outcome.result, dict):
                     raise SemanticQueryError("语义查询执行失败，请检查发布物和数据源映射。")

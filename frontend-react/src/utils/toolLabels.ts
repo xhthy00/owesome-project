@@ -5,6 +5,11 @@ export type HumanizePhase = "running" | "done" | "error";
 type ToolCopy = Record<HumanizePhase, string>;
 
 const TOOL_COPY: Record<string, ToolCopy> = {
+  lookup_question_context: {
+    running: "助手正在确认分析范围与候选…",
+    done: "已查询分析范围候选",
+    error: "未能确认分析范围候选"
+  },
   list_tables: {
     running: "助手正在查看可用数据表…",
     done: "已确认数据表清单",

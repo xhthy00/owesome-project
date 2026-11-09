@@ -1,3 +1,11 @@
+export type ContextUsage = {
+  context_tokens?: number;
+  context_limit?: number | null;
+  context_model?: string;
+  context_key?: string;
+  context_estimated?: boolean;
+};
+
 export type RunMetrics = {
   totalTokens: number;
   tokenKnown: boolean;
@@ -6,6 +14,7 @@ export type RunMetrics = {
   elapsedKnown: boolean;
   progressPct: number;
   runStartedAt: number | null;
+  contextUsage?: ContextUsage;
 };
 
 export const EMPTY_RUN_METRICS: RunMetrics = {
@@ -20,7 +29,8 @@ export const EMPTY_RUN_METRICS: RunMetrics = {
 /** 从会话 record 回放左侧指标条 */
 export function metricsFromPersisted(
   totalTokens?: number | null,
-  elapsedMs?: number | null
+  elapsedMs?: number | null,
+  contextUsage?: ContextUsage
 ): RunMetrics {
   return {
     totalTokens: typeof totalTokens === "number" ? totalTokens : 0,
@@ -28,8 +38,17 @@ export function metricsFromPersisted(
     elapsedMs: typeof elapsedMs === "number" ? elapsedMs : 0,
     elapsedKnown: typeof elapsedMs === "number",
     progressPct: 100,
-    runStartedAt: null
+    runStartedAt: null,
+    contextUsage
   };
+}
+
+export function formatContextUsage(usage?: ContextUsage): string | null {
+  if (usage?.context_tokens == null) return null;
+  const used = `${usage.context_estimated ? "≈" : ""}${formatTokenCount(usage.context_tokens, true)}`;
+  const limit = usage.context_limit;
+  if (limit == null || limit <= 0) return `上下文 ${used} / 容量未知`;
+  return `上下文 ${used} / ${formatTokenCount(limit, true)}（${Math.round(usage.context_tokens / limit * 100)}%）`;
 }
 
 export type ProgressInput = {

@@ -96,4 +96,6 @@ async def persist_turn(**kwargs: Any) -> int:
     if sink is not None:
         usage = sink.snapshot_for_persist()
         kwargs.update(total_tokens=usage["total_tokens"] or None, elapsed_ms=usage["elapsed_ms"] or None)
+        if sink.context:
+            kwargs["exec_result"] = {**(kwargs.get("exec_result") or {}), "context_usage": sink.context}
     return await asyncio.to_thread(_persist_sync, **kwargs)

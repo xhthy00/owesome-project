@@ -1,81 +1,94 @@
-/**
- * Minimal SSE-over-fetch parser. EventSource doesn't support POST + JSON body,
- * so we read a streaming response and emit `event` / `data` pairs to a handler.
- */
-
 export interface SSEEvent {
-  event: string
-  data: any
+  event: string;
+  data: any;
 }
 
 export interface SSEStreamOptions {
-  url: string
-  body?: any
-  headers?: Record<string, string>
-  signal?: AbortSignal
-  onEvent: (evt: SSEEvent) => void
-  onError?: (err: any) => void
-  onDone?: () => void
+  url: string;
+  body?: unknown;
+  headers?: Record<string, string>;
+  signal?: AbortSignal;
+  onEvent: (evt: SSEEvent) => void | Promise<void>;
+  onError?: (err: unknown) => void;
+  onDone?: () => void | Promise<void>;
+  requireDoneEvent?: boolean;
 }
 
-function safeParse(raw: string): any {
-  if (!raw) return null
+function safeParse(raw: string): unknown {
+  if (!raw) return null;
   try {
-    return JSON.parse(raw)
+    return JSON.parse(raw);
   } catch {
-    return raw
+    return raw;
   }
 }
 
 export async function streamSSE(opts: SSEStreamOptions): Promise<void> {
-  const { url, body, headers, signal, onEvent, onError, onDone } = opts
+  const { url, body, headers, signal, onEvent, onError, onDone } = opts;
+  let terminalReceived = false;
+  const emitChunk = async (chunk: string) => {
+    if (signal?.aborted) return;
+    if (!chunk.trim()) return;
+    let event = "message";
+    const dataLines: string[] = [];
+    for (const line of chunk.split(/\r?\n/)) {
+      if (!line || line.startsWith(":")) continue;
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+    }
+    if (dataLines.length === 0) return;
+    if (event === "done") terminalReceived = true;
+    await onEvent({ event, data: safeParse(dataLines.join("\n")) });
+  };
+
   try {
     const resp = await fetch(url, {
-      method: 'POST',
+      method: "POST",
       headers: {
-        'Content-Type': 'application/json',
-        Accept: 'text/event-stream',
-        ...(headers || {}),
+        "Content-Type": "application/json",
+        Accept: "text/event-stream",
+        ...(headers ?? {})
       },
       body: body ? JSON.stringify(body) : undefined,
-      signal,
-    })
+      signal
+    });
 
     if (!resp.ok || !resp.body) {
-      const text = await resp.text().catch(() => '')
-      throw new Error(text || `HTTP ${resp.status}`)
+      const text = await resp.text().catch(() => "");
+      throw new Error(text || `HTTP ${resp.status}`);
     }
 
-    const reader = resp.body.getReader()
-    const decoder = new TextDecoder('utf-8')
-    let buffer = ''
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
 
     while (true) {
-      const { value, done } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
+      const { value, done } = await reader.read();
+      if (signal?.aborted) return;
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
 
-      // SSE messages are separated by a blank line ("\n\n").
-      let idx
-      while ((idx = buffer.indexOf('\n\n')) !== -1) {
-        const chunk = buffer.slice(0, idx)
-        buffer = buffer.slice(idx + 2)
-
-        let event = 'message'
-        const dataLines: string[] = []
-        for (const line of chunk.split('\n')) {
-          if (!line || line.startsWith(':')) continue
-          if (line.startsWith('event:')) event = line.slice(6).trim()
-          else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim())
-        }
-        if (dataLines.length === 0) continue
-        const data = safeParse(dataLines.join('\n'))
-        onEvent({ event, data })
+      const parts = buffer.split(/\r?\n\r?\n/);
+      buffer = parts.pop() ?? "";
+      for (const part of parts) {
+        await emitChunk(part);
       }
     }
-    onDone?.()
+    // Flush any remaining SSE frame in buffer.
+    buffer += decoder.decode();
+    if (buffer.trim()) {
+      await emitChunk(buffer);
+    }
+    if (opts.requireDoneEvent && !terminalReceived) {
+      throw new Error("连接提前结束，本轮尚未确认完成，请重试。");
+    }
+    await onDone?.();
+    return;
   } catch (err) {
-    if ((err as any)?.name === 'AbortError') return
-    onError?.(err)
+    if ((err as { name?: string })?.name === "AbortError") {
+      return;
+    }
+    onError?.(err);
+    return;
   }
 }

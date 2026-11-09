@@ -406,8 +406,8 @@ async def _semantic_sql_response(chat_request, http_request, session, current_us
     from src.chat.service.deepagents_runtime import run_chat_stream
 
     _assert_query_scope(session, current_user, workspace_oid, chat_request)
-    denied = _edu_out_of_scope_message(
-        current_user.id, chat_request.question, datasource_id=chat_request.datasource_id,
+    denied = await asyncio.to_thread(
+        _edu_out_of_scope_message, current_user.id, chat_request.question, datasource_id=chat_request.datasource_id,
         workspace_oid=workspace_oid,
     )
     events = {}
@@ -512,8 +512,8 @@ async def chat_stream(
     )
 
     current_user_id = current_user.id
-    denied = _edu_out_of_scope_message(
-        int(current_user_id),
+    denied = await asyncio.to_thread(
+        _edu_out_of_scope_message, int(current_user_id),
         chat_request.question,
         datasource_id=chat_request.datasource_id,
         workspace_oid=workspace_oid,

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 import CoworkChat from "./CoworkChat";
 import { EMPTY_RUN_METRICS } from "@/utils/runMetrics";
@@ -19,6 +19,19 @@ function chatState(overrides: Partial<Parameters<typeof CoworkChat>[0]["chat"]> 
     thinkByRunId: {}, ...overrides,
   };
 }
+
+it("shows the latest context separately from cumulative tokens and labels unknown capacity", () => {
+  const state = chatState({
+    messages: [{ id: "q", runId: "r", role: "user", content: "继续" }],
+    runMetrics: { ...EMPTY_RUN_METRICS, totalTokens: 50000, tokenKnown: true,
+      contextUsage: { context_tokens: 2000, context_limit: 100000, context_estimated: false } }
+  });
+  const { rerender } = render(<CoworkChat chat={state} />);
+  expect(screen.getByText("上下文 2000 / 10万（2%）")).toBeVisible();
+  rerender(<CoworkChat chat={{ ...state, runMetrics: { ...state.runMetrics,
+    contextUsage: { context_tokens: 2000, context_limit: null, context_estimated: true } } }} />);
+  expect(screen.getByText("上下文 ≈2000 / 容量未知")).toBeVisible();
+});
 
 it("keeps previously saved tool protocol out of the answer and execution log", () => {
   const raw = "]<]minimax[>[<tool_call> ]<]minimax[>[<invoke name=\"query_semantic\">]<]minimax[>[<sql>SELECT private_field FROM exam_facts]<]minimax[>[</sql>]<]minimax[>[</invoke> ]<]minimax[>[</tool_call>";
@@ -120,7 +133,7 @@ it("groups adjacent queries and shows only user-facing tool metadata", () => {
   expect(screen.queryByText(/SELECT private_column|WITH internal/)).not.toBeInTheDocument();
 });
 
-it("opens the clicked round's results and keeps the latest clarification available", () => {
+it("opens the clicked round's results and keeps the latest clarification available", async () => {
   const chat = chatState({
     messages: [
       { id: "q1", runId: "first", role: "user", content: "第一问" },
@@ -135,6 +148,42 @@ it("opens the clicked round's results and keeps the latest clarification availab
   expect(screen.getByText("first")).toBeInTheDocument();
   expect(screen.queryByText("second")).not.toBeInTheDocument();
   fireEvent.click(within(screen.getByRole("dialog", { name: "结果预览" })).getByRole("button", { name: "Close" }));
-  fireEvent.click(within(screen.getByRole("group", { name: "助手追问" })).getByRole("button", { name: "期中考试" }));
-  expect(chat.send).toHaveBeenCalledWith("期中考试", { datasourceId: 4 });
+  const form = within(screen.getByRole("form", { name: "补充信息表单" }));
+  fireEvent.click(form.getByRole("radio", { name: "期中考试" }));
+  expect(chat.send).not.toHaveBeenCalled();
+  fireEvent.click(form.getByRole("button", { name: "提交并继续" }));
+  expect(chat.send).toHaveBeenCalledWith("1. 请选择或自行填写：期中考试", { datasourceId: 4, resumeInterruptId: "ask-exam" });
+  await waitFor(() => expect(form.getByRole("button", { name: "提交并继续" })).toBeEnabled());
+});
+
+it("keeps a waiting form available after an unsuccessful reply and preserves drafts on collapse", () => {
+  const chat = chatState({
+    messages: [
+      { id: "q1", runId: "first", role: "user", content: "分析成绩" },
+      { id: "q2", runId: "failed", role: "user", content: "未提交的回复" },
+      { id: "a2", runId: "failed", role: "assistant", content: "请求失败：连接中断" },
+    ],
+    clarifyByRunId: { first: { interrupt_id: "ask-1", prompt: "哪次考试？", status: "pending" } },
+  });
+  const { rerender } = render(<CoworkChat chat={chat} />);
+  fireEvent.change(screen.getByRole("textbox", { name: "你的回复" }), { target: { value: "期中" } });
+  rerender(<CoworkChat chat={{ ...chat, loading: true }} />);
+  expect(screen.queryByRole("form")).not.toBeInTheDocument();
+  rerender(<CoworkChat chat={chat} />);
+  expect(screen.getByRole("textbox", { name: "你的回复" })).toHaveValue("期中");
+  fireEvent.click(screen.getByRole("button", { name: "收起" }));
+  expect(screen.getByRole("textbox", { name: "回复追问" })).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "展开" }));
+  expect(screen.getByRole("textbox", { name: "你的回复" })).toHaveValue("期中");
+  expect(screen.getByText("请求失败：连接中断")).toBeVisible();
+});
+
+it("renders answered clarification history without reopening the form", () => {
+  render(<CoworkChat chat={chatState({
+    messages: [{ id: "q", runId: "r", role: "user", content: "分析成绩" }],
+    clarifyByRunId: { r: { interrupt_id: "ask-1", prompt: "哪次考试？", status: "answered", answer: "期中考试" } },
+  })} />);
+  expect(screen.queryByRole("form")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByText("补充信息 · 已回复"));
+  expect(screen.getByText("期中考试")).toBeVisible();
 });

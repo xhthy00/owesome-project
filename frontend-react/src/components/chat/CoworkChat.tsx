@@ -11,11 +11,12 @@ import { getCurrentUser } from "@/api/auth";
 import ChatExecutionPanel from "@/components/chat/ChatExecutionPanel";
 import { ChatComposerStatus, ChatTaskProgress, ChatWorkLog, runActivity } from "@/components/chat/ChatRunProgress";
 import DatasourcePicker from "@/components/chat/DatasourcePicker";
+import HumanQuestionForm, { HumanQuestionSummary } from "@/components/chat/HumanQuestionForm";
 import type { Message, useChat } from "@/hooks/useChat";
 import { ASSISTANT_AVATAR, ASSISTANT_WELCOME_TITLE, getAssistantSuggestions } from "@/new-components/chat/assistant";
 import { eduMarkdownComponents } from "@/new-components/chat/content/eduMarkdownComponents";
 import { snippetConversationTitle } from "@/utils/conversationTitle";
-import { formatTokenCount } from "@/utils/runMetrics";
+import { formatContextUsage, formatTokenCount } from "@/utils/runMetrics";
 import { extractThinkFromSteps, extractThinkFromText, mergeThinkText, splitThinkContent } from "@/utils/toolLabels";
 
 const markdownPlugins = [remarkGfm];
@@ -107,8 +108,8 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
   const stages = latestRun ? chat.taskPlanByRunId[latestRun] ?? [] : [];
   const activeStage = stages.find((stage) => stage.status === "in_progress");
   const activity = runActivity(latestSteps, chat.activity);
-  const pending = !loading && latestRun ? chat.clarifyByRunId[latestRun] : undefined;
-  const options = Array.isArray(pending?.options) ? pending.options : Object.values(pending?.options ?? {}).flat();
+  const pending = users.slice().reverse().map((user) => chat.clarifyByRunId[user.runId || ""])
+    .find((question) => question && question.status !== "answered" && question.status !== "cancelled");
   const latestArtifacts = [...chat.reports, ...chat.queryResults].some((item) => item.runId === latestRun);
   const activePreview = preview && users.some((item) => item.runId === preview.runId) ? preview : undefined;
 
@@ -129,7 +130,7 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
   const submit = (value = input) => {
     if (!value.trim() || loading) return;
     setInput("");
-    void send(value.trim(), { datasourceId });
+    void send(value.trim(), { datasourceId, ...(pending?.interrupt_id ? { resumeInterruptId: pending.interrupt_id } : {}) });
   };
 
   const composer = (
@@ -142,7 +143,7 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
               event.preventDefault(); submit();
             }
           }}
-          rows={welcome ? 3 : 2} maxLength={1000} disabled={loading} aria-label={pending ? "回复追问" : "输入消息"}
+          rows={welcome ? 3 : 2} maxLength={pending ? 8000 : 1000} disabled={loading} aria-label={pending ? "回复追问" : "输入消息"}
           placeholder={pending ? "回复助手的问题…" : loading ? "任务进行中，完成后可继续追问…" : welcome ? "今天帮你分析些什么？" : "继续追问…"} />
         <div className="cowork-composer-toolbar">
           <Popover trigger="click" placement="topLeft" open={menuOpen && !loading && !pending} onOpenChange={setMenuOpen}
@@ -166,6 +167,11 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
         <DatasourcePicker value={datasourceId} onChange={setDatasourceId} compact disabled={loading || Boolean(conversationId)} />
         <span className="cowork-mode"><RobotOutlined aria-hidden="true" /> 单智能体</span>
         {!welcome && chat.runMetrics.tokenKnown && <span className="cowork-token">{formatTokenCount(chat.runMetrics.totalTokens, true)} Token</span>}
+        {!welcome && formatContextUsage(chat.runMetrics.contextUsage) && (
+          <span className="cowork-token" title="最近一次主模型请求的输入 Token；累计用量另行统计。容量来自模型资料，历史由系统自动压缩。">
+            {formatContextUsage(chat.runMetrics.contextUsage)}
+          </span>
+        )}
       </div>
     </div>
   );
@@ -176,7 +182,7 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
       queryResults={activePreview.kind === "report" ? [] : chat.queryResults.filter((item) => item.runId === activePreview.runId)}
       chartByRunId={chat.chartByRunId} onPatchReport={chat.patchReport} />
   );
-  const progressBody = <ChatTaskProgress key={latestRun} stages={stages} steps={latestSteps} running={loading} waiting={Boolean(pending)} />;
+  const progressBody = <ChatTaskProgress key={latestRun} stages={stages} steps={latestSteps} running={loading} waiting={Boolean(pending) && !loading} />;
 
   if (welcome) return (
     <section className="cowork-chat cowork-welcome" aria-label="新对话">
@@ -226,7 +232,9 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
                   <ChatWorkLog key={running ? "running" : "settled"} running={running} steps={steps} metrics={running ? chat.runMetrics : chat.metricsByRunId[runId]}
                     activity={activity} planned={Boolean(activeStage)} />
                   {thinkText ? <ThinkBlock text={thinkText} live={running} /> : null}
-                  {assistant?.content && (!pending || latestRun !== runId) && <>
+                  {chat.clarifyByRunId[runId]?.status && chat.clarifyByRunId[runId].status !== "pending"
+                    ? <HumanQuestionSummary question={chat.clarifyByRunId[runId]} />
+                    : assistant?.content && !chat.clarifyByRunId[runId] && <>
                     <div className="cowork-answer">
                       <ReactMarkdown components={eduMarkdownComponents} remarkPlugins={markdownPlugins}>
                         {answer || (results.length ? "这轮未生成分析结论，请查看已返回的查询结果。" : "这轮未生成分析结论，请重新提问。")}
@@ -250,16 +258,15 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
               if (viewport.current) viewport.current.scrollTop = viewport.current.scrollHeight;
             }}><ArrowDownOutlined /></button>}
             {loading && <ChatComposerStatus stage={activeStage?.content} activity={activity} metrics={chat.runMetrics} />}
-            {pending && <div className="cowork-question" role="group" aria-label="助手追问">
+            {pending && <div className="cowork-question" hidden={loading} role="group" aria-label="助手追问">
               <div className="cowork-question-header"><QuestionCircleOutlined aria-hidden="true" /><strong>需要你的回复</strong>
                 <button type="button" className="cowork-icon" aria-expanded={!questionCollapsed}
                   onClick={() => setQuestionCollapsed(!questionCollapsed)}>{questionCollapsed ? "展开" : "收起"}</button>
               </div>
-              {!questionCollapsed && <><p>{pending.prompt}</p>{options.length > 0 && <div className="cowork-artifacts">
-                {[...new Set(options)].map((option) => <button type="button" key={option} onClick={() => submit(option)}>{option}</button>)}
-              </div>}</>}
+              <HumanQuestionForm key={pending.interrupt_id || pending.prompt} question={pending} hidden={questionCollapsed || loading}
+                onSubmit={(answer) => send(answer, { datasourceId, resumeInterruptId: pending.interrupt_id })} />
             </div>}
-            {composer}
+            {(!pending || questionCollapsed || loading) && composer}
           </div>
         </div>
       </div>

@@ -1,10 +1,10 @@
 """Database connection testing and execution based on SQLBot patterns."""
 
-from typing import Any, Dict, List, Optional, Tuple
-from datetime import datetime, date, time, timedelta
-from decimal import Decimal
 import logging
-import base64
+import math
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
+from typing import Any, Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -358,33 +358,22 @@ def check_sql_read(sql: str, db_type: str) -> bool:
         True if SQL is read-only, False otherwise
     """
     try:
-        from sqlglot import parse
         from sqlglot import expressions as exp
+        from sqlglot import parse
 
-        dialect = "mysql" if db_type == "mysql" else None
+        dialect = "mysql" if db_type == "mysql" else "postgres"
 
         statements = parse(sql, dialect=dialect)
 
-        if not statements:
+        if len(statements) != 1 or not isinstance(statements[0], exp.Query):
             return False
-
-        write_types = (
-            exp.Insert, exp.Update, exp.Delete,
-            exp.Create, exp.Drop, exp.Alter,
-            exp.Merge, exp.Copy
-        )
-
-        for stmt in statements:
-            if stmt is None:
-                continue
-            if isinstance(stmt, write_types):
-                return False
-
-        return True
+        return not any(isinstance(node, (
+            exp.DML, exp.DDL, exp.Command, exp.Into, exp.Lock,
+        )) for node in statements[0].walk())
 
     except Exception as e:
-        logger.warning(f"SQL parse check failed: {e}, allowing by default")
-        return True  # Allow if parse fails, let execution handle errors
+        logger.warning("SQL read-only validation failed: %s", type(e).__name__)
+        return False
 
 
 def execute_postgresql_sql(config: Dict[str, Any], sql: str) -> Tuple[bool, str, Any]:
@@ -404,7 +393,11 @@ def execute_postgresql_sql(config: Dict[str, Any], sql: str) -> Tuple[bool, str,
             application_name="awesome-data-sql",
         )
 
+        if config.get("read_only"):
+            conn.set_session(readonly=True)
         cursor = conn.cursor()
+        if config.get("query_timeout_seconds"):
+            cursor.execute("SET LOCAL statement_timeout = %s", (int(config["query_timeout_seconds"]) * 1000,))
         cursor.execute(sql)
 
         # Check if it's a SELECT query
@@ -448,9 +441,16 @@ def execute_mysql_sql(config: Dict[str, Any], sql: str) -> Tuple[bool, str, Any]
             password=config.get("password", ""),
             database=config.get("database", ""),
             connect_timeout=config.get("timeout", 30),
+            **({"read_timeout": int(config["query_timeout_seconds"])}
+               if config.get("query_timeout_seconds") else {}),
         )
 
         cursor = conn.cursor()
+        if config.get("read_only"):
+            cursor.execute("SET TRANSACTION READ ONLY")
+            cursor.execute("START TRANSACTION")
+        if config.get("query_timeout_seconds"):
+            cursor.execute("SET SESSION MAX_EXECUTION_TIME = %s", (int(config["query_timeout_seconds"]) * 1000,))
         cursor.execute(sql)
 
         # Check if it's a SELECT query
@@ -493,6 +493,13 @@ def convert_value(value: Any, datetime_format: str = 'space') -> Any:
     """
     if value is None:
         return None
+    if isinstance(value, (list, tuple)):
+        return [convert_value(item, datetime_format) for item in value]
+    if isinstance(value, dict):
+        return {key: convert_value(item, datetime_format) for key, item in value.items()}
+    if isinstance(value, (float, Decimal)):
+        numeric = float(value)
+        return numeric if math.isfinite(numeric) else None
 
     # Handle bytes type (including BIT fields)
     if isinstance(value, bytes):
@@ -503,7 +510,7 @@ def convert_value(value: Any, datetime_format: str = 'space') -> Any:
                     return bool(int_val)
                 else:
                     return int_val
-            except:
+            except (ValueError, OverflowError):
                 pass
 
         try:
@@ -519,9 +526,6 @@ def convert_value(value: Any, datetime_format: str = 'space') -> Any:
 
     elif isinstance(value, timedelta):
         return str(value)
-
-    elif isinstance(value, Decimal):
-        return float(value)
 
     elif isinstance(value, datetime):
         if datetime_format == 'iso':
@@ -669,7 +673,7 @@ def get_mysql_schema(config: Dict[str, Any]) -> list:
         tables = []
         for table_name in table_names:
             # Get table comment
-            cursor.execute(f"SELECT TABLE_COMMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s", (table_name,))
+            cursor.execute("SELECT TABLE_COMMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s", (table_name,))
             result = cursor.fetchone()
             table_comment = result[0] if result else ""
 

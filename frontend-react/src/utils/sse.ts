@@ -8,9 +8,10 @@ export interface SSEStreamOptions {
   body?: unknown;
   headers?: Record<string, string>;
   signal?: AbortSignal;
-  onEvent: (evt: SSEEvent) => void;
+  onEvent: (evt: SSEEvent) => void | Promise<void>;
   onError?: (err: unknown) => void;
-  onDone?: () => void;
+  onDone?: () => void | Promise<void>;
+  requireDoneEvent?: boolean;
 }
 
 function safeParse(raw: string): unknown {
@@ -24,7 +25,9 @@ function safeParse(raw: string): unknown {
 
 export async function streamSSE(opts: SSEStreamOptions): Promise<{ aborted: boolean }> {
   const { url, body, headers, signal, onEvent, onError, onDone } = opts;
-  const emitChunk = (chunk: string) => {
+  let terminalReceived = false;
+  const emitChunk = async (chunk: string) => {
+    if (signal?.aborted) return;
     if (!chunk.trim()) return;
     let event = "message";
     const dataLines: string[] = [];
@@ -34,7 +37,8 @@ export async function streamSSE(opts: SSEStreamOptions): Promise<{ aborted: bool
       else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
     }
     if (dataLines.length === 0) return;
-    onEvent({ event, data: safeParse(dataLines.join("\n")) });
+    if (event === "done") terminalReceived = true;
+    await onEvent({ event, data: safeParse(dataLines.join("\n")) });
   };
 
   try {
@@ -60,20 +64,25 @@ export async function streamSSE(opts: SSEStreamOptions): Promise<{ aborted: bool
 
     while (true) {
       const { value, done } = await reader.read();
+      if (signal?.aborted) return { aborted: true };
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
 
       const parts = buffer.split(/\r?\n\r?\n/);
       buffer = parts.pop() ?? "";
       for (const part of parts) {
-        emitChunk(part);
+        await emitChunk(part);
       }
     }
     // Flush any remaining SSE frame in buffer.
+    buffer += decoder.decode();
     if (buffer.trim()) {
-      emitChunk(buffer);
+      await emitChunk(buffer);
     }
-    onDone?.();
+    if (opts.requireDoneEvent && !terminalReceived) {
+      throw new Error("连接提前结束，本轮尚未确认完成，请重试。");
+    }
+    await onDone?.();
     return { aborted: false };
   } catch (err) {
     if ((err as { name?: string })?.name === "AbortError") {

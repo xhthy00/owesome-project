@@ -1,9 +1,12 @@
 import { getDate } from '@/utils/utils'
+import { humanQuestionText, type HumanQuestionText } from '@/utils/humanQuestions'
 
-export interface ExecResult {
+export interface ExecResult extends HumanQuestionText {
   columns?: string[]
   rows?: any[][]
   row_count?: number
+  clarify?: boolean
+  interrupt_id?: string
 }
 
 export interface ReasoningStep {
@@ -114,12 +117,14 @@ export class ChatRecord {
     this.plans = Array.isArray(data.plans) ? data.plans : undefined
     this.sub_task_agents = Array.isArray(data.sub_task_agents) ? data.sub_task_agents : undefined
     this.plan_states = Array.isArray(data.plan_states) ? data.plan_states : undefined
-    this.summary = data.summary || undefined
+    this.summary = this.exec_result?.clarify
+      ? humanQuestionText({ ...this.exec_result, prompt: this.exec_result.prompt || data.summary })
+      : data.summary || undefined
     this.tool_calls = Array.isArray(data.tool_calls) ? data.tool_calls : undefined
-    this.reports = Array.isArray(data.reports) ? data.reports : this._deriveReportsFromToolCalls(this.tool_calls)
+    this.reports = Array.isArray(data.reports) ? data.reports : ChatRecord._deriveReportsFromToolCalls(this.tool_calls)
   }
 
-  private _deriveReportsFromToolCalls(toolCalls?: ToolCallRecord[]): ReportPayload[] | undefined {
+  private static _deriveReportsFromToolCalls(toolCalls?: ToolCallRecord[]): ReportPayload[] | undefined {
     if (!Array.isArray(toolCalls) || !toolCalls.length) return undefined
     const reports: ReportPayload[] = []
     for (const call of toolCalls) {

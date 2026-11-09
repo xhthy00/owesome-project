@@ -96,6 +96,13 @@ Each top-level module under `src/` is a feature package exposing `api/`, `crud/`
 ### Chat runtime
 `chat-stream`, `generate-sql`, and `execute-sql` use DeepAgents and DataSemantic. PostgreSQL checkpoints store thread state. When DeepAgents requests clarification, clients send the returned interrupt ID with the next chat request.
 
+Business questions, including simple queries, must pass `question_assessment.py` before analysis. Native `before_model` hooks allow context discovery or route to `ask_human` and its original interrupt/resume flow. Do not silently skip invalid reviews or treat candidate discovery as business evidence. Review calls share usage and budgets with the main model; see `docs/question-assessment.md`.
+
+Conversation context follows my-cowork: append new user messages to the full checkpoint history,
+use official DeepAgents compaction and StateBackend archives, and report root-model context usage
+separately from cumulative tokens. Authorization/publication changes invalidate stored context.
+See `docs/mycowork-context-alignment.md` for the implementation mapping and migration behavior.
+
 ### Router registration
 All routers are centralized in `common/router.py::register_routers()`. Each feature module exposes a `router` (e.g. `system.api.system.router`), imported there and registered under `/api/v1`. **Never** call `app.include_router` directly in feature modules.
 

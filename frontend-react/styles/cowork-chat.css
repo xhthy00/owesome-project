@@ -31,7 +31,7 @@
   --cowork-action: #1676bc;
   --cowork-brand-ink: #87c9f7;
   --cowork-success: #8bd7b6;
-  --cowork-danger: #bb2b43;
+  --cowork-danger: #ff9bab;
   --cowork-shadow: 0 6px 28px rgba(0, 0, 0, .25);
 }
 .cowork-main { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; flex-direction: column; }
@@ -138,9 +138,35 @@
 .cowork-live-label { flex: 1; min-width: 0; }
 .cowork-live-label > * { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cowork-live time { flex: none; white-space: nowrap; font-size: 11px; font-variant-numeric: tabular-nums; }
-.cowork-question { max-height: min(36vh, 240px); overflow-y: auto; margin-bottom: 8px; padding: 4px 12px 8px; font-size: 14px; }
+.cowork-question { max-height: min(56vh, 480px); overflow-y: auto; margin-bottom: 8px; padding: 4px 12px 8px; font-size: 14px; }
 .cowork-question-header button { margin-left: auto; }
 .cowork-question p { margin: 2px 0 4px; white-space: pre-wrap; }
+.cowork-human-form { padding: 4px 0; }
+.cowork-human-form[hidden] { display: none; }
+.cowork-human-intro { color: var(--cowork-muted); overflow-wrap: anywhere; }
+.cowork-human-form fieldset { min-width: 0; margin: 12px 0; padding: 0; border: 0; }
+.cowork-human-form legend { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; margin-bottom: 8px; padding: 0; color: var(--cowork-text); font-weight: 600; overflow-wrap: anywhere; }
+.cowork-human-required { color: var(--cowork-muted); font-size: 12px; font-weight: 400; }
+.cowork-human-options { display: grid; gap: 8px; }
+.cowork-human-options label { display: flex; min-height: 44px; align-items: center; gap: 10px; padding: 8px 12px; border: 1px solid var(--cowork-border); border-radius: 8px; cursor: pointer; overflow-wrap: anywhere; }
+.cowork-human-options label:has(:checked) { border-color: var(--cowork-action); background: var(--cowork-soft); }
+.cowork-human-options label:hover { background: var(--cowork-soft); }
+.cowork-human-options input { flex: none; width: 16px; height: 16px; accent-color: var(--cowork-action); }
+.cowork-human-form textarea { display: block; width: 100%; box-sizing: border-box; min-height: 80px; max-height: 180px; margin-top: 8px; resize: vertical; border: 1px solid var(--cowork-border); border-radius: 8px; padding: 10px 12px; background: var(--cowork-card); color: var(--cowork-text); font: inherit; }
+.cowork-human-form textarea::placeholder { color: var(--cowork-muted); }
+.cowork-human-form textarea:focus-visible, .cowork-human-options input:focus-visible { outline: 2px solid var(--cowork-action); outline-offset: 2px; }
+.cowork-human-form textarea[aria-invalid="true"] { border-color: var(--cowork-danger); }
+.cowork-human-actions { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; }
+.cowork-human-actions > span { color: var(--cowork-muted); font-size: 12px; }
+.cowork-human-actions > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.cowork-human-actions button { min-height: 40px; border: 1px solid var(--cowork-border); border-radius: 8px; padding: 8px 12px; background: var(--cowork-card); color: var(--cowork-text); font: inherit; cursor: pointer; }
+.cowork-human-actions button:hover:not(:disabled) { background: var(--cowork-soft); }
+.cowork-human-actions button.cowork-human-submit { border-color: var(--cowork-action); background: var(--cowork-action); color: white; }
+.cowork-human-actions button:disabled { opacity: .5; cursor: not-allowed; }
+.cowork-human-error { color: var(--cowork-danger); }
+.cowork-human-summary { padding: 10px 12px; border: 1px solid var(--cowork-border); border-radius: 10px; background: var(--cowork-card); font-size: 14px; }
+.cowork-human-summary summary { cursor: pointer; color: var(--cowork-muted); }
+.cowork-human-summary p { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .cowork-preview { display: flex; width: min(48%, 680px); min-width: 360px; flex-direction: column; border-left: 1px solid var(--cowork-border); background: var(--cowork-card); }
 .cowork-preview-header { border-bottom: 1px solid var(--cowork-border); }
 .cowork-preview-body { flex: 1; min-height: 0; overflow: auto; padding: 12px; }

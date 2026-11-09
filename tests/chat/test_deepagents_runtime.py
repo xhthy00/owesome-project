@@ -8,7 +8,7 @@ from deepagents import create_deep_agent
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.messages.utils import count_tokens_approximately
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
@@ -16,6 +16,7 @@ from langgraph.types import Command
 from src.chat.schemas import ChatRequest
 from src.chat.service import deepagents_runtime, semantic_query
 from src.chat.service.deepagents_runtime import ask_human
+from src.chat.service.question_assessment import QuestionAssessment
 from src.common.core.config import Settings
 
 _RAW_MINIMAX_CALL = (
@@ -28,6 +29,168 @@ _RAW_MINIMAX_CALL = (
 class ToolCallingModel(FakeMessagesListChatModel):
     def bind_tools(self, tools, **kwargs):
         return self
+
+
+async def assessment_ready(**_kwargs):
+    """Execution tests start after review; dedicated assessment tests use the real reviewer."""
+    return QuestionAssessment(decision="ready", reason="测试前置：分析条件已评估。")
+
+
+@pytest.fixture(autouse=True)
+def mock_context_authorization(monkeypatch):
+    # Runtime tests exercise checkpoint behavior without the host permission DB.
+    monkeypatch.setattr(deepagents_runtime, "authorization_fingerprint", lambda *_a: "authorized")
+    monkeypatch.setattr(deepagents_runtime, "load_conversation_history", lambda *_a: [])
+    monkeypatch.setattr(deepagents_runtime, "review_question", assessment_ready)
+
+
+@pytest.mark.parametrize("change", [None, "authorization", "publication"])
+def test_followups_keep_full_history_inside_current_context_boundary(monkeypatch, change):
+    _query_budget_mocks(monkeypatch, [], None)
+    monkeypatch.setattr(deepagents_runtime, "_thread_lock", lambda *_a: nullcontext())
+    seen = []
+    bootstrap_calls = []
+
+    def bootstrap(*_args):
+        bootstrap_calls.append(True)
+        return [HumanMessage(content="历史问题"), AIMessage(content="历史结论")]
+
+    monkeypatch.setattr(deepagents_runtime, "load_conversation_history", bootstrap)
+    publication = {"bundle_id": "edu", "manifest_hash": "a" * 64}
+    monkeypatch.setattr(semantic_query.SemanticQuery, "context", lambda _self: publication.copy())
+
+    class RecordingModel(ToolCallingModel):
+        def _generate(self, messages, *args, **kwargs):
+            seen.append(list(messages))
+            return super()._generate(messages, *args, **kwargs)
+
+    def query(id_):
+        return AIMessage(content="", tool_calls=[{
+            "name": "query_semantic", "args": {"sql": "SELECT value FROM exam_facts"}, "id": id_,
+        }])
+
+    async def emit(*_a):
+        pass
+
+    async def persist(**_kw):
+        return 1
+
+    monkeypatch.setattr(deepagents_runtime, "persist_turn", persist)
+    first_model = RecordingModel(responses=[query("first-query"), AIMessage(content="期中考试结果为 1")])
+    second_model = RecordingModel(responses=[query("second-query"), AIMessage(content="本轮结果为 1")])
+
+    async def run():
+        saver = InMemorySaver()
+        args = dict(current_user_id=7, workspace_oid=1, emit=emit, checkpointer=saver)
+        await deepagents_runtime.run_chat_stream(
+            request=ChatRequest(datasource_id=4, conversation_id=9, question="期中考试人数"),
+            model=first_model, **args,
+        )
+        assert any(m.content == "历史结论" for m in seen[0])
+        seen.clear()
+        if change == "authorization":
+            monkeypatch.setattr(deepagents_runtime, "authorization_fingerprint", lambda *_a: "changed")
+        if change == "publication":
+            publication["manifest_hash"] = "b" * 64
+        # A fresh graph/model instance reads the persisted conversation checkpoint.
+        await deepagents_runtime.run_chat_stream(
+            request=ChatRequest(datasource_id=4, conversation_id=9, question="及格人数呢"),
+            model=second_model, **args,
+        )
+
+    asyncio.run(run())
+    assert len(bootstrap_calls) == 1
+    messages = seen[0]
+    assert messages[-1].content == "及格人数呢"
+    assert any(isinstance(m, ToolMessage) and m.tool_call_id == "first-query" for m in messages) is (change is None)
+    assert any(isinstance(m, AIMessage) and m.content == "期中考试结果为 1" for m in messages) is (change is None)
+    assert any(isinstance(m, HumanMessage) and m.content == "期中考试人数" for m in messages) is (change is None)
+
+
+def test_native_compaction_preserves_archive_and_hides_internal_summary(monkeypatch):
+    import deepagents.graph as graph_module
+    from deepagents.middleware.summarization import SummarizationMiddleware
+
+    _query_budget_mocks(monkeypatch, [], None)
+    monkeypatch.setattr(deepagents_runtime, "_thread_lock", lambda *_a: nullcontext())
+    internal = "内部上下文摘要：已确认期中考试"
+    summary_calls = []
+
+    class SummaryModel(ToolCallingModel):
+        def _generate(self, messages, *args, **kwargs):
+            summary_calls.append(messages)
+            return super()._generate(messages, *args, **kwargs)
+
+    summary_model = SummaryModel(responses=[AIMessage(content=internal)])
+    monkeypatch.setattr(graph_module, "create_summarization_middleware", lambda model, backend:
+        SummarizationMiddleware(model=summary_model, backend=backend,
+                                trigger=("messages", 4), keep=("messages", 2)))
+    events, graphs = [], []
+    create = deepagents_runtime.create_deep_agent
+
+    def capture(**kwargs):
+        graph = create(**kwargs)
+        graphs.append(graph)
+        return graph
+
+    monkeypatch.setattr(deepagents_runtime, "create_deep_agent", capture)
+
+    async def emit(event, payload):
+        events.append((event, payload))
+
+    async def persist(**_kw):
+        return 1
+
+    monkeypatch.setattr(deepagents_runtime, "persist_turn", persist)
+
+    async def run():
+        saver = InMemorySaver()
+        for number in (1, 2):
+            model = ToolCallingModel(responses=[AIMessage(content="", tool_calls=[{
+                "name": "query_semantic", "args": {"sql": "SELECT value FROM exam_facts"},
+                "id": f"query-{number}",
+            }]), AIMessage(content=f"本轮结论 {number}")])
+            await deepagents_runtime.run_chat_stream(
+                request=ChatRequest(datasource_id=4, conversation_id=9, question=f"查询人数{number}"),
+                current_user_id=7, workspace_oid=1, emit=emit, checkpointer=saver, model=model,
+            )
+        snapshot = await graphs[-1].aget_state({"configurable": {
+            "thread_id": "awesome:deepagents:v1:1:7:4:9",
+        }})
+        assert any(path.startswith("/conversation_history/") for path in snapshot.values["files"])
+        summary = snapshot.values["_summarization_event"]["summary_message"]
+        assert internal in str(summary.content)
+        archive = next(path for path in snapshot.values["files"] if path.startswith("/conversation_history/"))
+        observed = []
+
+        class ArchiveReader(ToolCallingModel):
+            def _generate(self, messages, *args, **kwargs):
+                observed.extend(m for m in messages if isinstance(m, ToolMessage))
+                return super()._generate(messages, *args, **kwargs)
+
+        def read_call(path, id_):
+            return AIMessage(content="", tool_calls=[{
+                "name": "read_file", "args": {"file_path": path}, "id": id_,
+            }])
+
+        model = ArchiveReader(responses=[
+            read_call("/conversation_history/../../etc/passwd", "blocked"),
+            read_call(archive, "archive"),
+            AIMessage(content="", tool_calls=[{
+                "name": "query_semantic", "args": {"sql": "SELECT value FROM exam_facts"}, "id": "query-3",
+            }]), AIMessage(content="本轮结论 3"),
+        ])
+        await deepagents_runtime.run_chat_stream(
+            request=ChatRequest(datasource_id=4, conversation_id=9, question="查询人数3"),
+            current_user_id=7, workspace_oid=1, emit=emit, checkpointer=saver, model=model,
+        )
+        assert any(m.tool_call_id == "blocked" and m.status == "error" for m in observed)
+        assert any(m.tool_call_id == "archive" and "查询人数" in str(m.content) for m in observed)
+
+    asyncio.run(run())
+    assert summary_calls
+    assert [p["content"] for e, p in events if e == "summary"] == ["本轮结论 1", "本轮结论 2", "本轮结论 3"]
+    assert not any(internal in str(p) for e, p in events if e in {"answer_delta", "reasoning_delta", "step"})
 
 
 def context_call(id_):
@@ -101,7 +264,9 @@ def test_tool_choice_prefers_named_function_when_gateway_supports_it():
     minimax = Model("https://api.minimaxi.com/v1")
     moonshot = Model("https://api.moonshot.cn/v1")
     other = Model("https://llm.example.com/v1")
-    assert deepagents_runtime._tool_choice_for(minimax, "write_todos") == "write_todos"
+    assert deepagents_runtime._tool_choice_for(minimax, "write_todos") == "auto"
+    assert deepagents_runtime._tool_choice_for(Model("https://api.openai.com/v1"), "write_todos") == "write_todos"
+    assert deepagents_runtime._tool_choice_for(Model("https://api.deepseek.com/v1"), "write_todos") == "write_todos"
     assert deepagents_runtime._tool_choice_for(moonshot, "write_todos") == "required"
     assert deepagents_runtime._tool_choice_for(other, "write_todos") == "auto"
 
@@ -512,7 +677,7 @@ def test_deepagent_streams_question_and_resumes_same_thread():
             )
         ]
         pending = events[-1]["__interrupt__"][0]
-        assert pending.value == {"kind": "ask_human", "question": "请选择考试"}
+        assert pending.value == {"kind": "human", "question": "请选择考试", "options": [], "fields": []}
 
         resumed = await agent.ainvoke(Command(resume={pending.id: "期中考试"}), config)
         answer = next(msg for msg in resumed["messages"] if isinstance(msg, ToolMessage))
@@ -542,6 +707,7 @@ def _query_turn(responses):
 
 
 def _install_query_mocks(monkeypatch):
+    monkeypatch.setattr(deepagents_runtime, "review_question", assessment_ready)
     async def persist(**_record):
         return 0
 
@@ -563,6 +729,113 @@ def _install_query_mocks(monkeypatch):
     monkeypatch.setattr(deepagents_runtime, "persist_turn", persist)
     settings = Settings(_env_file=None, chat_max_steps=None, chat_max_total_tokens=None)
     monkeypatch.setattr(deepagents_runtime, "get_settings", lambda: settings)
+
+
+@pytest.mark.parametrize("extra_tool", ["describe_semantic_model", "query_semantic"])
+def test_valid_plan_survives_batched_followup_tools(monkeypatch, extra_tool):
+    """会话 1611：模型正确发布计划，但同时夹带了下一步工具调用。"""
+    _install_query_mocks(monkeypatch)
+    described, queried, events = [], [], []
+    monkeypatch.setattr(semantic_query.SemanticQuery, "describe_many", lambda _self, names:
+                        described.append(names) or {"descriptions": []})
+
+    def run_query(_self, sql, *, execute):
+        queried.append(sql)
+        return {
+            "sql": sql, "tables": ["exam_facts"], "columns": ["value"], "rows": [[12]],
+            "bundle_id": "edu", "manifest_hash": "a" * 64,
+        }
+
+    monkeypatch.setattr(semantic_query.SemanticQuery, "run", run_query)
+    extra_args = {"names": ["exam_facts"]} if extra_tool == "describe_semantic_model" else {
+        "sql": "SELECT premature_value FROM exam_facts",
+    }
+    initial_plan = _planning_call()
+    initial_plan.tool_calls.append({
+        "name": extra_tool, "args": extra_args, "id": "premature", "type": "tool_call",
+    })
+    seen = []
+
+    class PlanningModel(ToolCallingModel):
+        def _generate(self, messages, *args, **kwargs):
+            seen.append(list(messages))
+            return super()._generate(messages, *args, **kwargs)
+
+    model = PlanningModel(responses=[
+        initial_plan,
+        AIMessage(content="", tool_calls=[{
+            "name": "describe_semantic_model", "args": {"names": ["exam_facts"]}, "id": "metadata",
+        }]),
+        AIMessage(content="", tool_calls=[{
+            "name": "query_semantic", "args": {"sql": "SELECT value FROM exam_facts"}, "id": "query",
+        }]),
+        AIMessage(content="本轮查询人数为 12。"),
+    ])
+
+    async def emit(event, payload):
+        events.append((event, payload))
+
+    asyncio.run(deepagents_runtime.run_chat_stream(
+        request=ChatRequest(datasource_id=4, question="对比两次考试同一批学生的达线情况"),
+        current_user_id=7, workspace_oid=1, emit=emit, checkpointer=InMemorySaver(), model=model,
+    ))
+    assert ("summary", {"content": "本轮查询人数为 12。"}) in events
+    assert described == [["exam_facts"]]
+    assert queried == ["SELECT value FROM exam_facts"]
+    assert any(event == "task_plan" and payload["stages"] for event, payload in events)
+    results = [m for m in seen[1] if isinstance(m, ToolMessage)]
+    assert any(m.tool_call_id == "initial-plan" and m.status == "success" for m in results)
+    assert any(m.tool_call_id == "premature" and m.status == "error" for m in results)
+
+
+@pytest.mark.parametrize("recovers", [True, False])
+def test_missing_plan_gets_feedback_and_never_runs_premature_queries(monkeypatch, recovers):
+    _install_query_mocks(monkeypatch)
+    queried, seen, events = [], [], []
+
+    def query(id_):
+        return AIMessage(content="", tool_calls=[{
+            "name": "query_semantic", "id": id_,
+            "args": {"sql": f"SELECT {id_} FROM exam_facts"},
+        }])
+
+    def run_query(_self, sql, *, execute):
+        queried.append(sql)
+        return {"sql": sql, "tables": ["exam_facts"], "columns": ["value"], "rows": [[12]],
+                "bundle_id": "edu", "manifest_hash": "a" * 64}
+
+    monkeypatch.setattr(semantic_query.SemanticQuery, "run", run_query)
+
+    class Model(ToolCallingModel):
+        def _generate(self, messages, *args, **kwargs):
+            seen.append(list(messages))
+            return super()._generate(messages, *args, **kwargs)
+
+    responses = [query("premature1")]
+    if recovers:
+        responses += [_planning_call(), query("approved"), AIMessage(content="查询人数为 12。")]
+    else:
+        responses += [query("premature2"), query("premature3")]
+
+    async def emit(event, payload):
+        events.append((event, payload))
+
+    asyncio.run(deepagents_runtime.run_chat_stream(
+        request=ChatRequest(datasource_id=4, question="对比两次考试同一批学生的达线情况"),
+        current_user_id=7, workspace_oid=1, emit=emit,
+        checkpointer=InMemorySaver(), model=Model(responses=responses),
+    ))
+    assert any(isinstance(m, ToolMessage) and m.tool_call_id == "premature1"
+               and m.status == "error" for m in seen[1])
+    assert isinstance(seen[1][-1], SystemMessage)
+    assert len([m for m in seen[1] if isinstance(m, HumanMessage)]) == 1
+    if recovers:
+        assert queried == ["SELECT approved FROM exam_facts"]
+        assert ("summary", {"content": "查询人数为 12。"}) in events
+    else:
+        assert not queried
+        assert len(seen) == 3
+        assert ("summary", {"content": deepagents_runtime._PLAN_FAILURE}) in events
 
 
 def test_final_answer_streams_as_answer_deltas(monkeypatch):
@@ -858,6 +1131,7 @@ def test_chat_sse_resumes_deepagents_across_requests(monkeypatch, max_steps):
         "chart_semantic_result",
         "ask_human",
         "write_todos",
+        "read_file",
     }
     if max_steps is None:
         assert followup.text.count("event: task_plan") == 2
@@ -1197,6 +1471,8 @@ def test_semantic_plan_uses_original_permission_functions(monkeypatch):
         assert kwargs["config"]["host"] == "edu-db"
         assert kwargs["config"]["port"] == 5544
         assert kwargs["config"]["database"] == "exam_data"
+        assert kwargs["config"]["read_only"] is True
+        assert kwargs["config"]["query_timeout_seconds"] == 60
         trace.append("execute")
         return type(
             "Outcome",

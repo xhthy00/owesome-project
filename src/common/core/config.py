@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     # 同一子任务内的语义查询次数上限：达到后收敛作答，避免反复补查拖长整轮。
     # 留空则不限制。
     chat_max_queries_per_stage: int | None = Field(default=12, ge=1)
+    chat_query_timeout_seconds: int = Field(default=60, ge=1)
     # 思考模式：``disabled`` / ``adaptive``。仅部分模型支持。留空不发送该参数。
     llm_chat_thinking: Optional[str] = None
     # 流式回复时向服务商索取 usage 分片（stream_options.include_usage）。

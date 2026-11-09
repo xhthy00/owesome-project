@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 # ============== Conversation Schemas ==============
 
@@ -128,10 +128,24 @@ class ConversationDetailResponse(BaseModel):
 
 class ChatRequest(BaseModel):
     """Chat request schema for SQL generation."""
-    question: str = Field(..., min_length=1, max_length=1000, description="User's natural language question")
-    datasource_id: int = Field(..., description="ID of the datasource to query")
-    conversation_id: Optional[int] = Field(None, description="Conversation ID for context")
-    resume_interrupt_id: Optional[str] = Field(None, max_length=128, description="Pending Ask Human interrupt")
+    question: str = Field(..., min_length=1, max_length=8000, description="Question or human clarification reply")
+    datasource_id: int = Field(..., ge=1, description="ID of the datasource to query")
+    conversation_id: Optional[int] = Field(None, ge=1, description="Conversation ID for context")
+    resume_interrupt_id: Optional[str] = Field(None, min_length=1, max_length=128, description="Pending Ask Human interrupt")
+
+    @model_validator(mode="after")
+    def limit_new_question_length(self):
+        if not self.resume_interrupt_id and len(self.question) > 1000:
+            raise ValueError("新提问最多 1000 字，澄清回复最多 8000 字")
+        return self
+
+    @field_validator("question")
+    @classmethod
+    def nonblank_question(cls, value):
+        value = value.strip()
+        if not value:
+            raise ValueError("请输入有效的问题")
+        return value
     agent_mode: Literal["agent"] = Field(
         default="agent",
         description="Single-agent DeepAgents chat mode. Legacy values are normalized for old clients.",

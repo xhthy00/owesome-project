@@ -28,7 +28,7 @@
 
 - 自然语言到 SQL 的端到端链路开箱即用
 - 兼容多种 LLM 接入方式（OpenAI/Ollama 等）
-- DeepAgents 提供多轮问数和可恢复的澄清追问
+- DeepAgents 为简单问数与复杂分析统一评估查询条件，并提供多轮问数和可恢复的澄清追问（[机制与开销](docs/question-assessment.md)）
 - 后端与前端分层清晰，便于二次开发与插件化扩展
 
 ## 核心能力
@@ -157,9 +157,9 @@ npm run dev
 uv run uvicorn src.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-> Agentic question 首版使用进程内 `asyncio.Event` 唤醒等待中的 Agent。生产部署必须保持
-> `--workers 1`（或确保同一会话粘滞到同一 worker）；启用多 worker 前需改用 Redis
-> Pub/Sub/Streams 传递 reply/reject 信号。SSE 会每 15 秒发送心跳，问题等待超时为 300 秒。
+> 追问通过 PostgreSQL checkpoint 持久化。客户端提交 `resume_interrupt_id` 恢复原任务，
+> 同一会话通过数据库锁串行推进。SSE 每 15 秒发送心跳；单条问数 SQL 默认最多执行
+> 60 秒，可通过 `CHAT_QUERY_TIMEOUT_SECONDS` 调整。
 
 - 健康检查：`GET http://localhost:8000/health`
 - API 文档：`http://localhost:8000/docs`

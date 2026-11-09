@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -24,6 +25,13 @@ from src.chat.api import chat as chat_api_mod
 from src.chat.api.chat import router as chat_router
 from system.api.auth_deps import get_current_user
 from system.workspace_scope import get_workspace_oid
+
+
+@pytest.fixture(autouse=True)
+def mock_query_scope(monkeypatch):
+    # Keep heartbeat tests independent from DB authorization without invalid IDs.
+    monkeypatch.setattr(chat_api_mod, "_assert_query_scope", lambda *_a: None)
+    monkeypatch.setattr(chat_api_mod, "_edu_out_of_scope_message", lambda *_a, **_kw: None)
 
 
 def _build_app() -> FastAPI:
@@ -81,10 +89,7 @@ def test_sse_keepalive_emitted_during_silence(monkeypatch):
 
     body = _stream_body(
         TestClient(_build_app()),
-        # datasource_id=0 让 chat_stream 跳过 assert_datasource_accessible（chat.py
-        # 里 `if request.datasource_id:` 为假），测试无需真实 DB / 数据源即可跑；
-        # 桩 agent 不消费 datasource_id。缺省 agent 分支。
-        {"question": "hi", "datasource_id": 0},
+        {"question": "hi", "datasource_id": 1},
     )
 
     assert ": keepalive" in body, f"未见心跳帧，body={body!r}"
@@ -99,7 +104,7 @@ def test_sse_keepalive_does_not_drop_real_events(monkeypatch):
 
     body = _stream_body(
         TestClient(_build_app()),
-        {"question": "hi", "datasource_id": 0},
+        {"question": "hi", "datasource_id": 1},
     )
 
     assert "event: final_answer" in body and "first" in body
@@ -125,7 +130,7 @@ def test_sse_keepalive_silent_when_events_flow(monkeypatch):
 
     body = _stream_body(
         TestClient(_build_app()),
-        {"question": "hi", "datasource_id": 0},
+        {"question": "hi", "datasource_id": 1},
     )
 
     assert "event: final_answer" in body

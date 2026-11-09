@@ -1,6 +1,7 @@
 import { getApiBaseUrl, apiRequest } from "@/api/client";
 import { getAccessToken } from "@/auth/session";
 import { streamSSE } from "@/utils/sse";
+import type { ContextUsage } from "@/utils/runMetrics";
 
 /** 与 `pages/_app.tsx` / `api/client.ts` 中工作空间键一致 */
 const WORKSPACE_OID_STORAGE_KEY = "frontend_react_workspace_oid";
@@ -53,6 +54,7 @@ export type Conversation = {
 export type ConversationRecord = {
   id: number;
   question: string;
+  turn_type?: string;
   create_time?: string;
   finish_time?: string;
   reasoning?: string;
@@ -85,7 +87,7 @@ export type ConversationRecord = {
     };
   }>;
   sql?: string;
-  exec_result?: (ClarifyPayload & { columns?: string[]; rows?: unknown[][]; row_count?: number; clarify?: boolean }) | null;
+  exec_result?: (ClarifyPayload & { columns?: string[]; rows?: unknown[][]; row_count?: number; clarify?: boolean; context_usage?: ContextUsage; human_reply_to?: string; human_answer?: string; human_cancelled_to?: string }) | null;
   chart_type?: string;
   chart_config?: { x?: string; y?: string[]; title?: string };
   reports?: Array<{
@@ -126,9 +128,21 @@ export type ChatStreamPayload = {
   resume_interrupt_id?: string;
 };
 
+export type HumanQuestionField = {
+  label: string;
+  kind: "single" | "multiple" | "text";
+  options?: string[];
+  required?: boolean;
+  placeholder?: string;
+};
+
 export type ClarifyPayload = {
   interrupt_id?: string;
+  question_id?: string;
   prompt?: string;
+  fields?: HumanQuestionField[];
+  status?: "pending" | "answered" | "cancelled";
+  answer?: string;
   missing?: string[];
   options?: Record<string, string[]> | string[];
   filled?: Record<string, string>;
@@ -182,14 +196,15 @@ type StreamHandlers = {
   /** 作废当前已展示的草稿（该轮其实是工具调用，不是最终结论） */
   onAnswerDiscard?: () => void;
   onSummary?: (content: string) => void;
-  onUsage?: (payload: {
+  onUsage?: (payload: ContextUsage & {
     prompt_tokens?: number;
     completion_tokens?: number;
     total_tokens?: number;
     delta_total?: number;
   }) => void;
-  onError?: (msg: string) => void;
-  onDone?: (recordId: number) => void;
+  onError?: (msg: string, metadata?: { preserveInterrupt?: boolean }) => void;
+  onHumanResolved?: (payload: { interrupt_id: string; status: "answered" | "cancelled"; answer?: string }) => void;
+  onDone?: (recordId: number) => void | Promise<void>;
   onClarify?: (payload: ClarifyPayload) => void;
 };
 
@@ -263,7 +278,9 @@ export async function sendMessageStream(
     body: payload,
     headers: chatStreamHeaders(),
     signal,
-    onEvent: (evt) => {
+    requireDoneEvent: true,
+    onEvent: async (evt) => {
+      if (signal?.aborted) return;
       const data = (evt.data ?? {}) as Record<string, unknown>;
       switch (evt.event) {
         case "step":
@@ -369,13 +386,21 @@ export async function sendMessageStream(
             completion_tokens:
               typeof data.completion_tokens === "number" ? data.completion_tokens : undefined,
             total_tokens: typeof data.total_tokens === "number" ? data.total_tokens : undefined,
-            delta_total: typeof data.delta_total === "number" ? data.delta_total : undefined
+            delta_total: typeof data.delta_total === "number" ? data.delta_total : undefined,
+            context_tokens: typeof data.context_tokens === "number" ? data.context_tokens : undefined,
+            context_limit: typeof data.context_limit === "number" ? data.context_limit : null,
+            context_model: typeof data.context_model === "string" ? data.context_model : undefined,
+            context_key: typeof data.context_key === "string" ? data.context_key : undefined,
+            context_estimated: typeof data.context_estimated === "boolean" ? data.context_estimated : undefined
           });
           break;
         case "clarify":
           handlers.onClarify?.({
             ...(typeof data.interrupt_id === "string" ? { interrupt_id: data.interrupt_id } : {}),
+            question_id: typeof data.question_id === "string" ? data.question_id : undefined,
             prompt: (data.prompt as string) ?? "",
+            fields: Array.isArray(data.fields) ? data.fields as HumanQuestionField[] : [],
+            status: "pending",
             missing: Array.isArray(data.missing) ? (data.missing as string[]) : [],
             options: (data.options as ClarifyPayload["options"]) ?? {},
             filled: (data.filled as Record<string, string>) ?? {},
@@ -383,11 +408,21 @@ export async function sendMessageStream(
             report_type: (data.report_type as string) ?? null
           });
           break;
+        case "human.answered":
+        case "human.cancelled":
+          if (typeof data.interrupt_id === "string") handlers.onHumanResolved?.({
+            interrupt_id: data.interrupt_id,
+            status: evt.event === "human.answered" ? "answered" : "cancelled",
+            answer: typeof data.answer === "string" ? data.answer : undefined
+          });
+          break;
         case "error":
-          handlers.onError?.((data.error as string) ?? "Unknown error");
+          handlers.onError?.((data.error as string) ?? "Unknown error", {
+            preserveInterrupt: data.preserve_interrupt === true
+          });
           break;
         case "done":
-          handlers.onDone?.(Number(data.record_id ?? 0));
+          await handlers.onDone?.(Number(data.record_id ?? 0));
           break;
       }
     },

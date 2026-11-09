@@ -122,6 +122,8 @@ async def _run(
         elapsed_ms = int((now - event_t0["t"]) * 1000)
         event_t0["t"] = now
         print(_fmt(event, _render_payload(event, data, full), elapsed_ms), flush=True)
+        if event == "error" or (event == "step" and data.get("name") == "deepagents" and data.get("status") == "error"):
+            terminated_ok["failed"] = True
         if event == "summary" and data.get("content"):
             terminated_ok["ok"] = True
 
@@ -137,7 +139,7 @@ async def _run(
             workspace_oid=1,
             emit=emit,
             checkpointer=InMemorySaver(),
-            recursion_limit=2 * max_rounds + 1 if max_rounds is not None else 25,
+            max_model_calls=max_rounds,
         )
     except KeyboardInterrupt:
         print("\n[interrupted]", file=sys.stderr)
@@ -149,7 +151,7 @@ async def _run(
     total = time.time() - wall_t0
     print("-" * 80)
     print(f"total elapsed: {total:.2f}s  terminated_ok={terminated_ok['ok']}")
-    return 0 if terminated_ok["ok"] else 1
+    return 0 if terminated_ok["ok"] and not terminated_ok.get("failed") else 1
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -163,6 +165,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-rounds", type=int, default=None, help="Limit model and tool rounds")
     parser.add_argument("--full", action="store_true", help="Do not truncate content/thought")
     args = parser.parse_args(argv)
+    if args.max_rounds is not None and args.max_rounds < 1:
+        parser.error("--max-rounds 必须大于 0")
 
     question = " ".join(args.question).strip()
     if not question:
