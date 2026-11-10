@@ -14,11 +14,11 @@ body,
 
 body {
   margin: 0;
-  font-family: "Josefin Sans", "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 14px;
   font-weight: 400;
   line-height: 1.5;
-  --antd-primary-color: #0069fe;
+  --antd-primary-color: #2563eb;
   background: var(--oc-bg-base);
   color: var(--oc-text-base, var(--oc-text));
   -webkit-font-smoothing: antialiased;
@@ -45,7 +45,7 @@ body {
 }
 
 .dbgpt-ui-font {
-  font-family: "Josefin Sans", "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
 .dbgpt-title-font {
@@ -78,7 +78,7 @@ body {
 .ant-input-number,
 .ant-select,
 .ant-menu {
-  font-family: "Josefin Sans", "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
 #home-container .ant-tabs-tab-active {

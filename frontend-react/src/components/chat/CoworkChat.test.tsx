@@ -20,17 +20,76 @@ function chatState(overrides: Partial<Parameters<typeof CoworkChat>[0]["chat"]> 
   };
 }
 
-it("shows the latest context separately from cumulative tokens and labels unknown capacity", () => {
+it("places the live task toolbar in the shell slot without duplicating the heading", () => {
+  const chat = chatState({
+    messages: [{ id: "q", runId: "r", role: "user", content: "分析成绩" }],
+    conversationTitle: "班级横向对比",
+  });
+  const view = (title: string) => <><div id="chat-header-slot" data-testid="shell-toolbar" /><CoworkChat chat={{ ...chat, conversationTitle: title }} /></>;
+  const { rerender } = render(view("班级横向对比"));
+  expect(within(screen.getByTestId("shell-toolbar")).getByRole("heading", { name: "班级横向对比" })).toBeVisible();
+  expect(screen.getAllByRole("heading", { name: "班级横向对比" })).toHaveLength(1);
+  rerender(view("最新分析结果"));
+  expect(within(screen.getByTestId("shell-toolbar")).getByRole("heading", { name: "最新分析结果" })).toBeVisible();
+});
+
+it("keeps usage out of the composer until requested and labels unknown capacity", async () => {
   const state = chatState({
     messages: [{ id: "q", runId: "r", role: "user", content: "继续" }],
     runMetrics: { ...EMPTY_RUN_METRICS, totalTokens: 50000, tokenKnown: true,
       contextUsage: { context_tokens: 2000, context_limit: 100000, context_estimated: false } }
   });
   const { rerender } = render(<CoworkChat chat={state} />);
-  expect(screen.getByText("上下文 2000 / 10万（2%）")).toBeVisible();
+  expect(screen.queryByText("上下文 2000 / 10万（2%）")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "查看用量与上下文" }));
+  await screen.findByText("累计用量 5万 Token");
+  await waitFor(() => expect(screen.getByText("上下文 2000 / 10万（2%）")).toBeVisible());
   rerender(<CoworkChat chat={{ ...state, runMetrics: { ...state.runMetrics,
     contextUsage: { context_tokens: 2000, context_limit: null, context_estimated: true } } }} />);
-  expect(screen.getByText("上下文 ≈2000 / 容量未知")).toBeVisible();
+  await waitFor(() => expect(screen.getByText("上下文 ≈2000 / 容量未知")).toBeVisible());
+});
+
+it("folds streamed thinking when the run settles and lets the reader reopen it", () => {
+  const chat = chatState({
+    messages: [
+      { id: "q", runId: "r", role: "user", content: "分析成绩" },
+      { id: "a", runId: "r", role: "assistant", content: "数学均分为 82.5 分。" },
+    ],
+    loading: true, thinkByRunId: { r: "先核对考试口径。" },
+  });
+  const { rerender } = render(<CoworkChat chat={chat} />);
+  expect(screen.getByText("先核对考试口径。")).toBeVisible();
+  rerender(<CoworkChat chat={{ ...chat, loading: false }} />);
+  expect(screen.queryByText("先核对考试口径。")).not.toBeInTheDocument();
+  expect(screen.getByText("数学均分为 82.5 分。")).toBeVisible();
+  fireEvent.click(screen.getByRole("button", { name: "思考过程" }));
+  expect(screen.getByText("先核对考试口径。")).toBeVisible();
+});
+
+it("collapses only fully completed task panels and allows reopening them", () => {
+  const breakpoint = window.matchMedia;
+  const media = vi.spyOn(window, "matchMedia").mockImplementation((query) => ({
+    ...breakpoint(query), matches: query === "(min-width: 992px)",
+  }));
+  const chat = chatState({
+    messages: [{ id: "q", runId: "r", role: "user", content: "分析成绩" }], loading: true,
+    taskPlanByRunId: { r: [{ content: "生成分析结论", status: "in_progress" }] },
+  });
+  try {
+    const { rerender } = render(<CoworkChat chat={chat} />);
+    expect(screen.getByRole("complementary", { name: "任务进度" })).toBeVisible();
+    rerender(<CoworkChat chat={{ ...chat, loading: false,
+      taskPlanByRunId: { r: [{ content: "生成分析结论", status: "completed" }] } }} />);
+    expect(screen.queryByRole("complementary", { name: "任务进度" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "展开任务进度" }));
+    expect(screen.getByRole("complementary", { name: "任务进度" })).toBeVisible();
+    expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+    fireEvent.click(screen.getByRole("button", { name: "折叠任务进度" }));
+    rerender(<CoworkChat chat={{ ...chat, loading: true,
+      messages: [...chat.messages, { id: "q2", runId: "next", role: "user", content: "继续分析" }],
+      taskPlanByRunId: { next: [{ content: "读取数据", status: "in_progress" }] } }} />);
+    expect(screen.getByRole("complementary", { name: "任务进度" })).toBeVisible();
+  } finally { media.mockRestore(); }
 });
 
 it("keeps previously saved tool protocol out of the answer and execution log", () => {

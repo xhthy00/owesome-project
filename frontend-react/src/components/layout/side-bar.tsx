@@ -273,9 +273,14 @@ export default function SideBar() {
     if (resourceActive) setResourceExpanded(true);
   }, [resourceActive]);
 
+  const startTask = () => {
+    window.dispatchEvent(new Event("chat:new-task"));
+    if (pathname !== "/chat" || router.asPath !== "/chat") void router.push("/chat");
+  };
+
   if (!isMenuExpand) {
     return (
-      <div className="flex h-screen flex-col bg-[#d7dfed] pt-4 dark:bg-[#232734]">
+      <div className="workspace-sidebar flex h-screen w-[64px] flex-col border-r border-slate-200 bg-slate-50 pt-4 text-slate-600 dark:border-slate-700 dark:bg-[#111827] dark:text-slate-300">
         <div className="flex shrink-0 flex-col items-center pb-2">
           <Link href="/" className="flex items-center justify-center pb-2">
             <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-white shadow-sm">
@@ -283,14 +288,20 @@ export default function SideBar() {
             </span>
           </Link>
           <Tooltip title="展开侧栏" placement="right">
-            <div
+            <button type="button" aria-label="展开侧栏"
               onClick={() => setIsMenuExpand(true)}
               className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
             >
               <MenuUnfoldOutlined style={{ fontSize: 14 }} />
-            </div>
+            </button>
           </Tooltip>
         </div>
+        <Tooltip title="新建任务" placement="right">
+          <button type="button" aria-label="新建任务" onClick={startTask}
+            className="mx-auto my-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white transition-colors hover:bg-blue-700">
+            <PlusOutlined />
+          </button>
+        </Tooltip>
         <div className="mt-2 flex min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto overscroll-contain px-1 pb-2 [scrollbar-gutter:stable] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[#9aa8c0]/70 [&::-webkit-scrollbar-track]:bg-transparent">
           {visibleRoutes.map((item) => {
             const active =
@@ -317,12 +328,12 @@ export default function SideBar() {
         </div>
         <div className="shrink-0 py-4">
           <Tooltip title="展开侧栏" placement="right">
-            <div
+            <button type="button" aria-label="展开侧栏"
               className="mx-auto flex h-12 w-12 cursor-pointer items-center justify-center rounded-xl text-xl transition-colors hover:bg-blue-50/50 dark:hover:bg-blue-900/10"
               onClick={() => setIsMenuExpand(true)}
             >
               <MenuUnfoldOutlined />
-            </div>
+            </button>
           </Tooltip>
         </div>
       </div>
@@ -330,33 +341,28 @@ export default function SideBar() {
   }
 
   return (
-    <div className="flex h-screen w-[240px] min-w-[240px] flex-col border-r border-[#cfd8e8] bg-[#d7dfed] px-4 pt-4 dark:border-[#34384a] dark:bg-[#232734]">
-      <div className="dbgpt-ui-font flex shrink-0 items-center justify-between p-2 pb-4">
-        <Link href="/" className="flex items-center gap-2">
-          <Image src="/logo-mark.svg" alt="logo" width={30} height={30} className="rounded-md" />
-          <span className="text-sm font-semibold tracking-[0.03em] text-[#243149] dark:text-white">AI学情分析智能体</span>
+    <div className="workspace-sidebar flex h-screen w-[232px] min-w-[232px] flex-col border-r border-slate-200 bg-slate-50 px-3 pt-3 dark:border-slate-700 dark:bg-[#111827]">
+      <div className="dbgpt-ui-font flex shrink-0 items-center justify-between gap-1 px-2 pb-5 pt-1">
+        <Link href="/" className="flex min-w-0 items-center gap-2.5" aria-label="AI学情分析智能体">
+          <Image src="/logo-mark.svg" alt="" width={32} height={32} className="shrink-0 rounded-lg" />
+          <span className="min-w-0"><span className="block whitespace-nowrap text-[15px] font-semibold text-slate-900 dark:text-white">学情分析</span><span className="block text-[11px] text-slate-500 dark:text-slate-400">AI 智能体工作台</span></span>
         </Link>
         <Tooltip title="收起侧栏">
-          <div
+          <button type="button" aria-label="收起侧栏"
             onClick={() => setIsMenuExpand(false)}
-            className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+            className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-slate-200"
           >
             <MenuFoldOutlined style={{ fontSize: 14 }} />
-          </div>
+          </button>
         </Tooltip>
       </div>
 
       <button
         type="button"
         className="w-full shrink-0 border-0 bg-transparent p-0"
-        onClick={() => {
-          window.dispatchEvent(new Event("chat:new-task"));
-          if (pathname !== "/chat" || router.asPath !== "/chat") {
-            void router.push("/chat");
-          }
-        }}
+        onClick={startTask}
       >
-        <div className="dbgpt-ui-font mb-4 flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-black px-4 py-2.5 text-sm font-medium text-white transition-opacity hover:opacity-90 dark:bg-white dark:text-black">
+        <div className="dbgpt-ui-font mb-4 flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700 dark:bg-blue-600 dark:text-white dark:hover:bg-blue-500">
           <PlusOutlined className="text-xs" />
           <span>新建任务</span>
         </div>
@@ -394,7 +400,7 @@ export default function SideBar() {
                       void router.push(item.path);
                     }
                   }}
-                  className={`flex h-12 w-full items-center px-4 transition-colors hover:rounded-xl hover:bg-blue-50/50 dark:hover:bg-blue-900/10 ${
+                  className={`flex h-11 w-full items-center rounded-lg px-3 transition-colors hover:bg-slate-100 dark:hover:bg-slate-800 ${
                     active ? "rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400" : "text-[#2e3a52] dark:text-gray-300"
                   }`}
                 >
@@ -473,7 +479,7 @@ export default function SideBar() {
 
         <div className="mb-2 mt-4 px-1">
           <div className="flex items-center justify-between">
-            <span className="dbgpt-ui-font text-xs font-semibold uppercase tracking-wider text-gray-400">所有任务</span>
+            <span className="dbgpt-ui-font text-xs font-medium text-slate-500 dark:text-slate-400">最近任务</span>
             <Link href="/conversations" className="inline-flex items-center">
               <Tooltip title="查看全部">
                 <RightOutlined className="cursor-pointer text-xs text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-gray-300" />
@@ -578,13 +584,7 @@ export default function SideBar() {
         </div>
       </div>
 
-      <div className="shrink-0 pb-2 pt-4">
-        <div className="mt-2 flex items-center justify-around border-t border-dashed border-gray-200 py-4 dark:border-gray-700">
-          <div className="flex-1 cursor-pointer text-center text-xl text-[#52617d] dark:text-gray-300" onClick={() => setIsMenuExpand(false)}>
-            <MenuFoldOutlined />
-          </div>
-        </div>
-      </div>
+      <div className="shrink-0 border-t border-slate-200 px-2 py-3 text-[11px] text-slate-500 dark:border-slate-700 dark:text-slate-400">AI 学情分析工作台</div>
     </div>
   );
 }

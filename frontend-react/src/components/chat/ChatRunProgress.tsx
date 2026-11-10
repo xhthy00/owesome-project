@@ -127,13 +127,13 @@ export function ChatTaskProgress({ stages, steps, running, waiting }: {
   const contextTools = Array.from(new Set(steps.flatMap((step) => step.toolName ? [step.toolName] : [])));
   return <div className="cowork-task-body">
     <details className="cowork-task-section" open>
-      <summary>进度 {stages.length > 0 && <span>{completed} / {stages.length}</span>}</summary>
+      <summary>分析步骤</summary>
       <div className="cowork-task-section-body">
         {stages.length ? <>
           <div className="cowork-progress-overview">
-            <div><span>阶段完成情况</span><strong>{completed} / {stages.length} 个阶段 · {percent}%</strong></div>
+            <div><span>{completed === stages.length ? "全部步骤已完成" : waiting ? "等待补充信息" : running ? "正在执行分析" : "本轮执行已结束"}</span><strong>{completed} / {stages.length}</strong></div>
             <div className="cowork-progress-track" role="progressbar" aria-label="任务完成进度"
-              aria-valuenow={percent} aria-valuetext={`${completed} / ${stages.length} 个阶段，${percent}%`}>
+              aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} aria-valuetext={`${completed} / ${stages.length} 个阶段，${percent}%`}>
               <span style={{ transform: `scaleX(${completed / stages.length})` }} />
             </div>
           </div>
@@ -146,8 +146,8 @@ export function ChatTaskProgress({ stages, steps, running, waiting }: {
               ));
               const row = <>
                 <span className="cowork-stage-index" aria-hidden="true">{status === "completed" ? <CheckOutlined /> : String(index + 1).padStart(2, "0")}</span>
-                <span className="cowork-stage-title">{stage.content}</span>
-                <span className="cowork-stage-status">{label}</span>
+                <span className="cowork-stage-title" title={stage.content}>{stage.content}</span>
+                <span className={status === "completed" ? "sr-only" : "cowork-stage-status"}>{label}</span>
               </>;
               return <li key={`${index}:${stage.content}`} className="cowork-stage" data-status={status}>
                 {related.length ? <details><summary className="cowork-stage-row">{row}</summary><TraceRows steps={related} running={running} /></details>
@@ -158,7 +158,7 @@ export function ChatTaskProgress({ stages, steps, running, waiting }: {
         </> : <p className="cowork-progress-empty">{running ? "尚未收到步骤规划" : "本轮没有发布阶段计划"}</p>}
       </div>
     </details>
-    {contextTools.length > 0 && <details className="cowork-task-section" open>
+    {contextTools.length > 0 && <details className="cowork-task-section">
       <summary>执行上下文</summary>
       <div className="cowork-task-section-body">
         <span className="cowork-task-context-label">工具</span>
@@ -166,7 +166,7 @@ export function ChatTaskProgress({ stages, steps, running, waiting }: {
       </div>
     </details>}
     {steps.length > 0 && <details className="cowork-task-section">
-      <summary>Trace <span>{steps.length}</span></summary>
+      <summary>执行记录 <span>{steps.length}</span></summary>
       <TraceRows steps={steps} running={running} />
     </details>}
   </div>;

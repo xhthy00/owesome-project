@@ -162,8 +162,8 @@ function LayoutWrapper({
   const themeConfig = useMemo(
     () => ({
       token: {
-        colorPrimary: "#0C75FC",
-        borderRadius: 4
+        colorPrimary: "#2563EB",
+        borderRadius: 8
       },
       algorithm: mode === "dark" ? theme.darkAlgorithm : theme.defaultAlgorithm
     }),
@@ -192,9 +192,9 @@ function LayoutWrapper({
               <SideBar />
             </div>
             <div className="relative flex flex-1 flex-col overflow-hidden">
-              <div className="flex h-14 shrink-0 items-center justify-between border-b border-gray-200 bg-white/80 px-8 text-sm text-[#3a465d] backdrop-blur dark:border-gray-800 dark:bg-[#111217]/80">
-                <span />
-                <div className="flex items-center gap-4 text-[#7d8ba2]">
+              <div className="workspace-topbar flex h-12 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 text-sm text-slate-700 md:h-10 dark:border-slate-700 dark:bg-[#111827]">
+                {pathname === "/chat" ? <div id="chat-header-slot" className="min-w-0 flex-1" /> : <span className="text-sm font-medium">学情分析工作台</span>}
+                <div className="workspace-account flex shrink-0 items-center gap-3 text-slate-500">
                   {workspaceOptions.length && !hideWorkspaceSwitcher ? (
                     <div className="flex h-9 items-center gap-2 rounded-full border border-[#d9e2f0] bg-[#f7faff] px-3 pr-2 shadow-sm dark:border-[#2f3a52] dark:bg-[#1a2130]">
                       <ApartmentOutlined className="text-[13px] text-[#4f6fa8] dark:text-[#8aa8de]" />
