@@ -54,6 +54,11 @@ from src.chat.service.conversation_state import (
     fingerprint,
     load_conversation_history,
 )
+from src.chat.service.evidence_answer import (
+    evidence_table,
+    revalidate_evidence,
+    summarize_verified_evidence,
+)
 from src.chat.service.human_questions import (
     CLARIFICATION_INSTRUCTIONS,
     HumanQuestionField,
@@ -77,6 +82,9 @@ from src.chat.service.semantic_query import (
 from src.chat.service.turn_records import persist_turn
 from src.common.core.config import get_settings
 from src.datasource.edu_connection import edu_db_connection
+from src.datasource.service.semantic_permission_contract import (
+    PermissionRecovery,
+)
 from src.llm.service import get_default_llm
 
 logger = logging.getLogger(__name__)
@@ -445,9 +453,13 @@ async def _run_turn(
     datasource_id = request.datasource_id
     semantic = SemanticQuery(settings, datasource_id, workspace_oid, user_id)
     try:
+        explicit_authorization = await asyncio.to_thread(semantic.authorization_context)
         context = await asyncio.to_thread(semantic.context)
     except SemanticQueryError as exc:
-        await emit("error", {"error": str(exc), "preserve_interrupt": True})
+        detail = getattr(exc, "detail", None)
+        await emit("error", {"error": detail.get("user_message", str(exc)) if detail else str(exc),
+                             "preserve_interrupt": True,
+                             **({"error_detail": detail} if detail else {})})
         return 0
     directory = {key: context[key] for key in ("bundle_id", "manifest_hash", "dialect") if key in context}
     for kind in ("models", "views"):
@@ -459,7 +471,8 @@ async def _run_turn(
     preparation_error = ""
     protocol_retried = False
     model_reply_error = ""
-    scope = await asyncio.to_thread(edu_scope_dict_for_user_id, user_id)
+    scope = ({"edu_role": "v2", **explicit_authorization} if explicit_authorization is not None
+             else await asyncio.to_thread(edu_scope_dict_for_user_id, user_id))
     context_key = fingerprint({
         "authorization": await asyncio.to_thread(
             authorization_fingerprint, user_id, workspace_oid, datasource_id,
@@ -471,9 +484,13 @@ async def _run_turn(
     })
     last_sql = ""
     last_result = None
+    final_ai_message_id = None
+    evidence_answer = None
     steps = []
     tool_calls = []
     query_error = ""
+    permission_recovery = PermissionRecovery()
+    permission_query_lock = asyncio.Lock()
     evidence = []
     todos = []
     planning_attempts = 0
@@ -543,7 +560,16 @@ async def _run_turn(
                 await asyncio.to_thread(lambda: [semantic.describe(name) for name in unread_names])
                 result = await asyncio.to_thread(semantic.run, sql, execute=True)
         except (QuestionAssessmentError, SemanticQueryError) as exc:
-            return json.dumps({"error": str(exc)}, ensure_ascii=False)
+            result = {"error": str(exc)}
+            if hasattr(exc, "detail") and (
+                str(exc.detail.get("code", "")).startswith("AUTH_")
+                or exc.detail.get("recovery_action")
+                or explicit_authorization is not None and isinstance(exc, SemanticFieldError)
+            ):
+                permission_recovery.reject({"message": str(exc), **exc.detail})
+                result["error_detail"] = permission_recovery.last_error
+            return json.dumps(result, ensure_ascii=False)
+        permission_recovery.success()
         return json.dumps({
             "columns": result["columns"], "rows": result["rows"],
             "row_count": result.get("row_count", len(result["rows"])),
@@ -554,6 +580,9 @@ async def _run_turn(
     async def query_semantic(sql: str) -> str:
         """提交一条只读语义 SQL，显式列出已确认的字段。DataSemantic 负责物理规划，宿主按权限执行。"""
         nonlocal query_error, last_sql, last_result
+        if permission_recovery.blocked:
+            return json.dumps({"error": permission_recovery.public_error() or "本轮数据查询已停止。",
+                               "error_detail": permission_recovery.last_error}, ensure_ascii=False)
         stage_index = active_stage_index()
         used = stage_query_count.get(stage_index, 0)
         if query_limit is not None and used >= query_limit:
@@ -594,10 +623,16 @@ async def _run_turn(
         except SemanticQueryError as exc:
             query_error = str(exc)
             result = {"error": query_error}
-            if isinstance(exc, SemanticFieldError):
+            if isinstance(exc, SemanticFieldError) or hasattr(exc, "detail"):
                 result["error_detail"] = exc.detail
+                if (str(exc.detail.get("code", "")).startswith("AUTH_")
+                        or exc.detail.get("recovery_action")
+                        or explicit_authorization is not None and isinstance(exc, SemanticFieldError)):
+                    permission_recovery.reject({"message": str(exc), **exc.detail})
+                    result["error_detail"] = permission_recovery.last_error
         else:
             query_error = ""
+            permission_recovery.success()
             last_sql = result["sql"]
             last_result = result if execute else None
             await emit(
@@ -635,10 +670,16 @@ async def _run_turn(
             result_preview=result.get("error", ""),
         )
         if "error" in result:
+            if explicit_authorization is not None and evidence:
+                result["available_results"] = [{"columns": e.get("columns", []), "row_count": e.get("row_count")}
+                                               for e in evidence[-3:] if e.get("rows")]
+                result["answer_guidance"] = "此前已有成功查询。若已覆盖原问题应据此作答，宿主发布前会重新核验授权；额外查询失败不能抹去已有数值。"
             return json.dumps(result, ensure_ascii=False) if "error_detail" in result else content
         if not execute:
             return "DataSemantic 已成功生成并校验计划。"
         preview = {
+            **({"answer_guidance": "如果当前结果已覆盖原问题，更新计划并直接作答；本校与全市整体比较无需另查各校明细或排名。"}
+               if explicit_authorization is not None else {}),
             "columns": result["columns"],
             "rows": result["rows"][:50],
             "preview_truncated": len(result["rows"]) > 50 or result.get("rows_truncated", False),
@@ -861,7 +902,7 @@ async def _run_turn(
                 "不要直接输出结论，不要只在正文里追问或声称正在等待用户。"
             ), additional_kwargs={"chat_runtime_instruction": True}))
             return {**update, "jump_to": "model"}
-        if not message.tool_calls and any(todo["status"] == "pending" for todo in state.get("todos", [])):
+        if not permission_recovery.blocked and not message.tool_calls and any(todo["status"] == "pending" for todo in state.get("todos", [])):
             completion_attempts += 1
             if completion_attempts > 2:
                 preparation_error = "本轮计划仍有未执行阶段，分析尚未完成。"
@@ -885,9 +926,35 @@ async def _run_turn(
             return AIMessage(content=limit_message)
         model_tools = [t for t in model_request.tools if t.name in allowed]
         assessment = model_request.state.get("chat_question_assessment") or {}
+        if explicit_authorization is not None and any(item.get("rows") for item in evidence):
+            model_request = model_request.override(system_prompt=(
+                f"{model_request.system_prompt}\n本轮已取得成功查询结果。先检查这些结果是否已覆盖原问题。"
+                "本校均分、全市整体均分和分差均已返回时，更新计划并直接作答。"
+                "不要为了核验整体对比再查询其他学校的明细或排名；仅补查用户明确需要且尚未返回的信息。"
+            ))
         if assessment.get("decision") == "ready":
             model_tools = [t for t in model_tools if t.name != "lookup_question_context"]
-        if assessment.get("decision") != "ready":
+        if permission_recovery.human_retry_blocked:
+            model_tools = [t for t in model_tools if t.name != "ask_human"]
+            model_request = model_request.override(system_prompt=(
+                f"{model_request.system_prompt}\n最近一次查询有宿主判定的技术失败。"
+                "按error_detail.recovery_action修正或停止，不能要求用户确认继续或重新授权。"
+            ))
+        if permission_recovery.blocked:
+            model_request = model_request.override(
+                tools=[t for t in model_tools if t.name not in {
+                    "query_semantic", "lookup_question_context", "ask_human",
+                }],
+                tool_choice="auto",
+                system_prompt=(
+                    f"{model_request.system_prompt}\n本轮数据查询已停止，不能继续读取或让用户选择重试。"
+                    f"宿主错误类别为{permission_recovery.last_error['category']}，"
+                    f"恢复动作为{permission_recovery.last_error['recovery_action']}。"
+                    "按宿主分类说明未完成部分，不能猜测账号未获授权。"
+                    "未执行的阶段保持未完成，不得虚报完成；已有可信数据保留在结果中。"
+                ),
+            )
+        elif assessment.get("decision") != "ready":
             lookup_attempts += 1
             if lookup_attempts > MAX_CONTEXT_LOOKUPS:
                 preparation_error = ASSESSMENT_FAILURE
@@ -969,9 +1036,18 @@ async def _run_turn(
             })
         )
 
-    @wrap_tool_call
-    async def restrict_tool_call(tool_request, handler):
+    async def _restricted_tool_call(tool_request, handler):
         name = tool_request.tool_call["name"]
+        if name == "ask_human" and permission_recovery.human_retry_blocked:
+            return ToolMessage(
+                content="技术校验失败不能通过用户确认继续；请按宿主给出的recovery_action修正或停止。",
+                tool_call_id=tool_request.tool_call["id"], status="error",
+            )
+        if permission_recovery.blocked and name in {"query_semantic", "lookup_question_context", "ask_human"}:
+            return ToolMessage(
+                content="本轮数据查询已停止，不能通过追问用户继续尝试。请按宿主错误分类说明未完成部分。",
+                tool_call_id=tool_request.tool_call["id"], status="error",
+            )
         if name in {"query_semantic", "chart_semantic_result", "write_todos"} and (
             tool_request.state.get("chat_question_assessment") or {}
         ).get("decision") != "ready":
@@ -1050,10 +1126,26 @@ async def _run_turn(
         await emit("tool_result", dict(call))
         return result
 
+    @wrap_tool_call
+    async def restrict_tool_call(tool_request, handler):
+        if explicit_authorization is not None and tool_request.tool_call["name"] in {
+            "query_semantic", "lookup_question_context",
+        }:
+            # A ToolNode can run sibling calls concurrently. Serialize v2 data
+            # reads so queued calls recheck terminal failures before execution.
+            async with permission_query_lock:
+                return await _restricted_tool_call(tool_request, handler)
+        return await _restricted_tool_call(tool_request, handler)
+
     prompt = (
         f"{_PROMPT}{CLARIFICATION_INSTRUCTIONS if execute and request.conversation_id else ''}\n当前授权范围参考：{scope}。\n"
         f"已发布目录（bundle_id / manifest_hash / dialect / models / views）：{context_json}"
     )
+    if explicit_authorization is not None:
+        prompt += (
+            "\n严格遵守scope_grants和query_contract。可执行规则以relations的reference_query_contract为准。"
+            "错误分类、修正次数和停止决定以宿主error_detail为准，不能猜测授权失效或让用户确认技术重试。"
+        )
     middleware = [initialize_turn, assess_question, request_assessed_clarification,
                   require_plan_or_repair, restrict_model_tools, restrict_tool_call]
     if execute:
@@ -1250,6 +1342,7 @@ async def _run_turn(
                     if node_name != "model" or not isinstance(message, AIMessage):
                         continue
                     if not message.tool_calls:
+                        final_ai_message_id = message.id
                         answer = _visible_model_text(message.text)
                     elif execute:
                         note = _visible_model_text(message.text)
@@ -1308,6 +1401,7 @@ async def _run_turn(
         stop_reason = limit_message
         answer = (
             preparation_error
+            or permission_recovery.public_error()
             or query_error
             or model_reply_error
             or (
@@ -1316,7 +1410,9 @@ async def _run_turn(
                 else "本轮未取得 DataSemantic 查询结果，请补充查询条件或检查语义模型覆盖范围。"
             )
         )
-        await emit("error", {"error": answer})
+        await emit("error", {"error": answer, **(
+            {"error_detail": permission_recovery.last_error} if permission_recovery.last_error else {}
+        )})
     elif execute and not pending and limit_message:
         answer = limit_message + "请查看本轮已返回的数据。"
     elif execute and not pending and evidence and not any(result["rows"] for result in evidence):
@@ -1330,7 +1426,52 @@ async def _run_turn(
         answer = model_reply_error + "请查看本轮已返回的查询结果。"
     if execute and any(result.get("rows_truncated") for result in evidence):
         answer += "\n查询结果已截断，以上结论仅覆盖返回的数据。"
-    if execute and not pending and evidence and query_error:
+    if execute and not pending and evidence and permission_recovery.last_error and explicit_authorization is not None:
+        try:
+            # A failed extra query cannot erase successful evidence. Synthesize the
+            # business answer in an isolated, query-free call; host owns error text.
+            current_evidence = await revalidate_evidence(semantic.authorization_context, evidence)
+            verified = current_evidence.results
+            finalization_error = current_evidence.error
+            if verified:
+                evidence_answer = evidence_table(verified)
+                if not budget or ((budget.limit is None or budget.calls < budget.limit)
+                                  and (budget.token_limit is None or budget.tokens < budget.token_limit)):
+                    evidence_answer = await summarize_verified_evidence(
+                        model=model, question=original_question, followup=request.question,
+                        results=verified, tool_choice=_tool_choice_for(model, "submit_verified_answer"),
+                        callbacks=config.get("callbacks", ()),
+                    )
+                after = await revalidate_evidence(semantic.authorization_context, evidence,
+                                                  expected=current_evidence.fingerprint)
+                finalization_error = after.error
+            if finalization_error:
+                evidence_answer = None
+                answer = finalization_error.get("user_message", "成功结果需要重新验证，请重新查询。")
+                query_error = answer
+            elif evidence_answer:
+                answer = evidence_answer.text
+                if evidence_answer.coverage == "complete":
+                    query_error = ""
+                    answer += "\n\n补充查询已被当前规则拦截，不影响上述已验证的结果。"
+                else:
+                    answer += "\n\n查询说明：" + permission_recovery.public_error()
+                if final_ai_message_id and not (limit_message or model_reply_error or preparation_error):
+                    await graph.aupdate_state(config, {"messages": [AIMessage(content=answer, id=final_ai_message_id)],
+                        "chat_model_calls": budget.calls if budget else 0,
+                        "chat_model_tokens": budget.tokens if budget else 0}, as_node="model")
+                    await graph.aupdate_state(config, None, as_node=END)
+            else:
+                answer = permission_recovery.public_error()
+            if streamed_text:
+                await emit("answer_discard", {})
+                streamed_text = ""
+        except asyncio.CancelledError:
+            await _recover_checkpoint(graph, config, snapshot)
+            raise
+    elif execute and not pending and evidence and permission_recovery.last_error:
+        answer = permission_recovery.public_error() + "\n已完成的数据见本轮查询结果；未完成部分暂时无法给出结论。"
+    elif execute and not pending and evidence and query_error:
         answer += "\n部分查询未完成，本轮结论仅覆盖已成功返回的数据。"
     if not execute:
         return 0
@@ -1363,6 +1504,10 @@ async def _run_turn(
         sql_error=None if succeeded else answer,
         exec_result={
             **(last_result or {}), "context_boundary": context_key,
+            **({"answer_coverage": {"coverage": evidence_answer.coverage,
+                                   "evidence_ids": list(evidence_answer.evidence_ids),
+                                   "model_generated": evidence_answer.model_generated}}
+               if evidence_answer else {}),
             **({"question_assessment": {key: value for key, value in question_assessment.items()
                                        if key not in {"after_tool", "call_id"}}} if question_assessment else {}),
             **({"human_reply_to": request.resume_interrupt_id, "human_answer": request.question}

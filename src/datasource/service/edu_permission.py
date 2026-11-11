@@ -508,7 +508,11 @@ def edu_scope_dict_for_user_id(user_id: int) -> dict[str, Any]:
         from src.system.crud.crud_user import get_user_by_id
 
         with get_db_session() as session:
-            return edu_scope_summary(get_user_by_id(session, int(user_id)))
+            user = get_user_by_id(session, int(user_id))
+            variables = getattr(user, "system_variables", None) or {}
+            if isinstance(variables, dict) and variables.get("edu_auth_v2"):
+                return {"edu_role": "v2"}  # SQL verifier, rather than legacy name regex, owns the scope.
+            return edu_scope_summary(user)
     except Exception:
         return {}
 

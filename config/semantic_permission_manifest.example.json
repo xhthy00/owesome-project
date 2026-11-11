@@ -1,0 +1,40 @@
+{
+  "bindings": [{
+    "workspace_oid": 1,
+    "datasource_id": 4,
+    "bundle_id": "replace-with-reviewed-publication",
+    "manifest_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+    "mapping_version": 1,
+    "dialect": "postgres",
+    "physical_schema": "public",
+    "connection": {"host": "replace-with-edu-host", "port": 5432, "database": "replace-with-edu-database", "username": "replace-with-readonly-user"},
+    "minimum_sample_size": 10,
+    "minimum_reference_units": 3,
+    "precision": 2,
+    "relations": {
+      "edu_scores": {
+        "physical_table": "reviewed_scores",
+        "columns": {
+          "city_id": "city_code", "district_id": "district_code",
+          "school_id": "school_code", "cohort_id": "cohort_code",
+          "class_id": "class_code", "student_id": "anonymous_student_id",
+          "exam_batch_id": "exam_batch_id", "exam_date": "exam_date",
+          "subject": "subject_code", "score_value": "valid_score"
+        },
+        "scope_columns": {
+          "city_id": "city_id", "district_id": "district_id", "school_id": "school_id",
+          "cohort_id": "cohort_id", "class_id": "class_id", "student_id": "student_id"
+        },
+        "metrics": {"subject_mean": "AVG(score_value)"},
+        "filter_only_columns": ["student_id"],
+        "exam_column": "exam_batch_id", "date_column": "exam_date",
+        "subject_column": "subject", "sample_column": "score_value"
+      }
+    },
+    "catalog": [
+      {"city_id": "CITY001", "district_id": "DISTRICT01", "school_id": "SCH001", "cohort_id": "COHORT2027", "class_id": "CLASS01"},
+      {"city_id": "CITY001", "district_id": "DISTRICT01", "school_id": "SCH001", "cohort_id": "COHORT2027", "class_id": "CLASS02"},
+      {"city_id": "CITY001", "district_id": "DISTRICT01", "school_id": "SCH001", "cohort_id": "COHORT2027", "class_id": "CLASS03"}
+    ]
+  }]
+}

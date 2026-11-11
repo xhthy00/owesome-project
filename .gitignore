@@ -24,6 +24,11 @@ tests/chat/*
 !tests/chat/test_context_usage.py
 !tests/chat/test_runtime_resilience.py
 !tests/chat/test_question_assessment.py
+!tests/chat/test_explicit_permissions.py
+!tests/chat/test_permission_contract.py
+!tests/chat/test_evidence_answer.py
+!tests/chat/test_explicit_permission_api.py
+!tests/chat/test_education_source.py
 !tests/agent/
 tests/agent/*
 !tests/agent/test_which_school_lookup.py

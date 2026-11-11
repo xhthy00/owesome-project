@@ -51,13 +51,14 @@ def test_root_context_is_latest_input_while_summary_and_children_accumulate():
             ("child", 9000, {"langgraph_checkpoint_ns": "tools:1|model:1"}),
             ("summary", 5000, {"lc_source": "summarization"}),
             ("root2", 200, {"chat_context_limit": 1000, "chat_context_key": "root"}),
+            ("verified-answer", 3000, {"lc_source": "verified_answer"}),
         ]:
             await callback.on_chat_model_start({}, [[HumanMessage(content="test")]], run_id=run_id, metadata=metadata)
             message = AIMessage(content="done", usage_metadata={
                 "input_tokens": tokens, "output_tokens": 10, "total_tokens": tokens + 10,
             })
             await callback.on_llm_end(LLMResult(generations=[[ChatGeneration(message=message)]]), run_id=run_id)
-        assert sink.prompt_tokens == 14300
+        assert sink.prompt_tokens == 17300
         assert sink.context["context_tokens"] == 200
         assert sink.context["context_limit"] == 1000
         assert sink.context["context_key"] == "root"

@@ -137,6 +137,8 @@ def _ensure_user_workspace(session: Session, uid: int, oid: int) -> None:
 
 
 def _assert_can_mutate_account(current_user, row: SysUser) -> None:
+    if not is_platform_admin(current_user) and int(current_user.id) != int(row.id):
+        raise ForbiddenException("仅平台管理员可修改其他用户账号")
     if is_super_admin(row):
         raise BadRequestException("不能操作超管账号")
     if is_platform_admin(row) and not is_super_admin(current_user):
@@ -201,7 +203,8 @@ def batch_create_users(
     current_user=Depends(get_current_user),
 ):
     _ = request
-    _ = current_user
+    if not is_platform_admin(current_user):
+        raise ForbiddenException("仅平台管理员可创建账号")
     csv_text = payload.get("csv")
     if not csv_text or not isinstance(csv_text, str):
         raise BadRequestException("需提供 csv 文本")
@@ -264,7 +267,8 @@ def create_user(
     session: Session = Depends(get_session),
     current_user=Depends(get_current_user),
 ):
-    _ = current_user
+    if not is_platform_admin(current_user):
+        raise ForbiddenException("仅平台管理员可创建账号")
     account = (payload.get("account") or "").strip()
     name = (payload.get("name") or "").strip()
     password = payload.get("password") or _DEFAULT_PASSWORD
@@ -301,11 +305,13 @@ def update_user(
     session: Session = Depends(get_session),
     current_user=Depends(get_current_user),
 ):
-    _ = current_user
     user_id = payload.get("id")
     row = session.query(SysUser).filter(SysUser.id == user_id).first()
     if not row:
         raise NotFoundException("User not found")
+    _assert_can_mutate_account(current_user, row)
+    if not is_platform_admin(current_user) and any(key in payload for key in ("oid", "status")):
+        raise ForbiddenException("仅平台管理员可修改账号状态或默认空间")
     if is_super_admin(row):
         raise BadRequestException("不能操作超管账号")
     for field in ("name", "email", "language"):
@@ -352,6 +358,8 @@ def update_user_status(
     session: Session = Depends(get_session),
     current_user=Depends(get_current_user),
 ):
+    if not is_platform_admin(current_user):
+        raise ForbiddenException("仅平台管理员可修改账号状态")
     user_id = payload.get("id")
     row = session.query(SysUser).filter(SysUser.id == user_id).first()
     if not row:

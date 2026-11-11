@@ -51,6 +51,9 @@ def _edu_out_of_scope_message(
     workspace_oid: int | None = None,
 ) -> str | None:
     """教师/校管点名越权班校时拒绝；读范围失败则放行。"""
+    from src.datasource.service.education_authorization import manifest_for
+    if datasource_id is not None and manifest_for(datasource_id) is not None:
+        return None  # v2 SQL proof handles multi-grant ranges; legacy name regex does not.
     from datasource.service.edu_permission import edu_scope_dict_for_user_id
     from src.agent.education.scope_guard import out_of_scope_question
 
@@ -142,6 +145,10 @@ def get_conversation(
     # Parse JSON fields
     record_responses = []
     for record in records:
+        from src.datasource.service.education_authorization import record_accessible
+        if not record_accessible(session, current_user, conversation, record):
+            # Omit both results and generated summaries/tool logs from stale authority.
+            continue
         record_dict = {
             "id": record.id,
             "conversation_id": record.conversation_id,

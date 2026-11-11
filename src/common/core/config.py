@@ -89,6 +89,8 @@ class Settings(BaseSettings):
     datasemantic_datasource_id: int | None = None
     datasemantic_bundle_id: str = ""
     datasemantic_manifest_hash: str = ""
+    # Explicit-permission SQL is enabled per datasource by a reviewed host manifest.
+    semantic_permission_manifest_path: str = ""
 
     # 侧边栏「系统文档」。留空则用代码内默认地址，修改后重启服务生效。
     edu_doc_commitment_url: str = ""

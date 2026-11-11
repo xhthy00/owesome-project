@@ -13,16 +13,34 @@ from sqlglot.optimizer.qualify import qualify
 from sqlglot.optimizer.scope import traverse_scope
 
 from src.agent.education.privacy_mode import apply_result_privacy, apply_sql_privacy
+from src.chat.service.semantic_permission_validator import (
+    PermissionValidator,
+    verify_compiled_permissions,
+)
 from src.common.core.config import DataSemanticBinding, Settings
 from src.common.core.database import get_db_session
 from src.datasource.edu_connection import parse_edu_database_url
 from src.datasource.service.edu_permission import build_edu_row_predicates, parse_edu_scope
+from src.datasource.service.education_authorization import (
+    AUTH_KEY,
+    AuthorizationError,
+    assert_workspace_member,
+    context_for,
+    manifest_for,
+    read_authorization,
+)
 from src.datasource.service.query_permission import (
     apply_permissions_for_execute,
     collect_row_predicate_sqls,
     filter_exec_result_by_column_permissions,
     qualify_edu_row_predicates,
     validate_sql_column_permissions,
+)
+from src.datasource.service.semantic_permission_contract import (
+    CONTRACT_VERSION,
+    PROVER_VERSION,
+    SQL_GRAMMAR,
+    permission_error_detail,
 )
 from src.datasource.service.sql_auto_fix import run_sql_with_auto_fix
 from src.system.crud.crud_user import get_user_by_id
@@ -34,21 +52,17 @@ _MAX_DESCRIBE_NAMES = 12
 _MAX_FIELD_ERRORS = 64
 _DIALECTS = {"pg": "postgres", "mysql": "mysql"}
 # The database can contain user-defined functions. Admit the analytical operations used by MDL.
-_FUNCTIONS = frozenset(
-    """
-    ABS AVG CAST CASE CEIL CEILING COALESCE CONCAT CONCAT_WS COUNT COUNT_IF
-    CURRENT_DATE CURRENT_TIMESTAMP DATE DATE_ADD DATE_DIFF DATE_PART DATE_SUB DATE_TRUNC
-    DENSE_RANK EXTRACT FIRST_VALUE FLOOR GREATEST IF IFNULL LAG LAST_VALUE LEAD
-    LEAST LENGTH LOWER LTRIM MAX MIN MOD NULLIF NTILE PERCENT_RANK PERCENTILE_CONT
-    PERCENTILE_DISC POWER RANK REPLACE ROUND ROW_NUMBER RTRIM SQRT STDDEV STDDEV_POP
-    STDDEV_SAMP SUBSTR SUBSTRING SUM TIMESTAMPDIFF TO_CHAR TRIM TRY_CAST UPPER
-    VARIANCE VAR_POP VAR_SAMP CORR CUME_DIST STR_TO_DATE DATE_FORMAT TIME_TO_STR
-""".split()
-)
+_FUNCTIONS = frozenset(SQL_GRAMMAR.functions)
 
 
 class SemanticQueryError(ValueError):
     """A query that could not be planned or safely executed."""
+
+
+class SemanticContractError(SemanticQueryError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.detail = permission_error_detail(code, message)
 
 
 class SemanticViewDescriptionRequiredError(SemanticQueryError):
@@ -66,12 +80,18 @@ class SemanticFieldError(SemanticQueryError):
         self.detail = detail
 
 
+class SemanticAuthorizationError(SemanticQueryError):
+    def __init__(self, error: AuthorizationError):
+        super().__init__(str(error))
+        self.detail = error.detail
+
+
 def _has_projection_star(tree):
     return any(not isinstance(star.parent, exp.Count) for star in tree.find_all(exp.Star))
 
 
 def _query(sql: str, dialect: str, *, compiled: bool = False):
-    if not isinstance(sql, str) or len(sql) > 50_000:
+    if not isinstance(sql, str) or len(sql) > SQL_GRAMMAR.max_sql_length:
         raise SemanticQueryError("语义 SQL 长度超出限制。")
     statements = parse(sql, read=dialect)
     if len(statements) != 1 or not isinstance(statements[0], (exp.Select, exp.SetOperation)):
@@ -225,6 +245,59 @@ class SemanticQuery:
         self._descriptions: dict[tuple, dict] = {}
         self._description_locks: dict[tuple, Lock] = {}
         self._field_errors: dict[tuple, tuple[str, dict]] = {}
+        self._environment_permission = None
+
+    def _permission_manifest(self):
+        try:
+            configured = manifest_for(self.datasource_id, getattr(self.settings, "semantic_permission_manifest_path", ""))
+            if configured is not None or not getattr(self.settings, "database_edu_url", ""):
+                return configured
+            return self._environment_permission
+        except AuthorizationError as exc:
+            raise SemanticAuthorizationError(exc) from exc
+
+    def _authorization(self, session, user):
+        policy = self._permission_manifest()
+        if policy is None:
+            variables = getattr(user, "system_variables", None) or {}
+            if AUTH_KEY in variables:
+                document = read_authorization(user)
+                if f"{self.workspace_oid}:{self.datasource_id}" in document.managed_resources or any(
+                    g.workspace_oid == self.workspace_oid and g.datasource_id == self.datasource_id for g in document.grants
+                ):
+                    raise AuthorizationError("AUTH_MAPPING_MISSING", "数据源的v2权限映射已移除，不能回退旧执行路径")
+            return None
+        binding = self._binding()
+        if (policy.bundle_id, policy.manifest_hash) != (binding["bundle_id"], binding["manifest_hash"]):
+            raise AuthorizationError("AUTH_MAPPING_MISSING", "权限映射与当前语义发布物不一致")
+        assert_workspace_member(session, user, self.workspace_oid)
+        return context_for(user, self.workspace_oid, self.datasource_id, policy, session=session)
+
+    def authorization_context(self):
+        # Legacy datasources keep their existing context contract.
+        try:
+            if not getattr(self.settings, "database_edu_url", "") and self._permission_manifest() is None:
+                return None
+            authorization = self._fresh_authorization()
+            return authorization.model_context() if authorization is not None else None
+        except AuthorizationError as exc:
+            raise SemanticAuthorizationError(exc) from exc
+
+    def _fresh_authorization(self):
+        with get_db_session() as session:
+            user = get_user_by_id(session, self.user_id)
+            from src.datasource.service.education_source import (
+                environment_manifest,
+                has_environment_authorization,
+            )
+            if has_environment_authorization(user, self.workspace_oid, self.datasource_id):
+                self._environment_permission = environment_manifest(self.workspace_oid, self.datasource_id, settings=self.settings)
+            else:
+                self._environment_permission = None
+            if self._permission_manifest() is None:
+                return self._authorization(session, user)
+            assert_datasource_accessible(session, user, self.datasource_id, self.workspace_oid)
+            return self._authorization(session, user)
 
     def _binding(self):
         binding = self.settings.datasemantic_bindings.get(self.datasource_id)
@@ -259,14 +332,15 @@ class SemanticQuery:
             data = response.json()
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code in {404, 409}:
-                raise SemanticQueryError("DataSemantic 发布物不存在或版本不匹配。") from exc
-            raise SemanticQueryError("DataSemantic 无法规划此查询。") from exc
+                raise SemanticContractError("QUERY_PUBLICATION_STALE", "DataSemantic 发布物不存在或版本不匹配。") from exc
+            code = "QUERY_PLAN_UNSUPPORTED" if exc.response.status_code in {400, 422} else "QUERY_SERVICE_UNAVAILABLE"
+            raise SemanticContractError(code, "DataSemantic 无法规划此查询。") from exc
         except (httpx.RequestError, ValueError) as exc:
-            raise SemanticQueryError("DataSemantic 服务暂时不可用。") from exc
+            raise SemanticContractError("QUERY_SERVICE_UNAVAILABLE", "DataSemantic 服务暂时不可用。") from exc
         if not isinstance(data, dict) or any(
             data.get(key) != value for key, value in binding.items()
         ):
-            raise SemanticQueryError("DataSemantic 返回的发布版本不匹配。")
+            raise SemanticContractError("QUERY_PUBLICATION_STALE", "DataSemantic 返回的发布版本不匹配。")
         return data
 
     def context(self):
@@ -277,14 +351,29 @@ class SemanticQuery:
                     "GET", f"bundles/{quote(binding['bundle_id'], safe='')}/context", binding
                 )
                 self._context_binding = binding
-            return self._context
+            policy = self._permission_manifest()
+            if policy is None:
+                return self._context
+            result = {k: v for k, v in self._context.items() if k in {"bundle_id", "manifest_hash", "dialect", "analysis_contract_schema_version"}}
+            for kind in ("models", "views"):
+                result[kind] = []
+                for item in self._context.get(kind, []):
+                    relation = policy.relations.get(item["name"].lower())
+                    if relation is not None:
+                        result[kind].append({"name": item["name"], "description": item.get("description", ""),
+                                             "columns": [{k: v for k, v in col.items() if k in {"name", "type", "description"}}
+                                                         for col in item.get("columns", [])
+                                                         if col["name"] in relation.columns and col["name"] not in relation.forbidden_columns]})
+            result["relationships"] = [r for r in self._context.get("relationships", [])
+                                       if set(r.get("models", [])) <= set(policy.relations)]
+            return result
 
     def _plan(self, semantic_sql: str, binding: dict, dialect: str) -> dict:
         plan = self._call("POST", "plan", binding, json={**binding, "semantic_sql": semantic_sql})
         if plan.get("dialect") != dialect:
-            raise SemanticQueryError("DataSemantic 计划的方言不匹配。")
+            raise SemanticContractError("QUERY_PLAN_INVALID", "DataSemantic 计划的方言不匹配。")
         if not isinstance(plan.get("physical_sql"), str) or not plan["physical_sql"].strip():
-            raise SemanticQueryError("DataSemantic 未返回物理 SQL。")
+            raise SemanticContractError("QUERY_PLAN_INVALID", "DataSemantic 未返回物理 SQL。")
         return plan
 
     def describe(self, name: str) -> dict:
@@ -343,6 +432,16 @@ class SemanticQuery:
         return [{"name": field} for field in fields]
 
     def run(self, sql: str, *, execute: bool = True):
+        try:
+            return self._run(sql, execute=execute)
+        except AuthorizationError as exc:
+            raise SemanticAuthorizationError(exc) from exc
+        except SemanticQueryError as exc:
+            if not hasattr(exc, "detail") and self._permission_manifest() is not None:
+                raise SemanticContractError("QUERY_SQL_UNSUPPORTED", str(exc)) from exc
+            raise
+
+    def _run(self, sql: str, *, execute: bool = True):
         context = self.context()
         binding = {key: context[key] for key in ("bundle_id", "manifest_hash")}
         url = self.settings.database_edu_url.strip()
@@ -392,9 +491,21 @@ class SemanticQuery:
                     name: (kind, relation, {field["name"]: field for field in columns})
                     for name, (kind, relation, columns) in published_columns.items()
                 })
+            permission_context = self._fresh_authorization() if getattr(self.settings, "database_edu_url", "") else None
+            proof = PermissionValidator(permission_context).prove(logical) if permission_context else None
             plan = self._plan(logical.sql(dialect=dialect), binding, dialect)
+            if permission_context is not None:
+                return self._execute_explicit(plan, binding, db_type, dialect, config, execute, logical, permission_context, proof)
             return self._prepare_and_execute(plan, binding, db_type, dialect, config, execute)
         except SemanticFieldError as exc:
+            policy = self._permission_manifest()
+            relation = policy.relations.get(exc.detail.get("source", {}).get("relation", "").lower()) if policy else None
+            formula = relation.metrics.get(exc.detail.get("field")) if relation else None
+            if formula:
+                exc.detail.update(
+                    metric_definition={"id": exc.detail["field"], "expression": formula},
+                    repair_hint="该名称是审核指标标识，不是表字段；请展开其表达式，基准输出仍需遵守查询契约。",
+                )
             with self._metadata_lock:
                 if len(self._field_errors) >= _MAX_FIELD_ERRORS:
                     self._field_errors.pop(next(iter(self._field_errors)))
@@ -403,11 +514,57 @@ class SemanticQuery:
         except SqlglotError as exc:
             raise SemanticQueryError("无法解析语义 SQL 或生成的物理计划。") from exc
 
+    def _execute_explicit(self, plan, binding, db_type, dialect, config, execute, logical, authorization, proof):
+        if dialect != authorization.manifest.dialect:
+            raise AuthorizationError("AUTH_MAPPING_MISSING", "权限映射的数据库方言不匹配")
+        if any(config.get(key) != value for key, value in authorization.manifest.connection.model_dump().items()):
+            raise AuthorizationError("AUTH_MAPPING_MISSING", "实际连接不属于审核的数据源，查询已停止")
+        try:
+            secured = _query(plan["physical_sql"], dialect, compiled=True)
+        except (SemanticQueryError, SqlglotError) as exc:
+            raise AuthorizationError("AUTH_PHYSICAL_PROOF_FAILED", "编译结果不是可验证的只读查询") from exc
+        verify_compiled_permissions(secured, authorization, proof)
+        for _, table in _sources(secured):
+            table.set("db", exp.to_identifier(authorization.manifest.physical_schema, quoted=True))
+        if execute:
+            limit = secured.args.get("limit")
+            if limit is None or not isinstance(limit.expression, exp.Literal) or not limit.expression.is_int or int(limit.expression.this) > _MAX_ROWS:
+                secured = secured.limit(_MAX_ROWS + 1)
+        verify_compiled_permissions(secured, authorization, proof)
+        current = self._fresh_authorization()
+        if current is None or current.fingerprint != authorization.fingerprint:
+            raise AuthorizationError("AUTH_CONTEXT_STALE", "执行前权限已变化，请重新生成查询")
+        result = {}
+        if execute:
+            outcome = run_sql_with_auto_fix(secured.sql(dialect=dialect), db_type=db_type, config={
+                **config, "read_only": True, "query_timeout_seconds": self.settings.chat_query_timeout_seconds,
+            }, max_fix_attempts=0)
+            current = self._fresh_authorization()
+            if current is None or current.fingerprint != authorization.fingerprint:
+                raise AuthorizationError("AUTH_REVOKED", "查询期间权限发生变化，结果已丢弃")
+            if not outcome.success or not isinstance(outcome.result, dict):
+                raise SemanticContractError("QUERY_EXECUTION_FAILED", "已验证查询执行失败，请检查数据源")
+            result = apply_result_privacy(outcome.result) or outcome.result
+            if tuple(result.get("columns", ())) != proof.output_columns:
+                raise AuthorizationError("AUTH_PHYSICAL_PROOF_FAILED", "数据库结果字段与已验证输出契约不一致")
+            rows = result.get("rows", [])
+            result = {"columns": result["columns"], "rows": rows[:_MAX_ROWS],
+                      "row_count": min(len(rows), _MAX_ROWS), "rows_truncated": len(rows) > _MAX_ROWS}
+        # The model and ordinary SSE/history never receive the compiled SQL or table names.
+        return jsonable_encoder({**result, "sql": logical.sql(dialect=dialect),
+                                 "tables": sorted({t.name for _, t in _sources(logical)}), **binding,
+                                 "plan_request_id": plan.get("request_id"), "permission_mode": "model_explicit_v2",
+                                 "authorization_fingerprint": authorization.fingerprint,
+                                 "query_contract": {"version": CONTRACT_VERSION,
+                                                    "prover_version": PROVER_VERSION,
+                                                    "fingerprint": proof.contract_fingerprint}})
+
     def _prepare_and_execute(self, plan, binding, db_type, dialect, config, execute):
         with get_db_session() as session:
             user = get_user_by_id(session, self.user_id)
             if user is None:
                 raise SemanticQueryError("用户权限已失效。")
+            self._authorization(session, user)  # rejects a removed v2 mapping; no legacy fallback
             assert_datasource_accessible(session, user, self.datasource_id, self.workspace_oid)
             schema = "public" if dialect == "postgres" else config["database"]
             tree = _query(plan["physical_sql"], dialect, compiled=True)

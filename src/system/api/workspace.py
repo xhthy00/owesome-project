@@ -14,6 +14,17 @@ from system.models.workspace import SysUserWorkspace, SysWorkspace
 from system.schemas import UserResponse
 from system.workspace_scope import is_platform_admin_user
 
+
+def _require_workspace_manager(session, current_user, oid):
+    from common.exceptions.base import ForbiddenException
+    if is_platform_admin_user(current_user):
+        return
+    member = session.query(SysUserWorkspace).filter(SysUserWorkspace.uid == current_user.id,
+                                                   SysUserWorkspace.oid == int(oid),
+                                                   SysUserWorkspace.weight == 1).first()
+    if member is None:
+        raise ForbiddenException("仅当前空间管理员可修改该空间或成员")
+
 router = APIRouter(prefix="/system/workspace", tags=["workspace"])
 
 
@@ -84,6 +95,7 @@ def update_workspace(
 ):
     _ = current_user
     workspace_id = payload.get("id")
+    _require_workspace_manager(session, current_user, workspace_id)
     row = session.query(SysWorkspace).filter(SysWorkspace.id == workspace_id).first()
     if not row:
         raise NotFoundException("Workspace not found")
@@ -158,6 +170,9 @@ def add_workspace_member(
         raise BadRequestException("uid_list is required")
     if not oid:
         oid = int(current_user.oid)
+    _require_workspace_manager(session, current_user, oid)
+    if weight not in (0, 1):
+        raise BadRequestException("成员角色无效")
     created = 0
     now_ts = datetime.now()
     for one_uid in uid_list:
@@ -195,6 +210,9 @@ def update_workspace_member(
         )
     if not row:
         raise NotFoundException("Workspace member not found")
+    _require_workspace_manager(session, current_user, row.oid)
+    if int(payload.get("weight", row.weight)) not in (0, 1):
+        raise BadRequestException("成员角色无效")
     row.weight = int(payload.get("weight", row.weight))
     session.commit()
     return success_response(data={"id": row.id, "weight": row.weight}, message="Member updated")
@@ -260,6 +278,7 @@ def remove_workspace_member(
     _ = current_user
     uid_list = payload.get("uid_list") or ([] if uid is None else [uid])
     oid_value = payload.get("oid", oid if oid is not None else int(current_user.oid))
+    _require_workspace_manager(session, current_user, oid_value)
     if not uid_list:
         raise BadRequestException("uid_list is required")
     session.query(SysUserWorkspace).filter(
@@ -288,7 +307,7 @@ def delete_workspace(
     session: Session = Depends(get_session),
     current_user=Depends(get_current_user),
 ):
-    _ = current_user
+    _require_workspace_manager(session, current_user, workspace_id)
     if workspace_id == 1:
         raise BadRequestException("Default workspace cannot be deleted")
     row = session.query(SysWorkspace).filter(SysWorkspace.id == workspace_id).first()

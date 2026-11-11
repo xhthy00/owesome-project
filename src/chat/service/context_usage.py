@@ -18,7 +18,7 @@ class ContextUsageCallback(AsyncCallbackHandler):
         )
         metadata = kwargs.get("metadata") or {}
         namespace = metadata.get("langgraph_checkpoint_ns") or ""
-        is_root = "|" not in namespace and metadata.get("lc_source") not in {"summarization", "question_assessment"}
+        is_root = "|" not in namespace and metadata.get("lc_source") not in {"summarization", "question_assessment", "verified_answer"}
         self.prompts[run_id] = (estimate, metadata if is_root else None)
 
     async def on_llm_end(self, response, *, run_id, **kwargs):

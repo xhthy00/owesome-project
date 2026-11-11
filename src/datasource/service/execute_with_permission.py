@@ -30,6 +30,8 @@ def execute_sql_with_permission(
     Returns:
         (success, message, result_dict, sql_run)
     """
+    from src.datasource.service.education_authorization import reject_unverified_execution
+    reject_unverified_execution(datasource_id, user)
     from datasource.service.sql_auto_fix import format_auto_fix_note, run_sql_with_auto_fix
 
     def _prepare(raw: str) -> str:
@@ -85,6 +87,8 @@ def execute_sql_with_permission_by_user_id(
     tables_hint: Optional[list[str]] = None,
 ) -> tuple[bool, str, dict[str, Any] | None, str]:
     """按 user_id 加载用户并执行（教育工具 / API 便捷入口）。"""
+    from src.datasource.service.education_authorization import reject_unverified_execution
+    reject_unverified_execution(datasource_id)
     from src.agent.resource.tool.business import _load_datasource
     from src.common.core.database import get_db_session
     from src.system.crud.crud_user import get_user_by_id

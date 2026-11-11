@@ -686,7 +686,9 @@ async def list_report_history(
             oid=int(workspace_oid),
             limit=lim,
         )
-        items = [_report_history_item(rec, conv, include_html=False) for rec, conv in pairs]
+        from src.datasource.service.education_authorization import record_accessible
+        items = [_report_history_item(rec, conv, include_html=False) for rec, conv in pairs
+                 if record_accessible(session, current_user, conv, rec)]
     return success_response({"total": len(items), "items": items})
 
 
@@ -713,6 +715,9 @@ async def get_report_history_detail(
         )
         if not conversation:
             raise NotFoundException("报告会话不存在")
+        from src.datasource.service.education_authorization import record_accessible
+        if not record_accessible(session, current_user, conversation, record):
+            raise NotFoundException("报告权限已变化，请按当前范围重新生成")
         return success_response(_report_history_item(record, conversation, include_html=True))
 
 

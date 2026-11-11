@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from audit.service.writer import log_operation
 from common.core.database import SessionLocal, get_session
-from common.exceptions.base import NotFoundException
+from common.exceptions.base import ForbiddenException, NotFoundException
 from common.schemas.response import success_response
 from common.utils.aes import decrypt_conf
 from datasource.crud import crud_datasource
@@ -27,6 +27,11 @@ from system.workspace_scope import (
 )
 
 router = APIRouter(prefix="/datasource", tags=["datasource"])
+
+
+def _require_datasource_admin(current_user):
+    if not is_platform_admin_user(current_user):
+        raise ForbiddenException("仅平台管理员可读取数据库凭据或维护数据源连接")
 
 
 def _client_ip(request: Request) -> Optional[str]:
@@ -83,6 +88,7 @@ def get_datasource(
     current_user: UserResponse = Depends(get_current_user),
 ):
     """Get datasource by ID."""
+    _require_datasource_admin(current_user)
     ds = assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
 
     config = decrypt_conf(ds.configuration) if ds.configuration else {}
@@ -110,6 +116,7 @@ def create_datasource(
     current_user: UserResponse = Depends(get_current_user),
 ):
     """Create a new datasource."""
+    _require_datasource_admin(current_user)
     config = datasource_in.config.model_dump()
 
     ds = crud_datasource.create_datasource(
@@ -146,6 +153,7 @@ def update_datasource(
     current_user: UserResponse = Depends(get_current_user),
 ):
     """Update datasource."""
+    _require_datasource_admin(current_user)
     assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
 
     update_data = datasource_in.model_dump(exclude_unset=True)
@@ -186,6 +194,7 @@ def delete_datasource(
     current_user: UserResponse = Depends(get_current_user),
 ):
     """Delete datasource."""
+    _require_datasource_admin(current_user)
     assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
 
     success = crud_datasource.delete_datasource(session, datasource_id)
@@ -207,6 +216,7 @@ def test_connection(
     current_user: UserResponse = Depends(get_current_user),
 ):
     """Test datasource connection and record operation log with real result."""
+    _require_datasource_admin(current_user)
     ds = assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
 
     config = decrypt_conf(ds.configuration) if ds.configuration else {}

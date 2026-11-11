@@ -34,6 +34,7 @@ import { getAccessToken } from "@/auth/session";
 import { getApiBaseUrl } from "@/api/client";
 import { permissionApi, type EduRoleItem, type EduSchoolItem } from "@/api/permission";
 import { systemApi, type SystemUser } from "@/api/system";
+import EduPermissionV2 from "@/components/EduPermissionV2";
 
 const WORKSPACE_OID_KEY = "frontend_react_workspace_oid";
 const DEFAULT_DATASOURCE_ID = Number(process.env.NEXT_PUBLIC_DEFAULT_DATASOURCE_ID || 1);
@@ -64,7 +65,7 @@ function roleTagClass(code: string): string {
   }
 }
 
-export default function EduPermissionPage() {
+function LegacyEduPermissions() {
   const [roles, setRoles] = useState<EduRoleItem[]>([]);
   const [users, setUsers] = useState<SystemUser[]>([]);
   const [loading, setLoading] = useState(false);
@@ -399,7 +400,7 @@ export default function EduPermissionPage() {
   };
 
   return (
-    <div className="dbgpt-ui-font h-full min-h-0 overflow-y-auto p-6 pb-10">
+    <div className="pt-4">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <Typography.Title level={4} className="!mb-1">
@@ -784,4 +785,15 @@ export default function EduPermissionPage() {
       </Modal>
     </div>
   );
+}
+
+export default function EduPermissionPage() {
+  const [legacyOpen, setLegacyOpen] = useState(false);
+  return <div className="dbgpt-ui-font h-full min-h-0 overflow-y-auto p-6 pb-10">
+    <EduPermissionV2 />
+    <details onToggle={event => setLegacyOpen(event.currentTarget.open)}>
+      <summary className="cursor-pointer">旧版教育权限（兼容维护）</summary>
+      {legacyOpen && <LegacyEduPermissions />}
+    </details>
+  </div>;
 }

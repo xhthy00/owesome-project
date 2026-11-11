@@ -66,6 +66,9 @@ def _load_datasource(
     from src.common.core.database import get_db_session
     from src.common.utils.aes import decrypt_conf
     from src.datasource.crud import crud_datasource
+    from src.datasource.service.education_authorization import reject_unverified_execution
+
+    reject_unverified_execution(datasource_id)
 
     with get_db_session() as session:
         ds = crud_datasource.get_datasource_by_id(session, datasource_id)
