@@ -155,6 +155,16 @@ CSV 表头为 `user_id,expected_revision,grants_json`，每用户一行，grants
 
 `failure_stage=sql_validation`表示当前SQL未通过校验，错误同时返回`granted_capabilities`和修正契约；不能据此断言账号没有已授予的`city_baseline`。模型按反馈自行修正，达到原有两次修正上限后停止查询，并说明具体未完成原因；不再弹出让用户反复选择“继续读取”的技术兜底追问。权限失效、物理证明失败等不可修正错误仍立即停止。
 
+### 释放形态诊断与修复预算（2026-11-11 补充）
+
+- **ROUND 位置**：整体基准的取整必须发生在参照池聚合 CTE 内（`ROUND(AVG(sx), precision)`），外层只引用已取整的值；在外层对未取整均值做 ROUND 仍会被拒绝。每个已授权 capability 的规范正例随 `model_context.reference_examples` 注入提示，测试会填充占位符并证明示例。
+- **错误详情**：`error_detail` 新增 `failure_domain`（`authorization` / `sql_shape` / `capability` / `execution` / `compiled_plan` / `context` / `service` / `configuration`）、`is_permission_issue`、`error_schema_version=2`，以及可定位的 `reason`、`location`、`rejected_expression`、`expected_expression`、`repair_hint`。`sql_shape` 的用户文案明确说明“账号权限正常”，避免把写法错误读成权限失败。
+- **修复预算**：SQL 修复次数按子任务计算；`lookup_question_context` 的探查失败只记录、不消耗 SQL 修复次数；同一子任务超过两次后只停止该阶段的查询，其他阶段仍可继续。终止性错误（越权、物理证明失败、配置失效）仍全局停止。
+- **能力边界**：`model_context.capability_catalog` 提供每个 capability 的 `answers` / `not_answers` / `granted`；问题要求未开通口径时，模型应先说明并给替代口径，不得用查询试探。
+- **授权范围与能力的区别**：`scope_answers` 明确列出授权范围内可直接查询的普通口径（本班学生成绩明细、班级内排名/分布/均分等），这些查询不需要 capability；`reference_examples.own_scope` 提供本班学生明细的规范示例。`capability_catalog` 只约束参照池/跨单位对照，不能用来否定本班明细查询。
+- **可观测**：`tool_call_log` 增加 `error_code`、`error_detail`、`failure_domain`、`rule`，并记录 `lookup_question_context`；`scripts/semantic_failure_report.py` 输出失败域、Top 规则、预算耗尽等只读指标。
+- **本轮证据**：历史/上一轮的查询结果不能作为本轮业务数值的证据。澄清或重试后被确认的口径，仍须在当前轮调用一次 `query_semantic`（可复用同一 SQL）；未执行查询时的提示为“本轮未执行数据查询”，不再冒充 DataSemantic 失败。
+
 ## 旧入口及回滚
 
 使用新版授权的账号不能通过旧教育报表/成绩库等接口绕过验证，旧查询 helper 同样检查新版资源标记。尚未迁移的账号保持旧行为。独立维护入口需完成单独的维护授权适配后再向新版账号开放。

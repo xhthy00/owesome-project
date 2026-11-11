@@ -22,9 +22,78 @@ from src.datasource.service.education_authorization import (
 )
 from src.datasource.service.semantic_permission_contract import SQL_GRAMMAR, build_query_contract
 
+_SHAPE_REASON = {
+    "参照池不能通过UNION输出": "pool_union_not_allowed",
+    "最终结果包含未经授权释放的参照池数据": "pool_release_incomplete",
+    "参照池在授权释放前不能参与关联": "pool_join_before_release",
+    "参照池不能先排序、截断或去重": "pool_order_limit_distinct_not_allowed",
+    "不能在已确定的参照池上再添加人群过滤": "reference_filter_not_allowed",
+    "必须先按审核单位聚合参照池": "reference_aggregate_required",
+    "排名前不能再次筛选单位": "pool_filter_before_rank",
+    "参照池列必须可追溯到审核字段": "pool_column_unresolved",
+    "参照池字段无法追溯": "pool_column_unresolved",
+    "无法识别参照池表达式": "pool_expression_unresolved",
+    "参照池投影不能增加筛选": "pool_projection_filter_not_allowed",
+    "请将参照池聚合和排名分为独立CTE": "window_requires_separate_cte",
+    "指标或有效样本字段没有审核定义": "metric_definition_missing",
+    "参照池HAVING仅允许审核后的样本和单位数门槛": "baseline_having_invalid",
+    "缺少参照池有效样本数门槛": "baseline_having_required",
+    "不能输出参照池未分组字段": "baseline_projection_not_grouped",
+    "整体基准必须按策略精度ROUND后释放": "baseline_round_required",
+    "参照池只允许审核后的指标表达式": "baseline_projection_not_allowed",
+    "参照池必须计算审核指标": "baseline_metric_required",
+    "排名窗口不能改变分区或人群": "rank_window_invalid",
+    "排名必须按审核指标降序": "rank_order_invalid",
+    "未开放此参照池窗口函数": "rank_window_unsupported",
+    "排名必须保留单位键、名次和参评数": "rank_output_incomplete",
+    "自身排名输出不能再次聚合或开窗口": "rank_output_aggregate_not_allowed",
+    "排名输出必须明确限定自身单位": "rank_target_required",
+    "缺少排名后的自身区县过滤": "rank_target_required",
+    "缺少最少参评区县数门槛": "rank_units_gate_required",
+    "排名输出含未批准筛选条件": "rank_filter_not_allowed",
+    "自身排名指标精度无效": "rank_round_required",
+    "ROUND只能处理审核指标": "rank_round_target_invalid",
+    "排名结果指标必须按策略精度输出": "rank_round_required",
+}
+
 
 def fail(code, message, **details):
+    # Every release-shape rejection carries a stable machine-readable reason so
+    # the model can repair it and operators can aggregate failure causes. Sites
+    # that can locate the offending expression use fail_shape() below.
+    if code == "AUTH_RELEASE_SHAPE_INVALID":
+        details.setdefault("reason", _SHAPE_REASON.get(message, "release_shape_invalid"))
     raise AuthorizationError(code, message, **details)
+
+
+def fail_shape(
+    message,
+    *,
+    reason,
+    location=None,
+    rejected=None,
+    expected=None,
+    hint=None,
+    example=None,
+    **details,
+):
+    fail(
+        "AUTH_RELEASE_SHAPE_INVALID",
+        message,
+        reason=reason,
+        location=location or {},
+        rejected_expression=rejected,
+        expected_expression=expected,
+        repair_hint=hint,
+        example=example,
+        **details,
+    )
+
+
+def cte_name(select, fallback=""):
+    """Best-effort name of the CTE/subquery that owns this SELECT."""
+    parent = getattr(select, "parent", None)
+    return getattr(parent, "alias_or_name", "") or fallback
 
 
 def plain(node):
@@ -289,16 +358,33 @@ class PermissionValidator:
             if exc.detail.get("retryable") and not physical:
                 # The active context was established before this proof. A rejected
                 # query shape must not be mistaken for missing account authorization.
-                exc.detail.update(
-                    granted_capabilities=sorted(
+                update = {
+                    "granted_capabilities": sorted(
                         {c for g in self.context.grants for c in g.capabilities}
                     ),
-                    reference_query_contracts={
+                }
+                if exc.detail.get("repair_hint"):
+                    # A located repair hint is more useful than another full contract dump.
+                    relation = exc.detail.get("relation")
+                    if relation in self.contract.relations:
+                        update["repair_contract"] = {
+                            "relation": relation,
+                            "precision": self.contract.reference_policy.precision,
+                            **self.contract.relations[relation].model_dump(mode="json"),
+                        }
+                    else:
+                        update["reference_query_contracts"] = {
+                            name: self.contract.relations[name].model_dump(mode="json")
+                            for name, policy in self.manifest.relations.items()
+                            if not policy.public
+                        }
+                else:
+                    update["reference_query_contracts"] = {
                         name: self.contract.relations[name].model_dump(mode="json")
                         for name, policy in self.manifest.relations.items()
                         if not policy.public
-                    },
-                )
+                    }
+                exc.detail.update(update)
             raise
 
     def _prove(self, tree, *, physical=False):
@@ -578,7 +664,13 @@ class PermissionValidator:
         ]
         if internal:
             if len(sources) != 1:
-                fail("AUTH_RELEASE_SHAPE_INVALID", "参照池在授权释放前不能参与关联")
+                fail_shape(
+                    "参照池在授权释放前不能参与关联",
+                    reason="pool_join_before_release",
+                    location={"cte": cte_name(select), "sources": sorted(sources)},
+                    expected="参照池先在独立 CTE 中聚合释放，再在最终 SELECT 中与本校结果关联",
+                    hint="不要把参照原始池直接 JOIN 到明细或其他来源；先聚合、过门槛、按精度取整，再关联。",
+                )
             alias, source = internal[0]
             releases_here = source.kind == "rank_pool" or (
                 source.kind == "reference_raw"
@@ -595,16 +687,34 @@ class PermissionValidator:
                     or select.args.get("order")
                 )
             ):
-                fail("AUTH_RELEASE_SHAPE_INVALID", "参照池不能先排序、截断或去重")
+                fail_shape(
+                    "参照池不能先排序、截断或去重",
+                    reason="pool_order_limit_distinct_not_allowed",
+                    location={"cte": cte_name(select, source.relation)},
+                    expected="参照池先完整聚合，再在最终输出中排序/截断；不要在池上使用 DISTINCT",
+                    hint="池上的 ORDER BY/LIMIT/OFFSET/DISTINCT 会改变参照人群；移到最终结果层。",
+                )
             if source.kind == "reference_raw":
                 if select.args.get("where") and any(
                     isinstance(s, Scope) for _, s in scope.selected_sources.values()
                 ):
-                    fail("AUTH_RELEASE_SHAPE_INVALID", "不能在已确定的参照池上再添加人群过滤")
+                    fail_shape(
+                        "不能在已确定的参照池上再添加人群过滤",
+                        reason="reference_filter_not_allowed",
+                        location={"cte": cte_name(select, source.relation)},
+                        expected="只保留策略要求的固定人群条件；AVG 自动忽略 NULL",
+                        hint="移除成绩非空、排除某班/某校等额外人群条件，它们会改变参照池口径。",
+                    )
                 if select.args.get("group") or any(e.find(exp.AggFunc) for e in select.expressions):
                     return self.aggregate(select, sources, source)
                 if any(e.find(exp.Window) for e in select.expressions):
-                    fail("AUTH_RELEASE_SHAPE_INVALID", "必须先按审核单位聚合参照池")
+                    fail_shape(
+                        "必须先按审核单位聚合参照池",
+                        reason="reference_aggregate_required",
+                        location={"cte": cte_name(select, source.relation)},
+                        expected="先聚合出各单位指标并过门槛，再单独 CTE 开窗口",
+                        hint="聚合和窗口不能写在同一个 SELECT；拆成两个 CTE。",
+                    )
                 return self.passthrough(select, sources, source)
             if source.kind == "reference_groups":
                 if (
@@ -612,7 +722,13 @@ class PermissionValidator:
                     or select.args.get("having")
                     or select.args.get("group")
                 ):
-                    fail("AUTH_RELEASE_SHAPE_INVALID", "排名前不能再次筛选单位")
+                    fail_shape(
+                        "排名前不能再次筛选单位",
+                        reason="pool_filter_before_rank",
+                        location={"cte": cte_name(select, source.relation)},
+                        expected="先对全部授权单位排名，再在最终输出中限定自身单位",
+                        hint="排名前筛选会改变名次；把自身范围过滤放到排名结果之后。",
+                    )
                 if any(e.find(exp.Window) for e in select.expressions):
                     return self.rank(select, sources, source)
                 return self.passthrough(select, sources, source)
@@ -624,10 +740,22 @@ class PermissionValidator:
     def value(self, node, sources):
         node = plain(node)
         if not isinstance(node, exp.Column) or node.table not in sources:
-            fail("AUTH_RELEASE_SHAPE_INVALID", "参照池列必须可追溯到审核字段")
+            fail_shape(
+                "参照池列必须可追溯到审核字段",
+                reason="pool_column_unresolved",
+                location={"expression": node.sql(dialect=self.manifest.dialect)},
+                expected="引用已审核的指标、分组维度或单位键列",
+                hint="只使用 reference_query_contract 中的列和审核指标表达式。",
+            )
         value = sources[node.table].columns.get(node.name)
         if value is None:
-            fail("AUTH_RELEASE_SHAPE_INVALID", "参照池字段无法追溯")
+            fail_shape(
+                "参照池字段无法追溯",
+                reason="pool_column_unresolved",
+                location={"expression": node.sql(dialect=self.manifest.dialect)},
+                expected="引用参照池已释放的列",
+                hint="外层只能引用参照池 CTE 实际输出的列。",
+            )
         return value
 
     def expanded(self, node, sources):
@@ -637,13 +765,25 @@ class PermissionValidator:
         for col in list(node.find_all(exp.Column)):
             value = self.value(col, sources)
             if value.kind not in {"raw", "dimension", "metric", "target", "rank", "units"}:
-                fail("AUTH_RELEASE_SHAPE_INVALID", "无法识别参照池表达式")
+                fail_shape(
+                    "无法识别参照池表达式",
+                    reason="pool_expression_unresolved",
+                    location={"expression": node.sql(dialect=self.manifest.dialect)},
+                    expected="使用审核指标表达式或其算术组合",
+                    hint="参照池表达式只能由审核列与审核指标组成。",
+                )
             col.replace(exp.column(value.name))
         return canonical(node)
 
     def passthrough(self, select, sources, source):
         if select.args.get("having"):
-            fail("AUTH_RELEASE_SHAPE_INVALID", "参照池投影不能增加筛选")
+            fail_shape(
+                "参照池投影不能增加筛选",
+                reason="pool_projection_filter_not_allowed",
+                location={"cte": cte_name(select, source.relation)},
+                expected="参照池投影只输出已释放的列",
+                hint="需要筛选时在聚合 CTE 内用审核后的 HAVING 门槛。",
+            )
         columns = {e.alias_or_name: self.value(plain(e), sources) for e in select.expressions}
         return Flow(
             source.kind, columns, source.relation, source.capability, source.grant_id, source.target
@@ -654,7 +794,13 @@ class PermissionValidator:
         rules = self.contract.relations[source.relation]
         capability = rules.capabilities[source.capability]
         if any(e.find(exp.Window) for e in select.expressions):
-            fail("AUTH_RELEASE_SHAPE_INVALID", "请将参照池聚合和排名分为独立CTE")
+            fail_shape(
+                "请将参照池聚合和排名分为独立CTE",
+                reason="window_requires_separate_cte",
+                location={"cte": cte_name(select, source.relation)},
+                expected="聚合 CTE 只做聚合和门槛；排名放到下一个 CTE 的窗口函数",
+                hint="同一个 SELECT 里同时聚合和开窗口无法证明释放边界。",
+            )
         grouping = [
             self.value(e, sources).name
             for e in (select.args.get("group") or exp.Group()).expressions
@@ -664,10 +810,12 @@ class PermissionValidator:
         if not set(grouping) <= allowed or (
             is_rank and grouping != [policy.scope_columns.get("district_id")]
         ):
-            fail(
-                "AUTH_RELEASE_SHAPE_INVALID",
+            fail_shape(
                 "参照池分组超出授权指标粒度；整体基准可不分组，不能按学校或届次拆组",
                 reason="reference_grouping_not_allowed",
+                location={"cte": cte_name(select, source.relation), "group_by": grouping},
+                expected=f"不分组，或只按 {sorted(c for c in allowed if c)} 分组",
+                hint="整体基准不能按学校/届次拆组；自身排名只按区县分组。",
                 rejected_group_columns=grouping,
                 allowed_group_columns=sorted(c for c in allowed if c),
             )
@@ -688,15 +836,28 @@ class PermissionValidator:
                 and isinstance(expr, exp.Count)
                 and self.expanded(expr, sources) not in formulas
             ):
-                fail(
-                    "AUTH_RELEASE_SHAPE_INVALID",
-                    "整体基准不开放人数、学生数或学校数输出；COUNT仅用于HAVING门槛，SELECT只输出审核指标和允许的分组维度",
+                fail_shape(
+                    "整体基准不开放人数、学生数或学校数输出；COUNT仅用于HAVING门槛，"
+                    "SELECT只输出审核指标和允许的分组维度",
                     reason="baseline_count_output_not_allowed",
+                    location={
+                        "cte": cte_name(select, source.relation),
+                        "projection": item.alias_or_name,
+                    },
+                    rejected=expr.sql(dialect=self.manifest.dialect),
+                    expected="SELECT 只输出审核指标和允许的分组维度；COUNT 只出现在 HAVING",
+                    hint="把 COUNT 从 SELECT 移到 HAVING；它不是可释放指标。",
                 )
             metric = formulas.get(self.expanded(expr, sources))
             sample = rules.sample_columns.get(metric)
             if metric is None or sample is None:
-                fail("AUTH_RELEASE_SHAPE_INVALID", "指标或有效样本字段没有审核定义")
+                fail_shape(
+                    "指标或有效样本字段没有审核定义",
+                    reason="metric_definition_missing",
+                    location={"cte": cte_name(select, source.relation)},
+                    expected="只使用 reference_query_contract 中定义的指标和样本列",
+                    hint="指标标识不是字段；请展开为审核后的聚合表达式。",
+                )
             samples.add(sample)
         required_gates = {
             canonical(
@@ -721,7 +882,17 @@ class PermissionValidator:
                     not isinstance(atom, exp.GTE)
                     or self.expanded(atom.left, sources) not in grouped_gates
                 ):
-                    fail("AUTH_RELEASE_SHAPE_INVALID", "参照池HAVING仅允许审核后的样本和单位数门槛")
+                    fail_shape(
+                        "参照池HAVING仅允许审核后的样本和单位数门槛",
+                        reason="baseline_having_invalid",
+                        location={
+                            "cte": cte_name(select, source.relation),
+                            "expression": atom.sql(dialect=self.manifest.dialect),
+                        },
+                        expected="HAVING "
+                        + " AND ".join(f"{key} >= {value}" for key, value in required_gates.items()),
+                        hint="HAVING 只能包含审核后的 COUNT(sample) 与 COUNT(DISTINCT unit) 门槛。",
+                    )
                 grouped_gates[self.expanded(atom.left, sources)].append(atom)
         if (
             not required_gates
@@ -731,29 +902,78 @@ class PermissionValidator:
                 for key, atoms in grouped_gates.items()
             )
         ):
-            fail("AUTH_RELEASE_SHAPE_INVALID", "缺少参照池有效样本数门槛")
+            fail_shape(
+                "缺少参照池有效样本数门槛",
+                reason="baseline_having_required",
+                location={"cte": cte_name(select, source.relation)},
+                expected="HAVING "
+                + " AND ".join(f"{key} >= {value}" for key, value in required_gates.items()),
+                hint="参照池必须在聚合 CTE 内同时满足有效样本数和参评单位数门槛。",
+            )
         columns = {}
         for e in select.expressions:
             expression = plain(e)
             if isinstance(expression, exp.Column):
                 value = self.value(expression, sources)
                 if value.name not in grouping:
-                    fail("AUTH_RELEASE_SHAPE_INVALID", "不能输出参照池未分组字段")
+                    fail_shape(
+                        "不能输出参照池未分组字段",
+                        reason="baseline_projection_not_grouped",
+                        location={
+                            "cte": cte_name(select, source.relation),
+                            "projection": e.alias_or_name,
+                        },
+                        rejected=expression.sql(dialect=self.manifest.dialect),
+                        expected="只输出已批准的分组维度或审核指标",
+                        hint="未分组的列会泄露池内明细；把它加入允许的分组或移除。",
+                    )
                 columns[e.alias_or_name] = Value("target" if is_rank else "dimension", value.name)
                 continue
             if not is_rank:
                 if not isinstance(expression, exp.Round) or literal(
                     expression.args.get("decimals")
                 ) != str(self.contract.reference_policy.precision):
-                    fail("AUTH_RELEASE_SHAPE_INVALID", "整体基准必须按策略精度ROUND后释放")
+                    precision = self.contract.reference_policy.precision
+                    rejected = expression.sql(dialect=self.manifest.dialect)
+                    fail_shape(
+                        "整体基准必须按策略精度ROUND后释放",
+                        reason="baseline_round_required",
+                        location={
+                            "cte": cte_name(select, source.relation),
+                            "projection": e.alias_or_name,
+                        },
+                        rejected=rejected,
+                        expected=f"ROUND({rejected}, {precision})",
+                        hint="取整必须发生在参照池聚合 CTE 内；外层只引用已取整的值，"
+                        "不要在外层再对未取整的 AVG 结果做 ROUND。",
+                        precision=precision,
+                        relation=source.relation,
+                    )
                 expression = expression.this
                 expression = numeric_wrapper(expression)
             formula = self.expanded(expression, sources)
             if formula not in formulas:
-                fail("AUTH_RELEASE_SHAPE_INVALID", "参照池只允许审核后的指标表达式")
+                fail_shape(
+                    "参照池只允许审核后的指标表达式",
+                    reason="baseline_projection_not_allowed",
+                    location={
+                        "cte": cte_name(select, source.relation),
+                        "projection": e.alias_or_name,
+                    },
+                    rejected=expression.sql(dialect=self.manifest.dialect),
+                    expected="审核指标表达式，例如 "
+                    + next(iter(rules.aggregate_expressions.values())),
+                    hint="指标标识不是字段；请展开为 reference_query_contract 中的表达式。",
+                )
             columns[e.alias_or_name] = Value("metric", formulas[formula])
         if not any(v.kind == "metric" for v in columns.values()):
-            fail("AUTH_RELEASE_SHAPE_INVALID", "参照池必须计算审核指标")
+            fail_shape(
+                "参照池必须计算审核指标",
+                reason="baseline_metric_required",
+                location={"cte": cte_name(select, source.relation)},
+                expected="至少输出一个审核指标",
+                hint="参照池的用途是释放审核指标；只输出维度不足以构成基准。",
+            )
         if not is_rank:
             self.releases.append(
                 fingerprint(
@@ -804,17 +1024,35 @@ class PermissionValidator:
                 or expression.args.get("partition_by")
                 or expression.args.get("spec")
             ):
-                fail("AUTH_RELEASE_SHAPE_INVALID", "排名窗口不能改变分区或人群")
+                fail_shape(
+                    "排名窗口不能改变分区或人群",
+                    reason="rank_window_invalid",
+                    location={"cte": cte_name(select, source.relation)},
+                    expected="RANK() OVER (ORDER BY 审核指标 DESC)，不分区、不指定 frame",
+                    hint="排名必须对同一参照池全体单位进行；不要 PARTITION BY 或加窗口 frame。",
+                )
             if isinstance(expression.this, exp.Rank):
                 order = expression.args.get("order")
                 if not order or len(order.expressions) != 1:
-                    fail("AUTH_RELEASE_SHAPE_INVALID", "排名必须按审核指标降序")
+                    fail_shape(
+                        "排名必须按审核指标降序",
+                        reason="rank_order_invalid",
+                        location={"cte": cte_name(select, source.relation)},
+                        expected="ORDER BY 审核指标 DESC",
+                        hint="排名窗口只能有一个排序键，且必须是审核指标降序。",
+                    )
                 ordered = order.expressions[0]
                 if (
                     not ordered.args.get("desc")
                     or self.value(ordered.this, sources).kind != "metric"
                 ):
-                    fail("AUTH_RELEASE_SHAPE_INVALID", "排名必须按审核指标降序")
+                    fail_shape(
+                        "排名必须按审核指标降序",
+                        reason="rank_order_invalid",
+                        location={"cte": cte_name(select, source.relation)},
+                        expected="ORDER BY 审核指标 DESC",
+                        hint="不能按维度、常量或升序排名。",
+                    )
                 columns[e.alias_or_name] = Value("rank", "city_rank")
                 self.releases.append(
                     fingerprint(
@@ -833,9 +1071,21 @@ class PermissionValidator:
             ):
                 columns[e.alias_or_name] = Value("units", "reference_units")
             else:
-                fail("AUTH_RELEASE_SHAPE_INVALID", "未开放此参照池窗口函数")
+                fail_shape(
+                    "未开放此参照池窗口函数",
+                    reason="rank_window_unsupported",
+                    location={"cte": cte_name(select, source.relation)},
+                    expected="只允许 RANK() 和 COUNT(*) OVER ()",
+                    hint="其他窗口函数请先确认是否在授权契约内。",
+                )
         if not {"target", "rank", "units"} <= {v.kind for v in columns.values()}:
-            fail("AUTH_RELEASE_SHAPE_INVALID", "排名必须保留单位键、名次和参评数")
+            fail_shape(
+                "排名必须保留单位键、名次和参评数",
+                reason="rank_output_incomplete",
+                location={"cte": cte_name(select, source.relation)},
+                expected="输出单位键、city_rank、reference_units",
+                hint="排名结果缺少单位键/名次/参评数，无法证明只释放了自身名次。",
+            )
         return Flow(
             "rank_pool", columns, source.relation, source.capability, source.grant_id, source.target
         )
@@ -846,16 +1096,34 @@ class PermissionValidator:
             or select.args.get("having")
             or any(e.find(exp.Window) for e in select.expressions)
         ):
-            fail("AUTH_RELEASE_SHAPE_INVALID", "自身排名输出不能再次聚合或开窗口")
+            fail_shape(
+                "自身排名输出不能再次聚合或开窗口",
+                reason="rank_output_aggregate_not_allowed",
+                location={"cte": cte_name(select, source.relation)},
+                expected="最终输出只做自身单位过滤和指标取整",
+                hint="排名已经完成；最终 SELECT 不要再 GROUP BY/HAVING/开窗口。",
+            )
         alias = next(iter(sources))
         where = select.args.get("where")
         branches = terms(where.this if where else None)
         if len(branches) != 1:
-            fail("AUTH_RELEASE_SHAPE_INVALID", "排名输出必须明确限定自身单位")
+            fail_shape(
+                "排名输出必须明确限定自身单位",
+                reason="rank_target_required",
+                location={"cte": cte_name(select, source.relation)},
+                expected="在排名结果上使用自身的区县条件（EQ 或 IN 明确值）",
+                hint="不能省略自身范围，也不能用 OR 放宽到其他区县。",
+            )
         target_fields = [k for k, v in source.columns.items() if v.kind == "target"]
         vals = column_values(branches[0], alias)
         if not any(vals.get(k) == {source.target} for k in target_fields):
-            fail("AUTH_RELEASE_SHAPE_INVALID", "缺少排名后的自身区县过滤")
+            fail_shape(
+                "缺少排名后的自身区县过滤",
+                reason="rank_target_required",
+                location={"cte": cte_name(select, source.relation)},
+                expected="限定为授权给的自身区县值",
+                hint="排名结果必须过滤到自己的区县，且只能使用授权值。",
+            )
         gates = [a for a in branches[0] if isinstance(a, exp.GTE)]
         if not gates or not self.minimum_gate(
             exp.and_(*gates),
@@ -863,7 +1131,13 @@ class PermissionValidator:
             "reference_units",
             self.contract.reference_policy.minimum_reference_units,
         ):
-            fail("AUTH_RELEASE_SHAPE_INVALID", "缺少最少参评区县数门槛")
+            fail_shape(
+                "缺少最少参评区县数门槛",
+                reason="rank_units_gate_required",
+                location={"cte": cte_name(select, source.relation)},
+                expected=f"reference_units >= {self.contract.reference_policy.minimum_reference_units}",
+                hint="参评区县数不足时不能释放名次。",
+            )
         # No additional metric/target probes beyond the two release conditions.
         for atom in branches[0]:
             if isinstance(atom, exp.GTE):
@@ -871,7 +1145,16 @@ class PermissionValidator:
             if not isinstance(atom, (exp.EQ, exp.In)) or not set(
                 column_values([atom], alias)
             ) <= set(target_fields):
-                fail("AUTH_RELEASE_SHAPE_INVALID", "排名输出含未批准筛选条件")
+                fail_shape(
+                    "排名输出含未批准筛选条件",
+                    reason="rank_filter_not_allowed",
+                    location={
+                        "cte": cte_name(select, source.relation),
+                        "expression": atom.sql(dialect=self.manifest.dialect),
+                    },
+                    expected="只保留自身区县条件和参评数门槛",
+                    hint="额外谓词可以用来做精度探测，必须移除。",
+                )
         columns = {}
         for e in select.expressions:
             expression = plain(e)
@@ -879,14 +1162,42 @@ class PermissionValidator:
                 if literal(expression.args.get("decimals")) != str(
                     self.contract.reference_policy.precision
                 ):
-                    fail("AUTH_RELEASE_SHAPE_INVALID", "自身排名指标精度无效")
+                    precision = self.contract.reference_policy.precision
+                    fail_shape(
+                        "自身排名指标精度无效",
+                        reason="rank_round_required",
+                        location={
+                            "cte": cte_name(select, source.relation),
+                            "projection": e.alias_or_name,
+                        },
+                        rejected=expression.sql(dialect=self.manifest.dialect),
+                        expected=f"ROUND(指标, {precision})",
+                        hint="排名结果指标必须按策略精度取整。",
+                    )
                 value = self.value(numeric_wrapper(expression.this), sources)
                 if value.kind != "metric":
-                    fail("AUTH_RELEASE_SHAPE_INVALID", "ROUND只能处理审核指标")
+                    fail_shape(
+                        "ROUND只能处理审核指标",
+                        reason="rank_round_target_invalid",
+                        location={"cte": cte_name(select, source.relation)},
+                        rejected=expression.sql(dialect=self.manifest.dialect),
+                        expected="ROUND 只包裹审核指标",
+                        hint="单位键、名次和参评数不需要也不允许取整。",
+                    )
             else:
                 value = self.value(expression, sources)
                 if value.kind not in {"target", "rank", "units"}:
-                    fail("AUTH_RELEASE_SHAPE_INVALID", "排名结果指标必须按策略精度输出")
+                    fail_shape(
+                        "排名结果指标必须按策略精度输出",
+                        reason="rank_round_required",
+                        location={
+                            "cte": cte_name(select, source.relation),
+                            "projection": e.alias_or_name,
+                        },
+                        rejected=expression.sql(dialect=self.manifest.dialect),
+                        expected="指标列使用 ROUND(指标, 策略精度)",
+                        hint="不要直接输出未取整的排名指标。",
+                    )
             columns[e.alias_or_name] = value
         self.releases.append(
             fingerprint(

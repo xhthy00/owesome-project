@@ -370,7 +370,7 @@ def test_parallel_bad_queries_cannot_exceed_host_repair_budget(runtime_harness, 
     assert maximum == 1 and not harness.plans and not harness.executions
     assert len([data for event, data in events if event == "tool_call"]) == 3
     answer = next(data["content"] for event, data in events if event == "summary")
-    assert "查询 SQL" in answer and "授权已失效" not in answer
+    assert "规则校验" in answer and "授权已失效" not in answer
 
 
 @pytest.mark.parametrize(

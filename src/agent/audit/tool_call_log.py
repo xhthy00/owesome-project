@@ -33,6 +33,10 @@ _INSERT_SQL = text(
         elapsed_ms,
         args_json,
         result_preview,
+        error_code,
+        error_detail,
+        failure_domain,
+        rule,
         created_at
     )
     VALUES (
@@ -45,6 +49,10 @@ _INSERT_SQL = text(
         :elapsed_ms,
         :args_json,
         :result_preview,
+        :error_code,
+        :error_detail,
+        :failure_domain,
+        :rule,
         :created_at
     )
     """
@@ -80,9 +88,14 @@ async def write_tool_call_log_async(
     elapsed_ms: int | None,
     args: dict[str, Any] | None,
     result_preview: str,
+    trace_id: str | None = None,
+    error_code: str | None = None,
+    error_detail: dict[str, Any] | None = None,
+    failure_domain: str | None = None,
+    rule: str | None = None,
 ) -> None:
     payload = {
-        "trace_id": get_trace_id(),
+        "trace_id": trace_id or get_trace_id(),
         "agent_name": agent_name or "",
         "round_idx": round_idx,
         "sub_task_index": sub_task_index,
@@ -91,6 +104,10 @@ async def write_tool_call_log_async(
         "elapsed_ms": elapsed_ms,
         "args_json": _to_json(args or {}),
         "result_preview": _truncate(result_preview or ""),
+        "error_code": error_code,
+        "error_detail": _truncate(_to_json(error_detail), 4000) if error_detail else None,
+        "failure_domain": failure_domain,
+        "rule": rule,
         "created_at": datetime.now(),
     }
     await asyncio.to_thread(_insert_tool_call_log_sync, payload)
@@ -106,7 +123,14 @@ def log_tool_call_fire_and_forget(
     elapsed_ms: int | None,
     args: dict[str, Any] | None,
     result_preview: str,
+    error_code: str | None = None,
+    error_detail: dict[str, Any] | None = None,
+    failure_domain: str | None = None,
+    rule: str | None = None,
 ) -> None:
+    # Capture the trace id before leaving the request context; a fire-and-forget
+    # task does not reliably inherit the logging context variable.
+    trace_id = get_trace_id()
     task = asyncio.create_task(
         write_tool_call_log_async(
             agent_name=agent_name,
@@ -117,6 +141,11 @@ def log_tool_call_fire_and_forget(
             elapsed_ms=elapsed_ms,
             args=args,
             result_preview=result_preview,
+            trace_id=trace_id,
+            error_code=error_code,
+            error_detail=error_detail,
+            failure_domain=failure_domain,
+            rule=rule,
         )
     )
 

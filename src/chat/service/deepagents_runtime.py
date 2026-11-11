@@ -115,6 +115,8 @@ _STREAM_PREFIX_CHARS = 24
 _PROMPT = (
     "你是 Awesome-DB 的数据分析助手。用工具查询数据，按工具返回的范围和口径作答。"
     "业务事实和数值必须来自本轮 query_semantic 返回的数据。"
+    "即使历史或上一轮已有同口径结果，本轮回答业务数值前仍须调用 query_semantic；"
+    "历史结果不能作为本轮证据。"
     "续问沿用历史中已确认的对象、条件和口径，用户本轮明确修改的条件覆盖旧条件。"
     "历史答复和查询结果仅用于理解上下文，数据权限和发布版本以当前宿主为准。"
     "系统自动压缩较早的消息；需要原始细节时，用 read_file 读取提示中给出的历史归档路径。"
@@ -473,6 +475,13 @@ async def _run_turn(
     model_reply_error = ""
     scope = ({"edu_role": "v2", **explicit_authorization} if explicit_authorization is not None
              else await asyncio.to_thread(edu_scope_dict_for_user_id, user_id))
+    # Keep the prompt readable: examples and the capability catalog are rendered
+    # as dedicated sections below instead of being repeated inside the JSON blob.
+    scope_for_prompt = (
+        {key: value for key, value in scope.items()
+         if key not in {"reference_examples", "capability_catalog"}}
+        if isinstance(scope, dict) else scope
+    )
     context_key = fingerprint({
         "authorization": await asyncio.to_thread(
             authorization_fingerprint, user_id, workspace_oid, datasource_id,
@@ -561,15 +570,52 @@ async def _run_turn(
                 result = await asyncio.to_thread(semantic.run, sql, execute=True)
         except (QuestionAssessmentError, SemanticQueryError) as exc:
             result = {"error": str(exc)}
+            if getattr(exc, "detail", None) and exc.detail.get("code") == "AUTH_SCOPE_MISSING":
+                # A probe that cannot prove the full tuple is usually an attempt
+                # to discover an unavailable capability (other classes, school rank).
+                exc.detail.setdefault(
+                    "repair_hint",
+                    "该探查未落在完整授权元组内。若目标是其他班级明细或全校个人名次，"
+                    "该能力未开通；可改用 grade_baseline 做班级与年级基准对照。",
+                )
             if hasattr(exc, "detail") and (
                 str(exc.detail.get("code", "")).startswith("AUTH_")
                 or exc.detail.get("recovery_action")
                 or explicit_authorization is not None and isinstance(exc, SemanticFieldError)
             ):
-                permission_recovery.reject({"message": str(exc), **exc.detail})
+                permission_recovery.reject(
+                    {"message": str(exc), **exc.detail},
+                    stage=active_stage_index(),
+                    tool="lookup",
+                )
                 result["error_detail"] = permission_recovery.last_error
+            detail = getattr(exc, "detail", None) or {}
+            log_tool_call_fire_and_forget(
+                agent_name="DeepAgents",
+                round_idx=None,
+                sub_task_index=active_stage_index(),
+                tool_name="lookup_question_context",
+                success=False,
+                elapsed_ms=None,
+                args={"sql": sql},
+                result_preview=str(exc),
+                error_code=detail.get("code"),
+                error_detail=detail or None,
+                failure_domain=detail.get("failure_domain"),
+                rule=detail.get("reason"),
+            )
             return json.dumps(result, ensure_ascii=False)
         permission_recovery.success()
+        log_tool_call_fire_and_forget(
+            agent_name="DeepAgents",
+            round_idx=None,
+            sub_task_index=active_stage_index(),
+            tool_name="lookup_question_context",
+            success=True,
+            elapsed_ms=None,
+            args={"sql": sql},
+            result_preview=f"{len(result.get('rows', []))} rows",
+        )
         return json.dumps({
             "columns": result["columns"], "rows": result["rows"],
             "row_count": result.get("row_count", len(result["rows"])),
@@ -580,10 +626,12 @@ async def _run_turn(
     async def query_semantic(sql: str) -> str:
         """提交一条只读语义 SQL，显式列出已确认的字段。DataSemantic 负责物理规划，宿主按权限执行。"""
         nonlocal query_error, last_sql, last_result
-        if permission_recovery.blocked:
-            return json.dumps({"error": permission_recovery.public_error() or "本轮数据查询已停止。",
-                               "error_detail": permission_recovery.last_error}, ensure_ascii=False)
         stage_index = active_stage_index()
+        if permission_recovery.blocked or permission_recovery.stage_blocked(stage_index):
+            return json.dumps({
+                "error": permission_recovery.public_error() or "本阶段数据查询已停止。",
+                "error_detail": permission_recovery.last_error,
+            }, ensure_ascii=False)
         used = stage_query_count.get(stage_index, 0)
         if query_limit is not None and used >= query_limit:
             return (
@@ -628,7 +676,11 @@ async def _run_turn(
                 if (str(exc.detail.get("code", "")).startswith("AUTH_")
                         or exc.detail.get("recovery_action")
                         or explicit_authorization is not None and isinstance(exc, SemanticFieldError)):
-                    permission_recovery.reject({"message": str(exc), **exc.detail})
+                    permission_recovery.reject(
+                        {"message": str(exc), **exc.detail},
+                        stage=stage_index,
+                        tool="query_semantic",
+                    )
                     result["error_detail"] = permission_recovery.last_error
         else:
             query_error = ""
@@ -662,12 +714,16 @@ async def _run_turn(
         log_tool_call_fire_and_forget(
             agent_name="DeepAgents",
             round_idx=meta["round"],
-            sub_task_index=None,
+            sub_task_index=meta.get("sub_task_index"),
             tool_name=meta["tool"],
             success=success,
             elapsed_ms=elapsed_ms,
             args={"sql": sql},
             result_preview=result.get("error", ""),
+            error_code=(result.get("error_detail") or {}).get("code"),
+            error_detail=result.get("error_detail"),
+            failure_domain=(result.get("error_detail") or {}).get("failure_domain"),
+            rule=(result.get("error_detail") or {}).get("reason"),
         )
         if "error" in result:
             if explicit_authorization is not None and evidence:
@@ -954,6 +1010,16 @@ async def _run_turn(
                     "未执行的阶段保持未完成，不得虚报完成；已有可信数据保留在结果中。"
                 ),
             )
+        elif permission_recovery.stage_blocked(active_stage_index()):
+            model_request = model_request.override(
+                tools=[t for t in model_tools if t.name != "query_semantic"],
+                tool_choice="auto",
+                system_prompt=(
+                    f"{model_request.system_prompt}\n当前子任务已用完 SQL 修正次数，不能再提交查询。"
+                    "可以更新计划进入下一阶段，或基于已有数据说明本阶段缺口；"
+                    "不要用用户确认或重授权来绕过技术修复。"
+                ),
+            )
         elif assessment.get("decision") != "ready":
             lookup_attempts += 1
             if lookup_attempts > MAX_CONTEXT_LOOKUPS:
@@ -1048,6 +1114,12 @@ async def _run_turn(
                 content="本轮数据查询已停止，不能通过追问用户继续尝试。请按宿主错误分类说明未完成部分。",
                 tool_call_id=tool_request.tool_call["id"], status="error",
             )
+        if name == "query_semantic" and permission_recovery.stage_blocked(active_stage_index()):
+            return ToolMessage(
+                content="当前子任务已用完 SQL 修正次数，不能再提交查询。"
+                        "请更新计划进入下一阶段，或基于已有数据说明本阶段缺口。",
+                tool_call_id=tool_request.tool_call["id"], status="error",
+            )
         if name in {"query_semantic", "chart_semantic_result", "write_todos"} and (
             tool_request.state.get("chat_question_assessment") or {}
         ).get("decision") != "ready":
@@ -1138,13 +1210,32 @@ async def _run_turn(
         return await _restricted_tool_call(tool_request, handler)
 
     prompt = (
-        f"{_PROMPT}{CLARIFICATION_INSTRUCTIONS if execute and request.conversation_id else ''}\n当前授权范围参考：{scope}。\n"
+        f"{_PROMPT}{CLARIFICATION_INSTRUCTIONS if execute and request.conversation_id else ''}\n当前授权范围参考：{scope_for_prompt}。\n"
         f"已发布目录（bundle_id / manifest_hash / dialect / models / views）：{context_json}"
     )
     if explicit_authorization is not None:
+        capabilities = explicit_authorization.get("capability_catalog") or []
+        examples = explicit_authorization.get("reference_examples") or {}
+        scope_answers = explicit_authorization.get("scope_answers") or []
+        scope_not_answers = explicit_authorization.get("scope_not_answers") or []
         prompt += (
             "\n严格遵守scope_grants和query_contract。可执行规则以relations的reference_query_contract为准。"
             "错误分类、修正次数和停止决定以宿主error_detail为准，不能猜测授权失效或让用户确认技术重试。"
+            "\n授权范围内可直接查询（scope_answers，不需要 capability；本班学生成绩明细、"
+            "班级内排名/分数分布/均分/及格率都属于这一类）："
+            + json.dumps(scope_answers, ensure_ascii=False)
+            + "\n只有以下口径才需要说明未开通（scope_not_answers）："
+            + json.dumps(scope_not_answers, ensure_ascii=False)
+            + "\ncapability_catalog 只约束参照池/跨单位对照，不限制 scope_answers 中的普通查询。"
+            "“未开通全校名次/跨校排名”不等于不能查本班学生明细；本班明细按 scope_answers 正常查询。"
+            "\n能力边界（granted=true 才可用；granted=false 的能力当前未开通；"
+            "问题要求 not_answers 中的口径时直接说明未开通并给出替代口径；"
+            "不得用 lookup_question_context 或 query_semantic 试探）："
+            + json.dumps(capabilities, ensure_ascii=False)
+            + "\n规范形态示例（占位符替换为已确认值；这是形态示例，不是可直接执行的模板）：\n"
+            + "\n\n".join(
+                f"[{capability}]\n{sql}" for capability, sql in examples.items()
+            )
         )
     middleware = [initialize_turn, assess_question, request_assessed_clarification,
                   require_plan_or_repair, restrict_model_tools, restrict_tool_call]
@@ -1407,7 +1498,7 @@ async def _run_turn(
             or (
                 stop_reason + "未取得 DataSemantic 查询结果，请缩小查询范围后重试。"
                 if stop_reason
-                else "本轮未取得 DataSemantic 查询结果，请补充查询条件或检查语义模型覆盖范围。"
+                else "本轮未执行数据查询，无法给出业务数值；如问题涉及数据，请确认查询条件或重新发起。"
             )
         )
         await emit("error", {"error": answer, **(

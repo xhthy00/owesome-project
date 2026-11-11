@@ -150,6 +150,21 @@ export type ClarifyPayload = {
   report_type?: string | null;
 };
 
+export type ErrorDetail = {
+  failure_domain?:
+    | "authorization"
+    | "capability"
+    | "sql_shape"
+    | "execution"
+    | "configuration"
+    | "compiled_plan"
+    | "context"
+    | "service";
+  is_permission_issue?: boolean;
+  user_message?: string;
+  repair_hint?: string;
+};
+
 type StreamHandlers = {
   onStep?: (step: NonNullable<ConversationRecord["steps"]>[number]) => void;
   onTaskPlan?: (stages: TaskPlanStage[]) => void;
@@ -202,7 +217,7 @@ type StreamHandlers = {
     total_tokens?: number;
     delta_total?: number;
   }) => void;
-  onError?: (msg: string, metadata?: { preserveInterrupt?: boolean }) => void;
+  onError?: (msg: string, metadata?: { preserveInterrupt?: boolean; errorDetail?: ErrorDetail }) => void;
   onHumanResolved?: (payload: { interrupt_id: string; status: "answered" | "cancelled"; answer?: string }) => void;
   onDone?: (recordId: number) => void | Promise<void>;
   onClarify?: (payload: ClarifyPayload) => void;
@@ -418,7 +433,8 @@ export async function sendMessageStream(
           break;
         case "error":
           handlers.onError?.((data.error as string) ?? "Unknown error", {
-            preserveInterrupt: data.preserve_interrupt === true
+            preserveInterrupt: data.preserve_interrupt === true,
+            errorDetail: data.error_detail as ErrorDetail | undefined
           });
           break;
         case "done":

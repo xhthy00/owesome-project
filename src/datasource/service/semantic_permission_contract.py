@@ -82,6 +82,27 @@ CAPABILITIES = {
     ),
 }
 
+# Human- and model-readable capability boundaries. Structural rules stay in
+# CapabilityContract; this catalog tells the planner what a capability can and
+# cannot answer so an unavailable question is declined before SQL is written.
+CAPABILITY_CATALOG = {
+    "grade_baseline": {
+        "label": "本校同届次年级整体基准",
+        "answers": ["本班与本校同届次、同考试的年级均值/分差"],
+        "not_answers": ["其他班级/其他学校的原始明细", "学生个人全校名次", "跨校排名"],
+    },
+    "city_baseline": {
+        "label": "全市整体基准",
+        "answers": ["本校/本区与全市同届次、同考试的均值对照"],
+        "not_answers": ["其他学校明细", "全市学生个人排名"],
+    },
+    "district_self_rank": {
+        "label": "本区县全市名次（仅自身）",
+        "answers": ["本区县自身的全市名次和参评区县数"],
+        "not_answers": ["其他区县名次", "全市学校/学生排名"],
+    },
+}
+
 
 class RelationQueryContract(ContractModel):
     metric_identifiers_are_fields: bool = False
@@ -251,6 +272,30 @@ _ERROR_RULES = {
     ),
 }
 
+# User-facing attribution. Authorization and SQL-shape failures must never be
+# collapsed into one "permission" message: they have different owners and fixes.
+_ERROR_DOMAIN = {
+    "AUTH_COLUMN_FORBIDDEN": "authorization",
+    "AUTH_SCOPE_OUTSIDE_GRANT": "authorization",
+    "AUTH_REVOKED": "authorization",
+    "AUTH_RELEASE_SHAPE_INVALID": "sql_shape",
+    "AUTH_SCOPE_MISSING": "sql_shape",
+    "AUTH_QUERY_SHAPE_UNSUPPORTED": "sql_shape",
+    "FIELD_NOT_PUBLISHED": "sql_shape",
+    "FIELD_WRONG_SOURCE": "sql_shape",
+    "QUERY_SQL_UNSUPPORTED": "sql_shape",
+    "QUERY_PLAN_UNSUPPORTED": "compiled_plan",
+    "QUERY_PLAN_INVALID": "compiled_plan",
+    "AUTH_PHYSICAL_PROOF_FAILED": "compiled_plan",
+    "QUERY_EXECUTION_FAILED": "execution",
+    "QUERY_SERVICE_UNAVAILABLE": "service",
+    "AUTH_MAPPING_MISSING": "configuration",
+    "AUTH_CONTEXT_INVALID": "configuration",
+    "AUTH_CONTEXT_STALE": "context",
+    "AUTH_CONTRACT_MISMATCH": "context",
+    "QUERY_PUBLICATION_STALE": "context",
+}
+
 
 def permission_error_detail(code, message, *, retryable=None, **details):
     category, stage, action = _ERROR_RULES.get(
@@ -259,8 +304,9 @@ def permission_error_detail(code, message, *, retryable=None, **details):
     can_repair = action == "repair_sql" and retryable is not False
     if action == "repair_sql" and not can_repair:
         action = "stop"
+    domain = _ERROR_DOMAIN.get(code, "configuration")
     public = {
-        "query_invalid": f"查询 SQL 不符合当前查询规则：{message}",
+        "query_invalid": f"这条查询的写法未通过规则校验（你的账号权限正常）：{message}",
         "service_unavailable": "语义规划服务暂时不可用，查询已停止，请稍后重试或联系管理员。",
         "execution_failed": "查询执行失败，无法给出本次结果，请联系管理员检查数据源。",
         "query_unsupported": f"当前校验器暂不支持这种查询结构：{message}",
@@ -274,6 +320,9 @@ def permission_error_detail(code, message, *, retryable=None, **details):
         "code": code,
         "message": message,
         "category": category,
+        "failure_domain": domain,
+        "is_permission_issue": domain == "authorization",
+        "error_schema_version": 2,
         "failure_stage": stage,
         "recovery_action": action,
         "retryable": can_repair,
@@ -286,10 +335,18 @@ def permission_error_detail(code, message, *, retryable=None, **details):
 
 @dataclass
 class PermissionRecovery:
-    """Turn-local host state; model text and human replies cannot extend the budget."""
+    """Turn-local host state; model text and human replies cannot extend the budget.
 
-    failures: int = 0
+    The SQL repair budget is scoped to one analysis stage. Candidate discovery
+    (``lookup_question_context``) is validated by the same prover but must not
+    consume the query repair budget: a failed probe says nothing about the
+    model's ability to repair the business query.
+    """
+
+    max_repairs: int = RECOVERY_CONTRACT.max_sql_repairs
+    stage_repairs: dict[object, int] = field(default_factory=dict)
     blocked: bool = False
+    blocked_stages: set[object] = field(default_factory=set)
     last_error: dict | None = None
     _terminal_error: dict | None = field(default=None, repr=False)
 
@@ -297,10 +354,17 @@ class PermissionRecovery:
     def human_retry_blocked(self):
         return self.last_error is not None
 
-    def reject(self, detail):
+    def remaining(self, stage=None):
+        if self.blocked or self.stage_blocked(stage):
+            return 0
+        return max(0, self.max_repairs + 1 - self.stage_repairs.get(stage, 0))
+
+    def stage_blocked(self, stage=None):
+        return stage in self.blocked_stages
+
+    def reject(self, detail, *, stage=None, tool="query_semantic"):
         if self.blocked:
-            return
-        self.failures += 1
+            return self.last_error
         # Normalize older tool adapters too; a caller cannot relabel a denial as
         # repairable or let a model-provided flag reopen a terminal failure.
         self.last_error = permission_error_detail(
@@ -309,25 +373,38 @@ class PermissionRecovery:
             retryable=detail.get("retryable"),
             **{k: v for k, v in detail.items() if k not in {"code", "message", "retryable"}},
         )
-        self.blocked |= (
-            self.last_error.get("recovery_action") != "repair_sql"
-            or self.failures > RECOVERY_CONTRACT.max_sql_repairs
-        )
-        self.last_error["remaining_sql_repairs"] = (
-            max(0, RECOVERY_CONTRACT.max_sql_repairs + 1 - self.failures) if not self.blocked else 0
-        )
-        if self.blocked and self.last_error["recovery_action"] == "repair_sql":
+        if tool != "query_semantic":
+            # Discovery failures are reported, but they do not spend SQL repairs.
+            self.last_error["remaining_sql_repairs"] = self.remaining(stage)
+            return self.last_error
+        if self.last_error.get("recovery_action") != "repair_sql":
+            self.blocked = True
+            self.last_error["remaining_sql_repairs"] = 0
+            if self._terminal_error is None:
+                self._terminal_error = self.last_error
+            return self.last_error
+        used = self.stage_repairs.get(stage, 0) + 1
+        self.stage_repairs[stage] = used
+        self.last_error["remaining_sql_repairs"] = max(0, self.max_repairs + 1 - used)
+        if used > self.max_repairs:
+            # No plan means the whole turn is one stage; stop globally like before.
+            if stage is None:
+                self.blocked = True
+            else:
+                self.blocked_stages.add(stage)
             self.last_error.update(
                 recovery_action="stop",
                 retryable=False,
                 sql_repair_required=False,
                 repair_budget_exhausted=True,
+                remaining_sql_repairs=0,
             )
-        if self.blocked and self._terminal_error is None:
-            self._terminal_error = self.last_error
+            if self._terminal_error is None:
+                self._terminal_error = self.last_error
+        return self.last_error
 
     def success(self):
-        if not self.blocked:
+        if not self.blocked and not self.blocked_stages:
             self.last_error = None
 
     def public_error(self):

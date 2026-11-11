@@ -952,8 +952,18 @@ export function useChat() {
             onError: (msg, metadata) => {
               preserveInterrupt = metadata?.preserveInterrupt === true;
               const safeMsg = asText(msg);
+              const detail = metadata?.errorDetail;
+              const domain = detail?.failure_domain;
+              const title = domain === "sql_shape" ? "查询写法未通过校验"
+                : domain === "capability" ? "当前授权未开通该口径"
+                : domain === "authorization" ? "当前授权不允许"
+                : "查询未完成";
+              const note = (domain === "sql_shape" || domain === "capability")
+                && !safeMsg.includes("权限正常")
+                ? "\n你的账号权限正常；这是查询写法/口径问题。"
+                : "";
               setActivity("本轮分析遇到问题，请查看右侧详情");
-              writeAssistant(`请求失败：${safeMsg}`);
+              writeAssistant(`${title}：${safeMsg}${note}`);
               setExecutionSteps((prev) => [
                 ...stripBootstrap(prev).map((step) =>
                   step.runId === runId && step.status === "running"

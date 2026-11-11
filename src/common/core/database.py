@@ -155,6 +155,10 @@ def _ensure_tool_call_log_table(conn, dialect: str) -> None:
                     elapsed_ms INTEGER NULL,
                     args_json TEXT NOT NULL,
                     result_preview TEXT NOT NULL,
+                    error_code TEXT NULL,
+                    error_detail TEXT NULL,
+                    failure_domain TEXT NULL,
+                    rule TEXT NULL,
                     created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL
                 )
                 """
@@ -175,14 +179,36 @@ def _ensure_tool_call_log_table(conn, dialect: str) -> None:
                     elapsed_ms INTEGER NULL,
                     args_json TEXT NOT NULL,
                     result_preview TEXT NOT NULL,
+                    error_code TEXT NULL,
+                    error_detail TEXT NULL,
+                    failure_domain TEXT NULL,
+                    rule TEXT NULL,
                     created_at DATETIME NOT NULL
                 )
                 """
             )
         )
 
+    _ensure_tool_call_log_columns(conn, dialect)
     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_tool_call_log_trace_id ON tool_call_log(trace_id)"))
     conn.execute(text("CREATE INDEX IF NOT EXISTS idx_tool_call_log_created_at ON tool_call_log(created_at)"))
+
+
+def _ensure_tool_call_log_columns(conn, dialect: str) -> None:
+    """Add diagnostic columns to an existing audit table without a migration."""
+    columns = ("error_code", "error_detail", "failure_domain", "rule")
+    if dialect == "postgresql":
+        for column in columns:
+            conn.execute(
+                text(f"ALTER TABLE tool_call_log ADD COLUMN IF NOT EXISTS {column} TEXT NULL")
+            )
+        return
+    existing = {
+        row[1] for row in conn.execute(text("PRAGMA table_info(tool_call_log)")).fetchall()
+    }
+    for column in columns:
+        if column not in existing:
+            conn.execute(text(f"ALTER TABLE tool_call_log ADD COLUMN {column} TEXT NULL"))
 
 
 def _ensure_default_workspace_seed() -> None:

@@ -280,7 +280,9 @@ def test_school_city_baseline_failures_explain_sql_repair_not_missing_grant(
     assert detail["granted_capabilities"] == ["city_baseline"]
     if reason:
         assert detail["reason"] == reason
-    contract = detail["reference_query_contracts"]["tb_score_overview"]
+    contract = detail.get("repair_contract") or detail["reference_query_contracts"][
+        "tb_score_overview"
+    ]
     assert not contract["baseline_count_output_allowed"]
     assert contract["aggregate_expressions"]["mean_sx"] == "AVG(sx)"
     assert not contract["metric_identifiers_are_fields"]

@@ -72,6 +72,10 @@ decision 的规则：
 
 若工具已返回用户对 ask_human 的回复，结合原问题和该回复重新判断；充分时 ready，不完整时只追问剩余必要项。
 无数据、无权限、服务故障或发布物缺失不是让用户从虚构选项中选择的理由；可由主图说明真实缺口。
+authorization_scope.scope_answers 中的授权范围内明细、排名、分数分布可直接 ready，不需要 capability。
+ready 只表示可以查询，不代表可以直接使用历史结果作答；需要业务数值时仍必须在本轮调用 query_semantic。
+只有问题要求 scope_not_answers，或需要未授权的参照能力（capability_catalog.granted=false）时，
+才 clarify 说明能力缺口并给出可替代口径；不要用 lookup 探查未开通的能力。
 """
 
 

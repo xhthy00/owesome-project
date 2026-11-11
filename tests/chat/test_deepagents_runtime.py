@@ -237,7 +237,7 @@ def test_context_is_preloaded_without_a_forced_model_round(monkeypatch):
 
     assert result == 0 and model.i == 1
     assert any(
-        event == "error" and "未取得 DataSemantic" in data["error"] for event, data in events
+        event == "error" and "未执行数据查询" in data["error"] for event, data in events
     )
 
 
@@ -1144,7 +1144,7 @@ def test_chat_sse_resumes_deepagents_across_requests(monkeypatch, max_steps):
         assert next(c for c in records[2]["tool_calls"] if c["tool"] == "query_semantic")["sub_task_index"] == 0
 
     assert "event: result" in reply.text and "event: result" in followup.text
-    assert "本轮未取得 DataSemantic" in no_query.text and "999 人" not in no_query.text
+    assert "本轮未执行数据查询" in no_query.text and "999 人" not in no_query.text
 
 
 def test_token_budget_estimates_usage_when_provider_omits_it():

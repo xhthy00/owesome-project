@@ -713,4 +713,4 @@ def test_permission_repair_exhaustion_cannot_restart_with_human_retry_loop(monke
     )
     assert not any(event == "clarify" for event, _ in events)
     assert not any("ask_human" in names or "query_semantic" in names for names in bindings[-2:])
-    assert any(event == "summary" and "SQL" in data["content"] for event, data in events)
+    assert any(event == "summary" and "规则校验" in data["content"] for event, data in events)

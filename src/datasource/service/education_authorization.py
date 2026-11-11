@@ -17,11 +17,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from src.datasource.service.semantic_permission_contract import (
     CAPABILITIES,
+    CAPABILITY_CATALOG,
     CONTRACT_INSTRUCTIONS,
     build_query_contract,
     permission_error_detail,
     relation_contract,
 )
+from src.datasource.service.semantic_permission_examples import canonical_examples
 
 AUTH_KEY = "edu_auth_v2"
 EDUCATION_RESOURCE_ID = "education"
@@ -314,6 +316,12 @@ class AuthorizationContext(StrictModel):
 
     def model_context(self):
         contract = build_query_contract(self.manifest)
+        levels = {grant.level for grant in self.grants}
+        student_scope = (
+            "本班学生成绩明细（匿名学号、各科分数、总分）"
+            if levels & {"class", "student"}
+            else "授权范围内的成绩聚合（学校/区县/班级维度）"
+        )
         return {
             "schema_version": 2,
             "authorization_fingerprint": self.fingerprint,
@@ -329,6 +337,24 @@ class AuthorizationContext(StrictModel):
                 "mapping_fingerprint": fingerprint(self.manifest),
             },
             "scope_grants": [g.model_dump(mode="json") for g in self.grants],
+            "scope_answers": [
+                student_scope,
+                "授权范围内的排名、分数分布、均分/及格率等聚合",
+                "授权范围与参照基准的对照（需对应 capability）",
+            ],
+            "scope_not_answers": [
+                "授权范围外的其他班级/学校明细",
+                "未开通的学生个人全校名次、跨校排名",
+            ],
+            "capability_catalog": [
+                {
+                    "id": name,
+                    **CAPABILITY_CATALOG[name],
+                    "granted": any(name in g.capabilities for g in self.grants),
+                }
+                for name in CAPABILITIES
+            ],
+            "reference_examples": canonical_examples(self.manifest, self.grants),
             "relations": {
                 name: {
                     "scope_columns": p.scope_columns,
