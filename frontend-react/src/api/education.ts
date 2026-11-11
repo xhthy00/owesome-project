@@ -919,7 +919,7 @@ export const educationApi = {
       };
       if (event === "progress") onProgress?.(data);
       else if (event === "error") failure = data.message || "识别试卷失败";
-      else if (event === "done") outline = data as PaperOutline;
+      else if (event === "done") outline = data as unknown as PaperOutline;
     };
     while (true) {
       const { value, done } = await reader.read();

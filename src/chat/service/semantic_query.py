@@ -1,5 +1,6 @@
 """Plan read-only queries against a published semantic model and reuse host permissions."""
 
+import time
 from difflib import get_close_matches
 from threading import Lock
 from urllib.parse import quote
@@ -50,6 +51,10 @@ from system.workspace_scope import assert_datasource_accessible
 _MAX_ROWS = 200
 _MAX_DESCRIBE_NAMES = 12
 _MAX_FIELD_ERRORS = 64
+# A 503 means the planner/executor rejected the call before doing any work
+# (busy, stopping or not ready), so a bounded retry is safe for plan and execute.
+_SERVICE_UNAVAILABLE_RETRIES = 2
+_SERVICE_RETRY_BACKOFF_SECONDS = 0.5
 _DIALECTS = {"pg": "postgres", "mysql": "mysql"}
 # The database can contain user-defined functions. Admit the analytical operations used by MDL.
 _FUNCTIONS = frozenset(SQL_GRAMMAR.functions)
@@ -320,23 +325,32 @@ class SemanticQuery:
         return binding.model_dump()
 
     def _call(self, method, path, binding, **kwargs):
-        try:
-            response = httpx.request(
-                method,
-                f"{self.settings.datasemantic_url.rstrip('/')}/internal/v1/{path}",
-                headers={"Authorization": f"Bearer {self.settings.datasemantic_token}"},
-                timeout=20,
-                **kwargs,
-            )
-            response.raise_for_status()
-            data = response.json()
-        except httpx.HTTPStatusError as exc:
-            if exc.response.status_code in {404, 409}:
-                raise SemanticContractError("QUERY_PUBLICATION_STALE", "DataSemantic 发布物不存在或版本不匹配。") from exc
-            code = "QUERY_PLAN_UNSUPPORTED" if exc.response.status_code in {400, 422} else "QUERY_SERVICE_UNAVAILABLE"
-            raise SemanticContractError(code, "DataSemantic 无法规划此查询。") from exc
-        except (httpx.RequestError, ValueError) as exc:
-            raise SemanticContractError("QUERY_SERVICE_UNAVAILABLE", "DataSemantic 服务暂时不可用。") from exc
+        data: dict | None = None
+        for attempt in range(_SERVICE_UNAVAILABLE_RETRIES + 1):
+            try:
+                response = httpx.request(
+                    method,
+                    f"{self.settings.datasemantic_url.rstrip('/')}/internal/v1/{path}",
+                    headers={"Authorization": f"Bearer {self.settings.datasemantic_token}"},
+                    timeout=30,
+                    **kwargs,
+                )
+                response.raise_for_status()
+                data = response.json()
+                break
+            except httpx.HTTPStatusError as exc:
+                if (
+                    exc.response.status_code == 503
+                    and attempt < _SERVICE_UNAVAILABLE_RETRIES
+                ):
+                    time.sleep(_SERVICE_RETRY_BACKOFF_SECONDS * (attempt + 1))
+                    continue
+                if exc.response.status_code in {404, 409}:
+                    raise SemanticContractError("QUERY_PUBLICATION_STALE", "DataSemantic 发布物不存在或版本不匹配。") from exc
+                code = "QUERY_PLAN_UNSUPPORTED" if exc.response.status_code in {400, 422} else "QUERY_SERVICE_UNAVAILABLE"
+                raise SemanticContractError(code, "DataSemantic 无法规划此查询。") from exc
+            except (httpx.RequestError, ValueError) as exc:
+                raise SemanticContractError("QUERY_SERVICE_UNAVAILABLE", "DataSemantic 服务暂时不可用。") from exc
         if not isinstance(data, dict) or any(
             data.get(key) != value for key, value in binding.items()
         ):

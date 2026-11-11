@@ -11,6 +11,7 @@ import {
 } from "@/api/adapter/chatAdapter";
 import { notifyConversationChanged, snippetConversationTitle } from "@/utils/conversationTitle";
 import { genUUID } from "@/utils/uuid";
+import { parseChartSpec, type ChartSpec } from "@/components/charts/chartSpec";
 import { replaceRecommendationsHtml } from "@/utils/reportRecommendations";
 import { humanizeStepTitle, humanizeTool } from "@/utils/toolLabels";
 import {
@@ -81,6 +82,9 @@ export type ChartConfig = {
 export type ChartRecommendation = {
   chartType?: string;
   chartConfig?: ChartConfig;
+  chartSpec?: ChartSpec;
+  /** 历史记录里的原始 ECharts option，供前端适配旧数据 */
+  rawChartConfig?: Record<string, unknown>;
 };
 
 type SendOptions = {
@@ -99,6 +103,8 @@ const asText = (value: unknown): string => {
     return String(value);
   }
 };
+
+const asChartSpec = (raw: unknown): ChartSpec | undefined => parseChartSpec(raw) ?? undefined;
 
 const asChartConfig = (raw: unknown): ChartConfig | undefined => {
   if (!raw || typeof raw !== "object") return undefined;
@@ -699,13 +705,18 @@ export function useChat() {
                 }
               ]);
             },
-            onChart: ({ chart_type, chart_config }) => {
-              if (!chart_type && !chart_config) return;
+            onChart: ({ chart_type, chart_config, chart_spec }) => {
+              if (!chart_type && !chart_config && !chart_spec) return;
               refreshProgress({ hasChartOrReport: true, charterDone: true });
               setActivity(humanizeTool("chart", "done"));
               const rec: ChartRecommendation = {
                 chartType: chart_type || undefined,
-                chartConfig: asChartConfig(chart_config)
+                chartConfig: asChartConfig(chart_config),
+                chartSpec: asChartSpec(chart_spec) ?? asChartSpec(chart_config),
+                rawChartConfig:
+                  chart_config && typeof chart_config === "object" && !Array.isArray(chart_config)
+                    ? (chart_config as Record<string, unknown>)
+                    : undefined
               };
               setChartByRunId((prev) => ({ ...prev, [runId]: rec }));
               setExecutionSteps((prev) => [
@@ -1232,10 +1243,16 @@ export function useChat() {
 
       nextMetricsByRunId[recordRunId] = metricsFromPersisted(record.total_tokens, record.elapsed_ms, record.exec_result?.context_usage);
       const loadedChart = asChartConfig(record.chart_config);
-      if (record.chart_type || loadedChart) {
+      const loadedChartSpec = asChartSpec(record.chart_config);
+      if (record.chart_type || loadedChart || loadedChartSpec) {
         nextChartByRunId[recordRunId] = {
           chartType: record.chart_type || undefined,
-          chartConfig: loadedChart
+          chartConfig: loadedChart,
+          chartSpec: loadedChartSpec,
+          rawChartConfig:
+            record.chart_config && typeof record.chart_config === "object"
+              ? (record.chart_config as Record<string, unknown>)
+              : undefined
         };
       }
       if (asText(record.question).trim()) {

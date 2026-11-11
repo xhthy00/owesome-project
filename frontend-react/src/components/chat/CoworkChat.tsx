@@ -9,6 +9,7 @@ import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getCurrentUser } from "@/api/auth";
+import AnswerVisual from "@/components/chat/AnswerVisual";
 import ChatExecutionPanel from "@/components/chat/ChatExecutionPanel";
 import { ChatComposerStatus, ChatTaskProgress, ChatWorkLog, runActivity } from "@/components/chat/ChatRunProgress";
 import DatasourcePicker from "@/components/chat/DatasourcePicker";
@@ -266,6 +267,8 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
               const steps = chat.executionSteps.filter((step) => step.runId === runId);
               const reports = chat.reports.filter((item) => item.runId === runId);
               const results = chat.queryResults.filter((item) => item.runId === runId);
+              const lastResult = results[results.length - 1];
+              const chartRec = chat.chartByRunId[runId];
               const answer = assistant ? visibleMessage(assistant) : "";
               const thinkText = (chat.thinkByRunId[runId] || "").trim() || mergeThinkText(
                 assistant ? extractThinkFromText(assistant.content) : "",
@@ -283,13 +286,25 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
                   {running && process}
                   {chat.clarifyByRunId[runId]?.status && chat.clarifyByRunId[runId].status !== "pending"
                     ? <HumanQuestionSummary question={chat.clarifyByRunId[runId]} />
-                    : assistant?.content && !chat.clarifyByRunId[runId] && <>
+                    : (assistant?.content || (!running && results.length > 0)) && !chat.clarifyByRunId[runId] && <>
                     <div className="cowork-answer">
                       <ReactMarkdown components={eduMarkdownComponents} remarkPlugins={markdownPlugins}>
                         {answer || (results.length ? "这轮未生成分析结论，请查看已返回的查询结果。" : "这轮未生成分析结论，请重新提问。")}
                       </ReactMarkdown>
+                      {!running && lastResult ? (
+                        <AnswerVisual
+                          question={user.content}
+                          columns={lastResult.columns}
+                          rows={lastResult.rows}
+                          rowCount={lastResult.rowCount}
+                          spec={chartRec?.chartSpec ?? null}
+                          legacyConfig={chartRec?.rawChartConfig}
+                          legacyChartType={chartRec?.chartType}
+                          onOpenPreview={() => setPreview({ runId, kind: "data" })}
+                        />
+                      ) : null}
                     </div>
-                    {!running && answer && <CopyRow item={assistant} />}
+                    {!running && answer && assistant && <CopyRow item={assistant} />}
                   </>}
                   {(reports.length > 0 || results.length > 0) && <div className="cowork-artifacts">
                     {reports.length > 0 && <button type="button" onClick={() => setPreview({ runId, kind: "report" })}><FileTextOutlined aria-hidden="true" /><span>分析报告 · {reports.length} 份</span></button>}

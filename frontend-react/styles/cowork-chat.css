@@ -253,3 +253,227 @@ summary.cowork-stage-row::after { content: ""; flex: none; width: 5px; height: 5
   .cowork-progress-track > span, .cowork-worklog > summary::after, .cowork-task-section > summary::after,
   .cowork-think-caret, .cowork-composer { transition: none; }
 }
+
+/* ---------- Answer Visual Card（P0） ---------- */
+.answer-visual {
+  min-width: 0;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--cowork-border);
+}
+.answer-visual-head { display: flex; align-items: center; gap: 8px; }
+.answer-visual-kicker { color: var(--cowork-brand-ink); font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+.answer-visual-meta { margin-left: auto; color: var(--cowork-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.answer-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 10px 0 12px; }
+.answer-kpi {
+  min-width: 0;
+  border: 1px solid var(--cowork-border);
+  border-radius: 10px;
+  padding: 9px 10px 8px;
+  background: linear-gradient(180deg, var(--cowork-card), var(--cowork-soft));
+}
+.answer-kpi-label { overflow: hidden; color: var(--cowork-muted); font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.answer-kpi-value { margin-top: 4px; color: var(--cowork-text); font-size: 22px; font-weight: 800; line-height: 1.05; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.answer-kpi-unit { margin-left: 3px; color: var(--cowork-muted); font-size: 11px; font-weight: 600; }
+.answer-kpi-delta { display: inline-flex; align-items: center; gap: 3px; margin-top: 5px; border-radius: 5px; padding: 2px 5px; font-size: 10px; font-weight: 700; }
+.answer-kpi-delta.is-up { background: color-mix(in srgb, var(--cowork-success) 10%, transparent); color: var(--cowork-success); }
+.answer-kpi-delta.is-down { background: color-mix(in srgb, var(--cowork-danger) 10%, transparent); color: var(--cowork-danger); }
+.answer-kpi-delta.is-neutral { background: var(--cowork-soft); color: var(--cowork-muted); }
+.answer-kpi-hint { overflow: hidden; margin-top: 5px; color: var(--cowork-muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.answer-chart-card { border: 1px solid var(--cowork-border); border-radius: 12px; padding: 12px 12px 6px; background: var(--cowork-card); }
+.answer-chart-card.is-secondary { margin-top: 10px; background: var(--cowork-soft); }
+.answer-chart-head { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 4px; }
+.answer-chart-head h3 { min-width: 0; margin: 0; color: var(--cowork-text); font-size: 13px; font-weight: 650; line-height: 1.45; }
+.answer-chart-head p { margin: 2px 0 0; color: var(--cowork-muted); font-size: 10.5px; }
+.answer-chart-tag { flex: none; margin-left: auto; border-radius: 5px; padding: 2px 6px; background: var(--cowork-soft); color: var(--cowork-brand-ink); font-size: 10px; font-weight: 650; }
+.answer-chart-tag.is-muted { background: transparent; color: var(--cowork-muted); }
+.chart-view { width: 100%; min-width: 0; }
+.chart-view-empty { display: grid; place-items: center; border: 1px dashed var(--cowork-border); border-radius: 8px; color: var(--cowork-muted); font-size: 12px; }
+.answer-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
+.answer-actions button { display: inline-flex; min-height: 32px; align-items: center; gap: 5px; border: 1px solid var(--cowork-border); border-radius: 7px; padding: 0 9px; background: var(--cowork-card); color: var(--cowork-muted); font: inherit; font-size: 11px; cursor: pointer; }
+.answer-actions button:hover { border-color: var(--cowork-action); color: var(--cowork-brand-ink); }
+
+.smart-table-card {
+  margin-top: 12px;
+  overflow: hidden;
+  border: 1px solid var(--cowork-border);
+  border-radius: 14px;
+  background: var(--cowork-card);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .03);
+}
+.smart-table-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--cowork-border);
+  background: linear-gradient(180deg, var(--cowork-soft), var(--cowork-card));
+}
+.smart-table-head strong { color: var(--cowork-text); font-size: 12px; font-weight: 700; }
+.smart-table-head > span { color: var(--cowork-muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.smart-table-actions { display: flex; gap: 4px; margin-left: auto; }
+.smart-table-actions button, .smart-table-more, .smart-table-modal-meta button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--cowork-border);
+  border-radius: 7px;
+  padding: 4px 8px;
+  background: var(--cowork-card);
+  color: var(--cowork-muted);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.smart-table-actions button:hover, .smart-table-more:hover, .smart-table-modal-meta button:hover {
+  border-color: var(--cowork-action);
+  color: var(--cowork-brand-ink);
+  background: var(--cowork-soft);
+}
+.smart-table-modal-body {
+  --cowork-card: #fff;
+  --cowork-soft: #eff6ff;
+  --cowork-border: #e2e8f0;
+  --cowork-text: #0f172a;
+  --cowork-muted: #64748b;
+  --cowork-action: #2563eb;
+  --cowork-brand-ink: #1d4ed8;
+  --cowork-success: #167659;
+  --cowork-danger: #b42336;
+  display: flex;
+  max-height: 82vh;
+  flex-direction: column;
+  background: var(--cowork-card);
+}
+.dark .smart-table-modal-body {
+  --cowork-card: #111827;
+  --cowork-soft: #1e293b;
+  --cowork-border: #334155;
+  --cowork-text: #e2e8f0;
+  --cowork-muted: #94a3b8;
+  --cowork-action: #3b82f6;
+  --cowork-brand-ink: #93c5fd;
+  --cowork-success: #8bd7b6;
+  --cowork-danger: #ff9bab;
+}
+.smart-table-modal-meta {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--cowork-border);
+  background: linear-gradient(180deg, var(--cowork-soft), var(--cowork-card));
+  color: var(--cowork-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.smart-table-modal-meta button { margin-left: auto; }
+.smart-table-scroll { max-height: 284px; overflow: auto; scrollbar-gutter: stable; }
+.smart-table-scroll.is-full { max-height: 72vh; }
+.smart-table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12.5px;
+  color: var(--cowork-text);
+}
+.smart-table-scroll.is-full .smart-table { min-width: 1180px; }
+.smart-table th, .smart-table td {
+  position: relative;
+  border-bottom: 1px solid color-mix(in srgb, var(--cowork-border) 72%, transparent);
+  padding: 9px 12px;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.smart-table th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  border-bottom: 1px solid color-mix(in srgb, var(--cowork-action) 18%, var(--cowork-border));
+  background: linear-gradient(180deg, var(--cowork-soft), color-mix(in srgb, var(--cowork-soft) 55%, var(--cowork-card)));
+  color: var(--cowork-brand-ink);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: .015em;
+}
+.smart-table th button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.smart-table th button:hover { color: var(--cowork-action); }
+.smart-table th.is-num { text-align: right; }
+.smart-table th.is-num button { width: 100%; justify-content: flex-end; }
+.smart-table th .anticon { font-size: 9px; opacity: .75; }
+.smart-table th:first-child, .smart-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  box-shadow: 1px 0 0 color-mix(in srgb, var(--cowork-border) 80%, transparent);
+}
+.smart-table th:first-child {
+  z-index: 4;
+  background: linear-gradient(180deg, var(--cowork-soft), color-mix(in srgb, var(--cowork-soft) 55%, var(--cowork-card)));
+}
+.smart-table td:first-child { background: var(--cowork-card); }
+.smart-table tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--cowork-action) 2.5%, var(--cowork-card));
+}
+.smart-table tbody tr:nth-child(even) td:first-child {
+  background: color-mix(in srgb, var(--cowork-action) 2.5%, var(--cowork-card));
+}
+.smart-table tbody tr:hover td { background: color-mix(in srgb, var(--cowork-action) 7%, var(--cowork-card)); }
+.smart-table tbody tr:hover td:first-child { background: color-mix(in srgb, var(--cowork-action) 7%, var(--cowork-card)); }
+.smart-table tbody tr.is-marked td { background: color-mix(in srgb, var(--cowork-action) 9%, var(--cowork-card)); }
+.smart-table tbody tr.is-marked td:first-child { background: color-mix(in srgb, var(--cowork-action) 9%, var(--cowork-card)); }
+.smart-table tbody tr:last-child td { border-bottom: 0; }
+.smart-table td.is-num { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; color: var(--cowork-text); }
+.smart-table td.is-up { color: var(--cowork-success); font-weight: 700; }
+.smart-table td.is-down { color: var(--cowork-danger); font-weight: 700; }
+.smart-table-bar {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  z-index: 0;
+  height: 54%;
+  transform: translateY(-50%);
+  border-radius: 0 999px 999px 0;
+  background: linear-gradient(90deg, color-mix(in srgb, var(--cowork-action) 24%, transparent), color-mix(in srgb, var(--cowork-action) 6%, transparent));
+  pointer-events: none;
+}
+.smart-table-value { position: relative; z-index: 1; }
+.smart-table-more {
+  width: 100%;
+  justify-content: center;
+  border: 0;
+  border-top: 1px solid var(--cowork-border);
+  border-radius: 0;
+  padding: 8px;
+  color: var(--cowork-brand-ink);
+}
+.smart-table-scroll.is-full::-webkit-scrollbar { width: 10px; height: 10px; }
+.smart-table-scroll.is-full::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cowork-muted) 35%, transparent);
+  background-clip: content-box;
+}
+.smart-table-scroll.is-full::-webkit-scrollbar-track { background: transparent; }
+@media (max-width: 900px) {
+  .answer-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .answer-visual { margin-top: 14px; padding-top: 12px; }
+  .answer-kpi-value { font-size: 19px; }
+  .answer-chart-card { padding-inline: 8px; }
+  .smart-table { min-width: 520px; }
+}

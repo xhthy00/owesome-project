@@ -51,7 +51,9 @@ class Settings(BaseSettings):
     llm_chat_model: Optional[str] = Field(
         None, validation_alias=AliasChoices("llm_chat_model", "llm_model")
     )
-    llm_chat_max_tokens: int = 8192
+    # 长结论（多校排名、知识点明细）在 8192 下会被截断。模型侧无小上限，
+    # 这里用 65536 只作防失控兜底：正常回答远低于它，但不会无限膨胀。
+    llm_chat_max_tokens: int = 65536
     # 可选单轮问数上限，默认不限制（沿用 DeepAgents 的图执行上限）。
     # 设置后用于收敛失控长尾；留空表示不限。
     chat_max_steps: int | None = Field(default=None, ge=1)

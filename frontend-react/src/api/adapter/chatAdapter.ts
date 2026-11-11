@@ -89,7 +89,7 @@ export type ConversationRecord = {
   sql?: string;
   exec_result?: (ClarifyPayload & { columns?: string[]; rows?: unknown[][]; row_count?: number; clarify?: boolean; context_usage?: ContextUsage; human_reply_to?: string; human_answer?: string; human_cancelled_to?: string }) | null;
   chart_type?: string;
-  chart_config?: { x?: string; y?: string[]; title?: string };
+  chart_config?: Record<string, unknown> | null;
   reports?: Array<{
     title?: string;
     html?: string;
@@ -169,7 +169,11 @@ type StreamHandlers = {
   onStep?: (step: NonNullable<ConversationRecord["steps"]>[number]) => void;
   onTaskPlan?: (stages: TaskPlanStage[]) => void;
   onAgentSpeak?: (payload: { agent?: string; status?: string; error?: string }) => void;
-  onChart?: (payload: { chart_type?: string; chart_config?: Record<string, unknown> }) => void;
+  onChart?: (payload: {
+    chart_type?: string;
+    chart_config?: Record<string, unknown>;
+    chart_spec?: Record<string, unknown>;
+  }) => void;
   onReport?: (payload: {
     title?: string;
     html?: string;
@@ -379,7 +383,8 @@ export async function sendMessageStream(
         case "chart":
           handlers.onChart?.({
             chart_type: (data.chart_type as string) ?? undefined,
-            chart_config: (data.chart_config as Record<string, unknown>) ?? undefined
+            chart_config: (data.chart_config as Record<string, unknown>) ?? undefined,
+            chart_spec: (data.chart_spec as Record<string, unknown>) ?? undefined
           });
           break;
         case "report":

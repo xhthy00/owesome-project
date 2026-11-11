@@ -46,8 +46,13 @@ from datasource.service.edu_permission import edu_scope_dict_for_user_id
 from src.agent.adapter.usage_sink import EmitFn, usage_tracking
 from src.agent.audit.tool_call_log import log_tool_call_fire_and_forget
 from src.agent.education.scope_guard import out_of_scope_question
-from src.agent.education.tools import build_chart_option_tool
 from src.chat.schemas import ChatRequest
+from src.chat.service.chart_spec import (
+    build_tool_chart_spec,
+    recommend_chart_spec,
+    spec_to_echarts_option,
+    validate_chart_spec,
+)
 from src.chat.service.context_usage import ContextUsageCallback
 from src.chat.service.conversation_state import (
     authorization_fingerprint,
@@ -493,6 +498,7 @@ async def _run_turn(
     })
     last_sql = ""
     last_result = None
+    last_result_index: int | None = None
     final_ai_message_id = None
     evidence_answer = None
     steps = []
@@ -514,7 +520,9 @@ async def _run_turn(
         else None
     )
     limit_message = ""
-    chart_type, chart_config = "table", None
+    chart_type, chart_config, chart_spec = "table", None, None
+    chart_emitted = False
+    chart_emitted_index: int | None = None
 
     def active_stage_index():
         return next((i for i, todo in enumerate(todos) if todo["status"] == "in_progress"), None)
@@ -625,7 +633,7 @@ async def _run_turn(
     @tool
     async def query_semantic(sql: str) -> str:
         """提交一条只读语义 SQL，显式列出已确认的字段。DataSemantic 负责物理规划，宿主按权限执行。"""
-        nonlocal query_error, last_sql, last_result
+        nonlocal query_error, last_sql, last_result, last_result_index
         stage_index = active_stage_index()
         if permission_recovery.blocked or permission_recovery.stage_blocked(stage_index):
             return json.dumps({
@@ -703,6 +711,8 @@ async def _run_turn(
             if execute:
                 await emit("result", result)
             evidence.append(result)
+            if execute:
+                last_result_index = len(evidence) - 1
         elapsed_ms = int((monotonic() - started) * 1000)
         success = "error" not in result
         content = result.get("error", "")
@@ -746,50 +756,56 @@ async def _run_turn(
     async def chart_semantic_result(
         x_column: str,
         y_columns: list[str],
-        kind: Literal["line", "bar"],
+        kind: Literal[
+            "line",
+            "area",
+            "bar",
+            "column",
+            "groupedColumn",
+            "stackedColumn",
+            "donut",
+            "pie",
+        ],
         title: str = "",
+        unit: str = "",
+        top_n: int | None = None,
     ) -> str:
-        """使用最近一次语义查询结果的列生成折线图或柱状图。"""
-        nonlocal chart_type, chart_config
+        """用最近一次语义查询结果生成图表。x 为维度列，y_columns 为数值列。
+
+        kind: line/area 趋势；bar 横向排名；column 纵向对比；groupedColumn 分组对比；
+        stackedColumn 堆叠；donut/pie 占比。title/unit 可选。
+        """
+        nonlocal chart_type, chart_config, chart_spec, chart_emitted, chart_emitted_index
         if not last_result or not last_result["rows"]:
             return "请先查询可用于绘图的数据。"
         rows = last_result["rows"]
         columns = last_result["columns"]
-        if not y_columns or not {x_column, *y_columns} <= set(columns):
-            return "请选择结果中已有的维度列和数值列。"
-        labels = [str(row[columns.index(x_column)]) for row in rows]
-        try:
-            series = [
-                {
-                    "name": column,
-                    "values": [
-                        float(row[columns.index(column)])
-                        if row[columns.index(column)] is not None
-                        else None
-                        for row in rows
-                    ],
-                }
-                for column in y_columns
-            ]
-        except (TypeError, ValueError):
-            return "纵轴列必须为数值。"
-        if kind == "line":
-            chart = await build_chart_option_tool.execute(
-                chart_type="trend_line",
-                data={"x_labels": labels, "series": series},
-                title=title,
-            )
-        else:
-            chart = await build_chart_option_tool.execute(
-                chart_type="subject_bar",
-                data={"subjects": labels, "metrics": series},
-                title=title,
-            )
-        if chart.data.get("error"):
-            return chart.content
-        chart_type, chart_config = chart.data["chart_type"], json.loads(chart.data["option"])
-        await emit("chart", {"chart_type": chart_type, "chart_config": chart_config})
-        return chart.content
+        spec, error = build_tool_chart_spec(
+            kind=kind,
+            x_column=x_column,
+            y_columns=y_columns,
+            columns=columns,
+            rows=rows,
+            result_index=last_result_index or 0,
+            title=title,
+            unit=unit,
+            top_n=top_n,
+        )
+        if spec is None:
+            return error
+        option = spec_to_echarts_option(spec, rows, columns)
+        chart_type, chart_spec, chart_config = spec["type"], spec, spec
+        chart_emitted = True
+        chart_emitted_index = last_result_index
+        await emit(
+            "chart",
+            {
+                "chart_type": chart_type,
+                "chart_spec": chart_spec,
+                "chart_config": option or None,
+            },
+        )
+        return f"已生成{chart_type}图表。"
 
     tools = [get_analysis_context, describe_semantic_model, lookup_question_context, query_semantic]
     if execute:
@@ -1566,6 +1582,45 @@ async def _run_turn(
         answer += "\n部分查询未完成，本轮结论仅覆盖已成功返回的数据。"
     if not execute:
         return 0
+    if (
+        execute
+        and not pending
+        and last_result
+        and (not chart_emitted or chart_emitted_index != last_result_index)
+    ):
+        result_rows = last_result.get("rows") or []
+        result_columns = last_result.get("columns") or []
+        if result_rows and result_columns:
+            try:
+                fallback_spec = recommend_chart_spec(
+                    question=request.question,
+                    columns=result_columns,
+                    rows=result_rows,
+                    result_index=last_result_index or 0,
+                )
+                if fallback_spec and not validate_chart_spec(
+                    fallback_spec, result_columns, result_rows
+                ):
+                    fallback_option = spec_to_echarts_option(
+                        fallback_spec, result_rows, result_columns
+                    )
+                    chart_type, chart_spec, chart_config = (
+                        fallback_spec["type"],
+                        fallback_spec,
+                        fallback_spec,
+                    )
+                    chart_emitted = True
+                    chart_emitted_index = last_result_index
+                    await emit(
+                        "chart",
+                        {
+                            "chart_type": chart_type,
+                            "chart_spec": chart_spec,
+                            "chart_config": fallback_option or None,
+                        },
+                    )
+            except Exception:
+                logger.exception("chart spec fallback failed")
     succeeded = bool(pending or ((evidence or (query_free and answer)) and not (
         limit_message or model_reply_error or preparation_error or query_error
     )))

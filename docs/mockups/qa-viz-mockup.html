@@ -1,0 +1,714 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>问答可视化升级方案 · 预览</title>
+<style>
+  :root {
+    --bg: #f4f7fb;
+    --card: #ffffff;
+    --ink: #0f172a;
+    --ink-2: #334155;
+    --muted: #64748b;
+    --muted-2: #94a3b8;
+    --line: #e6ebf2;
+    --line-strong: #d8e1ec;
+    --blue: #2563eb;
+    --blue-2: #3b82f6;
+    --blue-soft: #eff6ff;
+    --blue-soft-2: #dbeafe;
+    --green: #059669;
+    --green-soft: #ecfdf5;
+    --red: #dc2626;
+    --red-soft: #fef2f2;
+    --amber: #d97706;
+    --amber-soft: #fffbeb;
+    --violet: #7c3aed;
+    --shadow: 0 10px 30px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+    --radius: 18px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    min-width: 1280px;
+    background:
+      radial-gradient(900px 500px at 8% -8%, rgba(37, 99, 235, 0.10), transparent 60%),
+      radial-gradient(800px 420px at 98% 4%, rgba(124, 58, 237, 0.08), transparent 62%),
+      var(--bg);
+    color: var(--ink);
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { width: 1440px; margin: 0 auto; padding: 44px 48px 56px; }
+  .eyebrow { font-size: 12px; font-weight: 700; letter-spacing: 0.18em; color: var(--blue); text-transform: uppercase; }
+  h1 { margin: 12px 0 10px; font-size: 36px; line-height: 1.18; letter-spacing: -0.02em; }
+  .lede { margin: 0; max-width: 930px; color: var(--ink-2); font-size: 15px; line-height: 1.8; }
+  .hero-tags { display: flex; gap: 8px; margin-top: 18px; }
+  .hero-tags span {
+    padding: 5px 10px; border: 1px solid var(--line-strong); border-radius: 999px;
+    background: rgba(255,255,255,0.75); color: var(--ink-2); font-size: 12px; font-weight: 600;
+  }
+
+  .compare { display: grid; grid-template-columns: 402px minmax(0, 1fr); gap: 24px; margin-top: 30px; align-items: start; }
+  .col-head { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; font-size: 15px; font-weight: 750; }
+  .col-head .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot.red { background: #ef4444; box-shadow: 0 0 0 4px rgba(239,68,68,.12); }
+  .dot.green { background: #10b981; box-shadow: 0 0 0 4px rgba(16,185,129,.12); }
+  .count { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 600; }
+
+  .before-card {
+    border: 1px dashed var(--line-strong); border-radius: var(--radius);
+    background: rgba(255,255,255,0.55); padding: 18px; color: #475569;
+  }
+  .bubble {
+    border-radius: 14px; padding: 10px 14px; font-size: 13px; line-height: 1.7;
+  }
+  .bubble.user { margin-left: 34px; background: #eef2f7; color: #475569; }
+  .plain-answer { margin-top: 12px; border-left: 3px solid #e2e8f0; padding-left: 14px; }
+  .plain-answer p { margin: 8px 0; font-size: 13px; line-height: 1.8; }
+  .plain-table { width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 12px; background: #fff; }
+  .plain-table th, .plain-table td { border: 1px solid #e5eaf2; padding: 6px 8px; text-align: left; }
+  .plain-table th { background: #f8fafc; font-weight: 650; }
+  .artifact-row { display: flex; gap: 8px; margin-top: 12px; }
+  .artifact-row span {
+    border: 1px solid #dbe3ee; border-radius: 10px; background: #fff;
+    padding: 6px 10px; font-size: 11.5px; color: #475569;
+  }
+  .callouts { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; }
+  .callouts div {
+    display: flex; gap: 8px; align-items: flex-start; border-radius: 10px;
+    background: #fff7f7; border: 1px solid #fee2e2; padding: 8px 10px;
+    color: #7f1d1d; font-size: 12px; line-height: 1.6;
+  }
+  .callouts b { flex: none; display: inline-grid; place-items: center; width: 17px; height: 17px; border-radius: 50%; background: #ef4444; color: #fff; font-size: 10px; }
+  .gap-card { margin-top: 12px; border: 1px solid var(--line); border-radius: 14px; background: #fff; padding: 12px 14px; }
+  .gap-title { display: flex; align-items: center; gap: 6px; font-size: 11.5px; font-weight: 750; color: var(--ink-2); margin-bottom: 8px; }
+  .gap-title span { margin-left: auto; color: var(--muted-2); font-size: 10px; font-weight: 600; }
+  .gap-row { display: grid; grid-template-columns: 1fr 64px 54px 66px; align-items: center; gap: 6px; padding: 6px 0; border-top: 1px solid #f1f5f9; font-size: 10.5px; }
+  .gap-row:first-of-type { border-top: 0; }
+  .gap-row .k { color: var(--muted); }
+  .gap-row .old { color: #94a3b8; text-align: right; }
+  .gap-row .arrow { color: #cbd5e1; text-align: center; }
+  .gap-row .new { color: var(--blue); text-align: right; font-weight: 750; }
+  .old-flow { margin-top: 12px; border: 1px dashed var(--line-strong); border-radius: 14px; padding: 12px 14px; background: rgba(255,255,255,.55); }
+  .old-flow h5 { margin: 0 0 7px; font-size: 11.5px; color: var(--ink-2); }
+  .old-flow ol { margin: 0; padding-left: 17px; color: var(--muted); font-size: 10.5px; line-height: 1.9; }
+  .old-flow p { margin: 7px 0 0; color: #b45309; font-size: 10.5px; }
+  .quote { margin: 12px 0 0; padding: 10px 12px; border-left: 3px solid #bfdbfe; background: rgba(239,246,255,.7); border-radius: 0 10px 10px 0; color: #475569; font-size: 11px; line-height: 1.7; }
+
+  .answer-card {
+    border-radius: var(--radius); background: var(--card); border: 1px solid var(--line);
+    box-shadow: var(--shadow); overflow: hidden;
+  }
+  .ans-head { display: flex; align-items: center; gap: 10px; padding: 16px 20px; border-bottom: 1px solid var(--line); }
+  .avatar {
+    width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+    background: linear-gradient(135deg, #2563eb, #7c3aed); color: #fff; font-size: 12px; font-weight: 800;
+    box-shadow: 0 4px 10px rgba(37,99,235,.25);
+  }
+  .ans-head .who { font-size: 14px; font-weight: 750; }
+  .ans-head .meta { margin-left: 8px; color: var(--muted-2); font-size: 11.5px; font-weight: 500; }
+  .verified { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; background: var(--green-soft); color: var(--green); padding: 4px 9px; font-size: 11px; font-weight: 700; }
+
+  .ans-body { padding: 20px; }
+  .insight { margin: 0 0 16px; font-size: 14.5px; line-height: 1.85; color: #1e293b; }
+  .insight b { color: var(--ink); }
+  .insight .hl { background: linear-gradient(transparent 58%, #fde68a 58%); padding: 0 2px; font-weight: 750; }
+  .insight .num { color: var(--blue); font-weight: 800; }
+
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 16px; }
+  .kpi { border: 1px solid var(--line); border-radius: 13px; padding: 11px 12px 10px; background: linear-gradient(180deg, #fff, #fbfdff); }
+  .kpi .label { color: var(--muted); font-size: 11.5px; font-weight: 600; }
+  .kpi .value-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 6px; margin-top: 5px; }
+  .kpi .value { font-size: 24px; line-height: 1; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .kpi .unit { margin-left: 3px; color: var(--muted); font-size: 11px; font-weight: 600; }
+  .kpi .delta { display: inline-flex; align-items: center; gap: 2px; margin-top: 7px; border-radius: 6px; padding: 2px 5px; font-size: 10.5px; font-weight: 700; }
+  .kpi .delta.up { color: var(--green); background: var(--green-soft); }
+  .kpi .delta.down { color: var(--red); background: var(--red-soft); }
+  .kpi .spark { opacity: .95; }
+
+  .chart-card { border: 1px solid var(--line); border-radius: 14px; background: #fff; padding: 14px 14px 10px; }
+  .chart-head { display: flex; align-items: flex-start; gap: 12px; }
+  .chart-head h3 { margin: 0; font-size: 14px; font-weight: 750; }
+  .chart-head p { margin: 3px 0 0; color: var(--muted-2); font-size: 11px; }
+  .chart-actions { margin-left: auto; display: flex; align-items: center; gap: 5px; }
+  .seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 8px; padding: 2px; background: #f8fafc; }
+  .seg button { border: 0; background: transparent; border-radius: 6px; color: var(--muted); font: inherit; font-size: 10.5px; font-weight: 650; padding: 4px 7px; }
+  .seg button.on { background: #fff; color: var(--blue); box-shadow: 0 1px 2px rgba(15,23,42,.10); }
+  .icon-btn { width: 26px; height: 26px; border: 1px solid var(--line-strong); border-radius: 7px; background: #fff; display: grid; place-items: center; color: var(--muted); }
+  .chart-wrap { margin-top: 8px; }
+  .hero-legend { display: flex; gap: 14px; align-items: center; padding: 0 0 2px 48px; font-size: 10.5px; color: var(--muted); }
+  .hero-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+  .hero-legend .line { width: 14px; height: 0; border-top: 2px dashed var(--amber); border-radius: 0; }
+
+  .duo { display: grid; grid-template-columns: 0.92fr 1.08fr; gap: 10px; margin-top: 10px; }
+  .mini-card { border: 1px solid var(--line); border-radius: 14px; background: #fff; padding: 12px 14px 8px; }
+  .mini-head { display: flex; align-items: baseline; gap: 8px; }
+  .mini-head h4 { margin: 0; font-size: 12.5px; font-weight: 750; }
+  .mini-head span { color: var(--muted-2); font-size: 10.5px; }
+  .donut-row { display: flex; align-items: center; gap: 8px; }
+  .donut-legend { display: grid; gap: 4px; font-size: 10.5px; color: var(--muted); }
+  .donut-legend div { display: flex; align-items: center; gap: 6px; }
+  .donut-legend i { width: 7px; height: 7px; border-radius: 2px; }
+  .donut-legend b { margin-left: auto; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+  .table-card { margin-top: 10px; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .table-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; background: #fbfdff; border-bottom: 1px solid var(--line); }
+  .table-head h4 { margin: 0; font-size: 12.5px; font-weight: 750; }
+  .table-head span { color: var(--muted-2); font-size: 10.5px; }
+  .table-head .right { margin-left: auto; display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 10.5px; }
+  .data-table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  .data-table th { background: #f8fafc; color: var(--muted); font-weight: 650; text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .data-table td { padding: 8px 10px; border-bottom: 1px solid #f1f5f9; color: var(--ink-2); white-space: nowrap; }
+  .data-table tr:last-child td { border-bottom: 0; }
+  .data-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .data-table .school { font-weight: 700; color: var(--ink); }
+  .data-table .rank { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 6px; background: #f1f5f9; color: var(--muted); font-size: 10px; font-weight: 750; margin-right: 6px; }
+  .data-table tr.top .rank { background: #fef3c7; color: #b45309; }
+  .bar-cell { position: relative; min-width: 96px; }
+  .bar-cell .bar { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); height: 6px; border-radius: 999px; background: linear-gradient(90deg, #bfdbfe, #60a5fa); z-index: 0; }
+  .bar-cell .val { position: relative; z-index: 1; text-align: right; font-weight: 700; color: var(--ink); }
+  .delta-pill { display: inline-flex; align-items: center; gap: 2px; border-radius: 6px; padding: 2px 5px; font-size: 10px; font-weight: 750; }
+  .delta-pill.up { color: var(--green); background: var(--green-soft); }
+  .delta-pill.down { color: var(--red); background: var(--red-soft); }
+  .muted { color: var(--muted-2); }
+
+  .answer-toolbar { display: flex; align-items: center; gap: 8px; padding: 12px 20px; border-top: 1px solid var(--line); background: #fbfdff; }
+  .toolbar-label { font-size: 10.5px; color: var(--muted-2); font-weight: 600; }
+  .chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line-strong); border-radius: 999px; padding: 4px 9px; background: #fff; color: var(--muted); font-size: 10.5px; font-weight: 650; }
+  .chip.on { border-color: #bfdbfe; background: var(--blue-soft); color: var(--blue); }
+  .chip.ghost { border-style: dashed; }
+  .toolbar-spacer { flex: 1; }
+  .action { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line-strong); border-radius: 8px; padding: 5px 9px; background: #fff; color: var(--ink-2); font-size: 10.5px; font-weight: 650; }
+  .action.primary { border-color: var(--blue); background: var(--blue); color: #fff; }
+  .footnote { display: flex; align-items: center; gap: 8px; padding: 9px 20px 12px; color: var(--muted-2); font-size: 10.5px; }
+  .footnote .wm { margin-left: auto; border: 1px solid #e2e8f0; border-radius: 5px; padding: 1px 6px; color: #b6c2d2; letter-spacing: .08em; }
+
+  .anatomy { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+  .anatomy span { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; background: #fff; padding: 5px 10px; color: var(--muted); font-size: 11px; }
+  .anatomy i { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--blue-soft); color: var(--blue); font-style: normal; font-size: 9.5px; font-weight: 800; }
+
+  .section { margin-top: 40px; }
+  .section-head { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 14px; }
+  .section-head h2 { margin: 0; font-size: 22px; letter-spacing: -0.01em; }
+  .section-head p { margin: 0 0 2px; color: var(--muted); font-size: 12.5px; }
+  .section-head .tag { margin-left: auto; color: var(--muted-2); font-size: 11.5px; }
+
+  .library { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+  .lib-card { border: 1px solid var(--line); border-radius: 13px; background: #fff; padding: 12px; box-shadow: 0 1px 2px rgba(15,23,42,.03); }
+  .lib-card .glyph { height: 44px; display: flex; align-items: center; }
+  .lib-card h4 { margin: 4px 0 3px; font-size: 12px; font-weight: 750; }
+  .lib-card p { margin: 0; color: var(--muted-2); font-size: 10.5px; line-height: 1.55; }
+
+  .rules { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12px; background: #fff; border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+  .rules th { background: #f8fafc; color: var(--muted); font-weight: 650; text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 11px; }
+  .rules td { padding: 10px 12px; border-bottom: 1px solid #f1f5f9; color: var(--ink-2); vertical-align: top; }
+  .rules tr:last-child td { border-bottom: 0; }
+  .rules .intent { font-weight: 750; color: var(--ink); white-space: nowrap; }
+  .rules .pick { display: inline-block; border-radius: 6px; background: var(--blue-soft); color: var(--blue); padding: 2px 6px; font-size: 10.5px; font-weight: 700; }
+  .rules .alt { color: var(--muted); font-size: 11px; }
+  .rules .no { color: #b91c1c; font-size: 11px; }
+
+  .roadmap { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .phase { border: 1px solid var(--line); border-radius: 14px; background: #fff; padding: 14px 16px; }
+  .phase .tagline { display: flex; align-items: center; gap: 8px; }
+  .phase .badge { border-radius: 6px; background: var(--ink); color: #fff; font-size: 10px; font-weight: 800; padding: 3px 7px; }
+  .phase.p1 .badge { background: var(--blue); }
+  .phase.p2 .badge { background: #7c3aed; }
+  .phase h4 { margin: 8px 0 4px; font-size: 13.5px; }
+  .phase .days { margin-left: auto; color: var(--muted); font-size: 10.5px; font-weight: 650; }
+  .phase ul { margin: 8px 0 0; padding-left: 16px; color: var(--muted); font-size: 11.5px; line-height: 1.8; }
+  .phase li::marker { color: #cbd5e1; }
+
+  .footer { margin-top: 34px; padding-top: 16px; border-top: 1px solid var(--line); display: flex; color: var(--muted-2); font-size: 11px; }
+  .footer span:last-child { margin-left: auto; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div class="eyebrow">Awesome-Data · 教育问数</div>
+    <h1>问答可视化升级方案</h1>
+    <p class="lede">把「一句话 + 一张表」升级为「结论 + 指标 + 主图 + 辅图 + 明细 + 操作」的分析卡片：图表从 4 种扩展到 12 种，按问题意图自动选型，答案内直接可读、可切换、可导出。</p>
+    <div class="hero-tags">
+      <span>Answer Visual Card</span><span>ChartSpec</span><span>Auto Chart</span><span>ECharts 统一渲染</span><span>增强表格</span>
+    </div>
+  </header>
+
+  <div class="compare">
+    <section>
+      <div class="col-head"><span class="dot red"></span>现状<span class="count">表格回答</span></div>
+      <div class="before-card">
+        <div class="bubble user">对比扬州市各区县高三 3 月与 5 月模拟数学均分，找出差距最大的区县。</div>
+        <div class="plain-answer">
+          <p><b>智能分析</b></p>
+          <p>根据查询结果，3 月全市数学均分 <b>78.6</b> 分，5 月 <b>76.2</b> 分。各区县中，市直均分最高（88.4 分），仪征最低（66.2 分），极差 22.2 分。</p>
+          <table class="plain-table">
+            <thead><tr><th>区县</th><th>3 月</th><th>5 月</th><th>差值</th></tr></thead>
+            <tbody>
+              <tr><td>市直</td><td>88.4</td><td>86.1</td><td>+2.3</td></tr>
+              <tr><td>广陵区</td><td>82.1</td><td>79.6</td><td>+2.5</td></tr>
+              <tr><td>邗江区</td><td>79.8</td><td>77.2</td><td>+2.6</td></tr>
+              <tr><td>江都区</td><td>76.5</td><td>74.8</td><td>+1.7</td></tr>
+            </tbody>
+          </table>
+          <p class="muted">如需查看图表，请点击下方「查询结果」。</p>
+          <div class="artifact-row"><span>▤ 分析报告 · 1 份</span><span>▦ 查询结果 · 1 组</span></div>
+        </div>
+      </div>
+      <div class="callouts">
+        <div><b>1</b><span>结论、数字、表格挤在一起，没有视觉层级，领导一眼抓不到重点。</span></div>
+        <div><b>2</b><span>图表藏在右侧「查询结果」预览里，默认看不到，先点开预览、再切图表。</span></div>
+        <div><b>3</b><span>只有柱 / 条 / 线 / 饼 4 种图，且靠「第一列当 X、第一个数值列当 Y」硬猜。</span></div>
+      </div>
+
+      <div class="gap-card">
+        <div class="gap-title">关键差距<span>现在 → 方案</span></div>
+        <div class="gap-row"><span class="k">图表类型</span><span class="old">4 种</span><span class="arrow">→</span><span class="new">12 种</span></div>
+        <div class="gap-row"><span class="k">答案内可视化</span><span class="old">无</span><span class="arrow">→</span><span class="new">KPI + 3 图</span></div>
+        <div class="gap-row"><span class="k">选图方式</span><span class="old">列名启发式</span><span class="arrow">→</span><span class="new">意图 + 形态</span></div>
+        <div class="gap-row"><span class="k">导出与联动</span><span class="old">无</span><span class="arrow">→</span><span class="new">PNG / 报告</span></div>
+      </div>
+
+      <div class="old-flow">
+        <h5>现在看一张图，要走 4 步</h5>
+        <ol>
+          <li>读文字结论</li>
+          <li>在下方表格里找数字</li>
+          <li>点「查询结果」打开右侧预览</li>
+          <li>再切到「图表」，手动选类型</li>
+        </ol>
+        <p>结论、图、表彼此分离，切换时还会丢失上下文。</p>
+      </div>
+
+      <p class="quote">图表不是装饰，而是结论的证据：每个 KPI 都能回到明细，每张图都能回答一个具体问题。</p>
+    </section>
+
+    <section>
+      <div class="col-head"><span class="dot green"></span>建议<span class="count">分析卡片</span></div>
+      <div class="answer-card">
+        <div class="ans-head">
+          <div class="avatar">AI</div>
+          <div class="who">智能分析<span class="meta">2026-03 / 05 · 高三 · 全市</span></div>
+          <div class="verified">✓ 数据已核验</div>
+        </div>
+
+        <div class="ans-body">
+          <p class="insight">
+            3 月全市数学均分 <span class="num">78.6</span> 分，较 5 月高 <span class="num">2.4</span> 分；
+            <b>市直</b>以 <span class="hl">88.4 分</span> 领跑，<b>仪征</b>最低（66.2 分），
+            区县极差 <span class="num">22.2</span> 分，<b>仪征与市均分差距最大</b>。
+          </p>
+
+          <div class="kpis">
+            <div class="kpi">
+              <div class="label">参考人数</div>
+              <div class="value-row"><div class="value">12,480</div></div>
+              <div class="label" style="margin-top:6px;color:#94a3b8">49 所学校 · 7 个区县</div>
+            </div>
+            <div class="kpi">
+              <div class="label">全市数学均分</div>
+              <div class="value-row">
+                <div class="value">78.6<span class="unit">分</span></div>
+                <svg class="spark" width="62" height="26" viewBox="0 0 62 26" aria-hidden="true">
+                  <polyline points="2,19 14,16 26,17 38,11 50,12 60,6" fill="none" stroke="#3b82f6" stroke-width="2" stroke-linecap="round"/>
+                  <circle cx="60" cy="6" r="2.6" fill="#3b82f6"/>
+                </svg>
+              </div>
+              <div class="delta up">▲ +2.4 vs 5 月</div>
+            </div>
+            <div class="kpi">
+              <div class="label">及格率</div>
+              <div class="value-row">
+                <div class="value">71.2<span class="unit">%</span></div>
+                <svg class="spark" width="62" height="26" viewBox="0 0 62 26" aria-hidden="true">
+                  <polyline points="2,21 14,18 26,15 38,14 50,10 60,7" fill="none" stroke="#10b981" stroke-width="2" stroke-linecap="round"/>
+                  <circle cx="60" cy="7" r="2.6" fill="#10b981"/>
+                </svg>
+              </div>
+              <div class="delta up">▲ +3.4pp vs 5 月</div>
+            </div>
+            <div class="kpi">
+              <div class="label">区县极差</div>
+              <div class="value-row"><div class="value">22.2<span class="unit">分</span></div></div>
+              <div class="delta up">▲ 差距收窄 1.8 分</div>
+            </div>
+          </div>
+
+          <div class="chart-card">
+            <div class="chart-head">
+              <div>
+                <h3>各区县数学均分：3 月 vs 5 月</h3>
+                <p>单位：分 · 全市 49 校 · 虚线为全市加权均分 78.6</p>
+              </div>
+              <div class="chart-actions">
+                <div class="seg">
+                  <button class="on">组合图</button><button>柱状</button><button>折线</button><button>环形</button><button>表格</button>
+                </div>
+                <span class="icon-btn" title="导出 PNG">↓</span>
+                <span class="icon-btn" title="全屏">⤢</span>
+              </div>
+            </div>
+            <div class="chart-wrap" id="heroChart"></div>
+            <div class="hero-legend">
+              <span><i style="background:#2563eb"></i>3 月均分</span>
+              <span><i style="background:#bfdbfe"></i>5 月均分</span>
+              <span><i class="line"></i>全市加权均分</span>
+              <span style="margin-left:auto">柱顶数字为 3 月 − 5 月差值</span>
+            </div>
+          </div>
+
+          <div class="duo">
+            <div class="mini-card">
+              <div class="mini-head"><h4>分数段分布</h4><span>全部考生</span></div>
+              <div class="donut-row">
+                <div id="donutChart"></div>
+                <div class="donut-legend" id="donutLegend"></div>
+              </div>
+            </div>
+            <div class="mini-card">
+              <div class="mini-head"><h4>薄弱知识点 Top 5</h4><span>高二数学期末 · 得分率</span></div>
+              <div id="weakChart"></div>
+            </div>
+          </div>
+
+          <div class="table-card">
+            <div class="table-head">
+              <h4>学校明细</h4><span>共 49 行 · 已按权限脱敏</span>
+              <div class="right"><span>排序：均分 ↓</span><span>·</span><span>查看全部</span></div>
+            </div>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>学校</th><th>区县</th><th class="num">均分</th><th class="num">及格率</th><th class="num">优秀率</th><th class="num">较市均分</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr class="top">
+                  <td class="school"><span class="rank">1</span>GZ_19D9D68D</td><td>市直</td>
+                  <td class="num bar-cell"><span class="bar" style="width:78px"></span><span class="val">106.8</span></td>
+                  <td class="num">96.2%</td><td class="num">68.4%</td><td class="num"><span class="delta-pill up">▲ +28.2</span></td>
+                </tr>
+                <tr>
+                  <td class="school"><span class="rank">2</span>GZ_E74EBD64</td><td>邗江区</td>
+                  <td class="num bar-cell"><span class="bar" style="width:70px"></span><span class="val">100.9</span></td>
+                  <td class="num">93.1%</td><td class="num">55.2%</td><td class="num"><span class="delta-pill up">▲ +22.3</span></td>
+                </tr>
+                <tr>
+                  <td class="school"><span class="rank">3</span>GZ_39EC146C</td><td>江都区</td>
+                  <td class="num bar-cell"><span class="bar" style="width:64px"></span><span class="val">96.4</span></td>
+                  <td class="num">89.7%</td><td class="num">47.6%</td><td class="num"><span class="delta-pill up">▲ +17.8</span></td>
+                </tr>
+                <tr>
+                  <td class="school"><span class="rank">4</span>GZ_AADB4D1D</td><td>市直</td>
+                  <td class="num bar-cell"><span class="bar" style="width:60px"></span><span class="val">94.2</span></td>
+                  <td class="num">87.4%</td><td class="num">42.1%</td><td class="num"><span class="delta-pill up">▲ +15.6</span></td>
+                </tr>
+                <tr>
+                  <td class="school"><span class="rank">5</span>GZ_F57E7326</td><td>仪征市</td>
+                  <td class="num bar-cell"><span class="bar" style="width:56px"></span><span class="val">91.7</span></td>
+                  <td class="num">84.2%</td><td class="num">38.9%</td><td class="num"><span class="delta-pill up">▲ +13.1</span></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="answer-toolbar">
+          <span class="toolbar-label">推荐图表</span>
+          <span class="chip on">组合图</span><span class="chip">分组柱</span><span class="chip">折线</span><span class="chip">环形</span><span class="chip ghost">热力</span>
+          <span class="toolbar-spacer"></span>
+          <span class="action">↧ 导出 PNG</span>
+          <span class="action">＋ 加入报告</span>
+          <span class="action">⌘ 查看 SQL</span>
+          <span class="action primary">接着问：按区县看差距</span>
+        </div>
+        <div class="footnote">
+          <span>数据范围：全市 49 校 · 12,480 人 · 2026-03 / 2026-05 · 已按权限脱敏</span>
+          <span class="wm">演示数据 · 水印</span>
+        </div>
+      </div>
+
+      <div class="anatomy">
+        <span><i>1</i>结论先行</span><span><i>2</i>KPI 指标</span><span><i>3</i>主图</span><span><i>4</i>辅助图</span><span><i>5</i>增强明细</span><span><i>6</i>操作与追问</span>
+      </div>
+    </section>
+  </div>
+
+  <section class="section">
+    <div class="section-head">
+      <h2>图表类型库</h2>
+      <p>从 4 种扩展到 12 种，覆盖趋势、对比、构成、分布、相关、排名、达标七类问题。</p>
+      <span class="tag">按需加载 · 统一主题</span>
+    </div>
+    <div class="library" id="library"></div>
+  </section>
+
+  <section class="section">
+    <div class="section-head">
+      <h2>自动选图规则</h2>
+      <p>先判问题意图，再看数据形态，最后做反模式校验；模型只给建议，规则兜底。</p>
+      <span class="tag">规则优先 · LLM 辅助</span>
+    </div>
+    <table class="rules">
+      <thead>
+        <tr><th style="width:110px">问题意图</th><th style="width:210px">识别信号</th><th style="width:230px">数据形态</th><th style="width:170px">首选</th><th>备选 / 禁止</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="intent">趋势</td><td>走势、变化、近 N 次、对比两场</td><td>时间列 + 1~4 个数值列</td>
+          <td><span class="pick">折线 / 面积图</span></td>
+          <td><span class="alt">多系列折线、组合图</span><br><span class="no">禁止：把场次当柱高做排名</span></td>
+        </tr>
+        <tr>
+          <td class="intent">对比</td><td>对比、排名、差距、谁高谁低</td><td>类别 ≤ 12 + 1~2 个数值列</td>
+          <td><span class="pick">分组柱 / 横向条形</span></td>
+          <td><span class="alt">组合图（柱 + 折线）</span><br><span class="no">禁止：3D、截断基线</span></td>
+        </tr>
+        <tr>
+          <td class="intent">构成</td><td>占比、结构、分布、由什么组成</td><td>类别 ≤ 6、非负、合计有意义</td>
+          <td><span class="pick">环形图 / 100% 堆叠</span></td>
+          <td><span class="alt">堆叠柱、矩形树图</span><br><span class="no">禁止：饼图超过 6 片</span></td>
+        </tr>
+        <tr>
+          <td class="intent">分布</td><td>分布、分数段、集中度、波动</td><td>分数段已分箱 / 原始分值</td>
+          <td><span class="pick">直方图 + 累积线</span></td>
+          <td><span class="alt">箱线图、蜂群图</span><br><span class="no">禁止：用均分代表分布</span></td>
+        </tr>
+        <tr>
+          <td class="intent">相关</td><td>关系、影响、是否相关</td><td>2 个数值列（+ 气泡大小）</td>
+          <td><span class="pick">散点图 / 气泡图</span></td>
+          <td><span class="alt">带趋势线的散点</span><br><span class="no">禁止：把相关系数当因果</span></td>
+        </tr>
+        <tr>
+          <td class="intent">排名</td><td>前 N、后 N、名次、位次</td><td>类别 + 指标（名次列仅作标签）</td>
+          <td><span class="pick">排序横向条形</span></td>
+          <td><span class="alt">坡度图（两期名次）</span><br><span class="no">禁止：用名次当柱高</span></td>
+        </tr>
+        <tr>
+          <td class="intent">达标</td><td>达标、完成率、距离目标</td><td>1 个值 + 目标值</td>
+          <td><span class="pick">子弹图 / 仪表盘</span></td>
+          <td><span class="alt">进度环 + KPI</span><br><span class="no">禁止：无目标的孤立仪表盘</span></td>
+        </tr>
+        <tr>
+          <td class="intent">明细</td><td>名单、清单、逐条、明细</td><td>多列文本 + 数值</td>
+          <td><span class="pick">增强表格</span></td>
+          <td><span class="alt">表格 + 数据条 / 热力</span><br><span class="no">禁止：为凑图强行聚合</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section">
+    <div class="section-head">
+      <h2>落地路线</h2>
+      <p>先做「答案内可视化」闭环，再补交互与高级图形，最后统一报告与问答的图表语言。</p>
+      <span class="tag">P0 7 · P1 5 · P2 7 人日</span>
+    </div>
+    <div class="roadmap">
+      <div class="phase p0">
+        <div class="tagline"><span class="badge">P0</span><span class="days">7 人日</span></div>
+        <h4>答案内可视化 MVP</h4>
+        <ul>
+          <li>ChartSpec 协议 + 校验 + 兜底</li>
+          <li>ECharts ChartView（按需加载）</li>
+          <li>KPI 条 + 主图 + 增强表格</li>
+          <li>8 类基础图 + 自动选型</li>
+          <li>历史会话兼容与回归测试</li>
+        </ul>
+      </div>
+      <div class="phase p1">
+        <div class="tagline"><span class="badge">P1</span><span class="days">5 人日</span></div>
+        <h4>交互与分析深度</h4>
+        <ul>
+          <li>图表类型 / 维度 / 指标切换</li>
+          <li>参考线、目标线、高亮标注</li>
+          <li>导出 PNG、全屏、深色模式</li>
+          <li>组合图、散点、热力、雷达</li>
+          <li>移动端与可达性</li>
+        </ul>
+      </div>
+      <div class="phase p2">
+        <div class="tagline"><span class="badge">P2</span><span class="days">7 人日</span></div>
+        <h4>一致性与闭环</h4>
+        <ul>
+          <li>问答 / 报告共用主题与配色</li>
+          <li>「加入报告」、图表落库</li>
+          <li>图表点击联动明细（cross-filter）</li>
+          <li>子弹、仪表盘、漏斗、瀑布、桑基、树图</li>
+          <li>选型命中率与使用埋点</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <div class="footer">
+    <span>问答可视化升级 · 方案预览 · 数据均为演示数据</span>
+    <span>配套文档：docs/qa-visualization-upgrade-plan.md</span>
+  </div>
+</div>
+
+<script>
+(function () {
+  const NS = "http://www.w3.org/2000/svg";
+  function node(tag, attrs, parent) {
+    const el = document.createElementNS(NS, tag);
+    for (const k in attrs || {}) el.setAttribute(k, attrs[k]);
+    if (parent) parent.appendChild(el);
+    return el;
+  }
+  function text(parent, x, y, str, attrs) {
+    const el = node("text", Object.assign({ x, y, "font-size": 10, fill: "#64748b" }, attrs || {}), parent);
+    el.textContent = str;
+    return el;
+  }
+
+  // ---------- hero: grouped bars + reference line ----------
+  const data = [
+    { name: "市直", a: 88.4, b: 86.1 },
+    { name: "广陵", a: 82.1, b: 79.6 },
+    { name: "邗江", a: 79.8, b: 77.2 },
+    { name: "江都", a: 76.5, b: 74.8 },
+    { name: "宝应", a: 72.3, b: 70.1 },
+    { name: "高邮", a: 69.8, b: 67.4 },
+    { name: "仪征", a: 66.2, b: 64.9 }
+  ];
+  (function renderHero() {
+    const W = 826, H = 292, m = { l: 42, r: 14, t: 26, b: 40 };
+    const pw = W - m.l - m.r, ph = H - m.t - m.b;
+    const maxY = 100;
+    const y = v => m.t + ph - (v / maxY) * ph;
+    const svg = node("svg", { width: "100%", height: H, viewBox: `0 0 ${W} ${H}`, role: "img" }, document.getElementById("heroChart"));
+    // grid + y labels
+    [0, 20, 40, 60, 80, 100].forEach(t => {
+      const yy = y(t);
+      node("line", { x1: m.l, x2: W - m.r, y1: yy, y2: yy, stroke: t === 0 ? "#cbd5e1" : "#eef2f7", "stroke-width": 1 }, svg);
+      text(svg, m.l - 8, yy + 3, String(t), { "text-anchor": "end", fill: "#94a3b8", "font-size": 9.5 });
+    });
+    const groupW = pw / data.length;
+    const barW = 20, gap = 4;
+    data.forEach((d, i) => {
+      const cx = m.l + groupW * i + groupW / 2;
+      const x1 = cx - barW - gap / 2;
+      const x2 = cx + gap / 2;
+      const h1 = ph - (d.a / maxY) * ph;
+      const h2 = ph - (d.b / maxY) * ph;
+      node("rect", { x: x1, y: y(d.a), width: barW, height: h1, rx: 4, fill: "#2563eb" }, svg);
+      node("rect", { x: x2, y: y(d.b), width: barW, height: h2, rx: 4, fill: "#bfdbfe" }, svg);
+      const diff = (d.a - d.b).toFixed(1);
+      text(svg, cx, Math.min(y(d.a), y(d.b)) - 7, "+" + diff, { "text-anchor": "middle", fill: "#059669", "font-size": 9.5, "font-weight": 700 });
+      text(svg, cx, H - 18, d.name, { "text-anchor": "middle", fill: "#475569", "font-size": 10, "font-weight": 600 });
+    });
+    // reference line
+    const ry = y(78.6);
+    node("line", { x1: m.l, x2: W - m.r, y1: ry, y2: ry, stroke: "#f59e0b", "stroke-width": 1.5, "stroke-dasharray": "5 4" }, svg);
+    const tag = node("g", {}, svg);
+    node("rect", { x: W - m.r - 92, y: ry - 18, width: 88, height: 16, rx: 4, fill: "#fffbeb", stroke: "#fde68a" }, tag);
+    text(tag, W - m.r - 48, ry - 7, "市均分 78.6", { "text-anchor": "middle", fill: "#b45309", "font-size": 9.5, "font-weight": 700 });
+  })();
+
+  // ---------- donut ----------
+  (function renderDonut() {
+    const items = [
+      { label: "140+", value: 8, color: "#1d4ed8" },
+      { label: "120–140", value: 22, color: "#3b82f6" },
+      { label: "100–120", value: 31, color: "#93c5fd" },
+      { label: "80–100", value: 24, color: "#fbbf24" },
+      { label: "< 80", value: 15, color: "#f87171" }
+    ];
+    const W = 164, H = 168, cx = 82, cy = 84, r = 62, ir = 40;
+    const svg = node("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: "img" }, document.getElementById("donutChart"));
+    const total = items.reduce((s, d) => s + d.value, 0);
+    let start = -Math.PI / 2;
+    items.forEach(d => {
+      const angle = (d.value / total) * Math.PI * 2;
+      const end = start + angle;
+      const p = (rad, a) => [cx + rad * Math.cos(a), cy + rad * Math.sin(a)];
+      const [x1, y1] = p(r, start), [x2, y2] = p(r, end), [x3, y3] = p(ir, end), [x4, y4] = p(ir, start);
+      const large = angle > Math.PI ? 1 : 0;
+      node("path", {
+        d: `M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2} L ${x3} ${y3} A ${ir} ${ir} 0 ${large} 0 ${x4} ${y4} Z`,
+        fill: d.color
+      }, svg);
+      start = end;
+    });
+    text(svg, cx, cy - 4, "12,480", { "text-anchor": "middle", "font-size": 18, "font-weight": 800, fill: "#0f172a" });
+    text(svg, cx, cy + 13, "参考人次", { "text-anchor": "middle", "font-size": 9.5, fill: "#94a3b8" });
+    const legend = document.getElementById("donutLegend");
+    items.forEach(d => {
+      const row = document.createElement("div");
+      row.innerHTML = `<i style="background:${d.color}"></i><span>${d.label} 分</span><b>${d.value}%</b>`;
+      legend.appendChild(row);
+    });
+  })();
+
+  // ---------- weak knowledge horizontal bars ----------
+  (function renderWeak() {
+    const items = [
+      { label: "立体几何", v: 52 },
+      { label: "概率统计", v: 58 },
+      { label: "导数应用", v: 61 },
+      { label: "解析几何", v: 64 },
+      { label: "文言文翻译", v: 67 }
+    ];
+    const W = 380, H = 186, m = { l: 72, r: 34, t: 8, b: 8 };
+    const pw = W - m.l - m.r;
+    const rowH = (H - m.t - m.b) / items.length;
+    const svg = node("svg", { width: "100%", height: H, viewBox: `0 0 ${W} ${H}`, role: "img" }, document.getElementById("weakChart"));
+    const x = v => m.l + (v / 100) * pw;
+    items.forEach((d, i) => {
+      const yy = m.t + rowH * i + rowH / 2;
+      text(svg, m.l - 8, yy + 3, d.label, { "text-anchor": "end", fill: "#475569", "font-size": 10 });
+      node("rect", { x: m.l, y: yy - 5, width: pw, height: 10, rx: 5, fill: "#f1f5f9" }, svg);
+      const color = d.v < 60 ? "#f87171" : d.v < 70 ? "#fbbf24" : "#60a5fa";
+      node("rect", { x: m.l, y: yy - 5, width: (d.v / 100) * pw, height: 10, rx: 5, fill: color }, svg);
+      text(svg, m.l + (d.v / 100) * pw + 6, yy + 3, d.v + "%", { fill: "#334155", "font-size": 9.5, "font-weight": 700 });
+    });
+    const tx = x(70);
+    node("line", { x1: tx, x2: tx, y1: m.t - 2, y2: H - m.b + 2, stroke: "#94a3b8", "stroke-width": 1, "stroke-dasharray": "3 3" }, svg);
+    text(svg, tx, m.t + 7, "目标 70%", { "text-anchor": "middle", fill: "#64748b", "font-size": 8.5 });
+  })();
+
+  // ---------- chart library glyphs ----------
+  const lib = [
+    { name: "组合图", desc: "柱 + 折线，双指标同屏", glyph: "combo" },
+    { name: "分组柱", desc: "两期 / 两群体对比", glyph: "group" },
+    { name: "堆叠柱", desc: "构成随时间变化", glyph: "stack" },
+    { name: "折线 / 面积", desc: "趋势与累计走势", glyph: "line" },
+    { name: "环形图", desc: "占比 ≤ 6 类", glyph: "donut" },
+    { name: "散点 / 气泡", desc: "相关性与离群点", glyph: "scatter" },
+    { name: "热力图", desc: "班 × 科目、校 × 分段", glyph: "heat" },
+    { name: "雷达图", desc: "多科 / 多维画像", glyph: "radar" },
+    { name: "漏斗图", desc: "转化 / 达标链路", glyph: "funnel" },
+    { name: "子弹图", desc: "目标达成与差距", glyph: "bullet" },
+    { name: "瀑布图", desc: "增减因素拆解", glyph: "water" },
+    { name: "桑基 / 树图", desc: "流向与层级构成", glyph: "sankey" }
+  ];
+  (function renderLibrary() {
+    const wrap = document.getElementById("library");
+    const glyphs = {
+      combo: `<svg width="64" height="38" viewBox="0 0 64 38"><rect x="4" y="16" width="8" height="16" rx="2" fill="#bfdbfe"/><rect x="15" y="10" width="8" height="22" rx="2" fill="#60a5fa"/><rect x="26" y="20" width="8" height="12" rx="2" fill="#bfdbfe"/><rect x="37" y="13" width="8" height="19" rx="2" fill="#60a5fa"/><polyline points="4,22 15,14 26,18 37,8 52,5" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round"/></svg>`,
+      group: `<svg width="64" height="38" viewBox="0 0 64 38"><rect x="6" y="14" width="10" height="18" rx="2" fill="#2563eb"/><rect x="18" y="20" width="10" height="12" rx="2" fill="#bfdbfe"/><rect x="34" y="9" width="10" height="23" rx="2" fill="#2563eb"/><rect x="46" y="17" width="10" height="15" rx="2" fill="#bfdbfe"/></svg>`,
+      stack: `<svg width="64" height="38" viewBox="0 0 64 38"><rect x="8" y="18" width="12" height="14" rx="2" fill="#2563eb"/><rect x="8" y="10" width="12" height="8" fill="#93c5fd"/><rect x="28" y="14" width="12" height="18" rx="2" fill="#2563eb"/><rect x="28" y="8" width="12" height="6" fill="#93c5fd"/><rect x="48" y="20" width="12" height="12" rx="2" fill="#2563eb"/><rect x="48" y="14" width="12" height="6" fill="#93c5fd"/></svg>`,
+      line: `<svg width="64" height="38" viewBox="0 0 64 38"><path d="M4 30 L18 22 L30 25 L44 12 L60 6 L60 34 L4 34 Z" fill="#dbeafe"/><polyline points="4,30 18,22 30,25 44,12 60,6" fill="none" stroke="#2563eb" stroke-width="2" stroke-linecap="round"/></svg>`,
+      donut: `<svg width="64" height="38" viewBox="0 0 64 38"><circle cx="32" cy="19" r="13" fill="none" stroke="#bfdbfe" stroke-width="8"/><path d="M32 6 A13 13 0 0 1 44.7 15" fill="none" stroke="#2563eb" stroke-width="8"/><path d="M44.7 23 A13 13 0 0 1 22 29" fill="none" stroke="#60a5fa" stroke-width="8"/></svg>`,
+      scatter: `<svg width="64" height="38" viewBox="0 0 64 38"><circle cx="12" cy="27" r="3" fill="#93c5fd"/><circle cx="22" cy="20" r="4" fill="#60a5fa"/><circle cx="33" cy="24" r="2.5" fill="#93c5fd"/><circle cx="41" cy="13" r="5" fill="#2563eb"/><circle cx="52" cy="9" r="3" fill="#60a5fa"/><line x1="6" y1="32" x2="58" y2="5" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3 3"/></svg>`,
+      heat: `<svg width="64" height="38" viewBox="0 0 64 38"><rect x="6" y="6" width="12" height="8" rx="1" fill="#dbeafe"/><rect x="20" y="6" width="12" height="8" rx="1" fill="#60a5fa"/><rect x="34" y="6" width="12" height="8" rx="1" fill="#2563eb"/><rect x="6" y="16" width="12" height="8" rx="1" fill="#93c5fd"/><rect x="20" y="16" width="12" height="8" rx="1" fill="#dbeafe"/><rect x="34" y="16" width="12" height="8" rx="1" fill="#60a5fa"/><rect x="6" y="26" width="12" height="8" rx="1" fill="#2563eb"/><rect x="20" y="26" width="12" height="8" rx="1" fill="#93c5fd"/><rect x="34" y="26" width="12" height="8" rx="1" fill="#dbeafe"/></svg>`,
+      radar: `<svg width="64" height="38" viewBox="0 0 64 38"><polygon points="32,4 53,16 47,32 17,32 11,16" fill="none" stroke="#cbd5e1" stroke-width="1"/><polygon points="32,10 46,18 41,28 21,28 17,18" fill="#bfdbfe" fill-opacity=".55" stroke="#2563eb" stroke-width="1.5"/></svg>`,
+      funnel: `<svg width="64" height="38" viewBox="0 0 64 38"><path d="M8 5 H56 L48 14 H16 Z" fill="#2563eb"/><path d="M17 17 H47 L41 25 H23 Z" fill="#60a5fa"/><path d="M24 28 H40 L36 35 H28 Z" fill="#bfdbfe"/></svg>`,
+      bullet: `<svg width="64" height="38" viewBox="0 0 64 38"><rect x="8" y="13" width="42" height="12" rx="3" fill="#e2e8f0"/><rect x="8" y="13" width="31" height="12" rx="3" fill="#60a5fa"/><rect x="8" y="17" width="7" height="4" rx="2" fill="#1e293b"/><line x1="44" y1="9" x2="44" y2="29" stroke="#f59e0b" stroke-width="2"/></svg>`,
+      water: `<svg width="64" height="38" viewBox="0 0 64 38"><rect x="6" y="14" width="9" height="18" fill="#2563eb"/><rect x="18" y="8" width="9" height="10" fill="#60a5fa"/><rect x="30" y="18" width="9" height="14" fill="#93c5fd"/><rect x="42" y="6" width="9" height="8" fill="#60a5fa"/><line x1="4" y1="32" x2="60" y2="32" stroke="#cbd5e1"/></svg>`,
+      sankey: `<svg width="64" height="38" viewBox="0 0 64 38"><rect x="6" y="6" width="7" height="8" rx="2" fill="#2563eb"/><rect x="6" y="18" width="7" height="12" rx="2" fill="#60a5fa"/><rect x="50" y="9" width="7" height="20" rx="2" fill="#93c5fd"/><path d="M13 10 C30 10 36 12 50 12" stroke="#bfdbfe" stroke-width="5" fill="none"/><path d="M13 22 C30 22 36 20 50 22" stroke="#dbeafe" stroke-width="5" fill="none"/></svg>`
+    };
+    lib.forEach(item => {
+      const card = document.createElement("div");
+      card.className = "lib-card";
+      card.innerHTML = `<div class="glyph">${glyphs[item.glyph]}</div><h4>${item.name}</h4><p>${item.desc}</p>`;
+      wrap.appendChild(card);
+    });
+  })();
+})();
+</script>
+</body>
+</html>

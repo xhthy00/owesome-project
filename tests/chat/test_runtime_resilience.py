@@ -411,12 +411,12 @@ def test_chart_waits_for_same_batch_query_instead_of_using_previous_rows(host, m
         return {"sql": sql, "tables": ["exam_facts"], "bundle_id": "edu", "manifest_hash": "a" * 64,
                 "columns": ["label", "value"], "rows": [["current", 2 if "second" in sql else 1]]}
 
-    async def chart(**kwargs):
-        charts.append(kwargs["data"])
-        return SimpleNamespace(data={"option": "{}", "chart_type": "bar"}, content="图表已生成")
+    def chart_option(_spec, rows, _columns):
+        charts.append(rows)
+        return {}
 
     monkeypatch.setattr(semantic_query.SemanticQuery, "run", run_query)
-    monkeypatch.setattr(runtime.build_chart_option_tool, "execute", chart)
+    monkeypatch.setattr(runtime, "spec_to_echarts_option", chart_option)
     chart_call = call("chart_semantic_result", "stale-chart", x_column="label", y_columns=["value"], kind="bar")
     model = ToolCallingModel(responses=[query("first"),
         AIMessage(content="", tool_calls=[call("query_semantic", "second", sql="SELECT second FROM exam_facts"), chart_call]),
@@ -424,7 +424,7 @@ def test_chart_waits_for_same_batch_query_instead_of_using_previous_rows(host, m
         AIMessage(content="本轮结论")])
     asyncio.run(runtime.run_chat_stream(request=ChatRequest(datasource_id=4, question="查询人数并画图"), model=model, **args))
     assert len(charts) == 1
-    assert charts[0]["metrics"][0]["values"] == [2.0]
+    assert charts[0] == [["current", 2]]
     assert records[-1]["is_success"]
 
 
@@ -694,3 +694,39 @@ def test_reasoning_survives_provider_tool_roundtrip_only_for_supported_hosts(end
     assert message.additional_kwargs["reasoning_content"] == "hidden reasoning"
     wire = model._get_request_payload([HumanMessage(content="question"), message, ToolMessage(content="result", tool_call_id="q")])
     assert (wire["messages"][1].get("reasoning_content") == "hidden reasoning") is preserved
+
+
+def test_server_emits_chart_spec_when_model_skips_chart_tool(host, monkeypatch):
+    args, events, records, _ = host
+
+    def run_query(_self, sql, *, execute):
+        return {
+            "sql": sql,
+            "tables": ["exam_facts"],
+            "bundle_id": "edu",
+            "manifest_hash": "a" * 64,
+            "columns": ["学校", "均分"],
+            "rows": [["A", 90], ["B", 80], ["C", 70]],
+        }
+
+    monkeypatch.setattr(semantic_query.SemanticQuery, "run", run_query)
+    model = ToolCallingModel(
+        responses=[
+            query("first"),
+            AIMessage(content="本轮结论：A 校最高。"),
+        ]
+    )
+    asyncio.run(
+        runtime.run_chat_stream(
+            request=ChatRequest(datasource_id=4, question="数学均分是多少"),
+            model=model,
+            **args,
+        )
+    )
+    chart_events = [payload for event, payload in events if event == "chart"]
+    assert len(chart_events) == 1
+    spec = chart_events[0]["chart_spec"]
+    assert spec["kind"] == "spec"
+    assert spec["type"] in {"column", "bar"}
+    assert spec["source"]["resultIndex"] == 0
+    assert records[-1]["chart_config"]["kind"] == "spec"
