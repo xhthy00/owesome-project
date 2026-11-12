@@ -8,7 +8,7 @@
 
   设计约定：
   - 字体 / 间距 / 主色对齐 frontend-react/styles/gov-theme.css：
-    主色 #1677ff，正文 rgba(0,0,0,0.88)，次级 rgba(0,0,0,0.65)。
+    主色 #2563eb，正文 rgba(0,0,0,0.88)，次级 rgba(0,0,0,0.65)。
   - 图表统一用 ECharts CDN（5.x），由各模板的 <script> 调用
     echarts.init(el).setOption(JSON.parse(占位符JSON))。
   - 占位符统一 {{KEY}}（仅 [A-Za-z0-9_]），由 render_html_report 正则替换。
@@ -23,8 +23,8 @@
   <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
   <style>
     :root {
-      --edu-primary: #1677ff;
-      --edu-primary-bg: #e6f4ff;
+      --edu-primary: #2563eb;
+      --edu-primary-bg: #eff6ff;
       --edu-text-lv1: rgba(0,0,0,0.88);
       --edu-text-lv2: rgba(0,0,0,0.65);
       --edu-text-lv3: rgba(0,0,0,0.45);

@@ -1,5 +1,5 @@
 import { ApartmentOutlined } from "@ant-design/icons";
-import { App as AntApp, ConfigProvider, Select, Watermark, theme } from "antd";
+import { App as AntApp, ConfigProvider, Select, Watermark } from "antd";
 import zhCN from "antd/locale/zh_CN";
 import dayjs from "dayjs";
 import "dayjs/locale/zh-cn";
@@ -14,6 +14,8 @@ import { clearAccessToken, clearAuthSession, getAccessToken } from "@/auth/sessi
 import SideBar from "@/components/layout/side-bar";
 import UserAvatarMenu from "@/components/layout/user-menu";
 import { setCachedWatermarkText, userWatermarkText } from "@/utils/userWatermark";
+import { pageTitleFor } from "@/components/layout/nav-config";
+import { buildAntdTheme } from "@/theme/tokens";
 import "../styles/globals.css";
 
 dayjs.locale("zh-cn");
@@ -65,13 +67,6 @@ function LayoutWrapper({
     clearAuthSession();
     void router.replace("/login");
   };
-
-  useEffect(() => {
-    const savedMode = window.localStorage.getItem(APP_MODE_KEY);
-    if (savedMode === "dark" || savedMode === "light") {
-      setMode(savedMode);
-    }
-  }, [setMode]);
 
   useEffect(() => {
     document.body.classList.toggle("dark", mode === "dark");
@@ -159,16 +154,7 @@ function LayoutWrapper({
     [loginAccount, loginName]
   );
 
-  const themeConfig = useMemo(
-    () => ({
-      token: {
-        colorPrimary: "#2563EB",
-        borderRadius: 8
-      },
-      algorithm: mode === "dark" ? theme.darkAlgorithm : theme.defaultAlgorithm
-    }),
-    [mode]
-  );
+  const themeConfig = useMemo(() => buildAntdTheme(mode), [mode]);
 
   return (
     <ConfigProvider locale={zhCN} theme={themeConfig}>
@@ -192,12 +178,21 @@ function LayoutWrapper({
               <SideBar />
             </div>
             <div className="relative flex flex-1 flex-col overflow-hidden">
-              <div className="workspace-topbar flex h-12 shrink-0 items-center justify-between gap-3 border-b border-slate-200 bg-white px-5 text-sm text-slate-700 md:h-10 dark:border-slate-700 dark:bg-[#111827]">
-                {pathname === "/chat" ? <div id="chat-header-slot" className="min-w-0 flex-1" /> : <span className="text-sm font-medium">学情分析工作台</span>}
-                <div className="workspace-account flex shrink-0 items-center gap-3 text-slate-500">
+              <div className="workspace-topbar flex h-12 shrink-0 items-center justify-between gap-3 border-b border-[var(--color-border-1)] bg-[var(--color-surface-1)] px-5 text-sm text-[var(--color-text-2)] md:h-10">
+                {pathname === "/chat" ? (
+                  <div id="chat-header-slot" className="min-w-0 flex-1" />
+                ) : (
+                  <span
+                    className="min-w-0 truncate text-sm font-medium text-[var(--color-text-1)]"
+                    aria-current="page"
+                  >
+                    {pageTitleFor(pathname)}
+                  </span>
+                )}
+                <div className="workspace-account flex shrink-0 items-center gap-3 text-[var(--color-text-3)]">
                   {workspaceOptions.length && !hideWorkspaceSwitcher ? (
-                    <div className="flex h-9 items-center gap-2 rounded-full border border-[#d9e2f0] bg-[#f7faff] px-3 pr-2 shadow-sm dark:border-[#2f3a52] dark:bg-[#1a2130]">
-                      <ApartmentOutlined className="text-[13px] text-[#4f6fa8] dark:text-[#8aa8de]" />
+                    <div className="flex h-9 items-center gap-2 rounded-full border border-[var(--color-brand-tint-border)] bg-[var(--color-brand-tint)] px-3 pr-2">
+                      <ApartmentOutlined className="text-[13px] text-[var(--color-brand-ink)]" />
                       <Select
                         size="middle"
                         variant="borderless"

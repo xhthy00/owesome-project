@@ -1,7 +1,7 @@
 import {
   ApartmentOutlined, ArrowDownOutlined, ArrowUpOutlined, BulbOutlined, CheckOutlined, CloseCircleOutlined, CopyOutlined,
-  DatabaseOutlined, EyeOutlined, FileTextOutlined, InfoCircleOutlined, LeftOutlined, MessageOutlined,
-  PlusOutlined, QuestionCircleOutlined, RightOutlined, RobotOutlined,
+  DatabaseOutlined, EyeOutlined, FileTextOutlined, InfoCircleOutlined, LeftOutlined,
+  QuestionCircleOutlined, RightOutlined,
 } from "@ant-design/icons";
 import { Drawer, Grid, Popover, message as toast } from "antd";
 import { useEffect, useRef, useState } from "react";
@@ -12,10 +12,9 @@ import { getCurrentUser } from "@/api/auth";
 import AnswerVisual from "@/components/chat/AnswerVisual";
 import ChatExecutionPanel from "@/components/chat/ChatExecutionPanel";
 import { ChatComposerStatus, ChatTaskProgress, ChatWorkLog, runActivity } from "@/components/chat/ChatRunProgress";
-import DatasourcePicker from "@/components/chat/DatasourcePicker";
 import HumanQuestionForm, { HumanQuestionSummary } from "@/components/chat/HumanQuestionForm";
 import type { Message, useChat } from "@/hooks/useChat";
-import { ASSISTANT_AVATAR, ASSISTANT_WELCOME_TITLE, getAssistantSuggestions } from "@/new-components/chat/assistant";
+import { ASSISTANT_AVATAR, ASSISTANT_WELCOME_DESC, ASSISTANT_WELCOME_TITLE, getAssistantSuggestions } from "@/new-components/chat/assistant";
 import { eduMarkdownComponents } from "@/new-components/chat/content/eduMarkdownComponents";
 import { snippetConversationTitle } from "@/utils/conversationTitle";
 import { formatContextUsage, formatTokenCount } from "@/utils/runMetrics";
@@ -81,12 +80,11 @@ function CopyRow({ item }: { item: Message }) {
 }
 
 export default function CoworkChat({ chat }: { chat: ChatViewState }) {
-  const { messages, loading, send, stop, datasourceId, setDatasourceId, conversationId } = chat;
+  const { messages, loading, send, stop, datasourceId } = chat;
   const users = messages.filter((item) => item.role === "user");
   const welcome = users.length === 0;
   const [input, setInput] = useState("");
   const [suggestions, setSuggestions] = useState<readonly string[]>([]);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [preview, setPreview] = useState<{ runId: string; kind: "report" | "data" | "all" }>();
   const [progressOpen, setProgressOpen] = useState(true);
   const [mobileProgressOpen, setMobileProgressOpen] = useState(false);
@@ -183,16 +181,6 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
           rows={welcome ? 3 : 1} maxLength={pending ? 8000 : 1000} disabled={loading} aria-label={pending ? "回复追问" : "输入消息"}
           placeholder={pending ? "回复助手的问题…" : loading ? "任务进行中，完成后可继续追问…" : welcome ? "今天帮你分析些什么？" : "继续追问…"} />
         <div className="cowork-composer-toolbar">
-          <Popover trigger="click" placement="topLeft" open={menuOpen && !loading && !pending} onOpenChange={setMenuOpen}
-            content={<div className="cowork-examples">
-              <strong>提问示例</strong>
-              {suggestions.map((text) => <button key={text} type="button" onClick={() => {
-                setInput(text); setMenuOpen(false); editor.current?.focus();
-              }}><MessageOutlined aria-hidden="true" />{text}</button>)}
-            </div>}>
-            <button type="button" className="cowork-icon" disabled={loading || Boolean(pending)}
-              title="提问示例" aria-label="提问示例" aria-expanded={menuOpen && !loading && !pending}><PlusOutlined /></button>
-          </Popover>
           <span className="cowork-input-hint">Enter 发送 · Shift + Enter 换行</span>
           <button type="button" className={`cowork-send ${loading ? "cowork-stop" : ""}`} disabled={!loading && !input.trim()}
             title={loading ? "停止任务" : "发送消息"} aria-label={loading ? "停止任务" : "发送消息"}
@@ -201,18 +189,16 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
           </button>
         </div>
       </div>
-      <div className="cowork-composer-footer">
-        <DatasourcePicker value={datasourceId} onChange={setDatasourceId} compact disabled={loading || Boolean(conversationId)} />
-        <span className="cowork-mode"><RobotOutlined aria-hidden="true" /> 单智能体</span>
-        {showUsage && <Popover trigger="click" placement="topRight" content={
+      {showUsage && <div className="cowork-composer-footer">
+        <Popover trigger="click" placement="topRight" content={
           <div className="cowork-usage-detail">
             <strong>用量与上下文</strong>
             {chat.runMetrics.tokenKnown && <span>累计用量 {formatTokenCount(chat.runMetrics.totalTokens, true)} Token</span>}
             {contextLabel && <span>{contextLabel}</span>}
             <small>上下文为最近一次模型请求的输入量，历史由系统自动压缩。</small>
           </div>
-        }><button type="button" className="cowork-usage" aria-label="查看用量与上下文"><InfoCircleOutlined aria-hidden="true" />上下文</button></Popover>}
-      </div>
+        }><button type="button" className="cowork-usage" aria-label="查看用量与上下文"><InfoCircleOutlined aria-hidden="true" />上下文</button></Popover>
+      </div>}
     </div>
   );
 
@@ -243,9 +229,28 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
   if (welcome) return (
     <section className="cowork-chat cowork-welcome" aria-label="新对话">
       <div className="cowork-welcome-inner">
-        <img src={ASSISTANT_AVATAR} alt="" draggable={false} className="cowork-hero" />
-        <h1>{ASSISTANT_WELCOME_TITLE}</h1>
+        <div className="cowork-welcome-head">
+          <img src={ASSISTANT_AVATAR} alt="" draggable={false} className="cowork-hero" />
+          <div className="cowork-greeting">
+            <h1>{ASSISTANT_WELCOME_TITLE}</h1>
+            <p>{ASSISTANT_WELCOME_DESC}</p>
+          </div>
+        </div>
         {composer}
+        {suggestions.length ? (
+          <div className="cowork-starters">
+            <span className="cowork-starters-label">试试这样问</span>
+            <div className="cowork-starter-list">
+              {suggestions.slice(0, 4).map((text) => (
+                <button key={text} type="button" className="cowork-starter" title={text}
+                  onClick={() => { setInput(text); editor.current?.focus(); }}>
+                  <RightOutlined className="cowork-starter-icon" aria-hidden="true" />
+                  <span>{text}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
       </div>
     </section>
   );
@@ -340,7 +345,7 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
         <div className="cowork-preview-body">{previewBody}</div>
       </aside> : <Drawer title="结果预览" width="min(100%, 560px)" open onClose={() => setPreview(undefined)}>{previewBody}</Drawer>)}
       {!activePreview && (lg ? progressOpen ? <aside className="cowork-task-panel" aria-label="任务进度">
-        <header><ApartmentOutlined aria-hidden="true" /><strong>任务进度</strong><span className="cowork-panel-caption">单智能体</span>
+        <header><ApartmentOutlined aria-hidden="true" /><strong>任务进度</strong>
           <button type="button" className="cowork-icon" aria-label="折叠任务进度" title="折叠任务进度" onClick={() => setProgressOpen(false)}><RightOutlined /></button>
         </header>
         {progressBody}

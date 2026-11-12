@@ -336,7 +336,7 @@ def build_class_compare_table_html(
     school_row = ""
     if school_avg is not None or school_pass is not None:
         school_row = (
-            "<tr style='background:#e6f4ff;font-weight:600'>"
+            "<tr style='background:#eff6ff;font-weight:600'>"
             f"<td>{baseline_label}</td><td class='num'>-</td>"
             f"<td class='num'>{_fmt(school_avg)}</td>"
             f"<td class='num'>{_fmt(school_pass)}%</td></tr>"

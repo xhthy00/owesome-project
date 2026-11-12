@@ -12,6 +12,7 @@ from system.api.auth_deps import get_current_user
 from system.authz import effective_sys_role, is_platform_admin, is_super_admin
 from system.crud.crud_user import create_user, get_user_by_account, get_user_by_id
 from system.schemas import UserCreate
+from system.workspace_scope import get_workspace_oid
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -128,6 +129,7 @@ def login(
 def get_me(
     current_user=Depends(get_current_user),
     session: Session = Depends(get_session),
+    workspace_oid: int = Depends(get_workspace_oid),
 ):
     """Get current user info."""
     from datasource.service.edu_permission import (
@@ -138,7 +140,21 @@ def get_me(
 
     db_user = get_user_by_id(session, current_user.id)
     edu_scope = edu_scope_summary(db_user) if db_user else {}
-    if edu_scope:
+    raw_variables = getattr(db_user, "system_variables", None)
+    if isinstance(raw_variables, dict) and "edu_auth_v2" in raw_variables:
+        # v2：分析工具/前端需要资源数据源、范围层级、学校/班级与能力。
+        try:
+            from src.datasource.service.education_report_scope import load_report_scope
+            from src.datasource.service.education_source import source_settings
+
+            _, _kind, _config, datasource_id, _binding = source_settings()
+            scope = load_report_scope(
+                session, db_user, int(workspace_oid), int(datasource_id)
+            )
+            edu_scope = scope.summary() if scope is not None else {"edu_role": "v2"}
+        except Exception:
+            edu_scope = {"edu_role": "v2"}
+    if edu_scope and edu_scope.get("edu_role") != "v2":
         sid = str(edu_scope.get("school_id") or "").strip()
         stored = str(edu_scope.get("school_name") or "").strip()
         looked = ""

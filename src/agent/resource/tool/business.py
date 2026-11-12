@@ -211,7 +211,7 @@ def _sanitize_report_html(raw_html: str) -> str:
 #: 班级总览：内联 HTML（非模板）也注入统一表格/文字卡片样式
 _CLASS_OVERVIEW_POLISH_CSS = """
 :root{
-  --edu-primary:#1677ff;--edu-primary-soft:#e8f3ff;--edu-primary-bg:#e6f4ff;
+  --edu-primary:#2563eb;--edu-primary-soft:#eff6ff;--edu-primary-bg:#dbeafe;
   --edu-text-lv1:rgba(0,0,0,.88);--edu-text-lv2:rgba(0,0,0,.65);--edu-text-lv3:rgba(0,0,0,.45);
   --edu-border:#e8edf3;--edu-surface:#f7f9fc;
 }

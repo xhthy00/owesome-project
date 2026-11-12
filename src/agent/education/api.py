@@ -140,23 +140,35 @@ def _build_orchestrator(
     datasource_id: int,
     workspace_oid: int | None,
     user_id: int | None = None,
+    report_scope: Any = None,
 ) -> ReportOrchestrator:
     """用真实数据源回调构造 ReportOrchestrator。"""
     from src.agent.resource.tool.business import _load_datasource
     from src.datasource.db.db import get_schema_info
     from src.datasource.service.execute_with_permission import (
+        execute_report_sql_by_user_id,
         execute_sql_with_permission_by_user_id,
     )
 
     db_type, config, _ds_name = _load_datasource(datasource_id, workspace_oid)
 
-    async def execute_sql(sql: str) -> dict:
+    async def execute_sql(sql: str, reference: str | None = None) -> dict:
         import asyncio
 
         def _run() -> dict:
-            success, msg, result, _sql_run = execute_sql_with_permission_by_user_id(
-                user_id, datasource_id, workspace_oid, sql
-            )
+            if report_scope is not None:
+                success, msg, result, _sql_run = execute_report_sql_by_user_id(
+                    user_id,
+                    datasource_id,
+                    workspace_oid,
+                    sql,
+                    scope=report_scope,
+                    reference=reference,
+                )
+            else:
+                success, msg, result, _sql_run = execute_sql_with_permission_by_user_id(
+                    user_id, datasource_id, workspace_oid, sql
+                )
             # 失败必须抛出，否则编排层会当成「0 行成绩」生成空壳报告。
             if not success:
                 raise RuntimeError(msg or "SQL 执行失败")
@@ -196,6 +208,97 @@ def _build_orchestrator(
         workspace_oid=workspace_oid,
         user_id=user_id,
     )
+
+
+def _load_report_scope(current_user: UserResponse, datasource_id: int, workspace_oid: int):
+    """加载当前账号的 v2 分析工具范围；旧账号返回 None。"""
+    variables = getattr(current_user, "system_variables", None)
+    if not isinstance(variables, dict) or "edu_auth_v2" not in variables:
+        return None
+    from src.common.core.database import get_db_session
+    from src.datasource.service.education_report_scope import (
+        ReportScopeError,
+        load_report_scope,
+    )
+    from src.system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        user = get_user_by_id(session, int(current_user.id))
+        try:
+            return load_report_scope(
+                session, user, int(workspace_oid), int(datasource_id)
+            )
+        except ReportScopeError as exc:
+            detail = getattr(exc, "detail", None) or {}
+            raise ForbiddenException(
+                detail.get("user_message") or str(exc) or "当前数据无权限访问"
+            ) from exc
+
+
+def _apply_scope_defaults(scope: Any, filters: dict[str, str]) -> dict[str, str]:
+    """v2：单班/单校账号把下拉默认值补进 filters，报告标题与 SQL 口径一致。"""
+    if scope is None:
+        return filters
+    if not filters.get("school_name") and len(scope.schools) == 1:
+        filters["school_name"] = _plain_school_label(scope.schools[0])
+    if not filters.get("class_name") and len(scope.classes) == 1:
+        filters["class_name"] = scope.classes[0]
+    if not filters.get("district") and len(scope.districts) == 1:
+        filters["district"] = scope.districts[0]
+    if not filters.get("jc") and len(scope.cohorts) == 1:
+        filters["jc"] = scope.cohorts[0]
+    return filters
+
+
+def _assert_scope_targets(scope: Any, filters: dict[str, str]) -> None:
+    """v2：请求点名的学校/区县/班级必须在授权范围内。"""
+    if scope is None:
+        return
+    from common.exceptions.base import ForbiddenException
+
+    try:
+        scope.assert_in_scope(
+            school_name=str(
+                filters.get("school_name") or filters.get("school") or ""
+            ).strip(),
+            district=str(filters.get("district") or "").strip(),
+            class_name=str(filters.get("class_name") or filters.get("class") or "").strip(),
+        )
+    except Exception as exc:
+        detail = getattr(exc, "detail", None) or {}
+        raise ForbiddenException(str(exc) or detail.get("user_message") or "当前数据无权限访问") from exc
+
+
+_V2_CITY_ONLY_REPORT_TYPES = frozenset(
+    {
+        "subject_avg",
+        "assign_grade",
+        "rank_bucket",
+        "contribution",
+        "combo_reach",
+        "elite_roster",
+        "score_band",
+    }
+)
+
+
+def _assert_v2_report_capability(report_scope: Any, report_type: Any) -> None:
+    """v2：跨范围报告类型按 grants/能力提前拒绝，避免生成误导性空壳。"""
+    if report_scope is None or report_type is None:
+        return
+    from common.exceptions.base import ForbiddenException
+
+    name = getattr(report_type, "value", str(report_type))
+    if not report_scope.citywide and name in _V2_CITY_ONLY_REPORT_TYPES:
+        raise ForbiddenException("局端分析报告需要市级数据授权")
+    if name == "elite_rank_shift" and not report_scope.allows_city_position():
+        raise ForbiddenException("尖子生排名变化报告需要市级数据授权")
+    if (
+        name == "line_reach"
+        and report_scope.needs_grade_reference
+        and not report_scope.allows_grade_reference()
+    ):
+        raise ForbiddenException("当前账号未开通年级均分基准能力，无法生成达线报告")
 
 
 def _raise_if_out_of_scope(
@@ -241,16 +344,26 @@ async def batch_report(
 
     with get_db_session() as session:
         assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
-    _raise_if_out_of_scope(
-        int(current_user.id),
-        question,
-        *req.class_names,
-        (req.filters or {}).get("school_name") or (req.filters or {}).get("school"),
-        datasource_id=req.datasource_id,
-        workspace_oid=workspace_oid,
-    )
     ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
-    orch = _build_orchestrator(req.datasource_id, ws_oid, user_id=int(current_user.id))
+    report_scope = _load_report_scope(current_user, req.datasource_id, int(workspace_oid))
+    if report_scope is not None:
+        # v2 授权绑定工作空间，忽略请求体里的 workspace_oid，避免跨空间取数。
+        ws_oid = int(workspace_oid)
+    if report_scope is None:
+        _raise_if_out_of_scope(
+            int(current_user.id),
+            question,
+            *req.class_names,
+            (req.filters or {}).get("school_name") or (req.filters or {}).get("school"),
+            datasource_id=req.datasource_id,
+            workspace_oid=workspace_oid,
+        )
+    orch = _build_orchestrator(
+        req.datasource_id,
+        ws_oid,
+        user_id=int(current_user.id),
+        report_scope=report_scope,
+    )
 
     audience = Audience.DEFAULT
     if req.audience:
@@ -264,6 +377,8 @@ async def batch_report(
         for k, v in (req.filters or {}).items()
         if v is not None and str(v).strip()
     }
+    if report_scope is not None:
+        base_filters = _apply_scope_defaults(report_scope, base_filters)
     results = []
     for cls in req.class_names:
         cls_name = str(cls or "").strip()
@@ -274,7 +389,10 @@ async def batch_report(
                 report_type = ReportType(rt_raw)
             except ValueError as exc:
                 raise BadRequestException(f"无效的报告类型: {rt_raw}") from exc
+            _assert_v2_report_capability(report_scope, report_type)
             filters = {**base_filters, "class_name": cls_name}
+            if report_scope is not None:
+                _assert_scope_targets(report_scope, filters)
             spec = ReportSpec(
                 report_type=report_type,
                 audience=audience,
@@ -293,6 +411,10 @@ async def batch_report(
                 }
             )
         else:
+            if report_scope is not None:
+                _assert_scope_targets(
+                    report_scope, {**base_filters, "class_name": cls_name}
+                )
             q = question.replace("{class}", cls_name)
             res = await orch.run(q, audience_hint=req.audience)
             results.append(
@@ -328,14 +450,35 @@ async def diagnostic_report(
 
     with get_db_session() as session:
         assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
-    _raise_if_out_of_scope(
-        int(current_user.id),
-        req.question,
-        datasource_id=req.datasource_id,
-        workspace_oid=workspace_oid,
-    )
     ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
-    orch = _build_orchestrator(req.datasource_id, ws_oid, user_id=int(current_user.id))
+    report_scope = _load_report_scope(current_user, req.datasource_id, int(workspace_oid))
+    if report_scope is not None:
+        # v2 授权绑定工作空间，忽略请求体里的 workspace_oid，避免跨空间取数。
+        ws_oid = int(workspace_oid)
+    if report_scope is None:
+        _raise_if_out_of_scope(
+            int(current_user.id),
+            req.question,
+            datasource_id=req.datasource_id,
+            workspace_oid=workspace_oid,
+        )
+    else:
+        from src.agent.education.scope_guard import out_of_scope_question
+
+        denied = out_of_scope_question(
+            _report_legacy_scope(report_scope),
+            req.question,
+            datasource_id=req.datasource_id,
+            workspace_oid=ws_oid,
+        )
+        if denied:
+            raise ForbiddenException(denied)
+    orch = _build_orchestrator(
+        req.datasource_id,
+        ws_oid,
+        user_id=int(current_user.id),
+        report_scope=report_scope,
+    )
     res = await orch.run(req.question, audience_hint=req.audience)
     return success_response(
         {
@@ -424,21 +567,36 @@ async def generate_report(
             raise BadRequestException(f"无效的受众: {req.audience}") from exc
 
     filters = {str(k): str(v) for k, v in (req.filters or {}).items() if v is not None and str(v).strip()}
+    ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
+    report_scope = _load_report_scope(current_user, req.datasource_id, int(workspace_oid))
+    if report_scope is not None:
+        ws_oid = int(workspace_oid)
+        _apply_scope_defaults(report_scope, filters)
+        _assert_scope_targets(report_scope, filters)
+        _assert_v2_report_capability(report_scope, report_type)
     if report_type in (
         ReportType.LINE_SHIFT,
         ReportType.ABSENCE,
         ReportType.CLASS_LINE_REACH,
         ReportType.ELITE_RANK_SHIFT,
     ):
-        from datasource.service.edu_permission import edu_scope_dict_for_user_id
+        if report_scope is not None:
+            role = report_scope.legacy_role()
+            if role in ("school_admin", "teacher") and not filters.get("school_name"):
+                if len(report_scope.schools) == 1:
+                    filters["school_name"] = _plain_school_label(report_scope.schools[0])
+                else:
+                    raise BadRequestException("当前账号授权多所学校，请先选择学校")
+        else:
+            from datasource.service.edu_permission import edu_scope_dict_for_user_id
 
-        scope = edu_scope_dict_for_user_id(int(current_user.id))
-        role = str(scope.get("edu_role") or "").strip()
-        if role in ("school_admin", "teacher") and not filters.get("school_name"):
-            bound = str(scope.get("school_name") or scope.get("school_id") or "").strip()
-            if not bound:
-                raise BadRequestException("当前账号未绑定学校，无法生成该报告")
-            filters["school_name"] = bound
+            scope = edu_scope_dict_for_user_id(int(current_user.id))
+            role = str(scope.get("edu_role") or "").strip()
+            if role in ("school_admin", "teacher") and not filters.get("school_name"):
+                bound = str(scope.get("school_name") or scope.get("school_id") or "").strip()
+                if not bound:
+                    raise BadRequestException("当前账号未绑定学校，无法生成该报告")
+                filters["school_name"] = bound
         if report_type == ReportType.LINE_SHIFT:
             from src.agent.education.line_shift import line_shift_request_error
 
@@ -485,13 +643,14 @@ async def generate_report(
             if kind == "forbidden":
                 raise ForbiddenException(msg)
             raise BadRequestException(msg)
-    _raise_if_out_of_scope(
-        int(current_user.id),
-        filters.get("class_name") or filters.get("class"),
-        filters.get("school_name") or filters.get("school"),
-        datasource_id=req.datasource_id,
-        workspace_oid=workspace_oid,
-    )
+    if report_scope is None:
+        _raise_if_out_of_scope(
+            int(current_user.id),
+            filters.get("class_name") or filters.get("class"),
+            filters.get("school_name") or filters.get("school"),
+            datasource_id=req.datasource_id,
+            workspace_oid=workspace_oid,
+        )
     spec = ReportSpec(
         report_type=report_type,
         audience=audience,
@@ -501,8 +660,12 @@ async def generate_report(
 
     with get_db_session() as session:
         assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
-    ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
-    orch = _build_orchestrator(req.datasource_id, ws_oid, user_id=int(current_user.id))
+    orch = _build_orchestrator(
+        req.datasource_id,
+        ws_oid,
+        user_id=int(current_user.id),
+        report_scope=report_scope,
+    )
     res = await orch.run_spec(spec)
     title = orch._title(spec)
     err = res.error
@@ -569,6 +732,9 @@ async def save_report_history(
         raise BadRequestException("title 与 html 不能为空")
 
     ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
+    report_scope = _load_report_scope(current_user, req.datasource_id, int(workspace_oid))
+    if report_scope is not None:
+        ws_oid = int(workspace_oid)
     with get_db_session() as session:
         ds = assert_datasource_accessible(session, current_user, req.datasource_id, ws_oid)
         try:
@@ -614,6 +780,14 @@ async def save_report_history(
             agent_mode="analysis_tool",
             summary=f"已保存报告：{title}",
             reports=[report_item],
+            exec_result=(
+                {
+                    "permission_mode": "model_explicit_v2",
+                    "authorization_fingerprint": report_scope.fingerprint,
+                }
+                if report_scope is not None
+                else None
+            ),
             workspace_oid=int(ws_oid),
         )
         return success_response(
@@ -765,7 +939,13 @@ async def list_meta_options(
         user = get_user_by_id(session, int(current_user.id))
         edu_scope = parse_edu_scope(user)
 
-    orch = _build_orchestrator(datasource_id, workspace_oid, user_id=int(current_user.id))
+    report_scope = _load_report_scope(current_user, datasource_id, workspace_oid)
+    orch = _build_orchestrator(
+        datasource_id,
+        workspace_oid,
+        user_id=int(current_user.id),
+        report_scope=report_scope,
+    )
     options = await _load_meta_options(
         orch,
         school_name=(school_name or "").strip() or None,
@@ -774,6 +954,7 @@ async def list_meta_options(
         subject=(subject or "").strip() or None,
         jc=(jc or "").strip() or None,
         edu_scope=edu_scope,
+        report_scope=report_scope,
     )
     return success_response(options)
 
@@ -795,6 +976,14 @@ def _school_sql_filter(school_name: str) -> str:
     if _SCHOOL_TOKEN_RE.fullmatch(n) and not re.search(r"[\u4e00-\u9fff]", n):
         return f"sc.school_id = '{q}'"
     return f"(sch.s_name LIKE '%{q}%' OR sch.name LIKE '%{q}%')"
+
+
+def _plain_school_label(value: str) -> str:
+    """v2 grant 的学校值 → 下拉/筛选使用的明文校名（去掉 ``A01`` 校码前缀）。"""
+    text = str(value or "").strip()
+    if _SCHOOL_CODE_PREFIX_RE.match(text) and re.search(r"[\u4e00-\u9fff]", text):
+        text = text[3:].strip()
+    return text or str(value or "").strip()
 
 
 def _school_option_label(raw: str) -> str:
@@ -851,6 +1040,7 @@ async def _load_meta_options(
     subject: str | None,
     jc: str | None = None,
     edu_scope: Any = None,
+    report_scope: Any = None,
 ) -> dict[str, list[str]]:
     """按 edu schema 查 DISTINCT；SQL 经权限执行，并按 edu_scope 再收敛选项。"""
     from datasource.service.edu_permission import EduScope
@@ -949,6 +1139,22 @@ async def _load_meta_options(
             classes = [c for c in classes if c in allowed]
             if not classes:
                 classes = sorted(allowed)
+
+    if report_scope is not None:
+        # v2：SQL 已按范围收口，这里再按 grants 收敛一次，避免筛选条件放宽目录。
+        if report_scope.schools:
+            kept = [s for s in schools if report_scope.matches_school(s)]
+            schools = kept or [_plain_school_label(s) for s in report_scope.schools]
+        if report_scope.classes:
+            kept = [c for c in classes if report_scope.matches_class(c)]
+            classes = kept or list(report_scope.classes)
+        if report_scope.cohorts:
+            allowed_cohorts = {
+                str(c).strip() for c in report_scope.cohorts if str(c).strip()
+            }
+            cohorts = [c for c in cohorts if c in allowed_cohorts] or sorted(
+                allowed_cohorts
+            )
 
     return {
         "schools": schools,
@@ -1128,12 +1334,29 @@ async def line_reach_meta(
         can_access_line_reach,
     )
 
-    _ = datasource_id, workspace_oid
+    _ = datasource_id
     ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
+    report_scope = _load_report_scope(current_user, ds_id, int(workspace_oid))
+    if report_scope is not None:
+        if not report_scope.levels & {"city", "district", "school", "grade", "class"}:
+            return error_response(code=403, message="学生账号不可查看达线看板")
+        if (
+            report_scope.needs_grade_reference
+            and not report_scope.allows_grade_reference()
+        ):
+            return error_response(
+                code=403, message="当前账号未开通年级均分基准能力，无法查看达线看板"
+            )
+        scope = _report_legacy_scope(report_scope, scope)
     if not can_access_line_reach(scope):
         return error_response(code=403, message="学生账号不可查看达线看板")
 
-    orch = _build_orchestrator(ds_id, ds_oid, user_id=int(current_user.id))
+    orch = _build_orchestrator(
+        ds_id,
+        ds_oid,
+        user_id=int(current_user.id),
+        report_scope=report_scope,
+    )
     bar_rows = await _load_line_reach_bar_rows(orch._execute_sql)
     payload = build_line_reach_payload(
         bar_rows,
@@ -1167,12 +1390,29 @@ async def line_reach_dashboard(
         rows_as_dicts,
     )
 
-    _ = datasource_id, workspace_oid
+    _ = datasource_id
     ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
+    report_scope = _load_report_scope(current_user, ds_id, int(workspace_oid))
+    if report_scope is not None:
+        if not report_scope.levels & {"city", "district", "school", "grade", "class"}:
+            return error_response(code=403, message="学生账号不可查看达线看板")
+        if (
+            report_scope.needs_grade_reference
+            and not report_scope.allows_grade_reference()
+        ):
+            return error_response(
+                code=403, message="当前账号未开通年级均分基准能力，无法查看达线看板"
+            )
+        scope = _report_legacy_scope(report_scope, scope)
     if not can_access_line_reach(scope):
         return error_response(code=403, message="学生账号不可查看达线看板")
 
-    orch = _build_orchestrator(ds_id, ds_oid, user_id=int(current_user.id))
+    orch = _build_orchestrator(
+        ds_id,
+        ds_oid,
+        user_id=int(current_user.id),
+        report_scope=report_scope,
+    )
     execute = orch._execute_sql
     exam = (exam_name or "").strip()
     track_v = (track or "").strip()
@@ -1192,7 +1432,14 @@ async def line_reach_dashboard(
     )
     agg_rows: list[dict[str, Any]] = []
     if agg_sql:
-        result = await execute(agg_sql)
+        if (
+            report_scope is not None
+            and report_scope.needs_grade_reference
+            and report_scope.allows_grade_reference()
+        ):
+            result = await orch._execute_reference(agg_sql, "grade")
+        else:
+            result = await execute(agg_sql)
         agg_rows = rows_as_dicts(result.get("columns") or [], result.get("rows") or [])
 
     def _view(dest_bars: list[dict[str, Any]], view_track: str) -> dict[str, Any]:
@@ -1206,16 +1453,66 @@ async def line_reach_dashboard(
             tracks=tracks,
         )
 
+    citywide_kpis: dict[str, Any] | None = None
+    if (
+        report_scope is not None
+        and not report_scope.citywide
+        and report_scope.allows_city_reference()
+    ):
+        # city_baseline：只允许全市整体 KPI，区县/学校明细仍按授权范围。
+        ref_sql = _overview_agg_sql(
+            ov_cols, use_bars, exam_name=exam, track="", include_school=True
+        )
+        if ref_sql:
+            try:
+                ref_result = await orch._execute_reference(ref_sql, "city")
+                ref_rows = rows_as_dicts(
+                    ref_result.get("columns") or [], ref_result.get("rows") or []
+                )
+                ref_payload = payload_from_school_agg(
+                    remap_agg_rows(ref_rows, use_bars, use_bars),
+                    use_bars,
+                    exam_name=exam,
+                    track="",
+                    exams=exams,
+                    tracks=tracks,
+                )
+                citywide_kpis = ref_payload.get("kpis")
+            except Exception:  # noqa: BLE001 - 基准不可用时保持本范围口径
+                citywide_kpis = None
+
     phys_bars = _filter_bars(use_bars, exam, "物理类")
     hist_bars = _filter_bars(use_bars, exam, "历史类")
     city = _view(use_bars, "")
     physics = _view(phys_bars, "物理类")
     history = _view(hist_bars, "历史类")
+    if citywide_kpis:
+        for p in (city, physics, history):
+            p["kpis"] = citywide_kpis
     if hide_schools:
         for p in (city, physics, history):
             for d in p.get("districts") or []:
                 if isinstance(d, dict):
                     d["schools"] = []
+    if report_scope is not None and not report_scope.citywide:
+        allowed_districts = {
+            str(x).strip() for x in report_scope.allowed_district_ids() if str(x).strip()
+        }
+        if allowed_districts:
+            for p in (city, physics, history):
+                p["districts"] = [
+                    d
+                    for d in (p.get("districts") or [])
+                    if isinstance(d, dict)
+                    and str(d.get("district") or "").strip() in allowed_districts
+                ]
+        # 只有本校数据时不要把本校数字标成整个区县。
+        if not report_scope.districts and len(report_scope.schools) == 1:
+            label = report_scope.scope_label()
+            for p in (city, physics, history):
+                for d in p.get("districts") or []:
+                    if isinstance(d, dict):
+                        d["district"] = label
 
     def _slice(p: dict[str, Any]) -> dict[str, Any]:
         return {"lines": p.get("lines") or [], "kpis": p.get("kpis") or {}, "districts": p.get("districts") or []}
@@ -1273,6 +1570,125 @@ def _exam_line_tool_context(current_user: UserResponse) -> tuple[int, int, Any]:
         user = get_user_by_id(session, int(current_user.id))
         scope = parse_edu_scope(user)
         return int(ds.id), int(ds.oid), scope
+
+
+def _report_legacy_scope(report_scope: Any, fallback: Any = None) -> Any:
+    """v2 范围 → 旧模板/旧校验可用的 EduScope（只用于展示与既有入参校验）。"""
+    if report_scope is None:
+        return fallback
+    from datasource.service.edu_permission import EduScope
+
+    return EduScope(
+        edu_role=report_scope.legacy_role(),
+        school_id=report_scope.schools[0] if report_scope.schools else "",
+        school_name=(
+            _plain_school_label(report_scope.schools[0]) if report_scope.schools else ""
+        ),
+        class_names=list(report_scope.classes),
+    )
+
+
+def _rows_as_dicts(result: Any) -> list[dict[str, Any]]:
+    if not isinstance(result, dict):
+        return []
+    columns = [str(c).strip().lower() for c in (result.get("columns") or [])]
+    out: list[dict[str, Any]] = []
+    for row in result.get("rows") or []:
+        if isinstance(row, dict):
+            out.append({str(k).strip().lower(): v for k, v in row.items()})
+        elif isinstance(row, (list, tuple)):
+            out.append(
+                {columns[i]: row[i] for i in range(min(len(columns), len(row)))}
+            )
+    return out
+
+
+def _scope_school_ids(report_scope: Any, datasource_id: int, workspace_oid: int) -> list[str]:
+    """把 v2 授权学校（overview.xx）映射成 tb_school.id，供异常提醒落库字段过滤。"""
+    if report_scope is None:
+        return []
+    if report_scope.citywide:
+        return []
+    from src.agent.resource.tool.business import _load_datasource
+    from src.datasource.db.db import execute_sql
+
+    try:
+        db_type, config, _ = _load_datasource(int(datasource_id), workspace_oid)
+        ok, _msg, result = execute_sql(
+            db_type,
+            {**config, "read_only": True, "timeout": 5},
+            "SELECT id, name, s_name FROM tb_school LIMIT 20000",
+        )
+    except Exception:
+        return []
+    if not ok:
+        return []
+    ids: set[str] = set()
+    for row in _rows_as_dicts(result):
+        values = [
+            str(row.get("id") or "").strip(),
+            str(row.get("name") or "").strip(),
+            str(row.get("s_name") or "").strip(),
+        ]
+        sid = values[0]
+        if not sid:
+            continue
+        if any(report_scope.matches_school(v) for v in values if v):
+            ids.add(sid)
+    # 授权值本身可能就是 tb_school.id
+    for school in report_scope.schools:
+        token = str(school or "").strip()
+        if token:
+            ids.add(token)
+    return sorted(ids)
+
+
+def _alert_scope_filters(report_scope: Any, workspace_oid: int) -> tuple[Any, list[str] | None, list[str] | None]:
+    """v2 异常提醒过滤：返回 (旧 EduScope, 学校ID集合, 班级集合)。"""
+    from datasource.service.edu_permission import EduScope
+
+    if report_scope is None:
+        return EduScope(), None, None
+    synthetic = _report_legacy_scope(report_scope, EduScope())
+    if not report_scope.can_view_anomaly_alerts():
+        return synthetic, [], []
+    school_ids = _scope_school_ids(
+        report_scope, int(report_scope.datasource_id), int(workspace_oid)
+    )
+    allowed_classes = list(report_scope.allowed_class_ids()) or None
+    return synthetic, school_ids, allowed_classes
+
+
+def _fixed_source_datasource_id() -> int:
+    from src.datasource.service.education_source import source_settings
+
+    _, _kind, _config, datasource_id, _binding = source_settings()
+    return int(datasource_id)
+
+
+def _anomaly_scope(current_user: UserResponse, workspace_oid: int):
+    """返回 (EduScope, school_ids, allowed_classes, 拒绝文案)。v2 走 grants。"""
+    from datasource.service.edu_permission import parse_edu_scope
+    from src.common.core.database import get_db_session
+    from system.crud.crud_user import get_user_by_id
+
+    with get_db_session() as session:
+        user = get_user_by_id(session, int(current_user.id))
+        edu_scope = parse_edu_scope(user)
+    report_scope = _load_report_scope(
+        current_user, _fixed_source_datasource_id(), int(workspace_oid)
+    )
+    if report_scope is None:
+        return edu_scope, None, None, None
+    if not report_scope.can_view_anomaly_alerts():
+        return (
+            _report_legacy_scope(report_scope, edu_scope),
+            [],
+            [],
+            "教育局/学生账号不提供校内异常提醒",
+        )
+    scope, school_ids, allowed_classes = _alert_scope_filters(report_scope, workspace_oid)
+    return scope, school_ids, allowed_classes, None
 
 
 def _exam_line_actor(current_user: UserResponse) -> tuple[int, int, Any, Any]:
@@ -1602,18 +2018,26 @@ async def list_anomaly_alerts(
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     """校长/老师查看本校（本班）异常提醒；教育局不可见。"""
-    from datasource.service.edu_permission import parse_edu_scope
     from src.agent.education.alert_service import (
         alert_to_dict,
         can_access_anomaly_alerts,
         list_alerts,
     )
     from src.common.core.database import get_db_session
-    from system.crud.crud_user import get_user_by_id
 
+    scope, school_ids, allowed_classes, denied = _anomaly_scope(
+        current_user, int(workspace_oid)
+    )
+    if denied:
+        return success_response(
+            {
+                "accessible": False,
+                "total": 0,
+                "items": [],
+                "message": denied,
+            }
+        )
     with get_db_session() as session:
-        user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
         if not can_access_anomaly_alerts(scope):
             return success_response(
                 {
@@ -1630,6 +2054,8 @@ async def list_anomaly_alerts(
             status=(status or "").strip() or None,
             limit=limit,
             offset=offset,
+            school_ids=school_ids,
+            allowed_classes=allowed_classes,
         )
         return success_response(
             {
@@ -1646,22 +2072,28 @@ async def get_anomaly_alert(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    from datasource.service.edu_permission import parse_edu_scope
     from src.agent.education.alert_service import (
         alert_to_dict,
         can_access_anomaly_alerts,
         get_alert_for_scope,
     )
     from src.common.core.database import get_db_session
-    from system.crud.crud_user import get_user_by_id
 
+    scope, school_ids, allowed_classes, denied = _anomaly_scope(
+        current_user, int(workspace_oid)
+    )
+    if denied:
+        return error_response(code=403, message=denied)
     with get_db_session() as session:
-        user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
         if not can_access_anomaly_alerts(scope):
             return error_response(code=403, message="无权查看异常提醒")
         row = get_alert_for_scope(
-            session, int(alert_id), scope, workspace_oid=int(workspace_oid)
+            session,
+            int(alert_id),
+            scope,
+            workspace_oid=int(workspace_oid),
+            school_ids=school_ids,
+            allowed_classes=allowed_classes,
         )
         if row is None:
             return error_response(code=404, message="异常提醒不存在或无权查看")
@@ -1684,19 +2116,20 @@ async def confirm_anomaly_alert(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    from datasource.service.edu_permission import parse_edu_scope
     from src.agent.education.alert_service import (
         alert_to_dict,
         can_access_anomaly_alerts,
         confirm_alert,
     )
     from src.common.core.database import get_db_session
-    from system.crud.crud_user import get_user_by_id
 
     note = (payload.note if payload else None) or ""
+    scope, school_ids, allowed_classes, denied = _anomaly_scope(
+        current_user, int(workspace_oid)
+    )
+    if denied:
+        return error_response(code=403, message=denied)
     with get_db_session() as session:
-        user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
         if not can_access_anomaly_alerts(scope):
             return error_response(code=403, message="无权确认异常提醒")
         row = confirm_alert(
@@ -1706,6 +2139,8 @@ async def confirm_anomaly_alert(
             workspace_oid=int(workspace_oid),
             user_id=int(current_user.id),
             note=note,
+            school_ids=school_ids,
+            allowed_classes=allowed_classes,
         )
         if row is None:
             return error_response(code=404, message="异常提醒不存在或无权确认")

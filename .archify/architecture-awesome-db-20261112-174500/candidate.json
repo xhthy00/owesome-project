@@ -1,0 +1,403 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Awesome-DB 智能问数与学情分析 · 系统架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "output": ".archify/architecture-awesome-db-20261112-174500/awesome-db-architecture.html",
+    "repository": {
+      "url": "git@gitcode.com:xhthy00/awesome-data.git",
+      "link_mode": "local-only",
+      "revision": "c6df516f174d0c192085da9256648151feb757c3"
+    }
+  },
+  "components": [
+    {
+      "id": "users",
+      "type": "external",
+      "label": "教师 / 管理员",
+      "sublabel": "浏览器访问",
+      "icon": "person",
+      "pos": [
+        40,
+        300
+      ],
+      "size": [
+        110,
+        64
+      ]
+    },
+    {
+      "id": "web",
+      "type": "frontend",
+      "label": "Next.js 控制台",
+      "sublabel": "问数 · 报告 · 数据维护",
+      "pos": [
+        225,
+        294
+      ],
+      "size": [
+        160,
+        76
+      ],
+      "sources": [
+        {
+          "path": "frontend-react/src/api/client.ts",
+          "line": 30,
+          "end_line": 41
+        },
+        {
+          "path": "frontend-react/src/api/adapter/chatAdapter.ts",
+          "line": 290,
+          "end_line": 300
+        },
+        {
+          "path": "frontend-react/src/utils/exportReportPdf.ts",
+          "line": 20,
+          "end_line": 30
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "FastAPI · /api/v1",
+      "sublabel": "JWT · 工作区 · 审计",
+      "pos": [
+        465,
+        288
+      ],
+      "size": [
+        170,
+        80
+      ],
+      "sources": [
+        {
+          "path": "src/main.py",
+          "line": 61,
+          "end_line": 84
+        },
+        {
+          "path": "src/common/router.py",
+          "line": 30,
+          "end_line": 42
+        }
+      ]
+    },
+    {
+      "id": "agent",
+      "type": "backend",
+      "label": "问数 Agent 运行时",
+      "sublabel": "DeepAgents · 计划 · 澄清",
+      "pos": [
+        725,
+        280
+      ],
+      "size": [
+        180,
+        86
+      ],
+      "sources": [
+        {
+          "path": "src/chat/service/deepagents_runtime.py",
+          "line": 810,
+          "end_line": 817
+        },
+        {
+          "path": "src/chat/service/deepagents_runtime.py",
+          "line": 1285,
+          "end_line": 1291
+        },
+        {
+          "path": "src/chat/service/deepagents_runtime.py",
+          "line": 354,
+          "end_line": 360
+        }
+      ]
+    },
+    {
+      "id": "sem",
+      "type": "backend",
+      "label": "查询编译与权限执行",
+      "sublabel": "SQLGlot 校验 · 行列权限 · 只读",
+      "pos": [
+        950,
+        520
+      ],
+      "size": [
+        185,
+        86
+      ],
+      "sources": [
+        {
+          "path": "src/chat/service/semantic_query.py",
+          "line": 327,
+          "end_line": 337
+        },
+        {
+          "path": "src/chat/service/semantic_query.py",
+          "line": 531,
+          "end_line": 547
+        },
+        {
+          "path": "src/datasource/db/db.py",
+          "line": 330,
+          "end_line": 347
+        }
+      ]
+    },
+    {
+      "id": "edu",
+      "type": "backend",
+      "label": "学情报告编排",
+      "sublabel": "确定性编排 · 模板渲染 · 导入",
+      "pos": [
+        465,
+        520
+      ],
+      "size": [
+        185,
+        82
+      ],
+      "sources": [
+        {
+          "path": "src/agent/education/api.py",
+          "line": 148,
+          "end_line": 185
+        },
+        {
+          "path": "src/agent/education/orchestrator.py",
+          "line": 311,
+          "end_line": 340
+        },
+        {
+          "path": "src/agent/education/report_types.py",
+          "line": 17,
+          "end_line": 37
+        }
+      ]
+    },
+    {
+      "id": "sysdb",
+      "type": "database",
+      "label": "系统 PostgreSQL",
+      "sublabel": "账号 · 会话 · checkpoint",
+      "pos": [
+        245,
+        70
+      ],
+      "size": [
+        190,
+        78
+      ],
+      "sources": [
+        {
+          "path": "src/common/core/database.py",
+          "line": 21,
+          "end_line": 31
+        },
+        {
+          "path": "src/audit/models/audit.py",
+          "line": 44,
+          "end_line": 50
+        },
+        {
+          "path": "src/chat/service/deepagents_runtime.py",
+          "line": 354,
+          "end_line": 360
+        }
+      ]
+    },
+    {
+      "id": "edudb",
+      "type": "database",
+      "label": "教育数据源",
+      "sublabel": "tb_score · tb_school · tb_exam",
+      "pos": [
+        950,
+        700
+      ],
+      "size": [
+        190,
+        76
+      ],
+      "sources": [
+        {
+          "path": "src/datasource/edu_connection.py",
+          "line": 8,
+          "end_line": 33
+        }
+      ]
+    },
+    {
+      "id": "llm",
+      "type": "external",
+      "label": "LLM 模型服务",
+      "sublabel": "OpenAI 兼容 / Ollama",
+      "pos": [
+        725,
+        70
+      ],
+      "size": [
+        165,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/llm/service.py",
+          "line": 45,
+          "end_line": 75
+        },
+        {
+          "path": "src/llm/service.py",
+          "line": 103,
+          "end_line": 108
+        }
+      ]
+    },
+    {
+      "id": "dsem",
+      "type": "external",
+      "label": "DataSemantic",
+      "sublabel": "发布物编译 · plan 接口",
+      "pos": [
+        950,
+        70
+      ],
+      "size": [
+        175,
+        72
+      ],
+      "sources": [
+        {
+          "path": "src/common/core/config.py",
+          "line": 87,
+          "end_line": 93
+        },
+        {
+          "path": "src/chat/service/semantic_query.py",
+          "line": 327,
+          "end_line": 337
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "users-web",
+      "from": "users",
+      "to": "web"
+    },
+    {
+      "id": "web-api",
+      "from": "web",
+      "to": "api",
+      "label": "REST+SSE",
+      "variant": "emphasis"
+    },
+    {
+      "id": "api-agent",
+      "from": "api",
+      "to": "agent",
+      "label": "SSE 流式"
+    },
+    {
+      "id": "agent-llm",
+      "from": "agent",
+      "to": "llm",
+      "label": "模型调用",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "api-edu",
+      "from": "api",
+      "to": "edu",
+      "label": "报告 / 导入 API",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "edu-sem",
+      "from": "edu",
+      "to": "sem",
+      "label": "按权限聚合查询",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "id": "agent-sem",
+      "from": "agent",
+      "to": "sem",
+      "label": "query_semantic",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "sem-dsem",
+      "from": "sem",
+      "to": "dsem",
+      "label": "plan 编译",
+      "fromSide": "top",
+      "toSide": "bottom"
+    },
+    {
+      "id": "sem-edudb",
+      "from": "sem",
+      "to": "edudb",
+      "label": "只读 SQL",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "id": "api-sysdb",
+      "from": "api",
+      "to": "sysdb",
+      "label": "用户 / 审计"
+    },
+    {
+      "id": "agent-sysdb",
+      "from": "agent",
+      "to": "sysdb",
+      "label": "checkpoint 读写"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "问数主链路",
+      "items": [
+        "浏览器订阅 /chat/chat-stream，接收进度、结果、图表与追问事件",
+        "DeepAgents 先用 question_assessment 评估查询条件，必要时经 ask_human 中断并恢复",
+        "DataSemantic 把逻辑 SQL 编译成只读物理 SQL，行/列权限与脱敏在真正执行前生效"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "学情报告与导出",
+      "items": [
+        "ReportOrchestrator 按 ReportSpec 查库、统计、出图，再渲染 Jinja2 模板，全程不依赖 LLM",
+        "报告 HTML 在浏览器端截图为 PDF（html2canvas + jsPDF），同一截图嵌入 .doc 导出",
+        "成绩、试卷、知识点导入同样走教育库读写，试卷识别用 paper 模块的视觉模型"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "数据与审计",
+      "items": [
+        "系统库保存账号、工作区、会话记录与 LangGraph checkpoint；教育库保存成绩/学校/考试明细",
+        "access、operation、login 三类审计日志 + tool_call_log 记录每次 Agent 工具调用",
+        "工作区 oid 做多租户隔离，数据源权限按表/字段授权，教育权限再按学校与班级收敛"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "模型接入",
+      "items": [
+        "chat / match / paper 三套独立模型配置，可指向 OpenAI 兼容服务或 Ollama",
+        "match 模块负责知识点核对，paper 模块负责试卷 PDF/图片转写"
+      ]
+    }
+  ]
+}

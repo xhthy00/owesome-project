@@ -3460,7 +3460,7 @@ def _build_tier_alert_template_data(
                         {
                             "name": "偏科生",
                             "value": len(imbalanced),
-                            "color": "#1677ff",
+                            "color": "#2563eb",
                         },
                     ]
                 },

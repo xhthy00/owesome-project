@@ -255,7 +255,7 @@ def _knowledge_bar(data: dict[str, Any], title: str) -> dict[str, Any]:
         "series": [{
             "type": "bar",
             "data": values,
-            "itemStyle": {"color": "#1677ff"},
+            "itemStyle": {"color": "#2563eb"},
             "label": {"show": True, "position": "right", "formatter": "{c}%"},
         }],
     }

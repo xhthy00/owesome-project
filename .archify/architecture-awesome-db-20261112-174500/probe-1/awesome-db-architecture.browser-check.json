@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 1,
+  "ok": false,
+  "command": "browser-check",
+  "evidenceKind": "automated-browser",
+  "status": "fail",
+  "visualReview": "not-requested",
+  "provenance": "current",
+  "deliveryReceiptId": "ce2e9227-1851-4d30-91c7-832bdddc127a",
+  "artifact": {
+    "path": "/Users/tanghaoyu/develop/git-repo/owner/awesome-project/.archify/architecture-awesome-db-20261112-174500/awesome-db-architecture.html",
+    "sha256": "b60d1f1033a554080067d29320597a27df770ea3333b00a81db9c160cc67d535",
+    "bytes": 850886
+  },
+  "state": {
+    "detail": "read",
+    "motion": "still"
+  },
+  "chrome": {
+    "status": "available",
+    "executable": "/Users/tanghaoyu/Library/Caches/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-mac-arm64/chrome-headless-shell"
+  },
+  "diagnostics": [
+    {
+      "code": "viewer/browser-check-runtime",
+      "severity": "error",
+      "message": "browser-check could not complete its Chrome inspection.",
+      "subject": {
+        "artifact": "/Users/tanghaoyu/develop/git-repo/owner/awesome-project/.archify/architecture-awesome-db-20261112-174500/awesome-db-architecture.html"
+      },
+      "evidence": {
+        "reason": "Chrome DevTools read pipe failed: stream ended\nChrome process: still running.\nChrome stderr:\nsandbox initialization failed: Operation not permitted\n[1112/174750.955418:ERROR:content/browser/gpu/gpu_process_host.cc:1054] GPU process exited unexpectedly: exit_code=5\n[1112/174750.955514:WARNING:content/browser/gpu/gpu_process_host.cc:1506] The GPU process has crashed 1 time(s)\nsandbox initialization failed: Operation not permitted\n[1112/174750.971863:ERROR:content/browser/gpu/gpu_process_host.cc:1054] GPU process exited unexpectedly: exit_code=5\n[1112/174750.971879:WARNING:content/browser/gpu/gpu_process_host.cc:1506] The GPU process has crashed 2 time(s)\nsandbox initialization failed: Operation not permitted\n[1112/174750.985852:ERROR:content/browser/gpu/gpu_process_host.cc:1054] GPU process exited unexpectedly: exit_code=5\n[1112/174750.985862:WARNING:content/browser/gpu/gpu_process_host.cc:1506] The GPU process has crashed 3 time(s)\nsandbox initialization failed: Operation not permitted\n[1112/174751.001948:ERROR:content/browser/gpu/gpu_process_host.cc:1054] GPU process exited unexpectedly: exit_code=5\n[1112/174751.001963:WARNING:content/browser/gpu/gpu_process_host.cc:1506] The GPU process has crashed 4 time(s)\nsandbox initialization failed: Operation not permitted\n[1112/174751.015262:ERROR:content/browser/gpu/gpu_process_host.cc:1054] GPU process exited unexpectedly: exit_code=5\n[1112/174751.015269:WARNING:content/browser/gpu/gpu_process_host.cc:1506] The GPU process has crashed 5 time(s)\nsandbox initialization failed: Operation not permitted\n[1112/174751.030763:ERROR:content/browser/gpu/gpu_process_host.cc:1054] GPU process exited unexpectedly: exit_code=5\n[1112/174751.030770:WARNING:content/browser/gpu/gpu_process_host.cc:1506] The GPU process has crashed 6 time(s)\n[1112/174751.030775:FATAL:content/browser/gpu/gpu_data_manager_impl_private.cc:417] GPU process isn't usable. Goodbye.\nChrome transport: Node v21.7.3, libuv 1.48.0, darwin; pid=43909, exitCode=null, signalCode=null.\nChrome read pipe: readable=false, ended=true, destroyed=false, receivedBytes=602, messages=3, bufferedBytes=0.\nChrome write pipe: writable=true, ended=false, destroyed=false, completedWrites=3, writtenBytes=255, bufferedBytes=0."
+      },
+      "supportedFixes": [
+        "resolve the reported Chrome inspection error, then rerun browser-check"
+      ]
+    }
+  ],
+  "containment": {
+    "status": "fail",
+    "policy": "fit-or-reader-declared-readable-vertical-scroll",
+    "viewports": []
+  },
+  "themeStates": {
+    "status": "fail",
+    "viewports": []
+  },
+  "readability": {
+    "status": "fail",
+    "minimumProjectedNodeTextPx": 6,
+    "viewports": []
+  },
+  "viewerChrome": {
+    "status": "fail",
+    "viewports": []
+  },
+  "captures": {
+    "status": "not-requested",
+    "screenshots": [],
+    "contactSheet": null
+  },
+  "sidecars": {
+    "directory": "/Users/tanghaoyu/develop/git-repo/owner/awesome-project/.archify/architecture-awesome-db-20261112-174500/probe-1",
+    "receipt": "awesome-db-architecture.browser-check.json",
+    "files": []
+  },
+  "error": "Chrome DevTools read pipe failed: stream ended\nChrome process: still running.\nChrome stderr:\nsandbox initialization failed: Operation not permitted\n[1112/174750.955418:ERROR:content/browser/gpu/gpu_process_host.cc:1054] GPU process exited unexpectedly: exit_code=5\n[1112/174750.955514:WARNING:content/browser/gpu/gpu_process_host.cc:1506] The GPU process has crashed 1 time(s)\nsandbox initialization failed: Operation not permitted\n[1112/174750.971863:ERROR:content/browser/gpu/gpu_process_host.cc:1054] GPU process exited unexpectedly: exit_code=5\n[1112/174750.971879:WARNING:content/browser/gpu/gpu_process_host.cc:1506] The GPU process has crashed 2 time(s)\nsandbox initialization failed: Operation not permitted\n[1112/174750.985852:ERROR:content/browser/gpu/gpu_process_host.cc:1054] GPU process exited unexpectedly: exit_code=5\n[1112/174750.985862:WARNING:content/browser/gpu/gpu_process_host.cc:1506] The GPU process has crashed 3 time(s)\nsandbox initialization failed: Operation not permitted\n[1112/174751.001948:ERROR:content/browser/gpu/gpu_process_host.cc:1054] GPU process exited unexpectedly: exit_code=5\n[1112/174751.001963:WARNING:content/browser/gpu/gpu_process_host.cc:1506] The GPU process has crashed 4 time(s)\nsandbox initialization failed: Operation not permitted\n[1112/174751.015262:ERROR:content/browser/gpu/gpu_process_host.cc:1054] GPU process exited unexpectedly: exit_code=5\n[1112/174751.015269:WARNING:content/browser/gpu/gpu_process_host.cc:1506] The GPU process has crashed 5 time(s)\nsandbox initialization failed: Operation not permitted\n[1112/174751.030763:ERROR:content/browser/gpu/gpu_process_host.cc:1054] GPU process exited unexpectedly: exit_code=5\n[1112/174751.030770:WARNING:content/browser/gpu/gpu_process_host.cc:1506] The GPU process has crashed 6 time(s)\n[1112/174751.030775:FATAL:content/browser/gpu/gpu_data_manager_impl_private.cc:417] GPU process isn't usable. Goodbye.\nChrome transport: Node v21.7.3, libuv 1.48.0, darwin; pid=43909, exitCode=null, signalCode=null.\nChrome read pipe: readable=false, ended=true, destroyed=false, receivedBytes=602, messages=3, bufferedBytes=0.\nChrome write pipe: writable=true, ended=false, destroyed=false, completedWrites=3, writtenBytes=255, bufferedBytes=0."
+}

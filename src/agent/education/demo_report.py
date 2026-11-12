@@ -1031,7 +1031,7 @@ def build_school_city_level_html(snap: dict[str, Any]) -> str:
                 "name": snap["school_name"],
                 "type": "bar",
                 "barMaxWidth": 18,
-                "itemStyle": {"color": "#1677ff", "borderRadius": [4, 4, 0, 0]},
+                "itemStyle": {"color": "#2563eb", "borderRadius": [4, 4, 0, 0]},
                 "data": school_scores,
             },
             {
@@ -1078,8 +1078,8 @@ def build_school_city_level_html(snap: dict[str, Any]) -> str:
                     {
                         "value": gaps,
                         "name": "高出全市",
-                        "areaStyle": {"color": "rgba(22,119,255,.18)"},
-                        "lineStyle": {"color": "#1677ff"},
+                        "areaStyle": {"color": "rgba(37,99,235,.25)"},
+                        "lineStyle": {"color": "#2563eb"},
                     }
                 ],
             }
@@ -1100,7 +1100,7 @@ def build_school_city_level_html(snap: dict[str, Any]) -> str:
                 "name": snap["school_name"],
                 "type": "bar",
                 "barMaxWidth": 16,
-                "itemStyle": {"color": "#1677ff", "borderRadius": [4, 4, 0, 0]},
+                "itemStyle": {"color": "#2563eb", "borderRadius": [4, 4, 0, 0]},
                 "data": [b["school"] for b in snap["bands"]],
             },
             {
@@ -1197,7 +1197,7 @@ def build_school_city_level_html(snap: dict[str, Any]) -> str:
   <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
   <style>
     :root {{
-      --lead: #0f4c81; --gold: #d4a017; --primary: #1677ff;
+      --lead: #0f4c81; --gold: #d4a017; --primary: #2563eb;
       --ok: #389e0d; --watch: #d48806; --text: rgba(0,0,0,.88);
       --muted: rgba(0,0,0,.45); --line: #e8edf3;
     }}
@@ -1210,7 +1210,7 @@ def build_school_city_level_html(snap: dict[str, Any]) -> str:
     .page {{ max-width: 1100px; margin: 0 auto; padding: 0 16px 36px; }}
     .hero {{
       margin: 0 -16px 18px; padding: 28px 32px 22px;
-      background: linear-gradient(135deg, #0b3a67 0%, #1677ff 62%, #3aa0ff 100%);
+      background: linear-gradient(135deg, #0b3a67 0%, #2563eb 62%, #3b82f6 100%);
       color: #fff; box-shadow: 0 10px 28px rgba(15,76,129,.25);
     }}
     .hero .eyebrow {{ font-size: 12px; letter-spacing: .16em; opacity: .82; }}

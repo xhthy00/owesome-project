@@ -157,13 +157,13 @@ export default function OperationLogPage() {
     {
       title: "日志ID",
       dataIndex: "id",
-      width: 80,
+      width: 78,
       render: (v) => v ?? "-"
     },
     {
       title: "请求ID",
       dataIndex: "trace_id",
-      width: 160,
+      width: 150,
       ellipsis: true,
       render: (v: string | null) => v || "-"
     },
@@ -176,37 +176,38 @@ export default function OperationLogPage() {
     {
       title: "用户名",
       dataIndex: "user_account",
-      width: 160,
+      width: 118,
       render: (v: string | null) => v || "-"
     },
     {
       title: "IP",
       dataIndex: "ip",
-      width: 140,
+      width: 118,
       render: (v: string | null) => v || "-"
     },
     {
       title: "请求路径",
       dataIndex: "request_path",
+      width: 200,
       ellipsis: true,
       render: (v) => v || "-"
     },
     {
       title: "操作类型",
       dataIndex: "operation_type",
-      width: 120,
+      width: 96,
       render: (v: string) => <Tag color="blue">{v}</Tag>
     },
     {
       title: "耗时ms",
       dataIndex: "elapsed_ms",
-      width: 110,
+      width: 84,
       render: (v) => (v == null ? "-" : v)
     },
     {
       title: "状态",
       dataIndex: "success",
-      width: 100,
+      width: 84,
       render: (v: boolean) =>
         v ? <Tag color="success">成功</Tag> : <Tag color="error">失败</Tag>
     }
@@ -323,7 +324,9 @@ export default function OperationLogPage() {
           locale={{
             emptyText: emptyText
           }}
-          scroll={{ x: 1000 }}
+          scroll={{
+            x: 1148 /* 列宽合计 1100 + 展开列 48 */
+          }}
         />
       </div>
     </div>

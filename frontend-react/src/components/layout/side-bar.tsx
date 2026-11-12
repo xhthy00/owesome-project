@@ -1,21 +1,11 @@
 import {
-  AlertOutlined,
   DownOutlined,
-  BarChartOutlined,
-  ControlOutlined,
-  FolderOutlined,
-  FundViewOutlined,
-  GlobalOutlined,
-  FileTextOutlined,
-  HistoryOutlined,
+  EditOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   MessageOutlined,
-  EditOutlined,
   PlusOutlined,
-  RightOutlined,
-  SafetyCertificateOutlined,
-  SettingOutlined
+  RightOutlined
 } from "@ant-design/icons";
 import { permissionApi } from "@/api/permission";
 import { getCurrentUser, type CurrentUser } from "@/api/auth";
@@ -27,44 +17,23 @@ import { useContext, useEffect, useMemo, useRef, useState } from "react";
 import { ChatContext } from "@/app/chat-context";
 import { Conversation, listConversations, updateConversation } from "@/api/adapter/chatAdapter";
 import { CONVERSATION_CHANGED_EVENT } from "@/utils/conversationTitle";
+import {
+  mainRoutes,
+  permissionSubRoutes,
+  resourceSubRoutes,
+  systemSubRoutes,
+  type NavItem
+} from "./nav-config";
 
-const routes = [
-  { key: "explore", path: "/", label: "探索广场", icon: <GlobalOutlined /> },
-  { key: "analysis", path: "/construct/analysis", label: "分析工具", icon: <BarChartOutlined /> },
-  { key: "line-reach", path: "/construct/education/line-reach", label: "达线看板", icon: <FundViewOutlined /> },
-  { key: "report-history", path: "/construct/analysis/history", label: "报告历史", icon: <HistoryOutlined /> },
-  { key: "anomaly-alerts", path: "/construct/education/anomaly-alerts", label: "异常提醒", icon: <AlertOutlined /> },
-  { key: "anomaly-rules", path: "/construct/education/anomaly-rules", label: "异常规则", icon: <ControlOutlined /> },
-  { key: "resource", path: "/construct/database", label: "数据管理", icon: <FolderOutlined /> },
-  { key: "permission", path: "/construct/permission", label: "权限管理", icon: <SafetyCertificateOutlined /> },
-  { key: "system", path: "/system", label: "日志管理", icon: <SettingOutlined /> },
-  { key: "docs", path: "/construct/docs", label: "系统文档", icon: <FileTextOutlined /> },
-];
+/** 一级菜单行:展开态与收起态共用同一套激活判定与样式常量 */
+const ROW_BASE =
+  "flex w-full items-center rounded-lg transition-colors duration-150 focus-visible:outline-none";
+const ACTIVE_STYLE = "bg-brand-tint font-medium text-brand-ink";
+const IDLE_STYLE = "text-ink-2 hover:bg-surface-2 hover:text-ink-1";
 
-const resourceSubRoutes = [
-  { key: "datasource", path: "/construct/database", label: "数据源" },
-  { key: "school", path: "/construct/education/schools", label: "学校" },
-  { key: "exam-library", path: "/construct/education/exam-library", label: "试卷库" },
-  { key: "raw-score-import", path: "/construct/education/score-library", label: "成绩库" },
-  { key: "knowledge", path: "/construct/knowledge", label: "知识点" },
-  { key: "fraction-bar", path: "/construct/education/fraction-bar", label: "预测分数线" }
-];
-
-const permissionSubRoutes = [
-  { key: "permission-config", path: "/construct/permission/config", label: "权限配置" },
-  { key: "permission-edu", path: "/construct/permission/edu", label: "教育权限" },
-  { key: "permission-users", path: "/construct/permission/users", label: "用户管理" },
-  { key: "permission-workspaces", path: "/construct/permission/workspaces", label: "工作空间" },
-  { key: "permission-members", path: "/construct/permission/members", label: "成员管理" },
-  { key: "permission-privacy", path: "/construct/permission/privacy", label: "数据脱敏" },
-  { key: "permission-menu", path: "/construct/permission/menu", label: "菜单权限管理" }
-];
-
-const systemSubRoutes = [
-  { key: "system-log-access", path: "/system/log/access", label: "访问日志" },
-  { key: "system-log-operation", path: "/system/log/operation", label: "操作日志" },
-  { key: "system-log-login", path: "/system/log/login", label: "登录日志" }
-];
+function matchesPath(pathname: string, path: string) {
+  return pathname === path || pathname.startsWith(`${path}/`);
+}
 
 export default function SideBar() {
   const { isMenuExpand, setIsMenuExpand } = useContext(ChatContext);
@@ -242,9 +211,9 @@ export default function SideBar() {
   const visibleRoutes = useMemo(() => {
     const eduRole = currentUser?.edu_scope?.edu_role || "";
     const hideAnomalyAlerts = eduRole === "bureau_admin" || eduRole === "student";
-    let list = routes;
+    let list = mainRoutes;
     if (!isPlatformAdmin) {
-      list = routes.filter(
+      list = mainRoutes.filter(
         (item) => item.key !== "anomaly-rules" && menuVisibility[item.key] !== false
       );
     }
@@ -265,9 +234,7 @@ export default function SideBar() {
     visibleResourceRoutes.length
   ]);
 
-  const resourceActive = visibleResourceRoutes.some(
-    (item) => pathname === item.path || pathname.startsWith(item.path + "/")
-  );
+  const resourceActive = visibleResourceRoutes.some((item) => matchesPath(pathname, item.path));
 
   useEffect(() => {
     if (resourceActive) setResourceExpanded(true);
@@ -278,79 +245,117 @@ export default function SideBar() {
     if (pathname !== "/chat" || router.asPath !== "/chat") void router.push("/chat");
   };
 
+  const isItemActive = (item: NavItem) =>
+    item.key === "resource" ? resourceActive : matchesPath(pathname, item.path);
+
+  const expandedFor = (item: NavItem) =>
+    item.key === "resource" ? resourceExpanded : item.key === "permission" ? permissionExpanded : systemExpanded;
+
+  const toggleGroup = (item: NavItem) => {
+    if (item.key === "resource") setResourceExpanded((prev) => !prev);
+    else if (item.key === "permission") setPermissionExpanded((prev) => !prev);
+    else if (item.key === "system") setSystemExpanded((prev) => !prev);
+    else void router.push(item.path);
+  };
+
+  const renderSubList = (items: NavItem[]) => (
+    <div className="ml-11 mt-1 flex flex-col gap-0.5 border-l border-line-1 pl-2">
+      {items.map((sub) => {
+        const active = matchesPath(pathname, sub.path);
+        return (
+          <Link
+            key={sub.key}
+            href={sub.path}
+            aria-current={active ? "page" : undefined}
+            className={`flex h-9 items-center rounded-md px-3 text-navsub transition-colors ${
+              active ? ACTIVE_STYLE : "text-ink-3 hover:bg-surface-2 hover:text-ink-1"
+            }`}
+          >
+            {sub.label}
+          </Link>
+        );
+      })}
+    </div>
+  );
+
+  /* ---------- 收起态:只有图标 + 提示 ---------- */
   if (!isMenuExpand) {
     return (
-      <div className="workspace-sidebar flex h-screen w-[64px] flex-col border-r border-slate-200 bg-slate-50 pt-4 text-slate-600 dark:border-slate-700 dark:bg-[#111827] dark:text-slate-300">
-        <div className="flex shrink-0 flex-col items-center pb-2">
-          <Link href="/" className="flex items-center justify-center pb-2">
-            <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl bg-white shadow-sm">
-              <Image src="/logo-mark.svg" alt="logo" width={34} height={34} />
+      <nav
+        aria-label="主导航"
+        className="workspace-sidebar flex h-screen w-[64px] flex-col border-r border-line-1 bg-surface-0 pt-3 dark:bg-surface-1"
+      >
+        <div className="flex shrink-0 flex-col items-center pb-1">
+          <Link href="/" aria-label="返回探索广场" className="flex items-center justify-center">
+            <span className="inline-flex h-10 w-10 items-center justify-center rounded-lg bg-surface-1 ring-1 ring-line-1 dark:bg-surface-2 dark:ring-line-2">
+              <Image src="/logo-mark.svg" alt="" width={28} height={28} />
             </span>
           </Link>
           <Tooltip title="展开侧栏" placement="right">
-            <button type="button" aria-label="展开侧栏"
+            <button
+              type="button"
+              aria-label="展开侧栏"
               onClick={() => setIsMenuExpand(true)}
-              className="flex h-7 w-7 cursor-pointer items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-200 hover:text-gray-600 dark:hover:bg-gray-700 dark:hover:text-gray-300"
+              className="mt-2 flex h-7 w-7 items-center justify-center rounded-md text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-1"
             >
               <MenuUnfoldOutlined style={{ fontSize: 14 }} />
             </button>
           </Tooltip>
         </div>
         <Tooltip title="新建任务" placement="right">
-          <button type="button" aria-label="新建任务" onClick={startTask}
-            className="mx-auto my-2 flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-blue-600 text-white transition-colors hover:bg-blue-700">
+          <button
+            type="button"
+            aria-label="新建任务"
+            onClick={startTask}
+            className="mx-auto my-2 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-brand text-white shadow-1 transition-colors hover:bg-brand-hover"
+          >
             <PlusOutlined />
           </button>
         </Tooltip>
-        <div className="mt-2 flex min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto overscroll-contain px-1 pb-2 [scrollbar-gutter:stable] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[#9aa8c0]/70 [&::-webkit-scrollbar-track]:bg-transparent">
+        <div className="scrollbar-hide mt-1 flex min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto overscroll-contain px-1 pb-2">
           {visibleRoutes.map((item) => {
-            const active =
-              item.key === "resource"
-                ? resourceActive
-                : item.key === "analysis"
-                  ? pathname === "/construct/analysis"
-                  : pathname === item.path || pathname.startsWith(item.path + "/");
+            const active = isItemActive(item);
             const href = item.key === "resource" ? visibleResourceRoutes[0]?.path || item.path : item.path;
             return (
-              <Link key={item.key} href={href} className="flex h-12 shrink-0 items-center">
-                <Tooltip title={item.label} placement="right">
-                  <div
-                    className={`mx-auto flex h-12 w-12 items-center justify-center rounded-xl text-xl transition-colors ${
-                      active ? "bg-blue-50 text-blue-600 shadow-sm dark:bg-blue-900/20 dark:text-blue-400" : "hover:bg-blue-50/50 dark:hover:bg-blue-900/10"
-                    }`}
-                  >
-                    {item.icon}
-                  </div>
-                </Tooltip>
-              </Link>
+              <Tooltip key={item.key} title={item.label} placement="right">
+                <Link
+                  href={href}
+                  aria-label={item.label}
+                  aria-current={active ? "page" : undefined}
+                  className={`flex h-11 w-11 items-center justify-center rounded-lg text-lg transition-colors ${
+                    active ? ACTIVE_STYLE : IDLE_STYLE
+                  }`}
+                >
+                  {item.icon}
+                </Link>
+              </Tooltip>
             );
           })}
         </div>
-        <div className="shrink-0 py-4">
-          <Tooltip title="展开侧栏" placement="right">
-            <button type="button" aria-label="展开侧栏"
-              className="mx-auto flex h-12 w-12 cursor-pointer items-center justify-center rounded-xl text-xl transition-colors hover:bg-blue-50/50 dark:hover:bg-blue-900/10"
-              onClick={() => setIsMenuExpand(true)}
-            >
-              <MenuUnfoldOutlined />
-            </button>
-          </Tooltip>
-        </div>
-      </div>
+      </nav>
     );
   }
 
+  /* ---------- 展开态 ---------- */
   return (
-    <div className="workspace-sidebar flex h-screen w-[232px] min-w-[232px] flex-col border-r border-slate-200 bg-slate-50 px-3 pt-3 dark:border-slate-700 dark:bg-[#111827]">
-      <div className="dbgpt-ui-font flex shrink-0 items-center justify-between gap-1 px-2 pb-5 pt-1">
+    <nav
+      aria-label="主导航"
+      className="workspace-sidebar flex h-screen w-[232px] min-w-[232px] flex-col border-r border-line-1 bg-surface-0 px-3 pt-3 dark:bg-surface-1"
+    >
+      <div className="flex shrink-0 items-center justify-between gap-1 px-2 pb-4 pt-1">
         <Link href="/" className="flex min-w-0 items-center gap-2.5" aria-label="AI学情分析智能体">
           <Image src="/logo-mark.svg" alt="" width={32} height={32} className="shrink-0 rounded-lg" />
-          <span className="min-w-0"><span className="block whitespace-nowrap text-[15px] font-semibold text-slate-900 dark:text-white">学情分析</span><span className="block text-[11px] text-slate-500 dark:text-slate-400">AI 智能体工作台</span></span>
+          <span className="min-w-0">
+            <span className="block whitespace-nowrap text-[15px] font-semibold text-ink-1">学情分析</span>
+            <span className="block truncate whitespace-nowrap text-xs text-ink-3">AI 智能体工作台</span>
+          </span>
         </Link>
         <Tooltip title="收起侧栏">
-          <button type="button" aria-label="收起侧栏"
+          <button
+            type="button"
+            aria-label="收起侧栏"
             onClick={() => setIsMenuExpand(false)}
-            className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-lg text-slate-500 transition-colors hover:bg-slate-200 hover:text-slate-700 dark:hover:bg-slate-700 dark:hover:text-slate-200"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-1"
           >
             <MenuFoldOutlined style={{ fontSize: 14 }} />
           </button>
@@ -359,162 +364,81 @@ export default function SideBar() {
 
       <button
         type="button"
-        className="w-full shrink-0 border-0 bg-transparent p-0"
+        className="mb-3 flex min-h-[40px] w-full items-center justify-center gap-2 rounded-lg bg-brand px-4 text-sm font-medium text-white shadow-1 transition-colors hover:bg-brand-hover"
         onClick={startTask}
       >
-        <div className="dbgpt-ui-font mb-4 flex min-h-11 cursor-pointer items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-blue-700 dark:bg-blue-600 dark:text-white dark:hover:bg-blue-500">
-          <PlusOutlined className="text-xs" />
-          <span>新建任务</span>
-        </div>
+        <PlusOutlined className="text-xs" />
+        <span>新建任务</span>
       </button>
 
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain [scrollbar-gutter:stable] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-[#9aa8c0]/70 dark:[&::-webkit-scrollbar-thumb]:bg-[#5a6578] [&::-webkit-scrollbar-track]:bg-transparent">
-        <div className="flex flex-col gap-1">
+      <div className="scrollbar-hide flex min-h-0 flex-1 flex-col overflow-y-auto overscroll-contain">
+        <div className="flex flex-col gap-0.5">
           {visibleRoutes.map((item) => {
-            const isResourceRoot = item.key === "resource";
-            const active =
-              isResourceRoot
-                ? resourceActive
-                : item.key === "analysis"
-                  ? pathname === "/construct/analysis"
-                  : pathname === item.path || pathname.startsWith(item.path + "/");
-            const isPermissionRoot = item.key === "permission";
-            const isSystemRoot = item.key === "system";
-            const expanded = isResourceRoot
-              ? resourceExpanded
-              : isPermissionRoot
-                ? permissionExpanded
-                : systemExpanded;
+            const active = isItemActive(item);
+            const expanded = expandedFor(item);
             return (
               <div key={item.key}>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (isResourceRoot) {
-                      setResourceExpanded((prev) => !prev);
-                    } else if (isPermissionRoot) {
-                      setPermissionExpanded((prev) => !prev);
-                    } else if (isSystemRoot) {
-                      setSystemExpanded((prev) => !prev);
-                    } else {
-                      void router.push(item.path);
-                    }
-                  }}
-                  className={`flex h-11 w-full items-center rounded-lg px-3 transition-colors hover:bg-slate-100 dark:hover:bg-slate-800 ${
-                    active ? "rounded-xl bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400" : "text-[#2e3a52] dark:text-gray-300"
-                  }`}
+                  aria-expanded={item.group ? expanded : undefined}
+                  aria-current={!item.group && active ? "page" : undefined}
+                  onClick={() => toggleGroup(item)}
+                  className={`${ROW_BASE} h-10 gap-3 px-3 text-nav ${active ? ACTIVE_STYLE : IDLE_STYLE}`}
                 >
-                  <div className="mr-3">{item.icon}</div>
-                  <span className="dbgpt-ui-font text-sm">{item.label}</span>
-                  {isResourceRoot || isPermissionRoot || isSystemRoot ? (
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center text-base">{item.icon}</span>
+                  <span className="truncate">{item.label}</span>
+                  {item.group ? (
                     <DownOutlined
-                      className={`ml-auto text-xs transition-transform ${expanded ? "rotate-0" : "-rotate-90"}`}
+                      className={`ml-auto text-[10px] transition-transform ${expanded ? "rotate-0" : "-rotate-90"}`}
                     />
                   ) : null}
                 </button>
-                {isResourceRoot && resourceExpanded ? (
-                  <div className="ml-11 mt-1 flex flex-col gap-1">
-                    {visibleResourceRoutes.map((sub) => {
-                      const subActive = pathname === sub.path || pathname.startsWith(sub.path + "/");
-                      return (
-                        <Link
-                          key={sub.key}
-                          href={sub.path}
-                          className={`flex h-10 items-center rounded-lg px-3 text-sm transition-colors ${
-                            subActive
-                              ? "bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400"
-                              : "text-[#3d4a64] hover:bg-blue-50/50 dark:text-gray-400 dark:hover:bg-blue-900/10"
-                          }`}
-                        >
-                          {sub.label}
-                        </Link>
-                      );
-                    })}
-                  </div>
-                ) : null}
-                {isPermissionRoot && permissionExpanded ? (
-                  <div className="ml-11 mt-1 flex flex-col gap-1">
-                    {permissionSubRoutes.map((sub) => {
-                      const subActive = pathname === sub.path || pathname.startsWith(sub.path + "/");
-                      return (
-                        <Link
-                          key={sub.key}
-                          href={sub.path}
-                          className={`flex h-10 items-center rounded-lg px-3 text-sm transition-colors ${
-                            subActive
-                              ? "bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400"
-                              : "text-[#3d4a64] hover:bg-blue-50/50 dark:text-gray-400 dark:hover:bg-blue-900/10"
-                          }`}
-                        >
-                          {sub.label}
-                        </Link>
-                      );
-                    })}
-                  </div>
-                ) : null}
-                {isSystemRoot && systemExpanded ? (
-                  <div className="ml-11 mt-1 flex flex-col gap-1">
-                    {systemSubRoutes.map((sub) => {
-                      const subActive = pathname === sub.path || pathname.startsWith(sub.path + "/");
-                      return (
-                        <Link
-                          key={sub.key}
-                          href={sub.path}
-                          className={`flex h-10 items-center rounded-lg px-3 text-sm transition-colors ${
-                            subActive
-                              ? "bg-blue-50 text-blue-600 dark:bg-blue-900/20 dark:text-blue-400"
-                              : "text-[#3d4a64] hover:bg-blue-50/50 dark:text-gray-400 dark:hover:bg-blue-900/10"
-                          }`}
-                        >
-                          {sub.label}
-                        </Link>
-                      );
-                    })}
-                  </div>
-                ) : null}
+                {item.key === "resource" && resourceExpanded ? renderSubList(visibleResourceRoutes) : null}
+                {item.key === "permission" && permissionExpanded ? renderSubList(permissionSubRoutes) : null}
+                {item.key === "system" && systemExpanded ? renderSubList(systemSubRoutes) : null}
               </div>
             );
           })}
         </div>
 
-        <div className="mb-2 mt-4 px-1">
-          <div className="flex items-center justify-between">
-            <span className="dbgpt-ui-font text-xs font-medium text-slate-500 dark:text-slate-400">最近任务</span>
-            <Link href="/conversations" className="inline-flex items-center">
-              <Tooltip title="查看全部">
-                <RightOutlined className="cursor-pointer text-xs text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-gray-300" />
-              </Tooltip>
-            </Link>
-          </div>
+        <div className="mb-1 mt-4 flex items-center justify-between px-2">
+          <span className="text-xs font-medium text-ink-3">最近任务</span>
+          <Link href="/conversations" aria-label="查看全部任务" className="inline-flex items-center p-1">
+            <Tooltip title="查看全部">
+              <RightOutlined className="text-[11px] text-ink-4 transition-colors hover:text-ink-2" />
+            </Tooltip>
+          </Link>
         </div>
         <div className="pb-2">
           {historyList.length ? (
-            <div className="space-y-2 px-1 pb-2">
+            <div className="space-y-2 pb-2">
               {groupedHistory.map((group) => (
                 <div key={group.key}>
                   <button
+                    type="button"
                     onClick={() => setCollapsedGroups((prev) => ({ ...prev, [group.key]: !prev[group.key] }))}
-                    className="flex w-full items-center px-2 pb-1 text-left"
+                    aria-expanded={!collapsedGroups[group.key]}
+                    className="flex w-full items-center gap-1 rounded px-2 pb-1 text-left"
                   >
-                    <span className="text-[10px] font-semibold uppercase tracking-wider text-[#98a2b3]">{group.label}</span>
+                    <span className="text-xs font-medium text-ink-3">{group.label}</span>
                     <DownOutlined
-                      className={`ml-1 text-[10px] text-[#98a2b3] transition-transform ${
+                      className={`text-[10px] text-ink-4 transition-transform ${
                         collapsedGroups[group.key] ? "-rotate-90" : "rotate-0"
                       }`}
                     />
                   </button>
                   {!collapsedGroups[group.key] ? (
-                    <div className="space-y-1">
+                    <div className="space-y-0.5">
                       {group.items.map((item) => {
                         const active = activeConversationId === item.id;
                         const editing = renamingId === item.id;
                         return (
                           <div
                             key={item.id}
-                            className={`group relative rounded-lg transition ${
+                            className={`group relative rounded-lg transition-colors ${
                               active
-                                ? "border border-[#dbeafe] bg-[#f5f9ff] text-[#1d4ed8] shadow-[0_1px_2px_rgba(15,23,42,0.04)] dark:border-[#2f4b75] dark:bg-[#1d2940] dark:text-[#93c5fd]"
-                                : "border border-transparent hover:bg-white/80 dark:hover:bg-[#2a3040]"
+                                ? "bg-brand-tint text-brand-ink"
+                                : "text-ink-2 hover:bg-surface-2 hover:text-ink-1"
                             }`}
                           >
                             {editing ? (
@@ -535,7 +459,7 @@ export default function SideBar() {
                                     cancelRename();
                                   }
                                 }}
-                                className="m-1 w-[calc(100%-8px)] rounded border border-[#93c5fd] bg-white px-2 py-1 text-[13px] leading-5 text-[#1c2533] outline-none dark:border-[#2f4b75] dark:bg-[#1d2940] dark:text-[#93c5fd]"
+                                className="m-1 w-[calc(100%-8px)] rounded-md border border-brand-border bg-surface-1 px-2 py-1 text-navsub leading-5 text-ink-1 outline-none focus:ring-2 focus:ring-brand"
                               />
                             ) : (
                               <>
@@ -543,18 +467,20 @@ export default function SideBar() {
                                   href={{ pathname: "/chat", query: { conversation_id: item.id } }}
                                   className="block rounded-lg py-2 pl-3 pr-8"
                                   title={item.title || `对话 ${item.id}`}
+                                  aria-current={active ? "page" : undefined}
                                 >
-                                  <div className="truncate text-[13px] font-medium leading-5">
+                                  <div className="truncate text-navsub font-medium leading-5">
                                     {item.title || `对话 ${item.id}`}
                                   </div>
-                                  <div className="mt-0.5 truncate text-[10px] text-[#98a2b3]">
+                                  <div className="mt-0.5 truncate text-xs text-ink-4">
                                     {item.update_time?.slice(0, 16).replace("T", " ") || "刚刚"}
                                   </div>
                                 </Link>
                                 <button
                                   type="button"
                                   title="重命名"
-                                  className="absolute right-1 top-2 hidden h-6 w-6 items-center justify-center rounded text-[#98a2b3] hover:bg-white hover:text-[#3d4a64] group-hover:flex dark:hover:bg-[#34384a] dark:hover:text-gray-200"
+                                  aria-label="重命名任务"
+                                  className="absolute right-1 top-2 hidden h-6 w-6 items-center justify-center rounded text-ink-3 hover:bg-surface-1 hover:text-ink-1 group-hover:flex"
                                   onClick={(e) => {
                                     e.preventDefault();
                                     e.stopPropagation();
@@ -575,16 +501,16 @@ export default function SideBar() {
             </div>
           ) : (
             <div className="px-3 py-8 text-center">
-              <div className="mb-2 text-gray-300 dark:text-gray-600">
+              <div className="mb-2 text-ink-4">
                 <MessageOutlined style={{ fontSize: 24 }} />
               </div>
-              <p className="dbgpt-ui-font text-xs text-gray-400">暂无历史任务</p>
+              <p className="text-xs text-ink-3">暂无历史任务</p>
             </div>
           )}
         </div>
       </div>
 
-      <div className="shrink-0 border-t border-slate-200 px-2 py-3 text-[11px] text-slate-500 dark:border-slate-700 dark:text-slate-400">AI 学情分析工作台</div>
-    </div>
+      <div className="shrink-0 border-t border-line-1 px-2 py-3 text-xs text-ink-3">AI 学情分析工作台</div>
+    </nav>
   );
 }

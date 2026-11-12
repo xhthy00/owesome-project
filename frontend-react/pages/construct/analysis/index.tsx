@@ -257,6 +257,10 @@ export default function AnalysisToolPage() {
   const [skillsLoading, setSkillsLoading] = useState(true);
   const [eduRole, setEduRole] = useState<string | null>(null);
   const [boundSchoolName, setBoundSchoolName] = useState("");
+  const [v2DatasourceId, setV2DatasourceId] = useState<number | null>(null);
+  const [v2Citywide, setV2Citywide] = useState(false);
+  const [v2ClassNames, setV2ClassNames] = useState<string[]>([]);
+  const [isV2, setIsV2] = useState(false);
   const [selected, setSelected] = useState<SkillItem | null>(null);
   const [datasources, setDatasources] = useState<DatasourceItem[]>([]);
   const [generating, setGenerating] = useState(false);
@@ -310,10 +314,34 @@ export default function AnalysisToolPage() {
     let cancelled = false;
     void getCurrentUser()
       .then((user) => {
-        if (!cancelled) {
-          setEduRole(String(user.edu_scope?.edu_role || "").trim());
-          setBoundSchoolName(String(user.edu_scope?.school_name || "").trim());
+        if (cancelled) return;
+        const rawRole = String(user.edu_scope?.edu_role || "").trim();
+        const v2 = rawRole === "v2";
+        const levels = Array.isArray(user.edu_scope?.levels)
+          ? (user.edu_scope?.levels as string[])
+          : [];
+        const citywide = Boolean(user.edu_scope?.citywide);
+        setIsV2(v2);
+        setV2Citywide(citywide);
+        setV2DatasourceId(
+          user.edu_scope?.datasource_id != null
+            ? Number(user.edu_scope.datasource_id)
+            : null
+        );
+        setV2ClassNames(
+          Array.isArray(user.edu_scope?.class_names)
+            ? (user.edu_scope?.class_names as string[])
+            : []
+        );
+        // v2 账号把范围层级映射成旧角色语义，复用现有表单/报告类型收口逻辑。
+        let role = rawRole;
+        if (v2) {
+          if (citywide || levels.includes("district")) role = "bureau_admin";
+          else if (levels.includes("school") || levels.includes("grade")) role = "school_admin";
+          else if (levels.includes("class") || levels.includes("student")) role = "teacher";
         }
+        setEduRole(role);
+        setBoundSchoolName(String(user.edu_scope?.school_name || "").trim());
       })
       .catch(() => {
         if (!cancelled) setEduRole("");
@@ -330,9 +358,15 @@ export default function AnalysisToolPage() {
       .then((res) => {
         if (cancelled) return;
         const items = res.items || [];
-        setDatasources(items);
-        if (items.length > 0) {
-          form.setFieldsValue({ datasource_id: items[0].id });
+        const pinned = v2DatasourceId
+          ? items.filter((item) => Number(item.id) === Number(v2DatasourceId))
+          : items;
+        const usable = pinned.length ? pinned : items;
+        setDatasources(usable);
+        if (v2DatasourceId) {
+          form.setFieldsValue({ datasource_id: v2DatasourceId });
+        } else if (usable.length > 0) {
+          form.setFieldsValue({ datasource_id: usable[0].id });
         }
       })
       .catch(() => {
@@ -341,7 +375,7 @@ export default function AnalysisToolPage() {
     return () => {
       cancelled = true;
     };
-  }, [form]);
+  }, [form, v2DatasourceId]);
 
   useEffect(() => {
     if (!datasourceId) {
@@ -400,11 +434,19 @@ export default function AnalysisToolPage() {
   );
 
   const visibleSkills = useMemo(() => {
+    if (isV2 && !v2Citywide) {
+      // v2 非市级授权：不提供局端/全市报告；尖子生全市排名需要市级授权。
+      return skills.filter(
+        (s) =>
+          SCHOOL_TEACHER_REPORT_TYPES.has(s.report_type) &&
+          s.report_type !== "elite_rank_shift"
+      );
+    }
     if (eduRole != null && isSchoolOrTeacherRole(eduRole)) {
       return skills.filter((s) => SCHOOL_TEACHER_REPORT_TYPES.has(s.report_type));
     }
     return skills;
-  }, [skills, eduRole]);
+  }, [skills, eduRole, isV2, v2Citywide]);
 
   const cardsLoading = skillsLoading || eduRole == null;
 
@@ -434,6 +476,10 @@ export default function AnalysisToolPage() {
       message.info("当前角色不提供该报告");
       return;
     }
+    if (isV2 && !v2Citywide && skill.report_type === "elite_rank_shift") {
+      message.info("尖子生全市排名报告需要市级数据授权");
+      return;
+    }
     setSelected(skill);
     setResult(null);
     setBatchItems([]);
@@ -445,7 +491,7 @@ export default function AnalysisToolPage() {
           ? "default"
           : skill.audience_default || "default",
       include_charts: true,
-      class_name: undefined,
+      class_name: v2ClassNames.length === 1 ? v2ClassNames[0] : undefined,
       exam_name: undefined,
       subject: undefined,
       school_name: autoSchool || undefined,

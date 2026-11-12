@@ -214,33 +214,48 @@ export default function PermissionUsersPage() {
     }
   };
 
+  // 列宽合计必须 <= scroll.x,否则 AntD 在 fixed 布局下会把列按比例压扁
+  // (此前合计 1230 > 1100,"工作空间"被挤到只剩 20px)。
+/** 列宽 + 横向滚动下限,两者共用同一份数字,避免再次出现「列宽和 > scroll.x」 */
+const COLUMN_WIDTH = {
+  id: 72,
+  account: 160,
+  name: 140,
+  email: 208,
+  eduRole: 128,
+  role: 104,
+  workspace: 96,
+  actions: 208
+} as const;
+const TABLE_SCROLL_X = Object.values(COLUMN_WIDTH).reduce((sum, w) => sum + w, 0);
+
   const columns: ColumnsType<SystemUser> = [
-    { title: "ID", dataIndex: "id", width: 90 },
-    { title: "账号", dataIndex: "account", width: 180 },
-    { title: "名称", dataIndex: "name", width: 160 },
-    { title: "邮箱", dataIndex: "email", width: 220 },
+    { title: "ID", dataIndex: "id", width: COLUMN_WIDTH.id },
+    { title: "账号", dataIndex: "account", width: COLUMN_WIDTH.account },
+    { title: "名称", dataIndex: "name", width: COLUMN_WIDTH.name },
+    { title: "邮箱", dataIndex: "email", width: COLUMN_WIDTH.email },
     {
       title: "教育角色",
       dataIndex: "edu_role",
-      width: 140,
+      width: COLUMN_WIDTH.eduRole,
       render: (v: string | null | undefined) =>
         v ? <Tag color="geekblue">{v}</Tag> : <Tag>未配置</Tag>
     },
     {
       title: "角色",
       dataIndex: "sys_role",
-      width: 120,
+      width: COLUMN_WIDTH.role,
       render: (_, row) => {
         if (isSuperUser(row)) return <Tag color="red">超管</Tag>;
         if (row.sys_role === "platform_admin") return <Tag color="volcano">管理员</Tag>;
         return <Tag color={row.status ? "blue" : "default"}>{row.status ? "member" : "disabled"}</Tag>;
       }
     },
-    { title: "工作空间", dataIndex: "oid", width: 100 },
+    { title: "工作空间", dataIndex: "oid", width: COLUMN_WIDTH.workspace },
     {
       title: "操作",
       key: "actions",
-      width: 220,
+      width: COLUMN_WIDTH.actions,
       fixed: "right",
       render: (_, row) => {
         const canAppoint = isSuperAdmin && !isSuperUser(row) && row.id !== currentUserId;
@@ -330,13 +345,13 @@ export default function PermissionUsersPage() {
         </Space>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white shadow-sm">
+      <div className="overflow-hidden rounded-lg border border-line-1 bg-surface-1 shadow-1">
         <Table
           rowKey="id"
           columns={columns}
           dataSource={rows}
           loading={loading}
-          scroll={{ x: 1100 }}
+          scroll={{ x: TABLE_SCROLL_X }}
           pagination={{
             current: pageNum,
             pageSize,

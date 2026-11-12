@@ -215,3 +215,36 @@ def test_legacy_student_rows_consolidated_on_list():
     assert total == 1
     assert rows[0].anomaly_type == ANOMALY_REPORT
     assert alert_to_dict(rows[0])["counts"]["critical"] == 2
+
+
+def test_v2_list_alerts_filters_by_granted_schools_and_classes():
+    session = _session()
+    at_risk = {
+        "critical": [
+            {"student_id": "A", "name": "A", "subject": "数学", "score": 70, "class": "高三(10)班"}
+        ],
+        "regression": [],
+        "imbalanced": [],
+    }
+    for school, cls in [("YZZX", "高三(10)班"), ("YZZX", "高三(11)班"), ("OTHER", "高三(10)班")]:
+        upsert_from_at_risk_payload(
+            session,
+            at_risk,
+            workspace_oid=1,
+            datasource_id=1,
+            school_id=school,
+            exam_id="3",
+            exam_name="统考",
+            class_name=cls,
+            source="tier_alert_report",
+        )
+    rows, total = list_alerts(
+        session,
+        EduScope(edu_role="school_admin", school_id="YZZX"),
+        workspace_oid=1,
+        school_ids=["YZZX"],
+        allowed_classes=["高三(10)班"],
+    )
+    assert total == 1
+    assert rows[0].school_id == "YZZX"
+    assert rows[0].class_name == "高三(10)班"

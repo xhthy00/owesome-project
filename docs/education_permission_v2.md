@@ -169,6 +169,28 @@ CSV 表头为 `user_id,expected_revision,grants_json`，每用户一行，grants
 
 使用新版授权的账号不能通过旧教育报表/成绩库等接口绕过验证，旧查询 helper 同样检查新版资源标记。尚未迁移的账号保持旧行为。独立维护入口需完成单独的维护授权适配后再向新版账号开放。
 
+### 分析工具（读类入口）适配
+
+分析工具的 SQL 由宿主报告模板生成，不是模型 SQL，因此由宿主执行器直接下推 v2 范围，不经过模型权限证明。适配范围：
+
+| 入口 | 行为 |
+| --- | --- |
+| `POST /education/generate-report`、`/batch-report`、`/diagnostic-report` | 加载当前空间/固定学情库的有效 grants；请求点名的学校/区县/班级必须落在 grants 内；只读执行前把范围谓词并入每个直接读取 `tb_score_overview` / `tb_score` / `tb_score_detail` 的 SELECT |
+| `GET /education/meta/options` | 学校/届次/班级/考试下拉只返回授权范围内可选值 |
+| `GET/DELETE /education/report-history*`、`POST /education/save-report-history` | 保存时写入 `permission_mode=model_explicit_v2` 与授权指纹；读取/下载按当前指纹重新鉴权，指纹变化后旧报告不可读 |
+| `GET /education/dashboards/line-reach*` | 按授权范围收口：学校/班级级只看本校（班级级需 `grade_baseline` 才能使用校级基准），区县级只看本区县，市级看全市；开通 `city_baseline` 时 KPI 可显示全市整体值，区县/学校明细仍只给授权范围 |
+| `GET /education/anomaly-alerts*`、`POST /education/anomaly-alerts/{id}/confirm` | 学校/年级/班级级按授权学校与班级过滤；区县/市级/学生不提供校内异常提醒 |
+| `GET /education/dimensions`、`GET/PUT/POST /education/report-config*` | 静态/平台管理员配置；配置接口自身仍要求平台管理员 |
+
+范围判定与 SQL 生成集中在 `src/datasource/service/education_report_scope.py`：
+
+- `ReportScope.apply_sql` 只对宿主模板显式标注的查询放宽：`reference="city"` 需要 `city_baseline`，`reference="grade"` 需要 `grade_baseline`，`reference="district"` 需要 `district_self_rank`；未开通时返回/提示，不扩大到更大范围。
+- 全市个人/班级名次（学生画像全市名次、班级总览全市排名、尖子生排名变化）不在 capability 目录内，只有市级授权可用，否则隐藏该段并给出说明。
+- 局端分析报告、结构化诊断的全市口径需要市级授权；学校/班级级请求会被拒绝或按本范围生成。
+- `tb_score_indicator` 没有班级维度，按授权学校/区县在应用层过滤行；班级级使用校级基准前必须已开通 `grade_baseline`。
+
+成绩导入、试卷库、知识点维护、预测分数线维护等写操作没有随读权限放开，仍要求平台管理员或对应功能权限；`get_current_user` 只对上述读类路径放行 v2 账号，其余 `/api/v1/education/*` 继续拒绝。
+
 旧报告没有当前 v2 指纹时不可读；不能回收用户此前已下载的本地文件。回滚保留授权及资源标记；旧版本无法表达 v2 范围时暂停该数据源，不能恢复默认放行。
 
 上线仍需审核真实映射、绑定账号、完成真实库金标和灰度验收。不能把示例配置或单元测试通过等同于已经上线。

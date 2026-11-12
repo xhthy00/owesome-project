@@ -1,5 +1,6 @@
 import { LockOutlined, UserOutlined } from "@ant-design/icons";
 import { Alert, Button, Form, Input, Typography, message, ConfigProvider } from "antd";
+import { brand, radius } from "@/theme/tokens";
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import { login } from "@/api/auth";
@@ -64,9 +65,9 @@ export default function LoginPage() {
     <ConfigProvider
       theme={{
         token: {
-          colorPrimary: "#3B82F6",
-          colorPrimaryHover: "#60A5FA",
-          borderRadius: 12,
+          colorPrimary: brand[600],
+          colorPrimaryHover: brand[500],
+          borderRadius: radius.lg,
         },
       }}
     >

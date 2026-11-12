@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "/Users/tanghaoyu/develop/git-repo/owner/awesome-project/.archify/architecture-awesome-db-20261112-174500/candidate.json",
+    "sha256": "ee7c21f318f8b37be49cffe633296a45c17c5b605c80353c47cd9705462ff621",
+    "bytes": 9020
+  },
+  "artifact": {
+    "path": "/Users/tanghaoyu/develop/git-repo/owner/awesome-project/.archify/architecture-awesome-db-20261112-174500/awesome-db-architecture.html",
+    "sha256": "1046c15256f5b465a5413d0d21dfa4cc4421ee5e64a6bf25c134df45d7db1e8d",
+    "bytes": 850729
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/tanghaoyu/develop/git-repo/owner/awesome-project/.archify/architecture-awesome-db-20261112-174500/review-3/awesome-db-architecture.finalize.json",
+    "summaryReceipt": "/Users/tanghaoyu/develop/git-repo/owner/awesome-project/.archify/architecture-awesome-db-20261112-174500/review-3/awesome-db-architecture.finalize-summary.json",
+    "browserCheckReceipt": "/Users/tanghaoyu/develop/git-repo/owner/awesome-project/.archify/architecture-awesome-db-20261112-174500/review-3/awesome-db-architecture.browser-check.json"
+  },
+  "visualReview": "not-requested",
+  "durationMs": 1940,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}

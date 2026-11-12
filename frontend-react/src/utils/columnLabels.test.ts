@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { labelColumn } from "./columnLabels";
+import { labelColumn, labelColumns } from "./columnLabels";
 
 describe("labelColumn", () => {
   it("把单科排名表头里的字段名译成中文", () => {
@@ -42,7 +42,31 @@ describe("labelColumn", () => {
     expect(labelColumn("foo_bar_count")).toBe("人数");
     expect(labelColumn("custom_metric")).toBe("自定义指标");
     expect(labelColumn("ownClassMean")).toBe("本班均分");
-    expect(labelColumn("totally_unknown_alias")).toBe("字段");
-    expect(/[a-z_]/i.test(labelColumn("totally_unknown_alias"))).toBe(false);
+  });
+
+  it("译不出来时保留原始列名,不塌缩成同一个占位词", () => {
+    // 回归:模型写了 c1/c2 这类占位别名时,旧逻辑把 5 列全渲染成「字段」
+    expect(labelColumn("c1")).toBe("c1");
+    expect(labelColumn("totally_unknown_alias")).toBe("totally_unknown_alias");
+    const labels = labelColumns(["c1", "c2", "c3", "c4", "c5", "row_type", "subject", "item"]);
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(labels.slice(0, 5)).toEqual(["c1", "c2", "c3", "c4", "c5"]);
+  });
+});
+
+describe("labelColumns", () => {
+  it("翻译结果重名时补上原始列名以便区分", () => {
+    expect(labelColumns(["avg_score", "mean_score"])).toEqual([
+      "均分(avg_score)",
+      "均分(mean_score)"
+    ]);
+  });
+
+  it("无重名时保持原样", () => {
+    expect(labelColumns(["class_name", "valid_count", "pass_rate"])).toEqual([
+      "班级",
+      "有效人数",
+      "及格率"
+    ]);
   });
 });

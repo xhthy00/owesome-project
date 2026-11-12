@@ -31,7 +31,7 @@ import G2Chart, {
   preferQueryTableOverChart
 } from "@/components/chat/G2Chart";
 import { UserWatermark } from "@/components/UserWatermark";
-import { labelColumn } from "@/utils/columnLabels";
+import { labelColumns } from "@/utils/columnLabels";
 import { formatNumericDisplay } from "@/utils/formatNumericDisplay";
 import {
   extractRecommendationsText,
@@ -87,6 +87,7 @@ function QueryResultTable({
   onPageChange: (page: number) => void;
   maxHeight?: string | number;
 }) {
+  const headers = labelColumns(columns);
   return (
     <div
       className="overflow-auto rounded-md border border-[#e5e7eb] dark:border-[#2f3441]"
@@ -95,12 +96,12 @@ function QueryResultTable({
       <table className="min-w-full border-collapse text-xs">
         <thead className="sticky top-0 z-[1] bg-[#f8fafc] dark:bg-[#141923]">
           <tr>
-            {columns.map((col) => (
+            {columns.map((col, index) => (
               <th
                 key={col}
                 className="whitespace-nowrap border border-[#e5e7eb] px-2 py-1 text-left dark:border-[#2f3441]"
               >
-                {labelColumn(col)}
+                {headers[index]}
               </th>
             ))}
           </tr>

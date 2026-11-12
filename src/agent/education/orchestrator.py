@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re as _re
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
@@ -96,6 +97,20 @@ _BUREAU_TYPES = frozenset(
         ReportType.SCORE_BAND,
     }
 )
+
+
+def _accepts_reference(fn: Any) -> bool:
+    """执行回调是否支持 ``reference``（v2 分析工具范围标记）。"""
+    import inspect
+
+    try:
+        return "reference" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _report_capability_error(message: str) -> ValueError:
+    return ValueError(message)
 
 
 # ---- 意图识别 ------------------------------------------------------------
@@ -190,8 +205,6 @@ class ReportIntentResolver:
         return Audience.DEFAULT
 
 
-import re as _re
-
 _CLASS_RE = _re.compile(
     r"(?:高[一二三]|初[一二三]|[三四五六七八九]年级)\(\d{1,2}\)班|"
     r"(初三|初二|初一|高三|高二|高一|九年级|八年级|七年级|六年级|五年级|四年级|三年级)[\d班]*\d?班"
@@ -278,9 +291,12 @@ class ReportOrchestrator:
         datasource_id: int | None = None,
         workspace_oid: int | None = None,
         user_id: int | None = None,
+        report_scope: Any | None = None,
     ) -> None:
         self._execute_sql = execute_sql
         self._resolve_schema = resolve_schema
+        self._report_scope = report_scope
+        self._execute_accepts_reference = _accepts_reference(execute_sql)
         if config is not None:
             self._config = config
         else:
@@ -294,6 +310,35 @@ class ReportOrchestrator:
         self._workspace_oid = workspace_oid
         self._user_id = user_id
         self.intent_resolver = ReportIntentResolver()
+
+    # ---- v2 分析工具范围 -------------------------------------------------
+    @property
+    def report_scope(self):
+        return self._report_scope
+
+    def _scope_allows_city_position(self) -> bool:
+        return self._report_scope is None or self._report_scope.allows_city_position()
+
+    def _scope_allows_grade_reference(self) -> bool:
+        return self._report_scope is None or self._report_scope.allows_grade_reference()
+
+    def _scope_note(self, message: str) -> str:
+        return f"<p class='edu-sub'>{message}</p>"
+
+    def _scope_role(self) -> str:
+        """把 v2 范围映射到旧模板使用的角色语义（只影响展示口径）。"""
+        if self._report_scope is None:
+            return ""
+        return self._report_scope.legacy_role()
+
+    async def _execute_reference(self, sql: str, reference: str) -> dict[str, Any]:
+        """执行宿主显式标注的跨范围对照 SQL（能力由 ReportScope 判定）。"""
+        if self._report_scope is None or reference is None:
+            return await self._execute_sql(sql)
+        if not self._execute_accepts_reference:
+            raise _report_capability_error("当前报告执行器未接入分级权限范围")
+        return await self._execute_sql(sql, reference=reference)
+
 
     async def run(
         self,
@@ -771,7 +816,7 @@ class ReportOrchestrator:
             values = [float(s.get("avg_score_rate") or 0) for s in tier.get("by_ability_level") or []]
             data["ABILITY_TIER_CHART"] = build_chart_option(
                 "ability_radar",
-                {"levels": [ABILITY_LABELS.get(str(l), str(l)) for l in levels], "values": values},
+                {"levels": [ABILITY_LABELS.get(str(level), str(level)) for level in levels], "values": values},
                 title="能力层级得分率",
             )
         qtype_table = build_question_type_table_html(item_rows)
@@ -1010,6 +1055,9 @@ class ReportOrchestrator:
         from src.agent.education.line_reach_report import sql_result_to_dicts
         from src.agent.education.score_library import SCORE_SUBJECTS
 
+        if not self._scope_allows_city_position():
+            # 全市班级名次不在 capability 目录内：只有市级授权可以看。
+            return ""
         school_name = str(spec.filters.get("school_name") or "").strip()
         subject = str(spec.filters.get("subject") or "").strip()
         exam_names = _split_exam_filter(str(spec.filters.get("exam_name") or ""))
@@ -1048,7 +1096,7 @@ class ReportOrchestrator:
             ") pool\n"
             "LIMIT 2000"
         )
-        pool_rows = sql_result_to_dicts(await self._execute_sql(sql))
+        pool_rows = sql_result_to_dicts(await self._execute_reference(sql, "city"))
         if not pool_rows:
             return ""
 
@@ -1084,6 +1132,11 @@ class ReportOrchestrator:
         )
         if snippet:
             data["SUMMARY"] = f"{data.get('SUMMARY') or ''}{snippet}"
+        elif self._report_scope is not None and not self._scope_allows_city_position():
+            data["SUMMARY"] = (
+                f"{data.get('SUMMARY') or ''}"
+                f"{self._scope_note('当前账号未开通全市班级对照授权，已隐藏全市/同层次排名。')}"
+            )
 
     async def _fill_class_overview_external_rank(
         self,
@@ -1103,6 +1156,11 @@ class ReportOrchestrator:
         )
         if snippet:
             data["RANK_INFO"] = f"{data.get('RANK_INFO') or ''}{snippet}"
+        elif self._report_scope is not None and not self._scope_allows_city_position():
+            data["RANK_INFO"] = (
+                f"{data.get('RANK_INFO') or ''}"
+                f"{self._scope_note('当前账号未开通全市班级对照授权，已隐藏全市/同层次排名。')}"
+            )
 
     @staticmethod
     def _grade_ranking_table_html(ranked: list[dict[str, Any]]) -> str:
@@ -1146,6 +1204,20 @@ class ReportOrchestrator:
             or str(spec.filters.get("school_name") or "").strip()
             or "全市"
         )
+        if self._report_scope is not None:
+            if (
+                self._report_scope.needs_grade_reference
+                and not self._scope_allows_grade_reference()
+            ):
+                raise _report_capability_error(
+                    "当前账号未开通年级均分基准能力，无法生成达线报告"
+                )
+            if not (
+                str(spec.filters.get("scope") or "").strip()
+                or str(spec.filters.get("district") or "").strip()
+                or str(spec.filters.get("school_name") or "").strip()
+            ):
+                scope_label = self._report_scope.scope_label()
         batches: list[dict[str, Any]] = []
         try:
             batches = sql_result_to_dicts(await self._execute_sql(exam_batch_select_sql()))
@@ -1171,6 +1243,9 @@ class ReportOrchestrator:
                 )
             except Exception:
                 logger.exception("达线报告：读取上场 tb_score_indicator 失败")
+        if self._report_scope is not None:
+            curr_rows = self._report_scope.filter_indicator_rows(curr_rows)
+            prev_rows = self._report_scope.filter_indicator_rows(prev_rows)
         data = build_line_reach_report_data(
             curr_rows,
             prev_rows,
@@ -1484,8 +1559,8 @@ class ReportOrchestrator:
             )
         # 老师的行级权限在 SQL 层把成绩限制在所带班级，算不出全校年级对照——
         # 传开关让年级对照列显示「—」，不用所带班级冒充全校。
-        grade_rates_hidden = False
-        if self._user_id:
+        grade_rates_hidden = self._scope_role() == "teacher"
+        if not grade_rates_hidden and self._user_id and self._report_scope is None:
             from src.datasource.service.edu_permission import edu_scope_dict_for_user_id
 
             grade_rates_hidden = (
@@ -1513,6 +1588,8 @@ class ReportOrchestrator:
 
     async def _gather_elite_rank_shift(self, spec: ReportSpec) -> dict[str, Any]:
         """尖子生排名变化：一届学生多场考试的全市排名追踪。对比场默认上一场。"""
+        if self._report_scope is not None and not self._scope_allows_city_position():
+            raise _report_capability_error("尖子生排名变化报告需要市级数据授权")
         from src.agent.education.class_line_reach import pick_compare_exam_or_none
         from src.agent.education.elite_rank_shift import (
             build_elite_rank_shift_report,
@@ -1538,8 +1615,8 @@ class ReportOrchestrator:
         compare_query = str(spec.filters.get("compare_exam") or "").strip()
         top_n = parse_top_n(spec.filters.get("top_n"))
 
-        role = ""
-        if self._user_id:
+        role = self._scope_role()
+        if not role and self._user_id and self._report_scope is None:
             from src.datasource.service.edu_permission import edu_scope_dict_for_user_id
 
             role = str(edu_scope_dict_for_user_id(self._user_id).get("edu_role") or "")
@@ -1569,7 +1646,7 @@ class ReportOrchestrator:
         rows_by_exam: dict[str, list[dict[str, Any]]] = {}
         for exam in fetch_exams:
             rows_by_exam[exam] = sql_result_to_dicts(
-                await self._execute_sql(ranked_pool_sql(exam, names))
+                await self._execute_reference(ranked_pool_sql(exam, names), "city")
             )
         if not any(rows_by_exam.values()):
             raise ValueError(f"「{exam_name}」没有在籍生排名数据，请核对考试名称。")
@@ -1696,6 +1773,8 @@ class ReportOrchestrator:
 
     async def _gather_bureau_analysis(self, spec: ReportSpec) -> dict[str, Any]:
         """局端基础分析：读 tb_score_overview 学生行重算，禁止用预聚合 Excel。"""
+        if self._report_scope is not None and not self._report_scope.citywide:
+            raise _report_capability_error("局端分析报告需要市级数据授权")
         from src.agent.education.bureau_analysis import (
             BUREAU_KINDS,
             build_bureau_report_data,
@@ -1825,7 +1904,12 @@ class ReportOrchestrator:
                 logger.exception("结构化诊断：读取上场 tb_score_indicator 失败")
 
         school_name = str(spec.filters.get("school_name") or "").strip()
-        scope = school_name or "全市"
+        if self._report_scope is not None:
+            curr = self._report_scope.filter_indicator_rows(curr)
+            prev_rows = self._report_scope.filter_indicator_rows(prev_rows)
+        scope = school_name or (
+            self._report_scope.scope_label() if self._report_scope is not None else "全市"
+        )
         if school_name:
             codes: set[str] = set()
             try:
@@ -2016,6 +2100,9 @@ class ReportOrchestrator:
 
         if not exam_name or not student:
             return
+        if not self._scope_allows_city_position():
+            # 学生个人全市/同层次名次需要市级授权，capability 不覆盖个人位次。
+            return
         anon_stu_id = ""
         for r in rows or []:
             cand_id = str(r.get("student_id") or "").strip()
@@ -2063,7 +2150,7 @@ class ReportOrchestrator:
             "LIMIT 1"
         )
         try:
-            found = sql_result_to_dicts(await self._execute_sql(sql))
+            found = sql_result_to_dicts(await self._execute_reference(sql, "city"))
         except Exception as e:  # noqa: BLE001
             logger.warning("学生全市/同层次排名查询失败（已跳过）: %s", e)
             return
@@ -2286,6 +2373,15 @@ class ReportOrchestrator:
         school_name = str(spec.filters.get("school_name") or "").strip()
         if not class_name and not school_name:
             return
+        grade_reference = bool(
+            self._report_scope is not None
+            and self._report_scope.needs_grade_reference
+        )
+        if grade_reference and not self._scope_allows_grade_reference():
+            data["RANK_INFO"] = self._scope_note(
+                "当前账号未开通年级均分基准能力，已隐藏同校班级排名。"
+            )
+            return
 
         # 去掉本班过滤，拉同校对照
         peer_filters = dict(spec.filters)
@@ -2297,7 +2393,9 @@ class ReportOrchestrator:
             include_charts=False,
         )
         try:
-            peer_raw = await self._fetch_score_rows(peer_spec, mapping)
+            peer_raw = await self._fetch_score_rows(
+                peer_spec, mapping, reference="grade" if grade_reference else None
+            )
         except Exception:
             peer_raw = []
         peer_rows = prepare_score_rows_for_kpi(
@@ -2419,11 +2517,13 @@ class ReportOrchestrator:
         self,
         spec: ReportSpec,
         mapping: ScoreSchemaMapping,
+        *,
+        reference: str | None = None,
     ) -> list[dict[str, Any]]:
         sql = self._build_sql(spec, mapping)
         if not sql:
             return []
-        result = await self._execute_sql(sql)
+        result = await self._execute_reference(sql, reference) if reference else await self._execute_sql(sql)
         cols = result.get("columns") or []
         raw_rows = result.get("rows") or []
         return [dict(zip(cols, row)) for row in raw_rows]

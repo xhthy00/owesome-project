@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "dfef4a46-cef6-421f-a746-e03e4999eaab",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/Users/tanghaoyu/develop/git-repo/owner/awesome-project/.archify/architecture-awesome-db-20261112-174500/candidate.json",
+  "output": "/Users/tanghaoyu/develop/git-repo/owner/awesome-project/.archify/architecture-awesome-db-20261112-174500/awesome-db-architecture.html",
+  "specification": {
+    "sha256": "ee7c21f318f8b37be49cffe633296a45c17c5b605c80353c47cd9705462ff621",
+    "bytes": 9020
+  },
+  "artifact": {
+    "sha256": "1046c15256f5b465a5413d0d21dfa4cc4421ee5e64a6bf25c134df45d7db1e8d",
+    "bytes": 850729
+  }
+}

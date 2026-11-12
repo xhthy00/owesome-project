@@ -1,7 +1,7 @@
 import { CopyOutlined, DownOutlined, FullscreenOutlined, UpOutlined } from "@ant-design/icons";
 import { Modal, message } from "antd";
 import { useMemo, useState } from "react";
-import { labelColumn } from "@/utils/columnLabels";
+import { labelColumns } from "@/utils/columnLabels";
 import { formatNumericDisplay } from "@/utils/formatNumericDisplay";
 import { profileColumns, type ColumnProfile } from "@/components/charts/chartSpec";
 
@@ -84,9 +84,11 @@ export default function SmartTable({
     });
   };
 
+  const headers = labelColumns(columns);
+
   const copyTable = async () => {
     const lines = [
-      columns.map((column) => labelColumn(column)).join("\t"),
+      headers.join("\t"),
       ...rows.map((row) => row.map((value) => String(value ?? "")).join("\t"))
     ];
     try {
@@ -112,7 +114,7 @@ export default function SmartTable({
                   aria-sort={active ? (sort?.order === "asc" ? "ascending" : "descending") : "none"}
                 >
                   <button type="button" onClick={() => toggleSort(index)} title="点击排序">
-                    <span>{labelColumn(column)}</span>
+                    <span>{headers[index]}</span>
                     {active ? (
                       sort?.order === "asc" ? <UpOutlined /> : <DownOutlined />
                     ) : null}

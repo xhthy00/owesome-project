@@ -1,4 +1,4 @@
-/** 查询结果列名 → 中文表头。未收录的英文名原样展示。 */
+/** 查询结果列名 → 中文表头。译不出来时保留原始列名,绝不退化成同一个占位词。 */
 
 const COLUMN_LABELS: Record<string, string> = {
   exam_name: "考试",
@@ -198,7 +198,7 @@ const PHRASE_LABELS: Record<string, string> = {
 
 /**
  * 单词词素表。模型生成的别名不固定，不能只靠 COLUMN_LABELS 白名单；
- * 这里覆盖教育问数常见词素，组合出中文标签，未知词素直接丢弃并回退「字段」。
+ * 这里覆盖教育问数常见词素，组合出中文标签，未知词素丢弃后回退原始列名。
  */
 const TOKEN_LABELS: Record<string, string> = {
   own: "本",
@@ -325,7 +325,8 @@ function translateByTokens(key: string): string {
     }
     if (!matched) index += 1;
   }
-  return output;
+  // mean→均分 再拼 score→分 会出现「均分分」,压掉重复字尾
+  return output.replace(/分分$/, "分");
 }
 
 function composeSemanticName(key: string): string | null {
@@ -373,8 +374,25 @@ export function labelColumn(name: string): string {
     if (subject && SUBJECT_CODES.includes(code)) return `${subject}${prefix}`;
   }
 
-  // 兜底不再返回原始英文：已知词素组合出中文，未知词素丢弃。
+  // 兜底:已知词素组合出中文,译不出来就保留原始列名。
+  // 早先这里返回常量「字段」,导致 c1/c2/c3 这类占位别名全部渲染成同一个词,
+  // 列与列彻底无法区分(图表标题因此出现「字段、字段、字段」)。
   const translated = translateByTokens(key);
   if (translated) return translated;
-  return /[a-z]/i.test(key) ? "字段" : raw;
+  return raw;
+}
+
+/**
+ * 批量翻译列名,并消歧:翻译结果重名时补上原始列名,保证表头两两不同。
+ * 单个列名请用 labelColumn。
+ */
+export function labelColumns(names: string[]): string[] {
+  const labels = names.map((name) => labelColumn(name));
+  const counts = new Map<string, number>();
+  labels.forEach((label) => counts.set(label, (counts.get(label) ?? 0) + 1));
+  return labels.map((label, index) => {
+    if ((counts.get(label) ?? 0) <= 1) return label;
+    const raw = (names[index] || "").trim();
+    return raw && raw !== label ? `${label}(${raw})` : `${label}#${index + 1}`;
+  });
 }

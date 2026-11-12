@@ -30,6 +30,15 @@ export interface CurrentUser {
     school_name?: string | null;
     class_names?: string[] | null;
     student_id?: string | null;
+    /** v2 分级权限摘要 */
+    datasource_id?: number | null;
+    levels?: string[] | null;
+    capabilities?: string[] | null;
+    schools?: string[] | null;
+    districts?: string[] | null;
+    cohorts?: string[] | null;
+    citywide?: boolean | null;
+    scope_label?: string | null;
   };
 }
 

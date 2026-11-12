@@ -1,22 +1,50 @@
-:root {
-  --oc-bg: #f6f8fb;
-  --oc-card-bg: #ffffff;
-  --oc-text: #1f2329;
-  --oc-sub-text: #5f6773;
-  --oc-primary: #1677ff;
-  --oc-primary-hover: #4096ff;
-  --oc-primary-light: #e6f4ff;
-  --oc-gradient-1: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  --oc-gradient-2: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%);
-  --oc-gradient-blue: linear-gradient(135deg, #2563eb 0%, #0ea5e9 100%);
-}
+/*
+ * 兼容层:旧令牌名 --oc-* → tokens.css 语义令牌。
+ * 新代码请直接使用 --color-* / --radius-*,[data-legacy] 名称仅为不打断既有页面保留。
+ *
+ * 注意:别名必须同时声明在 .dark 上,自定义属性在声明元素处完成 var() 替换,
+ * 只在 :root 声明会让 body.dark 里的元素继承到浅色解析结果。
+ */
 
+:root,
+.light,
 .dark {
-  --oc-bg: #14181f;
-  --oc-card-bg: #1e242d;
-  --oc-text: #edf1f8;
-  --oc-sub-text: #9aa4b2;
-  --oc-primary: #3b82f6;
-  --oc-primary-hover: #60a5fa;
-  --oc-primary-light: #1e3a8a;
+  --oc-bg: var(--color-surface-0);
+  --oc-bg-base: var(--color-surface-0);
+  --oc-bg-elevated: var(--color-surface-1);
+  --oc-bg-soft: var(--color-surface-2);
+  --oc-card-bg: var(--color-surface-1);
+  --oc-surface-raised: var(--color-surface-1);
+  --oc-surface-hover: var(--color-surface-2);
+
+  --oc-text: var(--color-text-1);
+  --oc-text-base: var(--color-text-1);
+  --oc-text-strong: var(--color-text-1);
+  --oc-text-soft: var(--color-text-3);
+  --oc-text-weak: var(--color-text-3);
+  --oc-text-weaker: var(--color-text-4);
+  --oc-sub-text: var(--color-text-3);
+
+  --oc-border: var(--color-border-1);
+  --oc-border-base: var(--color-border-1);
+  --oc-border-weak: var(--color-border-1);
+  --oc-border-strong: var(--color-border-2);
+
+  --oc-primary: var(--color-brand-solid);
+  --oc-primary-hover: var(--color-brand-solid-hover);
+  --oc-primary-light: var(--color-brand-tint);
+  --oc-interactive-base: var(--color-brand-solid);
+  --oc-interactive-hover: var(--color-brand-solid-hover);
+
+  --oc-shadow: var(--shadow-2);
+
+  --font-family-sans: var(--font-sans);
+  --font-size-sm: var(--font-sm);
+  --font-size-base: var(--font-base);
+  --spacing-2: 0.5rem;
+  --spacing-3: 0.75rem;
+  --spacing-4: 1rem;
+  --transition-fast: var(--duration-fast) var(--ease-out);
+  --transition-normal: var(--duration-normal) var(--ease-out);
+  --transition-slow: 300ms var(--ease-out);
 }

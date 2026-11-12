@@ -10,11 +10,29 @@ import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import DatasourcePicker from "@/components/chat/DatasourcePicker";
 
+type Tone = "blue" | "green" | "violet" | "amber";
+
+/** 点缀色走 tokens.css 的 --accent-*,浅/深色模式各一套 */
+const TONE_CARD: Record<Tone, string> = {
+  blue: "!border-accent-blue-border !bg-accent-blue-tint hover:!border-accent-blue",
+  green: "!border-accent-green-border !bg-accent-green-tint hover:!border-accent-green",
+  violet: "!border-accent-violet-border !bg-accent-violet-tint hover:!border-accent-violet",
+  amber: "!border-accent-amber-border !bg-accent-amber-tint hover:!border-accent-amber",
+};
+
+const TONE_ICON: Record<Tone, string> = {
+  blue: "bg-surface-1 text-accent-blue",
+  green: "bg-surface-1 text-accent-green",
+  violet: "bg-surface-1 text-accent-violet",
+  amber: "bg-surface-1 text-accent-amber",
+};
+
 /** 提问示例：取自 docs/education_report_prompts.md 附录 D / 标准用户问法 */
 const EXAMPLE_PROMPTS = [
   {
     title: "班级总览报告",
     desc: "人数、均分、及格优秀率、分数段与班级能力画像",
+    tone: "blue" as Tone,
     prompt:
       "扬州中学高三(10)班连淮扬镇数学成绩总览，给我一份班级总览报告：人数均分及格优秀、分数段、能力画像和年级位置就行，别做各班对比，也别出临界生名单。",
     icon: <BarChartOutlined />,
@@ -22,6 +40,7 @@ const EXAMPLE_PROMPTS = [
   {
     title: "科目诊断报告",
     desc: "小题得分率与知识点掌握情况分析",
+    tone: "green" as Tone,
     prompt:
       "请生成【科目诊断报告】：扬州中学高三(10)班，「连淮扬镇」，数学。小题+知识点掌握情况。",
     icon: <RadarChartOutlined />,
@@ -29,6 +48,7 @@ const EXAMPLE_PROMPTS = [
   {
     title: "班级横向对比",
     desc: "全校各班均分、及格率等多维横向对比",
+    tone: "violet" as Tone,
     prompt:
       "扬州中学在连淮扬镇数学考试中各个班级的横向多维对比分析，出班级横向对比报告，不要做成单班总览。",
     icon: <FundViewOutlined />,
@@ -36,6 +56,7 @@ const EXAMPLE_PROMPTS = [
   {
     title: "临界生预警",
     desc: "临界生、大幅退步与偏科名单预警",
+    tone: "amber" as Tone,
     prompt: "扬州中学高三(10)班数学临界生预警报告",
     icon: <AlertOutlined />,
   },
@@ -68,27 +89,28 @@ export default function HomePage() {
   };
 
   return (
-    <div className="dbgpt-ui-font flex h-full flex-col bg-[#f7f7f9] dark:bg-[#0f1012]">
-      <div className="flex flex-1 flex-col items-center overflow-auto bg-white px-8 pb-6 pt-6 dark:bg-[#111217]">
+    <div className="flex h-full flex-col bg-surface-0">
+      <div className="flex flex-1 flex-col items-center overflow-auto bg-surface-1 px-6 pb-10 pt-10">
         <Typography.Title
           level={1}
-          className="dbgpt-title-font !mb-4 !flex !items-center !gap-3 !text-3xl md:!text-4xl !text-gray-900 dark:!text-gray-100"
+          className="dbgpt-title-font !mb-3 !flex !items-center !gap-3 !text-3xl md:!text-4xl !text-ink-1"
         >
-          <span className="relative inline-flex h-14 w-14 items-center justify-center overflow-hidden rounded-xl border border-gray-100 bg-white shadow-md dark:border-[#33353b] dark:bg-[#1a1b1e]">
-            <Image src="/logo-mark.svg" alt="logo" width={140} height={140} className="rounded-lg" />
+          <span className="relative inline-flex h-14 w-14 items-center justify-center overflow-hidden rounded-xl border border-line-1 bg-surface-1 shadow-1">
+            <Image src="/logo-mark.svg" alt="" width={140} height={140} className="rounded-lg" />
           </span>
           学情AI智能分析助手
         </Typography.Title>
-        <Typography.Text className="dbgpt-subtitle-font mb-10 !text-sm md:!text-base !font-light text-gray-400 dark:text-gray-500">
+        <Typography.Text className="dbgpt-subtitle-font mb-9 !text-sm !text-ink-3">
           Agentic Data Driven Decisions
         </Typography.Text>
 
-        <div className="w-full max-w-[860px] rounded-[28px] border border-gray-100 bg-white/95 px-7 pb-4 pt-5 shadow-[0_16px_48px_rgba(0,0,0,0.12),0_6px_20px_rgba(0,0,0,0.08)] backdrop-blur-md dark:border-[#33353b] dark:bg-[#1e1f24]/95 dark:shadow-[0_16px_48px_rgba(0,0,0,0.4)]">
+        <div className="w-full max-w-[860px] rounded-xl border border-line-1 bg-surface-1 px-6 pb-3 pt-4 shadow-3">
           <Input.TextArea
             autoSize={{ minRows: 3, maxRows: 4 }}
             variant="borderless"
             placeholder="向您关心的成绩提问，生成分析报告"
-            className="dbgpt-input-font !text-lg !leading-8"
+            aria-label="提问内容"
+            className="dbgpt-input-font !resize-none !text-lg !leading-8 !text-ink-1"
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             onPressEnter={(e) => {
@@ -97,50 +119,56 @@ export default function HomePage() {
               handleSend();
             }}
           />
-          <div className="mt-1 flex items-center justify-between text-[#8b97aa]">
-            <div className="flex items-center gap-3 text-xs">
+          <div className="mt-1 flex items-center justify-between">
+            <div className="flex items-center gap-3 text-xs text-ink-3">
               <DatasourcePicker value={selectedDatasourceId} onChange={setSelectedDatasourceId} />
             </div>
             <div className="flex items-center gap-3">
+              <span className="hidden text-xs text-ink-4 sm:inline">Enter 发送 · Shift+Enter 换行</span>
               <button
+                type="button"
                 onClick={() => handleSend()}
                 disabled={!canSend}
-                className="flex h-9 w-9 items-center justify-center rounded-full bg-gray-100 text-[#90a2be] transition-colors enabled:cursor-pointer enabled:hover:bg-blue-500 enabled:hover:text-white disabled:opacity-60 dark:bg-[#2a2b2f]"
+                aria-label="发送"
+                className="flex h-9 w-9 items-center justify-center rounded-lg bg-surface-2 text-ink-3 transition-colors enabled:cursor-pointer enabled:hover:bg-brand enabled:hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
               >
-                ↑
+                <span className="text-base leading-none">↑</span>
               </button>
             </div>
           </div>
         </div>
 
         <div className="mt-8 w-full max-w-[860px]">
-          <div className="mb-3 text-center text-xs font-medium text-[#98a4b8]">提问示例</div>
-          <div className="grid grid-cols-1 gap-[14px] sm:grid-cols-2">
-            {EXAMPLE_PROMPTS.map((card, idx) => (
+          <div className="mb-3 text-xs font-medium text-ink-3">提问示例</div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {EXAMPLE_PROMPTS.map((card) => (
               <Card
                 key={card.title}
                 hoverable
+                tabIndex={0}
+                role="button"
+                aria-label={`使用示例：${card.title}`}
                 onClick={() => {
                   setPrompt(card.prompt);
                 }}
-                className={`!cursor-pointer !rounded-[14px] !border transition-shadow hover:!shadow-md ${
-                  idx === 0
-                    ? "!border-blue-200/60 !bg-[#eaf3ff]"
-                    : idx === 1
-                      ? "!border-emerald-200/60 !bg-[#e9f8f2]"
-                      : idx === 2
-                        ? "!border-violet-200/60 !bg-[#f3edff]"
-                        : "!border-amber-200/60 !bg-[#fff3e8]"
-                }`}
-                styles={{ body: { padding: 13 } }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setPrompt(card.prompt);
+                  }
+                }}
+                className={`!cursor-pointer !rounded-lg !shadow-none transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand ${TONE_CARD[card.tone]}`}
+                styles={{ body: { padding: 14 } }}
               >
                 <div className="flex gap-3">
-                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white/70 text-[#4978c8]">
+                  <div
+                    className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md ${TONE_ICON[card.tone]}`}
+                  >
                     {card.icon}
                   </div>
                   <div className="min-w-0">
-                    <div className="mb-1 text-sm font-semibold text-[#2a3347]">{card.title}</div>
-                    <div className="text-xs leading-5 text-[#5f6c84]">{card.desc}</div>
+                    <div className="mb-1 text-sm font-semibold text-ink-1">{card.title}</div>
+                    <div className="text-xs leading-5 text-ink-2">{card.desc}</div>
                   </div>
                 </div>
               </Card>

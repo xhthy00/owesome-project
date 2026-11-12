@@ -32,8 +32,16 @@ export const ChatContext = createContext<ChatContextType>({
   setCurrentDialogInfo: () => {}
 });
 
+const THEME_STORAGE_KEY = "frontend_react_mode";
+
+/** 首帧就取到上次选择的主题,避免"先亮后暗"以及回写把 dark 覆盖成 light */
+function initialMode(): ThemeMode {
+  if (typeof window === "undefined") return "light";
+  return window.localStorage.getItem(THEME_STORAGE_KEY) === "dark" ? "dark" : "light";
+}
+
 export function ChatContextProvider({ children }: { children: React.ReactNode }) {
-  const [mode, setMode] = useState<ThemeMode>("light");
+  const [mode, setMode] = useState<ThemeMode>(initialMode);
   const [isMenuExpand, setIsMenuExpand] = useState(true);
   const [isContract, setIsContract] = useState(false);
   const [currentDialogInfo, setCurrentDialogInfo] = useState<DialogInfo>({

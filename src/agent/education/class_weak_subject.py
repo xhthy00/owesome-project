@@ -480,7 +480,7 @@ def render_class_weak_subject_html(report: dict[str, Any]) -> str:
                 item_html += "<p>小题相对本校其他班无明显落后。</p>"
     css = (
         ".cws-report{font-family:sans-serif;max-width:960px;margin:0 auto;line-height:1.6;"
-        "--edu-primary:#1677ff;--edu-primary-bg:#e6f4ff;--edu-border:#e8edf3;"
+        "--edu-primary:#2563eb;--edu-primary-bg:#dbeafe;--edu-border:#e8edf3;"
         "--edu-text-lv1:rgba(0,0,0,.88);--edu-text-lv2:rgba(0,0,0,.65)}"
         ".cws-card{border:1px solid var(--edu-border);border-radius:12px;padding:16px;margin:12px 0;background:#fff}"
         ".cws-card h1{margin:0 0 8px;font-size:20px;color:var(--edu-text-lv1)}"

@@ -87,7 +87,7 @@ function StemField({
         value={value}
         autoFocus={editing}
         autoSize={{ minRows: 2 }}
-        className="!max-h-none !w-full !overflow-hidden !rounded-lg !border-[#e4eef8] !bg-[#f8fbff] !px-3 !py-2 !text-[13px] !leading-6"
+        className="!max-h-none !w-full !overflow-hidden !rounded-lg !border-line-1 !bg-surface-0 !px-3 !py-2 !text-[13px] !leading-6"
         placeholder="题干"
         onBlur={() => setEditing(false)}
         onChange={(event) => onChange(event.target.value)}
@@ -99,7 +99,7 @@ function StemField({
       role="button"
       tabIndex={0}
       title="点击编辑题干"
-      className="w-full cursor-text rounded-lg border border-[#e4eef8] bg-[#f8fbff] px-3 py-2 text-left"
+      className="w-full cursor-text rounded-lg border border-line-1 bg-surface-0 px-3 py-2 text-left"
       onClick={() => {
         if (!readOnly) setEditing(true);
       }}
@@ -123,7 +123,7 @@ function StemField({
                 {block.rows.map((row, rowIndex) => (
                   <tr key={rowIndex}>
                     {row.map((cell, cellIndex) => (
-                      <td key={cellIndex} className="border border-[#cbd5e1] px-1.5 py-1 whitespace-nowrap">
+                      <td key={cellIndex} className="border border-line-2 px-1.5 py-1 whitespace-nowrap">
                         {cell || "\u00a0"}
                       </td>
                     ))}
@@ -194,12 +194,12 @@ function KnowledgePath({ levels }: { levels: string[] }) {
   return (
     <span className="min-w-0 flex-1 whitespace-normal break-words text-[13px] leading-6">
       {trail.map((part, index) => (
-        <span key={`${part}-${index}`} className="text-[#64748b]">
+        <span key={`${part}-${index}`} className="text-ink-3">
           {part}
-          <span className="px-1 text-[#cbd5e1]">-</span>
+          <span className="px-1 text-ink-4">-</span>
         </span>
       ))}
-      <span className="font-medium text-[#1e293b] dark:text-[#e2e8f0]">{name}</span>
+      <span className="font-medium text-ink-1">{name}</span>
     </span>
   );
 }
@@ -266,7 +266,7 @@ function KnowledgeLinksCell({
         onChange={changeIds}
       />
       {links.length > 1 ? (
-        <div className="mt-3 space-y-2 border-t border-[#eef2f6] pt-3">
+        <div className="mt-3 space-y-2 border-t border-line-1 pt-3">
           {links.map((link) => (
             <div key={link.knowledge_id} className="flex items-start gap-2">
               <KnowledgePath levels={levelsOf(link.knowledge_id)} />
@@ -317,18 +317,18 @@ function KnowledgeLinksCell({
               const name = levels[levels.length - 1] || "";
               const trail = levels.slice(0, -1);
               return (
-                <span key={link.knowledge_id} className="block rounded-lg bg-[#f3f8ff] px-2.5 py-1.5 dark:bg-[#1e3a5f]">
+                <span key={link.knowledge_id} className="block rounded-lg bg-brand-tint px-2.5 py-1.5">
                   {trail.length ? (
-                    <span className="block whitespace-normal break-words text-[11px] leading-4 text-[#7b8da6]">
+                    <span className="block whitespace-normal break-words text-[11px] leading-4 text-ink-3">
                       {trail.join(" - ")}
                     </span>
                   ) : null}
                   <span className="mt-0.5 flex items-start gap-2">
-                    <span className="min-w-0 flex-1 whitespace-normal break-words text-[13px] font-medium leading-5 text-[#16324f] dark:text-[#e2e8f0]">
+                    <span className="min-w-0 flex-1 whitespace-normal break-words text-[13px] font-medium leading-5 text-ink-1">
                       {name}
                     </span>
                     {links.length > 1 ? (
-                      <span className="shrink-0 rounded-full bg-white px-1.5 text-[11px] leading-5 tabular-nums text-[#0C75FC] ring-1 ring-[#d6e8ff] dark:bg-[#141923]">
+                      <span className="shrink-0 rounded-full bg-surface-1 px-1.5 text-[11px] leading-5 tabular-nums text-brand-ink ring-1 ring-brand-border">
                         {formatWeight(link.weight)}
                       </span>
                     ) : null}
@@ -338,7 +338,7 @@ function KnowledgeLinksCell({
             })}
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1 rounded-lg border border-dashed border-[#c5ddfb] bg-[#f4f8ff] px-2.5 py-1.5 text-[13px] text-[#0C75FC]">
+          <span className="inline-flex items-center gap-1 rounded-lg border border-dashed border-brand-border bg-brand-tint px-2.5 py-1.5 text-[13px] text-brand-ink">
             <PlusOutlined className="text-[11px]" />
             关联知识点
           </span>
@@ -596,7 +596,7 @@ export default function ExamQuestionPage() {
       width: questionNoWidth,
       render: (_, row) => (
         <Input
-          className="w-full !rounded-lg !border-[#e4eef8] !bg-[#eef5ff] !text-center !font-medium !text-[#0C75FC]"
+          className="w-full !rounded-lg !border-line-1 !bg-brand-tint !text-center !font-medium !text-brand-ink"
           value={row.question_no}
           disabled={!writable}
           onChange={(event) => updateRow(row.key, { question_no: event.target.value })}
@@ -608,7 +608,7 @@ export default function ExamQuestionPage() {
       width: 100,
       render: (_, row) => (
         <Select
-          className="w-full [&_.ant-select-selector]:!rounded-lg [&_.ant-select-selector]:!border-[#e4eef8]"
+          className="w-full [&_.ant-select-selector]:!rounded-lg [&_.ant-select-selector]:!border-line-1"
           allowClear
           disabled={!writable}
           value={row.question_type || undefined}
@@ -622,7 +622,7 @@ export default function ExamQuestionPage() {
       width: 72,
       render: (_, row) => (
         <InputNumber
-          className="w-full !rounded-lg !border-[#e4eef8]"
+          className="w-full !rounded-lg !border-line-1"
           min={0}
           step={0.5}
           disabled={!writable}
@@ -661,7 +661,7 @@ export default function ExamQuestionPage() {
           <span
             draggable
             aria-label="拖动调整顺序"
-            className="inline-flex cursor-grab items-center px-1 text-[#94a3b8] active:cursor-grabbing"
+            className="inline-flex cursor-grab items-center px-1 text-ink-4 active:cursor-grabbing"
             onDragStart={(event) => {
               dragFrom.current = index;
               event.dataTransfer.effectAllowed = "move";
@@ -839,15 +839,15 @@ export default function ExamQuestionPage() {
   const hasScores = Boolean(detail && (detail.exam.score_count || detail.exam.detail_count));
 
   return (
-    <div className="dbgpt-ui-font flex h-full min-h-0 flex-col overflow-hidden bg-[#f5f7fb] p-6 dark:bg-transparent">
-      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white shadow-sm dark:border-[#334155] dark:bg-[#141923]">
-        <div className="shrink-0 border-b border-[#eef2f6] bg-[linear-gradient(180deg,#f3f8ff_0%,#ffffff_78%)] px-5 py-4 dark:border-[#334155] dark:bg-none">
+    <div className="dbgpt-ui-font flex h-full min-h-0 flex-col overflow-hidden bg-surface-0 p-6 dark:bg-transparent">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-line-1 bg-surface-1 shadow-sm">
+        <div className="shrink-0 border-b border-line-1 bg-brand-tint px-5 py-4 dark:bg-none">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div className="flex min-w-0 items-start gap-3">
-              <Link href="/construct/education/exam-library" aria-label="返回试卷库" className="mt-2.5 text-[#0C75FC]">
+              <Link href="/construct/education/exam-library" aria-label="返回试卷库" className="mt-2.5 text-brand-ink">
                 <ArrowLeftOutlined />
               </Link>
-              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#e8f3ff] text-[18px] text-[#0C75FC]">
+              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-tint text-[18px] text-brand-ink">
                 <FileTextOutlined />
               </span>
               <div className="min-w-0">
@@ -858,19 +858,19 @@ export default function ExamQuestionPage() {
                   {detail?.exam.exam_batch_name || "题目、分值与知识点"}
                 </Typography.Text>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-2.5 py-1 text-xs ring-1 ring-[#e5e7eb] dark:bg-[#141923] dark:ring-[#334155]">
-                    <span className="text-[#64748b]">题目</span>
-                    <span className="font-medium tabular-nums text-[#1e293b] dark:text-[#e2e8f0]">{rows.length}</span>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-1 px-2.5 py-1 text-xs ring-1 ring-line-1">
+                    <span className="text-ink-3">题目</span>
+                    <span className="font-medium tabular-nums text-ink-1">{rows.length}</span>
                   </span>
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-2.5 py-1 text-xs ring-1 ring-[#e5e7eb] dark:bg-[#141923] dark:ring-[#334155]">
-                    <span className="text-[#64748b]">已关联</span>
-                    <span className={`font-medium tabular-nums ${rows.length && linkedCount === rows.length ? "text-[#15803d]" : "text-[#0C75FC]"}`}>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-1 px-2.5 py-1 text-xs ring-1 ring-line-1">
+                    <span className="text-ink-3">已关联</span>
+                    <span className={`font-medium tabular-nums ${rows.length && linkedCount === rows.length ? "text-success" : "text-brand-ink"}`}>
                       {linkedCount}/{rows.length}
                     </span>
                   </span>
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-white/80 px-2.5 py-1 text-xs ring-1 ring-[#e5e7eb] dark:bg-[#141923] dark:ring-[#334155]">
-                    <span className="text-[#64748b]">小题分</span>
-                    <span className={`font-medium tabular-nums ${scoreMismatch ? "text-[#c2410c]" : "text-[#1e293b] dark:text-[#e2e8f0]"}`}>
+                  <span className="inline-flex items-center gap-1.5 rounded-full bg-surface-1 px-2.5 py-1 text-xs ring-1 ring-line-1">
+                    <span className="text-ink-3">小题分</span>
+                    <span className={`font-medium tabular-nums ${scoreMismatch ? "text-warning" : "text-ink-1"}`}>
                       {examScore ? `${scoreSum}/${examScore}` : scoreSum}
                     </span>
                   </span>
@@ -902,7 +902,7 @@ export default function ExamQuestionPage() {
             </Space>
           </div>
           {hasScores || scoreMismatch ? (
-            <div className="mt-3 rounded-lg bg-[#fff7ed] px-3 py-2 text-xs leading-5 text-[#9a3412]">
+            <div className="mt-3 rounded-lg bg-warning-tint px-3 py-2 text-xs leading-5 text-warning">
               {hasScores ? (
                 <div>
                   该试卷已有 {detail?.exam.score_count || 0} 条成绩、{detail?.exam.detail_count || 0} 条小题分。修改题目不会自动改成绩，已有成绩的试卷不能删除。
@@ -921,7 +921,7 @@ export default function ExamQuestionPage() {
             dataSource={rows}
             pagination={false}
             tableLayout="fixed"
-            className="[&_.ant-table]:!w-full [&_.ant-table-container]:!overflow-visible [&_.ant-table-content]:!overflow-visible [&_.ant-table-tbody>tr:hover>td]:!bg-[#f9fbfe] [&_.ant-table-tbody>tr>td]:!border-[#eef3f8] [&_.ant-table-tbody>tr>td]:!py-3.5 [&_.ant-table-thead>tr>th]:!sticky [&_.ant-table-thead>tr>th]:!top-0 [&_.ant-table-thead>tr>th]:!z-10 [&_.ant-table-thead>tr>th]:!border-b-[#d6e6f8] [&_.ant-table-thead>tr>th]:!bg-[#f7f9fc] [&_.ant-table-thead>tr>th]:!font-medium [&_.ant-table-thead>tr>th]:!py-3 [&_.ant-table-thead>tr>th]:!text-[#475569] [&_td]:!align-middle [&_td]:whitespace-normal dark:[&_.ant-table-thead>tr>th]:!bg-[#1c2430]"
+            className="[&_.ant-table]:!w-full [&_.ant-table-container]:!overflow-visible [&_.ant-table-content]:!overflow-visible [&_.ant-table-tbody>tr:hover>td]:!bg-surface-0 [&_.ant-table-tbody>tr>td]:!border-line-1 [&_.ant-table-tbody>tr>td]:!py-3.5 [&_.ant-table-thead>tr>th]:!sticky [&_.ant-table-thead>tr>th]:!top-0 [&_.ant-table-thead>tr>th]:!z-10 [&_.ant-table-thead>tr>th]:!border-b-brand-border [&_.ant-table-thead>tr>th]:!bg-surface-0 [&_.ant-table-thead>tr>th]:!font-medium [&_.ant-table-thead>tr>th]:!py-3 [&_.ant-table-thead>tr>th]:!text-ink-2 [&_td]:!align-middle [&_td]:whitespace-normal dark:[&_.ant-table-thead>tr>th]:!bg-surface-2"
             onRow={(_row, index) => ({
               onDragOver: (event) => {
                 if (writable) event.preventDefault();
@@ -954,7 +954,7 @@ export default function ExamQuestionPage() {
         footer={
           <div className="flex items-center justify-end gap-2">
             {totalSuggestions ? (
-              <span className="mr-auto text-xs text-[#64748b]">共 {totalSuggestions} 条建议</span>
+              <span className="mr-auto text-xs text-ink-3">共 {totalSuggestions} 条建议</span>
             ) : null}
             <Button disabled={adopting} onClick={() => setDrawerOpen(false)}>关闭</Button>
             {writable ? (
@@ -969,7 +969,7 @@ export default function ExamQuestionPage() {
           <Progress percent={task.total ? Math.round((task.done / task.total) * 100) : 0} />
         ) : null}
         {task ? (
-          <div className="mb-4 rounded-lg bg-[#eff6ff] px-3 py-2.5 dark:bg-[#1e3a5f]">
+          <div className="mb-4 rounded-lg bg-brand-tint px-3 py-2.5">
             <Tag color={task.status === "done" ? "green" : task.status === "failed" ? "red" : "orange"}>
               {task.status === "done" ? "已完成" : task.status === "failed" ? "失败" : task.status === "running" ? "进行中" : task.status}
             </Tag>
@@ -978,13 +978,13 @@ export default function ExamQuestionPage() {
         ) : null}
         {task?.error ? <Alert className="mb-3" type="error" showIcon message={task.error} /> : null}
         {reportItems.length ? (
-          <div className="sticky top-0 z-10 mb-4 flex items-center justify-between gap-3 rounded-lg border border-[#e5e7eb] bg-white px-3 py-2.5 dark:border-[#334155] dark:bg-[#141923]">
+          <div className="sticky top-0 z-10 mb-4 flex items-center justify-between gap-3 rounded-lg border border-line-1 bg-surface-1 px-3 py-2.5">
             <div className="flex min-w-0 items-center gap-2">
               <span className="text-[13px] font-semibold">批量操作</span>
               {selectedCount ? (
-                <span className="rounded-full bg-[#eff6ff] px-2 text-xs leading-[18px] text-[#0C75FC]">已选 {selectedCount}</span>
+                <span className="rounded-full bg-brand-tint px-2 text-xs leading-[18px] text-brand-ink">已选 {selectedCount}</span>
               ) : (
-                <span className="text-xs text-[#64748b]">{totalSuggestions} 条建议</span>
+                <span className="text-xs text-ink-3">{totalSuggestions} 条建议</span>
               )}
             </div>
             <Space size={8}>
@@ -998,14 +998,14 @@ export default function ExamQuestionPage() {
           {reportItems.map((item) => {
             const pick = selected[item.id] || { add: [], remove: [], weights: {} };
             return (
-              <div key={item.id} className="rounded-lg border border-[#e5e7eb] p-3.5 dark:border-[#334155]">
+              <div key={item.id} className="rounded-lg border border-line-1 p-3.5">
                 <div className="mb-2 flex items-center gap-2">
                   <span className="text-sm font-semibold">{item.question_no || "-"} 题</span>
                   {item.verdict === "failed" ? <Tag color="red">失败</Tag> : null}
-                  {item.adopted ? <span className="ml-auto text-xs text-[#16a34a]">已采纳</span> : null}
+                  {item.adopted ? <span className="ml-auto text-xs text-success">已采纳</span> : null}
                 </div>
-                <p className="mb-3 text-[13px] leading-6 text-[#64748b]">{contentPreview(item.content)}</p>
-                <div className="text-xs font-semibold text-[#64748b]">当前关联</div>
+                <p className="mb-3 text-[13px] leading-6 text-ink-3">{contentPreview(item.content)}</p>
+                <div className="text-xs font-semibold text-ink-3">当前关联</div>
                 {item.current_links.length ? (
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     {item.current_links.map((link) => {
@@ -1014,7 +1014,7 @@ export default function ExamQuestionPage() {
                       return (
                         <Tag
                           key={link.knowledge_id}
-                          className={removing ? "!cursor-pointer !text-[#94a3b8] line-through" : "!cursor-pointer"}
+                          className={removing ? "!cursor-pointer !text-ink-4 line-through" : "!cursor-pointer"}
                           onClick={() => {
                             if (!replaced) toggleRemove(item.id, link.knowledge_id);
                           }}
@@ -1026,29 +1026,29 @@ export default function ExamQuestionPage() {
                     })}
                   </div>
                 ) : (
-                  <div className="mt-1 text-[13px] text-[#64748b]">无</div>
+                  <div className="mt-1 text-[13px] text-ink-3">无</div>
                 )}
                 {item.add_suggestions.length > 0 && item.current_links.length + item.add_suggestions.length > 3 ? (
-                  <div className="mt-1 text-xs leading-5 text-[#64748b]">
+                  <div className="mt-1 text-xs leading-5 text-ink-3">
                     当前已有 {item.current_links.length} 个关联。勾选满 3 条建议再采纳，会用这些建议替换当前关联；只采纳其中一部分时，请先点掉不需要保留的当前关联。
                   </div>
                 ) : null}
                 {item.remove_suggestions.length ? (
                   <div className="mt-3">
-                    <div className="mb-1.5 text-xs font-semibold text-[#dc2626]">建议移除</div>
+                    <div className="mb-1.5 text-xs font-semibold text-danger">建议移除</div>
                     <div className="space-y-1.5">
                       {item.remove_suggestions.map((suggestion) => {
                         const checked = pick.remove.includes(suggestion.knowledge_id);
                         return (
                           <div
                             key={suggestion.knowledge_id}
-                            className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-2 ${checked ? "border-[#0C75FC] bg-[#eff6ff] dark:bg-[#1e3a5f]" : "border-[#e5e7eb] dark:border-[#334155]"}`}
+                            className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-2 ${checked ? "border-brand bg-brand-tint" : "border-line-1"}`}
                             onClick={() => toggleRemove(item.id, suggestion.knowledge_id)}
                           >
-                            <DeleteOutlined className="mt-0.5 text-[#64748b]" />
+                            <DeleteOutlined className="mt-0.5 text-ink-3" />
                             <div className="min-w-0 flex-1">
                               <div className="text-[13px] font-medium">{suggestion.knowledge_name}</div>
-                              {suggestion.reason ? <div className="mt-0.5 text-xs leading-5 text-[#64748b]">{suggestion.reason}</div> : null}
+                              {suggestion.reason ? <div className="mt-0.5 text-xs leading-5 text-ink-3">{suggestion.reason}</div> : null}
                             </div>
                             <Checkbox
                               checked={checked}
@@ -1064,23 +1064,23 @@ export default function ExamQuestionPage() {
                 ) : null}
                 {item.add_suggestions.length ? (
                   <div className="mt-3">
-                    <div className="mb-1.5 text-xs font-semibold text-[#16a34a]">建议关联</div>
+                    <div className="mb-1.5 text-xs font-semibold text-success">建议关联</div>
                     <div className="space-y-1.5">
                       {item.add_suggestions.map((suggestion) => {
                         const checked = pick.add.includes(suggestion.knowledge_id);
                         return (
                           <div
                             key={suggestion.knowledge_id}
-                            className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-2 ${checked ? "border-[#0C75FC] bg-[#eff6ff] dark:bg-[#1e3a5f]" : "border-[#e5e7eb] dark:border-[#334155]"}`}
+                            className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2.5 py-2 ${checked ? "border-brand bg-brand-tint" : "border-line-1"}`}
                             onClick={() => toggleAdd(item.id, suggestion.knowledge_id, item.add_suggestions)}
                           >
-                            <PlusOutlined className="mt-0.5 text-[#64748b]" />
+                            <PlusOutlined className="mt-0.5 text-ink-3" />
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap items-center gap-2">
                                 <span className="text-[13px] font-medium">{suggestion.knowledge_name}</span>
                                 {checked ? (
                                   <span
-                                    className="inline-flex items-center gap-1 text-xs text-[#64748b]"
+                                    className="inline-flex items-center gap-1 text-xs text-ink-3"
                                     onClick={(event) => event.stopPropagation()}
                                   >
                                     权重
@@ -1101,7 +1101,7 @@ export default function ExamQuestionPage() {
                                   </span>
                                 ) : null}
                               </div>
-                              <div className="mt-0.5 flex flex-wrap items-center gap-1 text-xs leading-5 text-[#64748b]">
+                              <div className="mt-0.5 flex flex-wrap items-center gap-1 text-xs leading-5 text-ink-3">
                                 <Rate disabled count={5} value={Math.round((suggestion.confidence || 0) * 5)} className="text-[12px]" />
                                 <span>{suggestion.reason}</span>
                               </div>

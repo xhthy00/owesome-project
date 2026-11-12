@@ -357,10 +357,10 @@ def build_knowledge_cohort_report_data(
 
 _KC_REPORT_CSS = """
 :root{
-  --edu-primary:#1677ff;--edu-primary-soft:#e8f3ff;--edu-primary-bg:#e6f4ff;
+  --edu-primary:#2563eb;--edu-primary-soft:#eff6ff;--edu-primary-bg:#dbeafe;
   --edu-text-lv1:rgba(0,0,0,.88);--edu-text-lv2:rgba(0,0,0,.65);--edu-text-lv3:rgba(0,0,0,.45);
   --edu-border:#e8edf3;--edu-surface:#f7f9fc;--edu-success:#52c41a;--edu-warning:#fa8c16;--edu-error:#ff4d4f;
-  --kc-bottom:#fa8c16;--kc-median:#1677ff;
+  --kc-bottom:#fa8c16;--kc-median:#2563eb;
 }
 .kc-report{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
   color:var(--edu-text-lv1);line-height:1.65;max-width:1040px;margin:0 auto;padding:8px 4px 20px}
@@ -409,7 +409,7 @@ _KC_REPORT_CSS = """
 .kc-rate-track{display:block;height:6px;border-radius:999px;background:#f0f0f0;overflow:hidden}
 .kc-rate-fill{display:block;height:100%;border-radius:999px}
 .kc-rate-bottom .kc-rate-fill{background:linear-gradient(90deg,#ffc069,#fa8c16)}
-.kc-rate-median .kc-rate-fill{background:linear-gradient(90deg,#69b1ff,#1677ff)}
+.kc-rate-median .kc-rate-fill{background:linear-gradient(90deg,#60a5fa,#2563eb)}
 .kc-gap{display:inline-block;min-width:72px;padding:2px 8px;border-radius:999px;font-size:12px;
   font-weight:700;font-variant-numeric:tabular-nums;text-align:center}
 .kc-gap-pos{background:#fff1f0;color:#cf1322}

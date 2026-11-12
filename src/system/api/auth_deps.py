@@ -17,6 +17,24 @@ from system.schemas import UserResponse
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/system/login")
 
 
+#: Legacy education endpoints that already enforce the v2 resource-bound scope.
+#: They are allowed for migrated accounts; everything else under ``/education/``
+#: stays blocked so a migrated account cannot bypass ``query_semantic`` through
+#: the old score/paper/raw-query APIs.
+_ADAPTED_EDUCATION_PREFIXES = (
+    "/api/v1/education/generate-report",
+    "/api/v1/education/batch-report",
+    "/api/v1/education/diagnostic-report",
+    "/api/v1/education/save-report-history",
+    "/api/v1/education/report-history",
+    "/api/v1/education/meta/options",
+    "/api/v1/education/dimensions",
+    "/api/v1/education/dashboards/line-reach",
+    "/api/v1/education/anomaly-alerts",
+    "/api/v1/education/report-config",
+)
+
+
 def get_current_user(
     token: str = Depends(oauth2_scheme),
     session: Session = Depends(get_session),
@@ -38,13 +56,12 @@ def get_current_user(
     raw_variables = getattr(user, "system_variables", None)
     variables = raw_variables if isinstance(raw_variables, dict) else {}
     document = variables.get("edu_auth_v2") or {}
+    path = request.url.path if request is not None else ""
+    adapted = any(path.startswith(prefix) for prefix in _ADAPTED_EDUCATION_PREFIXES)
     if (
         request is not None
-        and request.url.path.startswith("/api/v1/education/")
-        and not (
-            request.method == "GET"
-            and request.url.path.startswith("/api/v1/education/report-history")
-        )
+        and path.startswith("/api/v1/education/")
+        and not adapted
         and isinstance(document, dict)
         and (document.get("managed_resources") or document.get("grants"))
     ):

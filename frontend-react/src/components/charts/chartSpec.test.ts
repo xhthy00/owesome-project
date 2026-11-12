@@ -45,6 +45,18 @@ describe("chartSpec", () => {
     ).toBe("录入人数（按班级）");
   });
 
+  it("占位别名 c1..c5 不再塌缩成同一个「字段」", () => {
+    const title = specTitle({
+      version: 1,
+      type: "groupedColumn",
+      title: "",
+      dataset: { columns: [] },
+      encoding: { x: "row_type", y: ["c1", "c2", "c3"] }
+    });
+    expect(title).not.toMatch(/字段/);
+    expect(title).toBe("c1、c2、c3（按类型）");
+  });
+
   it("解析 spec 与旧 ECharts option", () => {
     const spec = parseChartSpec({
       kind: "spec",

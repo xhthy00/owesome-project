@@ -1,4 +1,4 @@
-import { labelColumn } from "@/utils/columnLabels";
+import { labelColumn, labelColumns } from "@/utils/columnLabels";
 
 export type ChartSpecType =
   | "kpi"
@@ -349,7 +349,7 @@ export function adaptLegacyChartConfig(
 
 export function specTitle(spec: ChartSpec): string {
   const raw = (spec.title || "").trim();
-  const yLabels = (spec.encoding.y || []).map(labelColumn).filter(Boolean);
+  const yLabels = labelColumns(spec.encoding.y || []).filter(Boolean);
   const xLabel = spec.encoding.x ? labelColumn(spec.encoding.x) : "";
   const derived =
     yLabels.length > 1

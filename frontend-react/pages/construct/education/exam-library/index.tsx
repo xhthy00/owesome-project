@@ -82,8 +82,8 @@ function StatusMark({ title, ok }: { title: string; ok?: boolean }) {
         aria-label={title}
         className={
           ok
-            ? "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#e9f8ef] text-[11px] text-[#14914a] ring-1 ring-[#b7e4c7]"
-            : "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#fff6e8] text-[11px] text-[#d48806] ring-1 ring-[#ffe1b3]"
+            ? "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-success-tint text-[11px] text-success ring-1 ring-success-border"
+            : "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-warning-tint text-[11px] text-warning ring-1 ring-warning-border"
         }
       >
         {ok ? <CheckOutlined /> : <WarningOutlined />}
@@ -331,7 +331,7 @@ export default function ExamLibraryPage() {
         return (
           <span className="inline-flex min-w-0 max-w-full items-center gap-2">
             <StatusMark title={anomaly || "正常"} ok={!anomaly} />
-            <span className="truncate font-medium text-[#1f2937] dark:text-[#e5e7eb]">
+            <span className="truncate font-medium text-ink-1 text-ink-2">
               {value || row.exam_name || "-"}
             </span>
           </span>
@@ -373,7 +373,7 @@ export default function ExamLibraryPage() {
       render: (value: number, row) => (
         <button
           type="button"
-          className="text-[#0C75FC] underline decoration-[#0C75FC] underline-offset-2 hover:opacity-80"
+          className="text-brand-ink underline decoration-brand underline-offset-2 hover:opacity-80"
           onClick={() => router.push(`/construct/education/exam-library/${row.id}`)}
         >
           {value}
@@ -419,7 +419,7 @@ export default function ExamLibraryPage() {
               getPopupContainer={() => document.body}
               menu={{
                 items: [
-                  { key: "report", label: "核对报告", style: { color: "#0C75FC" } },
+                  { key: "report", label: "核对报告", style: { color: "var(--color-brand-ink)" } },
                   ...(maintain ? [{ key: "delete", label: "删除", danger: true as const }] : [])
                 ],
                 onClick: ({ key }) => {
@@ -442,12 +442,12 @@ export default function ExamLibraryPage() {
   ];
 
     return (
-    <div className="dbgpt-ui-font h-full min-h-0 overflow-y-auto bg-[#f5f7fb] p-6 pb-10 dark:bg-transparent">
+    <div className="dbgpt-ui-font h-full min-h-0 overflow-y-auto bg-surface-0 p-6 pb-10 dark:bg-transparent">
       <div className="w-full">
-        <div className="mb-4 overflow-hidden rounded-2xl border border-[#e5e7eb] bg-white shadow-sm dark:border-[#334155] dark:bg-[#141923]">
-          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[#eef2f6] bg-[linear-gradient(180deg,#f3f8ff_0%,#ffffff_72%)] px-5 py-4 dark:border-[#334155] dark:bg-none">
+        <div className="mb-4 overflow-hidden rounded-2xl border border-line-1 bg-surface-1 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-line-1 bg-brand-tint px-5 py-4 dark:bg-none">
             <div className="flex min-w-0 items-center gap-3">
-              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#e8f3ff] text-[18px] text-[#0C75FC]">
+              <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-tint text-[18px] text-brand-ink">
                 <FileTextOutlined />
               </span>
               <div className="min-w-0">
@@ -513,7 +513,7 @@ export default function ExamLibraryPage() {
               columns={columns}
               dataSource={rows}
               tableLayout="fixed"
-              className="[&_.ant-table]:!w-full [&_.ant-table-thead>tr>th]:!bg-[#f7f9fc] [&_.ant-table-thead>tr>th]:!font-medium dark:[&_.ant-table-thead>tr>th]:!bg-[#1c2430]"
+              className="[&_.ant-table]:!w-full [&_.ant-table-thead>tr>th]:!bg-surface-0 [&_.ant-table-thead>tr>th]:!font-medium dark:[&_.ant-table-thead>tr>th]:!bg-surface-2"
               pagination={{
                 current: page,
                 pageSize: 20,

@@ -117,7 +117,9 @@ export function buildChartOption(
   const labels = prepared.map((row) => toLabel(row[xIndex]));
   const isBar = spec.type === "bar";
   const isLine = spec.type === "line" || spec.type === "area";
-  const showLabel = Boolean(spec.options?.showLabel);
+  // 类别过多时逐个标数值会糊成一片(86 根柱子的数字会互相压住),此时只保留悬浮提示
+  const dense = prepared.length > 12;
+  const showLabel = Boolean(spec.options?.showLabel) && !dense;
   const series = yNames.map((yName, index) => {
     const yIndex = data.columns.indexOf(yName);
     const values = prepared.map((row) => toNumber(row[yIndex]));
