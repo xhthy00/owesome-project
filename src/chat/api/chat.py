@@ -3,11 +3,14 @@
 import asyncio
 import json
 import logging
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable, Coroutine
+from typing import Any
 
+from anyio import CancelScope
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from starlette.types import Receive, Scope, Send
 
 from audit.service.decorators import audit_access
 from chat.crud import chat as chat_crud
@@ -41,6 +44,28 @@ _SSE_HEADERS = {
     "Connection": "keep-alive",
     "X-Accel-Buffering": "no",
 }
+
+
+class _ChatStreamingResponse(StreamingResponse):
+    def __init__(
+        self,
+        content: AsyncGenerator[str, None],
+        run: Callable[[], Coroutine[Any, Any, None]],
+        **kwargs,
+    ):
+        super().__init__(content, **kwargs)
+        self._run = run
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        task = asyncio.create_task(self._run())
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            if not task.done():
+                task.cancel()
+            # Let LangGraph finish its checkpoint cleanup after an SSE disconnect.
+            with CancelScope(shield=True):
+                await asyncio.wait({task})
 
 
 def _edu_out_of_scope_message(
@@ -562,30 +587,24 @@ async def chat_stream(
             await emit_async("done", {"record_id": record_id})
             queue.put_nowait(sentinel)
 
-    background_task = asyncio.create_task(run())
-
     async def event_stream() -> AsyncGenerator[str, None]:
-        try:
-            while True:
-                try:
-                    item = await asyncio.wait_for(
-                        queue.get(), timeout=_SSE_KEEPALIVE_INTERVAL
-                    )
-                except asyncio.TimeoutError:
-                    # 刷新浏览器、中间代理和负载均衡器的空闲计时器。
-                    yield ": keepalive\n\n"
-                    continue
-                if item is sentinel:
-                    break
-                event, data = item
-                yield _sse_event(event, data)
-        finally:
-            if not background_task.done():
-                background_task.cancel()
-                await asyncio.gather(background_task, return_exceptions=True)
+        while True:
+            try:
+                item = await asyncio.wait_for(
+                    queue.get(), timeout=_SSE_KEEPALIVE_INTERVAL
+                )
+            except asyncio.TimeoutError:
+                # 刷新浏览器、中间代理和负载均衡器的空闲计时器。
+                yield ": keepalive\n\n"
+                continue
+            if item is sentinel:
+                break
+            event, data = item
+            yield _sse_event(event, data)
 
-    return StreamingResponse(
+    return _ChatStreamingResponse(
         event_stream(),
+        run,
         media_type="text/event-stream",
         headers={**_SSE_HEADERS, "X-Trace-Id": trace_id},
     )

@@ -40,6 +40,8 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.managed.is_last_step import RemainingStepsManager
 from langgraph.types import Command, interrupt
 from psycopg import AsyncConnection
+from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 from sqlalchemy.engine import make_url
 
 from datasource.service.edu_permission import edu_scope_dict_for_user_id
@@ -356,7 +358,15 @@ def _conninfo(database_url: str) -> str:
 
 @asynccontextmanager
 async def open_chat_checkpointer(database_url: str):
-    async with AsyncPostgresSaver.from_conn_string(_conninfo(database_url)) as saver:
+    # The saver serializes cursor use. A pool lets it replace a connection left busy by cancellation.
+    async with AsyncConnectionPool(
+        _conninfo(database_url),
+        kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+        min_size=1,
+        max_size=1,
+        open=False,
+    ) as pool:
+        saver = AsyncPostgresSaver(pool)
         # Serializes the checkpoint schema migrations across FastAPI workers.
         async with _thread_lock(database_url, "awesome:deepagents:setup", wait=True):
             await saver.setup()

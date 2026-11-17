@@ -1,6 +1,7 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager, nullcontext
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -12,6 +13,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.messages.utils import count_tokens_approximately
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
+from starlette.requests import ClientDisconnect
 
 from src.chat.schemas import ChatRequest
 from src.chat.service import deepagents_runtime, semantic_query
@@ -984,6 +986,59 @@ def test_provider_reasoning_content_streams(monkeypatch):
 
     reasoning = "".join(p["text"] for event, p in events if event == "reasoning_delta")
     assert reasoning == "先确认口径再汇总"
+
+
+@pytest.mark.parametrize("disconnect_at", ["queue", "send", "send_error"])
+def test_chat_sse_disconnect_waits_for_checkpoint_cleanup(monkeypatch, disconnect_at):
+    from src.chat.api import chat
+
+    monkeypatch.setattr(chat, "_assert_query_scope", lambda *_a: None)
+    monkeypatch.setattr(chat, "_edu_out_of_scope_message", lambda *_a, **_kw: None)
+
+    async def run():
+        disconnect = asyncio.Event()
+        cleanup_finished = asyncio.Event()
+
+        async def run_chat_stream(*, emit, **_kwargs):
+            if disconnect_at == "queue":
+                disconnect.set()
+            else:
+                await emit("step", {"name": "test"})
+            try:
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                # Checkpoint recovery needs to be able to suspend after cancellation.
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+                cleanup_finished.set()
+                raise
+
+        async def receive():
+            await disconnect.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            if message["type"] == "http.response.body":
+                if disconnect_at == "send_error":
+                    raise OSError("client disconnected")
+                disconnect.set()
+                await asyncio.Future()
+
+        monkeypatch.setattr(deepagents_runtime, "run_chat_stream", run_chat_stream)
+        request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(chat_checkpointer=None)))
+        response = await chat.chat_stream.__wrapped__(
+            ChatRequest(datasource_id=4, question="人数是多少"), request, None,
+            SimpleNamespace(id=7), 1,
+        )
+        scope = {"type": "http", "asgi": {"spec_version": "2.4" if disconnect_at == "send_error" else "2.3"}}
+        if disconnect_at == "send_error":
+            with pytest.raises(ClientDisconnect):
+                await asyncio.wait_for(response(scope, receive, send), timeout=3)
+        else:
+            await asyncio.wait_for(response(scope, receive, send), timeout=3)
+        assert cleanup_finished.is_set()
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("max_steps", [None, 4])
