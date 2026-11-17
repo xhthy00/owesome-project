@@ -1,0 +1,298 @@
+@import "./tokens.css";
+@import "./theme.css";
+@import "./opencode-theme.css";
+@import "./cowork-chat.css";
+@import "./login.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--font-base);
+  font-weight: 400;
+  line-height: 1.5;
+  --antd-primary-color: var(--color-brand-solid);
+  background: var(--oc-bg-base);
+  color: var(--color-text-1);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+  -webkit-appearance: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.light {
+  color: var(--color-text-1);
+  background-color: var(--color-surface-0);
+}
+
+.dark {
+  color: var(--color-text-1);
+  background-color: var(--color-surface-0);
+}
+
+.dark-sub-bg {
+  background-color: var(--color-surface-2);
+}
+
+.dbgpt-ui-font {
+  font-family: var(--font-sans);
+}
+
+/* 侧栏字号:抽成语义类,改一处即可全站生效(不依赖 Tailwind 配置) */
+.text-nav {
+  font-size: var(--font-nav);
+  line-height: 20px;
+}
+
+.text-navsub {
+  font-size: var(--font-nav-sub);
+  line-height: 18px;
+}
+
+/* 标题:中文黑体 + 负字距拉开层级,替代原先的 Times New Roman 衬线 */
+.dbgpt-title-font {
+  font-family: var(--font-sans);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-size: 2rem;
+  line-height: 1.15;
+}
+
+.dbgpt-subtitle-font {
+  font-family: var(--font-sans);
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  font-size: var(--font-base);
+  line-height: 1.5;
+}
+
+.dbgpt-input-font {
+  font-family: var(--font-sans);
+  font-weight: 400;
+  font-size: var(--font-lg);
+  line-height: 1.5;
+}
+
+.ant-typography,
+.ant-btn,
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-input-number,
+.ant-select,
+.ant-menu {
+  font-family: var(--font-sans);
+}
+
+#home-container .ant-tabs-tab-active {
+  font-size: 16px;
+}
+
+#home-container .ant-tabs-tab {
+  font-size: 16px;
+}
+
+#home-container .ant-card-body {
+  padding: 12px 24px;
+}
+
+/* 统一焦点态:键盘用户必须能看见焦点在哪 */
+:where(a, button, [role="button"], input, textarea, select, summary):focus-visible {
+  outline: 2px solid var(--color-brand-solid);
+  outline-offset: 2px;
+}
+
+.scrollbar-default::-webkit-scrollbar {
+  display: block;
+  width: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-2);
+  border-radius: var(--radius-full);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: var(--color-border-2);
+}
+
+.z-float-helper {
+  z-index: 997;
+}
+
+.z-prompt-bot {
+  z-index: 998;
+}
+
+.z-scroll-buttons {
+  z-index: 999;
+}
+
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes run-metrics-shimmer {
+  0% {
+    background-position: 200% center;
+  }
+  100% {
+    background-position: -200% center;
+  }
+}
+
+.run-metrics-blink {
+  background-image: linear-gradient(
+    110deg,
+    var(--color-text-3) 0%,
+    var(--color-text-3) 35%,
+    var(--color-brand-500) 45%,
+    var(--color-text-1) 50%,
+    var(--color-brand-ink) 55%,
+    var(--color-text-3) 65%,
+    var(--color-text-3) 100%
+  );
+  background-size: 220% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: run-metrics-shimmer 4.8s linear infinite;
+}
+
+/* 对话摘要 Markdown 表格:与学情报告 edu-table 同一套视觉,取值走令牌以自动跟随暗色 */
+.edu-md-table-wrap {
+  margin: 12px 0;
+  border: 1px solid var(--color-border-1);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-1);
+}
+.edu-md-table-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 8px 0;
+}
+.edu-md-table-fullscreen {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-1);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-1);
+  color: var(--color-brand-ink);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+.edu-md-table-fullscreen:hover {
+  border-color: var(--color-brand-tint-border);
+  background: var(--color-brand-tint);
+}
+.edu-md-table-scroll,
+.edu-md-table-wrap--full {
+  overflow: auto;
+}
+.edu-md-table-wrap--full {
+  margin: 0;
+  max-height: 76vh;
+  scrollbar-gutter: stable;
+}
+.edu-md-table-wrap--full table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.edu-md-table-wrap table {
+  display: table;
+  width: 100%;
+  margin: 0;
+  border-collapse: collapse;
+  table-layout: auto;
+  font-size: var(--font-sm);
+}
+.edu-md-table-wrap thead {
+  display: table-header-group;
+}
+.edu-md-table-wrap tbody {
+  display: table-row-group;
+}
+.edu-md-table-wrap tr {
+  display: table-row;
+}
+.edu-md-table-wrap th,
+.edu-md-table-wrap td {
+  display: table-cell;
+  box-sizing: border-box;
+  border: none;
+  border-bottom: 1px solid var(--color-border-1);
+  padding: 11px 14px;
+  text-align: left;
+  vertical-align: middle;
+  white-space: nowrap;
+  color: var(--color-text-1);
+}
+.edu-md-table-wrap table thead th {
+  background: linear-gradient(180deg, var(--color-brand-tint) 0%, var(--color-brand-tint-strong) 100%);
+  color: var(--color-brand-ink);
+  font-weight: 600;
+  white-space: nowrap;
+  font-size: var(--font-xs);
+  letter-spacing: normal;
+  text-align: left;
+}
+.edu-md-table-wrap tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--color-surface-2) 55%, var(--color-surface-1));
+}
+.edu-md-table-wrap tbody tr:hover td {
+  background: var(--color-brand-tint);
+}
+.edu-md-table-wrap tbody tr:last-child td {
+  border-bottom: none;
+}
+.edu-md-table-wrap table thead th.num,
+.edu-md-table-wrap table tbody td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+  white-space: nowrap;
+}
+.edu-md-table-wrap tbody tr.is-weak td {
+  background: var(--color-warning-tint);
+}
+.edu-md-table-wrap tbody tr.is-weak:hover td {
+  background: color-mix(in srgb, var(--color-warning-tint) 80%, var(--color-brand-tint));
+}
+.edu-md-table-wrap td.is-weak-label {
+  color: var(--color-danger);
+  font-weight: 650;
+}
+
+/* 无障碍:尊重系统「减少动态效果」 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

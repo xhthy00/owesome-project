@@ -1,0 +1,94 @@
+import { apiRequest, getApiBaseUrl } from "@/api/client";
+
+export interface LoginPayload {
+  username: string;
+  password: string;
+}
+
+export interface LoginResult {
+  access_token: string;
+  token_type: string;
+}
+
+export interface CurrentUser {
+  id: number;
+  account: string;
+  name: string;
+  email?: string;
+  oid: number;
+  status: number;
+  language: string;
+  origin: number;
+  create_time: number;
+  is_platform_admin: boolean;
+  is_super_admin?: boolean;
+  sys_role?: string | null;
+  edu_scope?: {
+    edu_role?: string | null;
+    edu_role_label?: string | null;
+    school_id?: string | null;
+    school_name?: string | null;
+    class_names?: string[] | null;
+    student_id?: string | null;
+    /** v2 分级权限摘要 */
+    datasource_id?: number | null;
+    levels?: string[] | null;
+    capabilities?: string[] | null;
+    schools?: string[] | null;
+    districts?: string[] | null;
+    cohorts?: string[] | null;
+    citywide?: boolean | null;
+    scope_label?: string | null;
+  };
+}
+
+export async function login(payload: LoginPayload) {
+  const body = new URLSearchParams();
+  body.set("username", payload.username);
+  body.set("password", payload.password);
+
+  const response = await fetch(`${getApiBaseUrl()}/system/login`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request failed: ${response.status}`);
+  }
+
+  const result = (await response.json()) as {
+    code?: number;
+    message?: string;
+    data?: LoginResult;
+  };
+
+  if (result.code && result.code !== 200) {
+    throw new Error(result.message || "登录失败");
+  }
+
+  if (!result.data?.access_token) {
+    throw new Error("登录失败，未返回 token");
+  }
+  return result.data;
+}
+
+export async function getCurrentUser() {
+  return apiRequest<CurrentUser>("/system/me");
+}
+
+export async function updateMyNickname(name: string) {
+  return apiRequest<{ id: number; name: string }>("/system/me", {
+    method: "PATCH",
+    body: JSON.stringify({ name })
+  });
+}
+
+export async function updateMyPassword(payload: { old_password: string; new_password: string }) {
+  return apiRequest<{ id: number }>("/system/me/password", {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}

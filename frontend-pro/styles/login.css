@@ -1,0 +1,82 @@
+.login-page {
+  display: grid;
+  grid-template-columns: minmax(0, 11fr) minmax(0, 9fr);
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.login-panel {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  isolation: isolate;
+  overflow: hidden;
+  place-items: center;
+}
+
+.login-daylight {
+  position: absolute;
+  z-index: -1;
+  inset-block-start: -24%;
+  inset-inline-start: 43%;
+  width: 36%;
+  height: 122%;
+  opacity: 0.68;
+  filter: blur(32px);
+  transform: rotate(32deg);
+  pointer-events: none;
+}
+
+.login-content {
+  width: min(100%, 432px);
+}
+
+.login-glass {
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+}
+
+/* 品牌字：深墨 → 品牌蓝 → 青的渐变压字，收紧字距，比正文更"重" */
+.login-brand-name {
+  font-size: 22px;
+  font-weight: 800;
+  line-height: 1.25;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  background: linear-gradient(100deg, #0b1220 6%, #1d4ed8 58%, #0e7490 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* 标语：小字号 + 宽字距 + 两侧渐隐细线，做出"排版感" */
+.login-tagline { width: 100%; }
+.login-tagline-rule { flex: 0 0 auto; width: 26px; height: 1px; background: linear-gradient(90deg, transparent, #c7d2e0); }
+.login-tagline-rule-end { background: linear-gradient(90deg, #c7d2e0, transparent); }
+.login-tagline-text {
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  color: #8b9cb3;
+  white-space: nowrap;
+}
+
+.login-visual {
+  display: none;
+}
+
+@media (min-width: 821px) {
+  .login-visual {
+    display: block;
+    background-image: url("/login-academic-review.jpg");
+    background-position: center 68%;
+    background-size: cover;
+  }
+}
+
+@media (max-width: 820px) {
+  .login-page {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

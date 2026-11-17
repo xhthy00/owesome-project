@@ -40,7 +40,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 _SSE_HEADERS = {
-    "Cache-Control": "no-cache",
+    # no-transform 不只是语义：Node 的 compression / 部分网关只看这一条才肯跳过压缩，
+    # 否则 text/event-stream 会被 gzip，事件要攒到缓冲区满/流结束才到浏览器（表现为不流式）。
+    "Cache-Control": "no-cache, no-transform",
     "Connection": "keep-alive",
     "X-Accel-Buffering": "no",
 }

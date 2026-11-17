@@ -1,0 +1,144 @@
+/*
+ * oc-* 组件类:保留给仍在使用的页面(如 construct/skills)。
+ * 取值全部来自 tokens.css,不再自带一套颜色。
+ */
+
+.oc-panel {
+  border: 1px solid var(--color-border-1);
+  background: var(--color-surface-1);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-2);
+}
+
+.oc-sub-panel {
+  border: 1px solid var(--color-border-1);
+  background: var(--color-surface-2);
+  border-radius: var(--radius-lg);
+}
+
+.oc-card {
+  background-color: var(--color-surface-1);
+  border: 1px solid var(--color-border-1);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+}
+
+.oc-card-hover {
+  transition: border-color var(--duration-normal) var(--ease-out), box-shadow var(--duration-normal)
+    var(--ease-out);
+}
+
+.oc-card-hover:hover {
+  border-color: var(--color-border-2);
+  box-shadow: var(--shadow-2);
+}
+
+.oc-input {
+  background-color: var(--color-surface-1);
+  border: 1px solid var(--color-border-1);
+  border-radius: var(--radius-md);
+  color: var(--color-text-1);
+  font-size: var(--font-base);
+  padding: var(--spacing-2) var(--spacing-3);
+  transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast)
+    var(--ease-out);
+}
+
+.oc-input:focus {
+  outline: none;
+  border-color: var(--color-brand-solid);
+  box-shadow: var(--focus-ring);
+}
+
+.oc-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-2);
+  padding: var(--spacing-2) var(--spacing-4);
+  font-size: var(--font-base);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-out);
+}
+
+.oc-btn-primary {
+  background-color: var(--color-brand-solid);
+  color: #fff;
+  border: none;
+}
+
+.oc-btn-primary:hover {
+  background-color: var(--color-brand-solid-hover);
+}
+
+.oc-scrollbar::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+  height: 8px;
+}
+
+.oc-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.oc-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--color-border-1);
+  border-radius: var(--radius-full);
+}
+
+.oc-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-2);
+}
+
+.oc-session-turn [data-slot="user-message"] {
+  animation: oc-fade-in var(--duration-normal) var(--ease-out);
+}
+
+.oc-session-turn [data-slot="assistant-section"] {
+  animation: oc-slide-up 300ms var(--ease-out);
+}
+
+.oc-text {
+  color: var(--color-text-1);
+}
+
+.oc-muted {
+  color: var(--color-text-3);
+}
+
+.oc-page-bg {
+  background:
+    radial-gradient(circle at 15% 0%, rgba(37, 99, 235, 0.1), transparent 45%),
+    radial-gradient(circle at 85% 100%, rgba(14, 165, 233, 0.08), transparent 42%),
+    var(--color-surface-0);
+}
+
+.dark .oc-page-bg {
+  background:
+    radial-gradient(circle at 12% 0%, rgba(59, 130, 246, 0.16), transparent 42%),
+    radial-gradient(circle at 90% 100%, rgba(37, 99, 235, 0.12), transparent 40%),
+    var(--color-surface-0);
+}
+
+@keyframes oc-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes oc-slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

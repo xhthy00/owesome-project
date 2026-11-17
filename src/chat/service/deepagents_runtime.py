@@ -337,9 +337,9 @@ def ask_human(
 ) -> str:
     """Ask for essential missing information using a form, then resume this task.
 
-    Use fields for single/multiple choices or text. Only essential fields are
-    required. Combine necessary questions in one call; do not ask for facts
-    available through tools. The UI supports custom answers and optional skips.
+    Use single or multiple fields with options for known candidates. Use text
+    only when there are no candidates. Keep labels short. Combine necessary
+    questions in one call, and let the user skip optional fields.
     """
     form = HumanQuestionInput(question=question, options=options, fields=fields)
     value = interrupt({
