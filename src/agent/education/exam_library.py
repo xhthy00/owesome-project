@@ -1,19 +1,19 @@
 """试卷库：列表、可见范围、试卷与题目维护。
 
 超管和平台管理员可以维护考试批次、试卷和题目。
-教育局和学校账号可以查看对应范围的批次和试卷，不能改。
+学校和班级账号可在授权范围内查看试卷，并上传独立试卷。
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any
 
 from datasource.db.db import WriteDbSession
 
 EXAM_TYPES = ("city", "school", "teacher")
-EXAM_TYPE_LABELS = {"city": "模拟考试", "school": "学校自建", "teacher": "教师自建"}
+EXAM_TYPE_LABELS = {"city": "全市统考", "school": "学校自建", "teacher": "班级自建"}
 _TYPE_ALIASES = {
     "city": "city",
     "school": "school",
@@ -23,6 +23,7 @@ _TYPE_ALIASES = {
     "全市统考": "city",
     "学校自建": "school",
     "教师自建": "teacher",
+    "班级自建": "teacher",
 }
 
 __all__ = [
@@ -63,6 +64,14 @@ class ExamActor:
     owner_id: str
     edu_role: str
     can_maintain: bool = False
+    school_grants: tuple[tuple[str, str], ...] = ()
+    class_grants: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def school_ids(self) -> tuple[str, ...]:
+        return tuple(key for key, _ in self.school_grants) or (
+            (self.school_id,) if self.edu_role == "school_admin" and self.school_id else ()
+        )
 
 
 def build_actor(user: Any, scope: Any) -> ExamActor:
@@ -70,18 +79,76 @@ def build_actor(user: Any, scope: Any) -> ExamActor:
 
     role = str(getattr(scope, "edu_role", "") or "").strip()
     privileged = bool(is_platform_admin(user))
+    school = str(getattr(scope, "school_id", "") or "").strip()
+    school_entry = ((school, str(getattr(scope, "school_name", "") or school)),) if school else ()
     return ExamActor(
         see_all=bool(privileged or role == "bureau_admin"),
-        school_id=str(getattr(scope, "school_id", "") or "").strip(),
+        school_id=school,
         owner_id=str(getattr(user, "account", "") or "").strip(),
         edu_role=role,
         can_maintain=privileged,
+        school_grants=school_entry if role == "school_admin" else (),
+        class_grants=school_entry if role == "teacher" else (),
     )
 
 
+def build_scoped_actor(
+    db_type: str, config: dict[str, Any], actor: ExamActor, grants: tuple[Any, ...]
+) -> ExamActor:
+    """对齐授权组织目录与试卷表使用的学校 ID。"""
+    references = {g.school_id for g in grants if g.level in {"school", "class"} and g.school_id}
+    by_id: dict[str, str] = {}
+    by_name: dict[str, list[str]] = {}
+    if references:
+        with WriteDbSession(db_type, config) as session:
+            rows = _all(
+                session,
+                "SELECT id::text, btrim(s_name) FROM tb_school "
+                "WHERE id::text = ANY(%s) OR btrim(s_name) = ANY(%s)",
+                (sorted(references), sorted(references)),
+            )
+        for key, name in rows:
+            by_id[key] = name or key
+            if name:
+                by_name.setdefault(name, []).append(key)
+
+    def schools(level: str) -> tuple[tuple[str, str], ...]:
+        resolved: dict[str, str] = {}
+        for grant in grants:
+            if grant.level != level or not grant.school_id:
+                continue
+            key = grant.school_id
+            matches = by_name.get(key, [])
+            if key not in by_id and len(matches) == 1:
+                key = matches[0]
+            if key in by_id:
+                resolved[key] = by_id[key]
+        return tuple(sorted(resolved.items(), key=lambda item: (item[1], item[0])))
+
+    return replace(
+        actor,
+        edu_role="v2",
+        school_id="",
+        see_all=actor.can_maintain or any(g.level == "city" for g in grants),
+        school_grants=schools("school"),
+        class_grants=schools("class"),
+    )
+
+
+def paper_upload_schools(actor: ExamActor) -> dict[str, tuple[str, str]]:
+    """学校级授权优先。班级级授权只创建账号私有试卷。"""
+    options = {key: (name, "teacher") for key, name in actor.class_grants if actor.owner_id}
+    options.update({key: (name, "school") for key, name in actor.school_grants})
+    return options
+
+
 def exam_kind(exam: dict[str, Any]) -> str:
-    kind = str(exam.get("exam_type") or "").strip()
-    return kind if kind in EXAM_TYPES else "city"
+    kind = _text(exam.get("exam_type"))
+    if kind:
+        return kind
+    if _text(exam.get("owner_id")):
+        return "teacher"
+    return "school" if _text(exam.get("school_id")) else "city"
 
 
 def can_create_exam(actor: ExamActor) -> bool:
@@ -98,10 +165,7 @@ def batch_visible(batch: dict[str, Any], actor: ExamActor) -> bool:
         return True
     if exam_kind(batch) == "city":
         return True
-    if actor.edu_role == "school_admin":
-        return exam_kind(batch) == "school" and _same_school(batch, actor)
-    owner = str(batch.get("owner_id") or "").strip()
-    return bool(actor.owner_id) and owner == actor.owner_id
+    return exam_kind(batch) == "school" and _same_school(batch, actor)
 
 
 def batch_writable(batch: dict[str, Any], actor: ExamActor) -> bool:
@@ -111,7 +175,7 @@ def batch_writable(batch: dict[str, Any], actor: ExamActor) -> bool:
 
 
 def _guard_batch_for_paper(actor: ExamActor, batch_type: str, batch_school: str | None) -> None:
-    """学校账号只能在本校学校自建批次下维护试卷。看不到的批次按不存在处理。"""
+    """批次试卷只由平台管理员维护。"""
     info = {"exam_type": batch_type, "school_id": batch_school}
     if not batch_visible(info, actor):
         raise ValueError("考试批次不存在")
@@ -133,12 +197,17 @@ def new_batch_owner(actor: ExamActor) -> tuple[str | None, str | None]:
 
 
 def exam_visible(exam: dict[str, Any], actor: ExamActor) -> bool:
-    if actor.see_all or exam_kind(exam) == "city":
+    kind = exam_kind(exam)
+    if actor.see_all or kind == "city":
         return True
-    if actor.edu_role == "school_admin":
-        return exam_kind(exam) == "school" and _same_school(exam, actor)
-    owner_id = str(exam.get("owner_id") or "")
-    return bool(actor.owner_id) and owner_id == actor.owner_id
+    if kind in {"school", "teacher"} and _same_school(exam, actor):
+        return True
+    if kind != "teacher" or not actor.owner_id or _text(exam.get("owner_id")) != actor.owner_id:
+        return False
+    school = _text(exam.get("school_id"))
+    if actor.edu_role == "teacher":
+        return school is None or school == actor.school_id
+    return school in {key for key, _ in actor.class_grants}
 
 
 def exam_writable(exam: dict[str, Any], actor: ExamActor) -> bool:
@@ -148,10 +217,7 @@ def exam_writable(exam: dict[str, Any], actor: ExamActor) -> bool:
 
 
 def _same_school(exam: dict[str, Any], actor: ExamActor) -> bool:
-    if actor.edu_role != "school_admin":
-        return False
-    school = str(exam.get("school_id") or "").strip()
-    return bool(school) and school == str(actor.school_id or "").strip()
+    return _text(exam.get("school_id")) in actor.school_ids
 
 
 def normalize_exam_type(value: str | None) -> str:
@@ -363,23 +429,37 @@ def _must_write(session: Any, sql: str, params: tuple) -> int:
     return int((data or {}).get("row_count") or 0)
 
 
+def _exam_kind_sql(prefix: str) -> str:
+    return (
+        f"COALESCE(NULLIF(btrim({prefix}exam_type), ''), CASE "
+        f"WHEN NULLIF(btrim({prefix}owner_id), '') IS NOT NULL THEN 'teacher' "
+        f"WHEN NULLIF(btrim({prefix}school_id), '') IS NOT NULL THEN 'school' "
+        "ELSE 'city' END)"
+    )
+
+
 def _visibility_sql(actor: ExamActor, alias: str = "") -> tuple[str, tuple]:
     if actor.see_all:
         return "TRUE", ()
     prefix = f"{alias}." if alias else ""
-    if actor.edu_role == "school_admin" and actor.school_id:
-        sql = (
-            f"(COALESCE(NULLIF({prefix}exam_type, ''), 'city') = 'city' "
-            f"OR ({prefix}exam_type = 'school' AND {prefix}school_id = %s))"
-        )
-        return sql, (actor.school_id,)
-    if actor.edu_role == "school_admin":
-        return f"COALESCE(NULLIF({prefix}exam_type, ''), 'city') = 'city'", ()
-    sql = (
-        f"(COALESCE(NULLIF({prefix}exam_type, ''), 'city') = 'city' "
-        f"OR ({prefix}owner_id = %s AND %s <> ''))"
-    )
-    return sql, (actor.owner_id, actor.owner_id)
+    kind = _exam_kind_sql(prefix)
+    school = f"btrim({prefix}school_id)"
+    conditions = [f"{kind} = 'city'"]
+    params: list[Any] = []
+    if actor.school_ids:
+        conditions.append(f"({kind} IN ('school', 'teacher') AND {school} = ANY(%s))")
+        params.append(list(actor.school_ids))
+    class_schools = [key for key, _ in actor.class_grants]
+    if actor.owner_id and (actor.edu_role == "teacher" or class_schools):
+        if actor.edu_role == "teacher":
+            school_match = f"(COALESCE({school}, '') = '' OR {school} = %s)"
+            schools_param = actor.school_id
+        else:
+            school_match = f"{school} = ANY(%s)"
+            schools_param = class_schools
+        conditions.append(f"({kind} = 'teacher' AND btrim({prefix}owner_id) = %s AND {school_match})")
+        params.extend((actor.owner_id, schools_param))
+    return f"({' OR '.join(conditions)})", tuple(params)
 
 
 def _parse_time(value: str | None) -> str | None:
@@ -470,7 +550,7 @@ def _date_text(value: Any) -> str | None:
 
 
 def _exam_dict(row: tuple) -> dict[str, Any]:
-    kind = row[5] if row[5] in EXAM_TYPES else "city"
+    kind = exam_kind({"exam_type": row[5], "school_id": row[6], "owner_id": row[7]})
     return {
         "id": int(row[0]),
         "exam_name": row[1] or "",
@@ -478,7 +558,7 @@ def _exam_dict(row: tuple) -> dict[str, Any]:
         "subject": row[3] or "",
         "exam_score": None if row[4] is None else float(row[4]),
         "exam_type": kind,
-        "exam_type_label": EXAM_TYPE_LABELS[kind],
+        "exam_type_label": EXAM_TYPE_LABELS.get(kind, kind),
         "school_id": _text(row[6]),
         "owner_id": _text(row[7]),
         "exam_batch_id": None if row[8] is None else int(row[8]),
@@ -531,7 +611,7 @@ def list_exams(
         values.append(f"%{text}%")
         values.append(f"%{text}%")
     if exam_type.strip():
-        where += " AND e.exam_type = %s"
+        where += f" AND {_exam_kind_sql('e.')} = %s"
         values.append(normalize_exam_type(exam_type))
     if subject.strip():
         where += " AND e.subject = %s"
@@ -970,7 +1050,6 @@ def ensure_exam_batch_scope(db_type: str, config: dict[str, Any]) -> None:
 
 
 def _batch_dict(row: tuple, actor: ExamActor) -> dict[str, Any]:
-    kind = row[6] if len(row) > 6 and row[6] in EXAM_TYPES else "city"
     item = {
         "id": int(row[0]),
         "batch_name": row[1] or "",
@@ -978,17 +1057,19 @@ def _batch_dict(row: tuple, actor: ExamActor) -> dict[str, Any]:
         "exam_count": int(row[3] or 0),
         "school_id": _text(row[4]) if len(row) > 4 else None,
         "owner_id": _text(row[5]) if len(row) > 5 else None,
-        "exam_type": kind,
-        "exam_type_label": EXAM_TYPE_LABELS[kind],
+        "exam_type": row[6] if len(row) > 6 else None,
         "jc": _text(row[7]) if len(row) > 7 else None,
     }
+    kind = exam_kind(item)
+    item["exam_type"] = kind
+    item["exam_type_label"] = EXAM_TYPE_LABELS.get(kind, kind)
     item["writable"] = batch_writable(item, actor)
     return item
 
 
 _BATCH_LIST_SQL = (
     "SELECT b.id, b.batch_name, b.exam_time, "
-    "(SELECT COUNT(*) FROM tb_exam e WHERE e.exam_batch_id = b.id), "
+    "(SELECT COUNT(*) FROM tb_exam e WHERE e.exam_batch_id = b.id AND {exam_scope}), "
     "b.school_id, b.owner_id, b.exam_type, b.jc "
     "FROM tb_exam_batch b"
 )
@@ -997,31 +1078,26 @@ _BATCH_LIST_SQL = (
 def _batch_visibility_sql(actor: ExamActor) -> tuple[str, tuple]:
     if actor.see_all:
         return "TRUE", ()
-    if actor.edu_role == "school_admin" and actor.school_id:
-        return (
-            "(COALESCE(NULLIF(b.exam_type, ''), 'city') = 'city' "
-            "OR (b.exam_type = 'school' AND b.school_id = %s))",
-            (actor.school_id,),
+    kind = _exam_kind_sql("b.")
+    if actor.school_ids:
+        return f"({kind} = 'city' OR ({kind} = 'school' AND btrim(b.school_id) = ANY(%s)))", (
+            list(actor.school_ids),
         )
-    if actor.edu_role == "school_admin":
-        return "COALESCE(NULLIF(b.exam_type, ''), 'city') = 'city'", ()
-    return (
-        "(COALESCE(NULLIF(b.exam_type, ''), 'city') = 'city' "
-        "OR (b.owner_id = %s AND %s <> ''))",
-        (actor.owner_id, actor.owner_id),
-    )
+    return f"{kind} = 'city'", ()
 
 
 def list_exam_batches(
     db_type: str, config: dict[str, Any], actor: ExamActor
 ) -> list[dict[str, Any]]:
     where, params = _batch_visibility_sql(actor)
+    exam_scope, exam_params = _visibility_sql(actor, "e")
     with WriteDbSession(db_type, config) as session:
         _ensure_batch_scope(session)
         rows = _all(
             session,
-            _BATCH_LIST_SQL + f" WHERE {where} ORDER BY b.exam_time DESC NULLS LAST, b.id DESC",
-            params,
+            _BATCH_LIST_SQL.format(exam_scope=exam_scope)
+            + f" WHERE {where} ORDER BY b.exam_time DESC NULLS LAST, b.id DESC",
+            (*exam_params, *params),
         )
     return [_batch_dict(row, actor) for row in rows]
 
@@ -1189,7 +1265,7 @@ def update_exam_batch(
         _sync_batch_jc(session, int(batch_id), cohort)
         row = _one(
             session,
-            _BATCH_LIST_SQL + " WHERE b.id = %s",
+            _BATCH_LIST_SQL.format(exam_scope="TRUE") + " WHERE b.id = %s",
             (int(batch_id),),
         )
         session.commit()

@@ -20,6 +20,12 @@ export const rootContainer = (container: ReactNode) =>
 
 export const layout: RunTimeLayoutConfig = () => ({
   ...settings,
+  token: {
+    pageContainer: {
+      paddingBlockPageContainerContent: 24,
+      paddingInlinePageContainerContent: 32,
+    },
+  },
   logo: <BrandLogo size={30} />,
   menu: { locale: false, request: loadMenu },
   menuItemRender: (item, dom) => item.path ? <Link to={item.path}>{dom}</Link> : dom,

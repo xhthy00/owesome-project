@@ -1,4 +1,5 @@
-import { BulbOutlined, CheckOutlined, FileTextOutlined, OrderedListOutlined, ToolOutlined } from "@ant-design/icons";
+import { BulbOutlined, ClockCircleOutlined, FileTextOutlined, OrderedListOutlined, PauseCircleOutlined, ToolOutlined } from "@ant-design/icons";
+import { ThoughtChain } from "@ant-design/x";
 import type { TaskPlanStage } from "@/api/adapter/chatAdapter";
 import { AgentDots, AgentThinking } from "@/components/boardui/AgentThinking";
 import type { ExecutionStep } from "@/hooks/useChat";
@@ -131,24 +132,22 @@ export function ChatTaskProgress({ stages, steps, running, waiting }: {
               <span style={{ transform: `scaleX(${completed / stages.length})` }} />
             </div>
           </div>
-          <ol className="cowork-stage-list">
-            {stages.map((stage, index) => {
-              const status = !running && !waiting && ["pending", "in_progress"].includes(stage.status) ? "unconfirmed" : stage.status;
-              const label = { pending: "待执行", in_progress: waiting ? "待继续" : "进行中", completed: "已完成", failed: "未完成", unconfirmed: "未确认完成" }[status];
+          <ThoughtChain className="cowork-stage-chain" line items={stages.map((stage, index) => {
+              const unconfirmed = !running && !waiting && (stage.status === "pending" || stage.status === "in_progress");
+              const status = stage.status === "completed" ? "success" : stage.status === "failed" ? "error" :
+                unconfirmed ? "abort" : stage.status === "in_progress" && running ? "loading" : undefined;
+              const label = unconfirmed ? "未确认完成" :
+                { pending: "待执行", in_progress: waiting ? "待继续" : "进行中", completed: "已完成", failed: "未完成" }[stage.status];
               const related = steps.filter((step) => step.toolName && (
                 step.stageContent ? step.stageContent === stage.content : step.subTaskIndex === index
               ));
-              const row = <>
-                <span className="cowork-stage-index" aria-hidden="true">{status === "completed" ? <CheckOutlined /> : String(index + 1).padStart(2, "0")}</span>
-                <span className="cowork-stage-title" title={stage.content}>{stage.content}</span>
-                <span className={status === "completed" ? "sr-only" : "cowork-stage-status"}>{label}</span>
-              </>;
-              return <li key={`${index}:${stage.content}`} className="cowork-stage" data-status={status}>
-                {related.length ? <details><summary className="cowork-stage-row">{row}</summary><TraceRows steps={related} running={running} /></details>
-                  : <div className="cowork-stage-row">{row}</div>}
-              </li>;
-            })}
-          </ol>
+              return {
+                key: `${index}:${stage.content}`, title: stage.content, description: label, status,
+                icon: stage.status === "in_progress" && waiting ? <PauseCircleOutlined /> : <ClockCircleOutlined />,
+                collapsible: related.length > 0,
+                content: related.length > 0 ? <TraceRows steps={related} running={running} /> : undefined,
+              };
+            })} />
         </> : <p className="cowork-progress-empty">{running ? "尚未收到步骤规划" : "本轮没有发布阶段计划"}</p>}
       </div>
     </details>

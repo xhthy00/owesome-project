@@ -66,6 +66,11 @@ export interface ExamBatchItem {
   writable?: boolean;
 }
 
+export interface PaperUploadOptions {
+  batch_import: boolean;
+  schools: { id: string; name: string; exam_type: "school" | "teacher" }[];
+}
+
 export interface ExamPayload {
   exam_name: string;
   exam_type: string;
@@ -99,6 +104,14 @@ export interface MatchItem {
 export function canManageExamBatches(user: CurrentUser | null): boolean {
   if (!user) return false;
   return Boolean(user.is_platform_admin || user.is_super_admin);
+}
+
+export function canAccessExamLibrary(user: CurrentUser): boolean {
+  if (canManageExamBatches(user)) return true;
+  const scope = user.edu_scope;
+  return scope?.edu_role === "v2"
+    ? Boolean(scope.levels?.some((level) => ["city", "school", "class"].includes(level)))
+    : scope?.edu_role !== "student";
 }
 
 export function canCreateExam(user: CurrentUser | null): boolean {
@@ -176,6 +189,9 @@ async function send<T>(path: string, init: RequestInit, fallback: string): Promi
 }
 
 export const examLibraryApi = {
+  uploadOptions() {
+    return send<PaperUploadOptions>("/upload-options", { method: "GET" }, "加载试卷上传权限失败");
+  },
   listBatches() {
     return send<ExamBatchItem[]>("/batches", { method: "GET" }, "加载考试批次失败");
   },

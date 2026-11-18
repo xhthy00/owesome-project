@@ -111,14 +111,17 @@ def save_paper_outline(
     db_type: str,
     config: dict[str, Any],
     *,
-    exam_batch_id: int,
+    exam_batch_id: int | None = None,
     subject: str,
     exam_score: float,
     questions: list[dict[str, Any]],
     actor: Any = None,
+    exam_name: str = "",
+    school_id: str | None = None,
 ) -> dict[str, Any]:
-    """按批次和科目写入试卷。已有同一科目时覆盖题目，并清除该科成绩和小题分。"""
+    """写入独立试卷，或按批次和科目写入管理员导入的试卷。"""
     from datasource.db.db import WriteDbSession
+    from src.agent.education.exam_library import paper_upload_schools
 
     name = (subject or "").strip()
     if name not in SUBJECTS:
@@ -127,72 +130,60 @@ def save_paper_outline(
     if exam_score <= 0:
         raise ValueError("卷面满分必须大于 0")
 
+    if exam_batch_id is not None and actor is not None and not actor.can_maintain:
+        raise ValueError("当前账号只能上传独立试卷")
+    exam_name = exam_name.strip()
+    exam_time = batch_jc = owner_id = paper_school = None
+    exam_type = "city"
+    if exam_batch_id is None:
+        options = paper_upload_schools(actor) if actor is not None else {}
+        paper_school = school_id or (next(iter(options)) if len(options) == 1 else None)
+        if paper_school not in options:
+            raise ValueError("请选择已授权的学校")
+        if not exam_name or len(exam_name) > 255:
+            raise ValueError("试卷名称须为 1 至 255 个字符")
+        _, exam_type = options[paper_school]
+        if exam_type == "teacher":
+            owner_id = actor.owner_id
+
     with WriteDbSession(db_type, config) as session:
-        _ensure_exam_unique(session)
-        from src.agent.education.exam_library import (
-            _ensure_batch_scope,
-            normalize_batch_exam_type,
-        )
+        exam_id = None
+        if exam_batch_id is not None:
+            from src.agent.education.exam_library import _ensure_batch_scope, normalize_batch_exam_type
 
-        _ensure_batch_scope(session)
-        batch = _one(
-            session,
-            "SELECT id, batch_name, exam_time, exam_type, school_id, jc "
-            "FROM tb_exam_batch WHERE id = %s",
-            (int(exam_batch_id),),
-        )
-        if batch is None:
-            raise ValueError("考试批次不存在")
-        batch_name = str(batch[1] or "").strip()
-        exam_time = batch[2]
-        exam_name = batch_name
-        batch_type = normalize_batch_exam_type(batch[3] if len(batch) > 3 else None, default_city=True)
-        batch_school = str(batch[4]).strip() if len(batch) > 4 and batch[4] else ""
-        batch_jc = str(batch[5]).strip() if len(batch) > 5 and batch[5] else None
-        if actor is not None:
-            from src.agent.education.exam_library import _guard_batch_for_paper
-
-            _guard_batch_for_paper(actor, batch_type, batch_school or None)
-        existing = _all(
-            session,
-            "SELECT id FROM tb_exam WHERE exam_batch_id = %s AND subject = %s",
-            (int(exam_batch_id), name),
-        )
-        if len(existing) > 1:
-            raise ValueError(f"批次中已有多份{name}试卷，请先整理后再导入")
-        exam_id = int(existing[0][0]) if existing else None
-        updated = exam_id is not None
-        owner_id = None
-        current_school = None
-        if actor is not None:
-            from src.agent.education.exam_library import can_create_exam, exam_writable
-
-            if exam_id is None:
-                if not can_create_exam(actor):
-                    raise ValueError("无权创建试卷")
-            else:
+            _ensure_exam_unique(session)
+            _ensure_batch_scope(session)
+            batch = _one(
+                session,
+                "SELECT id, batch_name, exam_time, exam_type, school_id, jc "
+                "FROM tb_exam_batch WHERE id = %s",
+                (exam_batch_id,),
+            )
+            if batch is None:
+                raise ValueError("考试批次不存在")
+            exam_name = str(batch[1] or "").strip()
+            exam_time = batch[2]
+            exam_type = normalize_batch_exam_type(batch[3] if len(batch) > 3 else None, default_city=True)
+            if exam_type == "school" and len(batch) > 4 and batch[4]:
+                paper_school = str(batch[4]).strip() or None
+            batch_jc = str(batch[5]).strip() if len(batch) > 5 and batch[5] else None
+            existing = _all(
+                session,
+                "SELECT id FROM tb_exam WHERE exam_batch_id = %s AND subject = %s",
+                (exam_batch_id, name),
+            )
+            if len(existing) > 1:
+                raise ValueError(f"批次中已有多份{name}试卷，请先整理后再导入")
+            exam_id = int(existing[0][0]) if existing else None
+            if exam_id is not None and exam_type == "school" and not paper_school and actor is not None:
                 current = _one(
                     session,
                     "SELECT exam_type, school_id, owner_id FROM tb_exam WHERE id = %s",
                     (exam_id,),
                 )
-                owned = {
-                    "exam_type": None if current is None else current[0],
-                    "school_id": None if current is None else current[1],
-                    "owner_id": None if current is None else current[2],
-                }
-                if not exam_writable(owned, actor):
-                    raise ValueError("无权维护这张试卷")
-                current_school = None if current is None else current[1]
-        if batch_type == "city":
-            paper_school = None
-        else:
-            paper_school = batch_school or (None if current_school is None else str(current_school).strip())
-            if not paper_school and actor is not None and not actor.see_all:
-                paper_school = str(actor.school_id or "").strip() or None
-            paper_school = paper_school or None
-            if batch_type == "teacher" and actor is not None and not actor.see_all:
-                owner_id = str(actor.owner_id or "").strip() or None
+                if current and current[1]:
+                    paper_school = str(current[1]).strip() or None
+        updated = exam_id is not None
         cleared_score_count = 0
         cleared_detail_count = 0
         if exam_id is None:
@@ -207,8 +198,8 @@ def save_paper_outline(
                     exam_time,
                     name,
                     float(exam_score),
-                    batch_type,
-                    int(exam_batch_id),
+                    exam_type,
+                    exam_batch_id,
                     owner_id,
                     paper_school,
                     batch_jc,
@@ -228,7 +219,7 @@ def save_paper_outline(
                 session,
                 "UPDATE tb_exam SET exam_name = %s, exam_time = %s, exam_score = %s, "
                 "exam_type = %s, school_id = %s, jc = %s WHERE id = %s",
-                (exam_name, exam_time, float(exam_score), batch_type, paper_school, batch_jc, exam_id),
+                (exam_name, exam_time, float(exam_score), exam_type, paper_school, batch_jc, exam_id),
             )
             _replace_questions(session, exam_id)
         for item in rows:

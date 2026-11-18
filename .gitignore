@@ -54,6 +54,7 @@ tests/agent/*
 # 分析工具 v2 权限适配新增测试（沿用 tests/ 白名单）
 !tests/agent/test_analysis_v2_scope.py
 !tests/agent/test_analysis_v2_api.py
+!tests/agent/test_education_overview.py
 !tests/datasource/
 tests/datasource/*
 !tests/datasource/test_education_report_scope.py

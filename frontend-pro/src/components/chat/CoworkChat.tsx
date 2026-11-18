@@ -1,9 +1,9 @@
 import {
-  ApartmentOutlined, ArrowDownOutlined, ArrowUpOutlined, BulbOutlined, CheckOutlined, CloseCircleOutlined, CopyOutlined,
-  DatabaseOutlined, EyeOutlined, FileTextOutlined, InfoCircleOutlined, LeftOutlined,
+  ApartmentOutlined, ArrowDownOutlined, ArrowUpOutlined, BarChartOutlined, BookOutlined, BulbOutlined, CheckOutlined, CloseCircleOutlined, CopyOutlined,
+  DatabaseOutlined, EyeOutlined, FileTextOutlined, FlagOutlined, InfoCircleOutlined,
   QuestionCircleOutlined, RightOutlined,
 } from "@ant-design/icons";
-import { Button, Drawer, Grid, Popover, message as toast } from "antd";
+import { Button, Drawer, Grid, Popover, message as toast, theme } from "antd";
 import { Bubble, Prompts, Sender, Welcome } from "@ant-design/x";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -16,13 +16,24 @@ import ChatExecutionPanel from "@/components/chat/ChatExecutionPanel";
 import { ChatComposerStatus, ChatTaskProgress, ChatWorkLog, runActivity } from "@/components/chat/ChatRunProgress";
 import HumanQuestionForm, { HumanQuestionSummary } from "@/components/chat/HumanQuestionForm";
 import type { Message, useChat } from "@/hooks/useChat";
-import { ASSISTANT_AVATAR, ASSISTANT_WELCOME_DESC, ASSISTANT_WELCOME_TITLE, getAssistantSuggestions } from "@/new-components/chat/assistant";
+import { ASSISTANT_AVATAR, ASSISTANT_NAME } from "@/new-components/chat/assistant";
 import { eduMarkdownComponents } from "@/new-components/chat/content/eduMarkdownComponents";
 import { snippetConversationTitle } from "@/utils/conversationTitle";
 import { formatContextUsage, formatTokenCount } from "@/utils/runMetrics";
 import { extractThinkFromSteps, extractThinkFromText, mergeThinkText, splitThinkContent } from "@/utils/toolLabels";
 
 const markdownPlugins = [remarkGfm];
+
+const analysisScenarios = [
+  { key: "comparison", label: "成绩对比", detail: "查看近几次考试的成绩变化", icon: BarChartOutlined,
+    prompt: "请对比我有权查看的范围内近三次可比考试的成绩，展示总分均分和各科变化。" },
+  { key: "reach", label: "达线分析", detail: "查看本科线和特控线达线情况", icon: FlagOutlined,
+    prompt: "请分析最近一次考试的本科线和特控线达线情况，列出达线人数及达线率。" },
+  { key: "subjects", label: "薄弱学科", detail: "找出需要重点关注的学科", icon: BookOutlined,
+    prompt: "请分析最近一次考试中需要重点关注的学科，并根据成绩数据给出改进建议。" },
+  { key: "report", label: "生成报告", detail: "汇总本场考试的学情表现", icon: FileTextOutlined,
+    prompt: "请为我有权查看的范围生成最近一次考试的学情报告，包含成绩概况、重点发现和改进建议。" },
+];
 
 type ChatViewState = Pick<ReturnType<typeof useChat>,
   "messages" | "loading" | "send" | "stop" | "datasourceId" | "setDatasourceId" | "conversationId" |
@@ -85,10 +96,9 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
   const users = messages.filter((item) => item.role === "user");
   const welcome = users.length === 0;
   const [input, setInput] = useState("");
-  const [suggestions, setSuggestions] = useState<readonly string[]>([]);
+  const [personalScope, setPersonalScope] = useState(false);
   const [preview, setPreview] = useState<{ runId: string; kind: "report" | "data" | "all" }>();
-  const [progressOpen, setProgressOpen] = useState(true);
-  const [mobileProgressOpen, setMobileProgressOpen] = useState(false);
+  const [progressOpen, setProgressOpen] = useState(false);
   const [questionCollapsed, setQuestionCollapsed] = useState(false);
   const [showBottom, setShowBottom] = useState(false);
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
@@ -98,6 +108,7 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
   const lastScrollRun = useRef<string | undefined>(undefined);
   const wasLoading = useRef(false);
   const { lg } = Grid.useBreakpoint();
+  const { token } = theme.useToken();
 
   useEffect(() => { setHeaderSlot(document.getElementById("chat-header-slot")); }, []);
 
@@ -119,11 +130,14 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
   useEffect(() => {
     let current = true;
     void getCurrentUser().then((user) => {
-      if (current) setSuggestions(getAssistantSuggestions(user.edu_scope?.edu_role));
-    }).catch(() => { if (current) setSuggestions(getAssistantSuggestions()); });
+      if (!current) return;
+      const scope = user.edu_scope;
+      setPersonalScope(scope?.edu_role === "student" || Boolean(scope?.levels?.length === 1 && scope.levels[0] === "student"));
+    }).catch(() => {});
     return () => { current = false; };
   }, []);
 
+  const firstTurn = users[0]?.id;
   const latestRun = users[users.length - 1]?.runId;
   const latestSteps = chat.executionSteps.filter((step) => step.runId === latestRun);
   const stages = latestRun ? chat.taskPlanByRunId[latestRun] ?? [] : [];
@@ -142,15 +156,15 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
     setQuestionCollapsed(false);
     nearBottom.current = true;
     setShowBottom(false);
-    setProgressOpen(true);
   }, [latestRun]);
 
   useEffect(() => {
-    if (planComplete && !loading && !waiting) setProgressOpen(false);
-  }, [latestRun, planComplete, loading, waiting]);
+    setProgressOpen(false);
+    setPreview(undefined);
+  }, [firstTurn]);
 
   useEffect(() => {
-    if (welcome) { setInput(""); setPreview(undefined); setMobileProgressOpen(false); }
+    if (welcome) setInput("");
   }, [welcome]);
 
   useEffect(() => {
@@ -189,7 +203,7 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
           onChange={(value) => setInput(value.slice(0, pending ? 8000 : 1000))}
           onKeyDown={(event) => event.nativeEvent.isComposing ? false : undefined}
           onSubmit={submit} onCancel={stop}
-          placeholder={pending ? "回复助手的问题…" : loading ? "正在分析…" : welcome ? "今天帮你分析些什么？" : "继续追问…"}
+          placeholder={pending ? "回复助手的问题…" : loading ? "正在分析…" : welcome ? "例如：对比近三次考试的成绩" : "继续追问…"}
           suffix={(_, { components: { SendButton, LoadingButton } }) => <div className="cowork-composer-toolbar">
               {showUsage && <Popover trigger="click" placement="topRight" content={
                 <div className="cowork-usage-detail">
@@ -226,8 +240,11 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
       <span className="cowork-run-state" data-state={loading ? "running" : waiting ? "waiting" : planComplete ? "completed" : "settled"}>
         {loading ? "分析中" : waiting ? "待回复" : planComplete ? "已完成" : "已结束"}
       </span>
-      {!lg && <button type="button" className="cowork-icon" title="任务进度" aria-label="任务进度" aria-expanded={mobileProgressOpen && !activePreview}
-        onClick={() => { setPreview(undefined); setMobileProgressOpen(true); }}><ApartmentOutlined /></button>}
+      <Button type={progressOpen && !activePreview ? "default" : "text"} size="small" className="cowork-progress-trigger"
+        title="任务进度" aria-label="任务进度" aria-expanded={progressOpen && !activePreview} icon={<ApartmentOutlined />}
+        onClick={() => { setPreview(undefined); setProgressOpen(Boolean(activePreview) || !progressOpen); }}>
+        {lg && "任务进度"}
+      </Button>
       <button type="button" className="cowork-icon" disabled={!latestArtifacts && !activePreview} title="结果预览" aria-label="结果预览" aria-expanded={Boolean(activePreview)}
         onClick={() => setPreview(activePreview ? undefined : latestRun ? { runId: latestRun, kind: "all" } : undefined)}><EyeOutlined /></button>
       {loading && <button type="button" className="cowork-icon" title="停止任务" aria-label="停止任务" onClick={stop}><span className="cowork-stop-mark" aria-hidden="true" /></button>}
@@ -239,14 +256,25 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
       <div className="cowork-welcome-inner">
         <Welcome variant="borderless" className="cowork-welcome-head"
           icon={<img src={ASSISTANT_AVATAR} alt="" draggable={false} className="cowork-hero" />}
-          title={ASSISTANT_WELCOME_TITLE} description={ASSISTANT_WELCOME_DESC}
+          title={ASSISTANT_NAME} description="今天想分析什么？"
           classNames={{ title: "cowork-welcome-title" }} />
         {composer}
-        {suggestions.length ? (
-          <Prompts title="试试这样问" wrap classNames={{ list: "cowork-starter-list", item: "cowork-starter" }}
-            items={suggestions.slice(0, 4).map((text) => ({ key: text, label: text, icon: <RightOutlined /> }))}
-            onItemClick={({ data }) => { setInput(data.key); editor.current?.focus(); }} />
-        ) : null}
+        <Prompts aria-label="教研场景" wrap classNames={{ list: "cowork-starter-list", item: "cowork-starter" }}
+          items={analysisScenarios.map(({ key, label, detail, icon: Icon }, index) => {
+            const [ink, surface] = [
+              [token.colorPrimaryText, token.colorPrimaryBg], [token.cyan7, token.cyan1],
+              [token.purple7, token.purple1], [token.geekblue7, token.geekblue1],
+            ][index];
+            return { key, label, description: personalScope && key === "reach" ? "查看我的成绩距分数线有多远" : detail,
+              icon: <span className="cowork-starter-icon" style={{ color: ink, background: surface }}><Icon aria-hidden="true" /></span> };
+          })}
+          onItemClick={({ data }) => {
+            const scenario = analysisScenarios.find(({ key }) => key === data.key);
+            if (!scenario) return;
+            setInput(personalScope && scenario.key === "reach"
+              ? "请查看我最近一次考试的成绩，分析与对应本科线、特控线的差距。" : scenario.prompt);
+            window.requestAnimationFrame(() => editor.current?.focus({ cursor: "end" }));
+          }} />
       </div>
     </section>
   );
@@ -343,16 +371,13 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
         <div className="cowork-preview-header"><strong>结果预览</strong><button type="button" className="cowork-icon" aria-label="关闭预览" onClick={() => setPreview(undefined)}><CloseCircleOutlined /></button></div>
         <div className="cowork-preview-body">{previewBody}</div>
       </aside> : <Drawer title="结果预览" width="min(100%, 560px)" open onClose={() => setPreview(undefined)}>{previewBody}</Drawer>)}
-      {!activePreview && (lg ? progressOpen ? <aside className="cowork-task-panel" aria-label="任务进度">
+      {progressOpen && !activePreview && (lg ? <aside className="cowork-task-panel" aria-label="任务进度">
         <header><ApartmentOutlined aria-hidden="true" /><strong>任务进度</strong>
           <button type="button" className="cowork-icon" aria-label="折叠任务进度" title="折叠任务进度" onClick={() => setProgressOpen(false)}><RightOutlined /></button>
         </header>
         {progressBody}
-      </aside> : <div className="cowork-task-rail">
-        <button type="button" className="cowork-icon" aria-label="展开任务进度" title="展开任务进度" onClick={() => setProgressOpen(true)}><LeftOutlined /></button>
-        <span className="cowork-rail-label">任务进度</span>
-      </div> : mobileProgressOpen && <Drawer title="任务进度" width="min(100%, 380px)" getContainer={false}
-        rootStyle={{ position: "absolute" }} styles={{ body: { padding: 0 } }} open onClose={() => setMobileProgressOpen(false)}>{progressBody}</Drawer>)}
+      </aside> : <Drawer title="任务进度" width="min(100%, 380px)" getContainer={false}
+        rootStyle={{ position: "absolute" }} styles={{ body: { padding: 0 } }} open onClose={() => setProgressOpen(false)}>{progressBody}</Drawer>)}
     </section>
   );
 }

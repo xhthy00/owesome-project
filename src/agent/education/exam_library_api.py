@@ -1,4 +1,4 @@
-"""试卷库 API。数据写在当前工作空间登记的 edu 业务库。"""
+"""试卷库 API。使用固定学情库和账号的数据范围。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from common.exceptions.base import BadRequestException, ForbiddenException, NotF
 from common.schemas.response import success_response
 from system.api.auth_deps import get_current_user
 from system.schemas import UserResponse
-from system.workspace_scope import assert_datasource_accessible, get_workspace_oid
+from system.workspace_scope import get_workspace_oid
 
 router = APIRouter(prefix="/education/exam-library", tags=["education-exam-library"])
 
@@ -57,24 +57,38 @@ class ApplyBody(BaseModel):
 def _db(current_user: UserResponse, workspace_oid: int):
     from common.core.database import get_db_session
     from datasource.service.edu_permission import parse_edu_scope
-    from src.agent.education.exam_library import build_actor
-    from src.agent.education.raw_import import resolve_edu_datasource_id
-    from src.agent.resource.tool.business import _load_datasource
+    from src.agent.education.exam_library import build_actor, build_scoped_actor
+    from src.datasource.edu_connection import edu_db_connection
+    from src.datasource.service.education_authorization import AUTH_KEY, AuthorizationError
+    from src.datasource.service.education_report_scope import load_report_scope
+    from src.datasource.service.education_source import source_settings
     from system.crud.crud_user import get_user_by_id
 
+    report_scope = None
     with get_db_session() as session:
-        ds_id = resolve_edu_datasource_id(session, workspace_oid)
-        if not ds_id:
-            raise BadRequestException("当前工作空间未登记 edu 业务库")
-        assert_datasource_accessible(session, current_user, ds_id, workspace_oid)
         user = get_user_by_id(session, int(current_user.id))
         if user is None:
             raise ForbiddenException("用户不存在")
-        scope = parse_edu_scope(user)
-    if scope.edu_role == "student":
-        raise ForbiddenException("学生账号不能管理试卷库")
-    db_type, config, _name = _load_datasource(ds_id, workspace_oid)
-    return db_type, config, build_actor(user, scope)
+        actor = build_actor(user, parse_edu_scope(user))
+        variables = getattr(user, "system_variables", None)
+        if not actor.can_maintain and isinstance(variables, dict) and AUTH_KEY in variables:
+            try:
+                _, db_type, config, ds_id, _ = source_settings()
+                report_scope = load_report_scope(session, user, workspace_oid, ds_id)
+            except AuthorizationError as exc:
+                raise ForbiddenException(exc.detail.get("user_message") or str(exc)) from exc
+            if report_scope is None or not report_scope.levels & {"city", "school", "class"}:
+                raise ForbiddenException("当前账号没有试卷库访问权限")
+        else:
+            if not actor.can_maintain and actor.edu_role == "student":
+                raise ForbiddenException("学生账号不能访问试卷库")
+            try:
+                db_type, config = edu_db_connection()
+            except ValueError as exc:
+                raise BadRequestException(str(exc)) from exc
+    if report_scope is not None:
+        actor = _call(lambda: build_scoped_actor(db_type, config, actor, report_scope.grants))
+    return db_type, config, actor
 
 
 def _call(action):
@@ -82,6 +96,32 @@ def _call(action):
         return action()
     except ValueError as exc:
         raise BadRequestException(str(exc)) from exc
+
+
+def paper_upload_context(current_user: UserResponse, workspace_oid: int):
+    from src.agent.education.exam_library import paper_upload_schools
+
+    db_type, config, actor = _db(current_user, workspace_oid)
+    if not actor.can_maintain and not paper_upload_schools(actor):
+        raise ForbiddenException("当前账号没有可上传试卷的学校授权")
+    return db_type, config, actor
+
+
+@router.get("/upload-options")
+async def get_paper_upload_options(
+    current_user: UserResponse = Depends(get_current_user),
+    workspace_oid: int = Depends(get_workspace_oid),
+) -> dict:
+    from src.agent.education.exam_library import paper_upload_schools
+
+    _, _, actor = _db(current_user, workspace_oid)
+    return success_response({
+        "batch_import": actor.can_maintain,
+        "schools": [
+            {"id": key, "name": name, "exam_type": kind}
+            for key, (name, kind) in paper_upload_schools(actor).items()
+        ],
+    })
 
 
 @router.get("")
@@ -196,11 +236,14 @@ async def get_match_task(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    db_type, config, _actor = _db(current_user, workspace_oid)
+    db_type, config, actor = _db(current_user, workspace_oid)
+    from src.agent.education.exam_library import get_exam
     from src.agent.education.exam_match import get_task
 
     task = _call(lambda: get_task(db_type, config, task_id))
     if task is None:
+        raise NotFoundException("核对任务不存在")
+    if not actor.see_all and _call(lambda: get_exam(db_type, config, actor, task["exam_id"])) is None:
         raise NotFoundException("核对任务不存在")
     return success_response(task)
 
@@ -211,9 +254,13 @@ async def cancel_match_task(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    _db(current_user, workspace_oid)
-    from src.agent.education.exam_match import cancel_check
+    db_type, config, actor = _db(current_user, workspace_oid)
+    from src.agent.education.exam_match import cancel_check, get_task
 
+    if not actor.can_maintain:
+        raise ForbiddenException("无权取消核对任务")
+    if _call(lambda: get_task(db_type, config, task_id)) is None:
+        raise NotFoundException("核对任务不存在")
     cancel_check(task_id)
     return success_response({"id": task_id}, message="已请求取消")
 

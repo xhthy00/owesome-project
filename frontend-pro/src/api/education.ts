@@ -1085,7 +1085,9 @@ export interface PaperRecognizeProgress {
 }
 
 export interface PaperImportExecutePayload {
-  exam_batch_id: number;
+  exam_batch_id?: number;
+  exam_name?: string;
+  school_id?: string;
   subject: string;
   exam_score: number;
   questions: PaperQuestionDraft[];

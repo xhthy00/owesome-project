@@ -30,8 +30,11 @@ _ADAPTED_EDUCATION_PREFIXES = (
     "/api/v1/education/meta/options",
     "/api/v1/education/dimensions",
     "/api/v1/education/dashboards/line-reach",
+    "/api/v1/education/overview",
     "/api/v1/education/anomaly-alerts",
     "/api/v1/education/report-config",
+    "/api/v1/education/exam-library",
+    "/api/v1/education/paper-import",
 )
 
 
@@ -57,7 +60,9 @@ def get_current_user(
     variables = raw_variables if isinstance(raw_variables, dict) else {}
     document = variables.get("edu_auth_v2") or {}
     path = request.url.path if request is not None else ""
-    adapted = any(path.startswith(prefix) for prefix in _ADAPTED_EDUCATION_PREFIXES)
+    adapted = any(
+        path == prefix or path.startswith(prefix + "/") for prefix in _ADAPTED_EDUCATION_PREFIXES
+    )
     if (
         request is not None
         and path.startswith("/api/v1/education/")

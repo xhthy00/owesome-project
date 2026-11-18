@@ -1,6 +1,7 @@
 """试卷库可见范围、归属和核对结果解析。"""
 
 import json
+from types import SimpleNamespace
 
 from src.agent.education.exam_library import (
     EXAM_TYPE_LABELS,
@@ -11,6 +12,7 @@ from src.agent.education.exam_library import (
     _visibility_sql,
     batch_visible,
     batch_writable,
+    build_scoped_actor,
     can_create_batch,
     can_create_exam,
     exam_visible,
@@ -21,6 +23,7 @@ from src.agent.education.exam_library import (
     normalize_batch_jc,
     normalize_ownership,
     normalize_question_rows,
+    paper_upload_schools,
     stamp_exam_from_batch,
 )
 from src.agent.education.exam_match import (
@@ -114,13 +117,44 @@ def test_same_school_users_maintain_their_batch():
     foreign = {"exam_type": "school", "school_id": "OTHER", "owner_id": "exvwji03"}
     assert not batch_visible(foreign, creator)
     sql, params = _batch_visibility_sql(other)
-    assert "b.school_id = %s" in sql
-    assert "owner_id" not in sql
-    assert params == ("OTHER",)
+    assert "btrim(b.school_id) = ANY(%s)" in sql
+    assert params == (["OTHER"],)
     paper_sql, paper_params = _visibility_sql(other)
-    assert "school_id = %s" in paper_sql
-    assert "owner_id" not in paper_sql
-    assert paper_params == ("OTHER",)
+    assert "btrim(school_id) = ANY(%s)" in paper_sql
+    assert paper_params == (["OTHER"],)
+
+
+def test_scoped_papers_use_school_grants_and_class_ownership_independently(monkeypatch):
+    class DirectorySession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def execute_query(self, _, params):
+            assert params == (["A01甲校", "B02乙校"], ["A01甲校", "B02乙校"])
+            return True, "", {"rows": [("GZ_A", "A01甲校"), ("GZ_B", "B02乙校")]}
+
+    monkeypatch.setattr("src.agent.education.exam_library.WriteDbSession", lambda *_: DirectorySession())
+    actor = build_scoped_actor("pg", {}, _actor(), (
+        SimpleNamespace(level="school", school_id="A01甲校"),
+        SimpleNamespace(level="class", school_id="B02乙校"),
+    ))
+    assert paper_upload_schools(actor) == {
+        "GZ_A": ("A01甲校", "school"),
+        "GZ_B": ("B02乙校", "teacher"),
+    }
+    assert exam_visible({"exam_type": "city"}, actor)
+    assert exam_visible({"exam_type": "school", "school_id": "GZ_A"}, actor)
+    assert exam_visible({"exam_type": "teacher", "school_id": "GZ_A", "owner_id": "other"}, actor)
+    assert exam_visible({"exam_type": "teacher", "school_id": "GZ_B", "owner_id": "teacher1"}, actor)
+    assert not exam_visible({"exam_type": "teacher", "school_id": "GZ_B", "owner_id": "other"}, actor)
+    assert not exam_visible({"exam_type": "school", "school_id": "GZ_B"}, actor)
+    assert not exam_visible({"exam_type": "teacher", "school_id": "GZ_C", "owner_id": "teacher1"}, actor)
+    assert not exam_visible({"school_id": "GZ_C", "owner_id": "other"}, actor)
+    assert not exam_visible({"exam_type": "unknown"}, actor)
+    assert _visibility_sql(actor)[1] == (["GZ_A"], "teacher1", ["GZ_B"])
 
 
 def test_paper_type_follows_the_batch_not_the_form():
@@ -147,7 +181,7 @@ def test_paper_type_follows_the_batch_not_the_form():
     assert normalize_batch_exam_type("全市统考") == "city"
     assert normalize_batch_exam_type("全市联考") == "city"
     assert normalize_batch_exam_type("模拟考试") == "city"
-    assert EXAM_TYPE_LABELS["city"] == "模拟考试"
+    assert EXAM_TYPE_LABELS["city"] == "全市统考"
     assert normalize_batch_jc("2027届高三10月月考") == "2027"
     assert normalize_batch_jc(2027) == "2027"
     try:

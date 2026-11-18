@@ -1,5 +1,6 @@
 import pytest
 
+from src.agent.education.exam_library import ExamActor
 from src.agent.education.paper_import import save_paper_outline
 
 _QUESTION = {
@@ -109,3 +110,68 @@ def test_duplicate_papers_in_one_batch_are_rejected(monkeypatch):
         _save(monkeypatch, session)
     assert not any(sql.startswith("INSERT INTO tb_exam_question") for sql in session.writes)
     assert not any(sql.startswith("DELETE FROM tb_score") for sql in session.writes)
+
+
+@pytest.mark.parametrize(("level", "kind", "owner"), [("class", "teacher", "account"), ("school", "school", None)])
+def test_scoped_upload_creates_standalone_paper_without_replacing_existing_scores(monkeypatch, level, kind, owner):
+    grants = {f"{level}_grants": (("GZ_A", "甲校"),)}
+    actor = ExamActor(False, "", "account", "v2", **grants)
+    session = _Session([(9,)])
+    monkeypatch.setattr("datasource.db.db.WriteDbSession", lambda *_: session)
+    payload = dict(exam_name="校内随堂卷", subject="化学", exam_score=100, questions=[_QUESTION], actor=actor)
+
+    with pytest.raises(ValueError, match="只能上传独立试卷"):
+        save_paper_outline("pg", {}, exam_batch_id=1, **payload)
+    with pytest.raises(ValueError, match="请选择已授权的学校"):
+        save_paper_outline("pg", {}, school_id="GZ_B", **payload)
+    assert not session.params
+
+    saved = save_paper_outline("pg", {}, **payload)
+    assert saved["exam_id"] == 42 and saved["updated"] is False
+    assert session.params[0] == ("校内随堂卷", None, "化学", 100.0, kind, None, owner, "GZ_A", None)
+    assert len(session.writes) == 1 and session.writes[0].startswith("INSERT INTO tb_exam_question")
+    assert session.committed
+
+
+def test_class_upload_options_and_execute_use_same_actor(monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from common.middlewares.exception import register_exception_handlers
+    from src.agent.education import api, exam_library_api
+
+    actor = ExamActor(False, "", "class-account", "v2", class_grants=(("GZ_A", "甲校"),))
+    session = _Session([])
+    monkeypatch.setattr(exam_library_api, "_db", lambda *_: ("pg", {}, actor))
+    monkeypatch.setattr("datasource.db.db.WriteDbSession", lambda *_: session)
+    app = FastAPI()
+    register_exception_handlers(app)
+    app.include_router(exam_library_api.router, prefix="/api/v1")
+    app.include_router(api.router, prefix="/api/v1")
+    app.dependency_overrides[exam_library_api.get_current_user] = lambda: SimpleNamespace(id=7, oid=1)
+    app.dependency_overrides[exam_library_api.get_workspace_oid] = lambda: 1
+
+    with TestClient(app) as client:
+        options = client.get("/api/v1/education/exam-library/upload-options")
+        assert options.json()["data"] == {
+            "batch_import": False,
+            "schools": [{"id": "GZ_A", "name": "甲校", "exam_type": "teacher"}],
+        }
+        payload = {
+            "exam_name": "随堂卷",
+            "school_id": "GZ_A",
+            "subject": "化学",
+            "exam_score": 100,
+            "questions": [_QUESTION],
+        }
+        path = "/api/v1/education/paper-import/execute"
+        rejected = client.post(path, json={**payload, "exam_batch_id": 1})
+        assert rejected.json()["code"] == 400
+        assert rejected.json()["data"] is None
+        assert not session.params
+        response = client.post(path, json=payload)
+        assert response.status_code == 200
+        assert response.json()["data"]["exam_id"] == 42
+        assert session.params[0][4:8] == ("teacher", None, "class-account", "GZ_A")

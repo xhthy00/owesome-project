@@ -2654,7 +2654,9 @@ class PaperQuestionPayload(BaseModel):
 
 
 class PaperImportExecutePayload(BaseModel):
-    exam_batch_id: int
+    exam_batch_id: int | None = None
+    exam_name: str = Field(default="", max_length=255)
+    school_id: str | None = None
     subject: str
     exam_score: float
     questions: list[PaperQuestionPayload]
@@ -2668,8 +2670,9 @@ async def paper_import_text_layer(
 ) -> dict:
     """选择 PDF 时判断有没有可复制文字，供界面决定是否默认打开图像识别。"""
     from src.agent.education.paper_import import pdf_has_text_layer
+    from src.agent.education.exam_library_api import paper_upload_context
 
-    _prepare_raw_import(current_user, workspace_oid, write=True)
+    paper_upload_context(current_user, workspace_oid)
     name = (file.filename or "").lower()
     if not name.endswith(".pdf"):
         raise BadRequestException("请上传 PDF")
@@ -2691,8 +2694,9 @@ async def preview_paper_import(
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     from src.agent.education.paper_import import preview_paper_file
+    from src.agent.education.exam_library_api import paper_upload_context
 
-    _prepare_raw_import(current_user, workspace_oid, write=True)
+    paper_upload_context(current_user, workspace_oid)
     name = (file.filename or "").lower()
     if not name.endswith((".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp", ".bmp")):
         raise BadRequestException("请上传 PDF、Word（.docx）或图片")
@@ -2723,8 +2727,9 @@ async def preview_paper_import_stream(
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> StreamingResponse:
     from src.agent.education.paper_import import preview_paper_file
+    from src.agent.education.exam_library_api import paper_upload_context
 
-    _prepare_raw_import(current_user, workspace_oid, write=True)
+    paper_upload_context(current_user, workspace_oid)
     name = (file.filename or "").lower()
     if not name.endswith((".pdf", ".docx", ".png", ".jpg", ".jpeg", ".webp", ".bmp")):
         raise BadRequestException("请上传 PDF、Word（.docx）或图片")
@@ -2780,26 +2785,22 @@ async def execute_paper_import(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
+    from src.agent.education.exam_library_api import paper_upload_context
     from src.agent.education.paper_import import save_paper_outline
 
-    _ds_id, scope, db_type, config, _see_all = _prepare_raw_import(current_user, workspace_oid, write=True)
-    from common.core.database import get_db_session
-    from src.agent.education.exam_library import build_actor
-    from system.crud.crud_user import get_user_by_id
-
-    with get_db_session() as session:
-        user = get_user_by_id(session, int(current_user.id))
-    if user is None:
-        raise ForbiddenException("用户不存在")
+    db_type, config, actor = paper_upload_context(current_user, workspace_oid)
     try:
-        saved = save_paper_outline(
+        saved = await asyncio.to_thread(
+            save_paper_outline,
             db_type,
             config,
             exam_batch_id=body.exam_batch_id,
+            exam_name=body.exam_name,
+            school_id=body.school_id,
             subject=body.subject,
             exam_score=body.exam_score,
             questions=[item.model_dump() for item in body.questions],
-            actor=build_actor(user, scope),
+            actor=actor,
         )
     except ValueError as exc:
         raise BadRequestException(str(exc)) from exc

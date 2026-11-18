@@ -26,41 +26,41 @@ export type NavItem = {
  * 侧栏菜单和顶栏面包屑都从这里取,避免出现「菜单叫 A、顶栏叫 B」。
  */
 export const mainRoutes: NavItem[] = [
-  { key: "overview", path: "/", label: "学情总览", icon: <AppstoreOutlined /> },
-  { key: "analysis", path: "/construct/analysis", label: "分析工具", icon: <BarChartOutlined /> },
+  { key: "overview", path: "/", label: "学情总览", icon: <AppstoreOutlined className="pro-nav-icon pro-nav-icon-blue" /> },
+  { key: "analysis", path: "/construct/analysis", label: "分析工具", icon: <BarChartOutlined className="pro-nav-icon pro-nav-icon-violet" /> },
   {
     key: "line-reach",
     path: "/construct/education/line-reach",
     label: "达线看板",
-    icon: <FundViewOutlined />
+    icon: <FundViewOutlined className="pro-nav-icon pro-nav-icon-green" />
   },
   {
     key: "report-history",
     path: "/construct/analysis/history",
     label: "报告历史",
-    icon: <HistoryOutlined />
+    icon: <HistoryOutlined className="pro-nav-icon pro-nav-icon-blue" />
   },
   {
     key: "anomaly-alerts",
     path: "/construct/education/anomaly-alerts",
     label: "异常提醒",
-    icon: <AlertOutlined />
+    icon: <AlertOutlined className="pro-nav-icon pro-nav-icon-amber" />
   },
   {
     key: "anomaly-rules",
     path: "/construct/education/anomaly-rules",
     label: "异常规则",
-    icon: <ControlOutlined />
+    icon: <ControlOutlined className="pro-nav-icon pro-nav-icon-amber" />
   },
-  { key: "resource", path: "/construct/database", label: "数据管理", icon: <FolderOutlined />, group: true },
+  { key: "resource", path: "/construct/database", label: "数据管理", icon: <FolderOutlined className="pro-nav-icon pro-nav-icon-green" />, group: true },
   {
     key: "permission",
     path: "/construct/permission",
     label: "权限管理",
-    icon: <SafetyCertificateOutlined />,
+    icon: <SafetyCertificateOutlined className="pro-nav-icon pro-nav-icon-amber" />,
     group: true
   },
-  { key: "system", path: "/system", label: "日志管理", icon: <SettingOutlined />, group: true },
+  { key: "system", path: "/system", label: "日志管理", icon: <SettingOutlined className="pro-nav-icon pro-nav-icon-blue" />, group: true },
   { key: "docs", path: "/construct/docs", label: "系统文档", icon: <FileTextOutlined /> }
 ];
 

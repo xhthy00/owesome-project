@@ -79,7 +79,7 @@ export function WorkspaceGate({ children }: { children: ReactNode }) {
     action={<Button onClick={() => setAttempt(previous => previous + 1)}>重试</Button>} />;
   if (!session) return <Spin className="pro-session-screen" />;
   return <Watermark content={userWatermarkText(session.user.account, session.user.name)}>
-    {chatPage ? children : <PageContainer title={false} breadcrumbRender={false} className="pro-workspace-page"><div className="pro-business-page">{children}</div></PageContainer>}
+    {chatPage ? children : <PageContainer pageHeaderRender={false} className="pro-workspace-page"><div className="pro-business-page">{children}</div></PageContainer>}
   </Watermark>;
 }
 

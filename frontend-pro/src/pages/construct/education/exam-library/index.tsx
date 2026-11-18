@@ -1,4 +1,4 @@
-import { CheckOutlined, DownOutlined, FileTextOutlined, PlusOutlined, WarningOutlined } from "@ant-design/icons";
+import { CheckOutlined, DownOutlined, FileTextOutlined, PlusOutlined, UploadOutlined, WarningOutlined } from "@ant-design/icons";
 import { Button, DatePicker, Drawer, Dropdown, Form, Input, InputNumber, Modal, Select, Space, Table, Tag, Tooltip, Typography, message } from "antd";
 import dayjs, { type Dayjs } from "dayjs";
 import type { ColumnsType } from "antd/es/table";
@@ -42,9 +42,9 @@ const SUBJECT_SCORE: Record<string, number> = {
   地理: 100
 };
 const EXAM_TYPES = [
-  { value: "city", label: "模拟考试" },
+  { value: "city", label: "全市统考" },
   { value: "school", label: "学校自建" },
-  { value: "teacher", label: "教师自建" }
+  { value: "teacher", label: "班级自建" }
 ];
 const FORM_EXAM_TYPES = EXAM_TYPES.filter((item) => item.value !== "teacher");
 
@@ -96,6 +96,7 @@ export default function ExamLibraryPage() {
   const router = useRouter();
   const [form] = Form.useForm<ExamPayload>();
   const [examType, setExamType] = useState("");
+  const [keyword, setKeyword] = useState("");
   const [subjectFilter, setSubjectFilter] = useState("");
   const [batchFilter, setBatchFilter] = useState<number | undefined>();
   const [page, setPage] = useState(1);
@@ -106,6 +107,7 @@ export default function ExamLibraryPage() {
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [canUpload, setCanUpload] = useState(false);
   const [batches, setBatches] = useState<ExamBatchItem[]>([]);
   const [batchOpen, setBatchOpen] = useState(false);
   const [batchFormOpen, setBatchFormOpen] = useState(false);
@@ -127,6 +129,7 @@ export default function ExamLibraryPage() {
     setLoading(true);
     try {
       const data = await examLibraryApi.list({
+        keyword,
         examType,
         subject: subjectFilter,
         examBatchId: batchFilter,
@@ -140,7 +143,7 @@ export default function ExamLibraryPage() {
     } finally {
       setLoading(false);
     }
-  }, [examType, subjectFilter, batchFilter, page]);
+  }, [keyword, examType, subjectFilter, batchFilter, page]);
 
   useEffect(() => {
     void load();
@@ -154,6 +157,9 @@ export default function ExamLibraryPage() {
       .listBatches()
       .then(setBatches)
       .catch((error) => message.error(error instanceof Error ? error.message : "加载考试批次失败"));
+    void examLibraryApi.uploadOptions()
+      .then((options) => setCanUpload(options.batch_import || options.schools.length > 0))
+      .catch(() => setCanUpload(false));
   }, []);
 
   const reloadBatches = async () => {
@@ -322,7 +328,7 @@ export default function ExamLibraryPage() {
 
   const columns: ColumnsType<ExamLibraryItem> = [
     {
-      title: "考试批次",
+      title: "试卷名称",
       dataIndex: "exam_batch_name",
       width: "24%",
       ellipsis: true,
@@ -330,7 +336,7 @@ export default function ExamLibraryPage() {
         const anomaly = examAnomaly(row);
         return (
           <span className="inline-flex min-w-0 max-w-full items-center gap-2">
-            <StatusMark title={anomaly || "正常"} ok={!anomaly} />
+            {row.exam_batch_id ? <StatusMark title={anomaly || "正常"} ok={!anomaly} /> : null}
             <span className="truncate font-medium text-ink-1 text-ink-2">
               {value || row.exam_name || "-"}
             </span>
@@ -355,7 +361,7 @@ export default function ExamLibraryPage() {
       render: (_, row) => (
         <div className="min-w-0">
           <div>{row.exam_type_label}</div>
-          {row.exam_type === "school" && row.school_name ? (
+          {row.exam_type !== "city" && row.school_name ? (
             <div className="truncate text-xs text-slate-400" title={row.school_name}>
               {row.school_name}
             </div>
@@ -454,22 +460,34 @@ export default function ExamLibraryPage() {
                 <Typography.Title level={4} className="!mb-0">
                   试卷库
                 </Typography.Title>
-                <Typography.Text type="secondary" className="text-[13px]">
-                  批次前的标记按优先级提示未关联题目、卷面总分异常、未关联知识点或尚有若干题未关联、未关联成绩；齐全时为绿色勾。管理员和教育局可维护全部批次与试卷；学校账号可查看模拟考试和本校学校自建，并维护本校学校自建。
-                </Typography.Text>
               </div>
             </div>
             <Space>
-              <Button onClick={() => setBatchOpen(true)}>批次管理</Button>
+              <Button onClick={() => setBatchOpen(true)}>{canManageBatches ? "批次管理" : "查看批次"}</Button>
               {canCreate ? (
-                <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+                <Button icon={<PlusOutlined />} onClick={openCreate}>
                   新增试卷
+                </Button>
+              ) : null}
+              {canUpload ? (
+                <Button type="primary" icon={<UploadOutlined />} onClick={() => router.push("/construct/education/exam-library/import")}>
+                  上传试卷
                 </Button>
               ) : null}
             </Space>
           </div>
           <div className="px-5 py-4">
             <div className="mb-4 flex flex-wrap items-center gap-3">
+              <Input.Search
+                allowClear
+                aria-label="搜索试卷名称"
+                className="!w-56"
+                placeholder="搜索试卷名称"
+                onSearch={(value) => {
+                  setPage(1);
+                  setKeyword(value.trim());
+                }}
+              />
               <Select
                 allowClear
                 className="w-36"
@@ -622,7 +640,7 @@ export default function ExamLibraryPage() {
               title: "类型",
               dataIndex: "exam_type_label",
               width: 100,
-              render: (value) => value || "模拟考试"
+              render: (value) => value || "全市统考"
             },
             {
               title: "届次",

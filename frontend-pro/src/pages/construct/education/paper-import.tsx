@@ -18,14 +18,12 @@ import {
 import type { ColumnsType } from "antd/es/table";
 import Link from "@/routing/Link";
 import { useRouter } from "@/routing/router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getCurrentUser } from "@/api/auth";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   educationApi,
-  type ExamBatchOption,
   type PaperQuestionDraft
 } from "@/api/education";
-import { canCreateExam } from "@/api/examLibrary";
+import { examLibraryApi, type ExamBatchItem, type PaperUploadOptions } from "@/api/examLibrary";
 
 const SUBJECTS = ["语文", "数学", "英语", "物理", "化学", "生物", "政治", "历史", "地理"];
 const SUBJECT_FULL_SCORE: Record<string, number> = {
@@ -265,8 +263,12 @@ function confirmPaperWrite(): Promise<boolean> {
 
 export function PaperImportPage() {
   const router = useRouter();
-  const [batches, setBatches] = useState<ExamBatchOption[]>([]);
+  const [batches, setBatches] = useState<ExamBatchItem[]>([]);
+  const [uploadOptions, setUploadOptions] = useState<PaperUploadOptions | null>(null);
   const [batchId, setBatchId] = useState<number | null>(null);
+  const [examName, setExamName] = useState("");
+  const [schoolId, setSchoolId] = useState<string>();
+  const batchImport = Boolean(uploadOptions?.batch_import);
   const [subject, setSubject] = useState<string>("数学");
   const [file, setFile] = useState<File | null>(null);
   const [examScore, setExamScore] = useState<number>(SUBJECT_FULL_SCORE["数学"]);
@@ -299,33 +301,35 @@ export function PaperImportPage() {
     );
   }
 
-  const loadBatches = useCallback(async () => {
-    try {
-      setBatches(await educationApi.listRawImportBatches(true));
-    } catch (err) {
-      message.error(err instanceof Error ? err.message : "加载批次失败");
-    }
-  }, []);
-
   useEffect(() => {
-    void getCurrentUser()
-      .then((user) => {
-        if (!canCreateExam(user)) {
-          message.error("仅系统管理员可导入试卷");
+    let active = true;
+    void (async () => {
+      try {
+        const options = await examLibraryApi.uploadOptions();
+        if (!active) return;
+        if (!options.batch_import && !options.schools.length) {
+          message.error("当前账号没有可上传试卷的学校授权");
           router.replace("/construct/education/exam-library");
+          return;
         }
-      })
-      .catch(() => {
-        router.replace("/construct/education/exam-library");
-      });
-    void loadBatches();
-  }, [loadBatches, router]);
+        setUploadOptions(options);
+        if (options.schools.length === 1) setSchoolId(options.schools[0].id);
+        if (options.batch_import) {
+          const data = await examLibraryApi.listBatches();
+          if (active) setBatches(data);
+        }
+      } catch (error) {
+        if (active) message.error(error instanceof Error ? error.message : "加载上传配置失败");
+      }
+    })();
+    return () => { active = false; };
+  }, [router]);
 
   useEffect(() => {
-    if (!router.isReady || presetApplied.current) return;
+    if (!router.isReady || !uploadOptions || presetApplied.current) return;
     const rawBatch = router.query.batchId;
     const batchText = Array.isArray(rawBatch) ? rawBatch[0] : rawBatch;
-    if (batchText && batches.length === 0) return;
+    if (batchImport && batchText && batches.length === 0) return;
     const batch = Number(batchText);
     if (Number.isFinite(batch) && batches.some((item) => item.id === batch)) {
       setBatchId(batch);
@@ -334,7 +338,7 @@ export function PaperImportPage() {
     const subjectName = Array.isArray(rawSubject) ? rawSubject[0] : rawSubject;
     if (subjectName && SUBJECTS.includes(subjectName)) setSubject(subjectName);
     presetApplied.current = true;
-  }, [router.isReady, router.query.batchId, router.query.subject, batches]);
+  }, [router.isReady, router.query.batchId, router.query.subject, uploadOptions, batchImport, batches]);
 
   useEffect(() => {
     setExamScore(SUBJECT_FULL_SCORE[subject] ?? 100);
@@ -383,20 +387,26 @@ export function PaperImportPage() {
   }
 
   async function save() {
-    if (batchId == null) {
+    if (!uploadOptions) return;
+    if (batchImport && batchId == null) {
       message.warning("请选择考试批次");
+      return;
+    }
+    if (!batchImport && (!examName.trim() || !schoolId)) {
+      message.warning("请填写试卷名称并确认所属学校");
       return;
     }
     if (!questions.length) {
       message.warning("请先识别题目");
       return;
     }
-    const confirmed = await confirmPaperWrite();
-    if (!confirmed) return;
+    if (batchImport && !(await confirmPaperWrite())) return;
     setSaving(true);
     try {
       const saved = await educationApi.executePaperImport({
-        exam_batch_id: batchId,
+        ...(batchImport
+          ? { exam_batch_id: batchId ?? undefined }
+          : { exam_name: examName.trim(), school_id: schoolId }),
         subject,
         exam_score: examScore,
         questions
@@ -541,10 +551,11 @@ export function PaperImportPage() {
 
       <div className={`${PANEL} mb-4 shrink-0`}>
         <Typography.Paragraph type="secondary" className="!mb-3">
-          上传 Word、PDF 或图片。题号按卷面生成：选择题写成单选/多选加印刷题号，解答题按小问拆开。物理实验、化学和生物的细目请在下表里改到与阅卷表一致。同一批次、同一科目再次导入会覆盖题目，并删除该科单科成绩和小题分。成绩宽表不会自动清理。
+          支持 Word（.docx）、PDF 或图片。识别后可核对题号、题干和分值。
+          {batchImport ? " 同一批次、同科再次导入会覆盖题目并清除单科成绩和小题分。" : null}
         </Typography.Paragraph>
         <div className="flex flex-wrap items-center gap-3">
-          <Select
+          {batchImport ? <Select
             className="min-w-[280px]"
             showSearch
             optionFilterProp="label"
@@ -552,7 +563,27 @@ export function PaperImportPage() {
             value={batchId ?? undefined}
             options={batches.map((item) => ({ value: item.id, label: item.batch_name }))}
             onChange={(value) => setBatchId(value)}
-          />
+          /> : <>
+            <Input
+              className="!w-[280px] max-w-full"
+              aria-label="试卷名称"
+              placeholder="填写试卷名称"
+              value={examName}
+              maxLength={255}
+              onChange={(event) => setExamName(event.target.value)}
+            />
+            <Select
+              className="min-w-[180px]"
+              aria-label="所属学校"
+              placeholder="选择所属学校"
+              value={schoolId}
+              options={uploadOptions?.schools.map((school) => ({
+                value: school.id,
+                label: `${school.name} · ${school.exam_type === "school" ? "学校自建" : "班级自建"}`
+              }))}
+              onChange={setSchoolId}
+            />
+          </>}
           <Select
             className="min-w-[120px]"
             value={subject}
@@ -584,7 +615,7 @@ export function PaperImportPage() {
             </span>
           ) : null}
           <div className="ml-auto inline-flex items-center gap-2">
-            <Button type="primary" loading={recognizing} onClick={() => void recognize()}>
+            <Button type="primary" disabled={!uploadOptions} loading={recognizing} onClick={() => void recognize()}>
               识别题目
             </Button>
             <span className="inline-flex items-center gap-1.5">
