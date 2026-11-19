@@ -3,8 +3,8 @@ import {
   DatabaseOutlined, EyeOutlined, FileTextOutlined, FlagOutlined, InfoCircleOutlined,
   QuestionCircleOutlined, RightOutlined,
 } from "@ant-design/icons";
-import { Button, Drawer, Grid, Popover, message as toast, theme } from "antd";
-import { Bubble, Prompts, Sender, Welcome } from "@ant-design/x";
+import { Button, Drawer, Grid, Popover, message as toast } from "antd";
+import { Bubble, Sender } from "@ant-design/x";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
@@ -25,13 +25,13 @@ import { extractThinkFromSteps, extractThinkFromText, mergeThinkText, splitThink
 const markdownPlugins = [remarkGfm];
 
 const analysisScenarios = [
-  { key: "comparison", label: "成绩对比", detail: "查看近几次考试的成绩变化", icon: BarChartOutlined,
+  { key: "comparison", label: "成绩对比", detail: "查看总分与各科变化", icon: BarChartOutlined,
     prompt: "请对比我有权查看的范围内近三次可比考试的成绩，展示总分均分和各科变化。" },
-  { key: "reach", label: "达线分析", detail: "查看本科线和特控线达线情况", icon: FlagOutlined,
+  { key: "reach", label: "达线分析", detail: "查看达线人数与比例", icon: FlagOutlined,
     prompt: "请分析最近一次考试的本科线和特控线达线情况，列出达线人数及达线率。" },
-  { key: "subjects", label: "薄弱学科", detail: "找出需要重点关注的学科", icon: BookOutlined,
+  { key: "subjects", label: "薄弱学科", detail: "找出需要优先关注的学科", icon: BookOutlined,
     prompt: "请分析最近一次考试中需要重点关注的学科，并根据成绩数据给出改进建议。" },
-  { key: "report", label: "生成报告", detail: "汇总本场考试的学情表现", icon: FileTextOutlined,
+  { key: "report", label: "生成报告", detail: "汇总考试表现和建议", icon: FileTextOutlined,
     prompt: "请为我有权查看的范围生成最近一次考试的学情报告，包含成绩概况、重点发现和改进建议。" },
 ];
 
@@ -98,7 +98,7 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
   const [input, setInput] = useState("");
   const [personalScope, setPersonalScope] = useState(false);
   const [preview, setPreview] = useState<{ runId: string; kind: "report" | "data" | "all" }>();
-  const [progressOpen, setProgressOpen] = useState(false);
+  const [progressOpen, setProgressOpen] = useState(true);
   const [questionCollapsed, setQuestionCollapsed] = useState(false);
   const [showBottom, setShowBottom] = useState(false);
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
@@ -108,7 +108,6 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
   const lastScrollRun = useRef<string | undefined>(undefined);
   const wasLoading = useRef(false);
   const { lg } = Grid.useBreakpoint();
-  const { token } = theme.useToken();
 
   useEffect(() => { setHeaderSlot(document.getElementById("chat-header-slot")); }, []);
 
@@ -159,13 +158,19 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
   }, [latestRun]);
 
   useEffect(() => {
-    setProgressOpen(false);
+    setProgressOpen(true);
     setPreview(undefined);
   }, [firstTurn]);
 
   useEffect(() => {
     if (welcome) setInput("");
   }, [welcome]);
+
+  useEffect(() => {
+    const resetInput = () => setInput("");
+    window.addEventListener("chat:new-task", resetInput);
+    return () => window.removeEventListener("chat:new-task", resetInput);
+  }, []);
 
   useEffect(() => {
     const firstSettledView = latestRun !== lastScrollRun.current && !loading;
@@ -191,36 +196,59 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
     void send(value.trim(), { datasourceId, ...(pending?.interrupt_id ? { resumeInterruptId: pending.interrupt_id } : {}) });
   };
 
+  const keyboardHint = (
+    <div id="cowork-composer-hint" className="cowork-composer-hint">
+      <span>Enter 发送</span><span aria-hidden="true">·</span><span>Shift + Enter 换行</span>
+    </div>
+  );
   const composer = (
-    <div className="cowork-composer">
-      <span className="cowork-composer-surface" aria-hidden="true" />
-      <ComposerLoader active={loading} radius={28} />
-      <div className="cowork-composer-content">
-        <Sender ref={editor} className="cowork-sender" value={input} loading={loading} readOnly={loading}
-          classNames={{ content: "cowork-sender-content" }}
-          autoSize={{ minRows: 1, maxRows: 7 }}
-          aria-label={pending ? "回复追问" : "输入消息"}
-          onChange={(value) => setInput(value.slice(0, pending ? 8000 : 1000))}
-          onKeyDown={(event) => event.nativeEvent.isComposing ? false : undefined}
-          onSubmit={submit} onCancel={stop}
-          placeholder={pending ? "回复助手的问题…" : loading ? "正在分析…" : welcome ? "例如：对比近三次考试的成绩" : "继续追问…"}
-          suffix={(_, { components: { SendButton, LoadingButton } }) => <div className="cowork-composer-toolbar">
-              {showUsage && <Popover trigger="click" placement="topRight" content={
-                <div className="cowork-usage-detail">
-                  <strong>用量与上下文</strong>
-                  {chat.runMetrics.tokenKnown && <span>累计用量 {formatTokenCount(chat.runMetrics.totalTokens, true)} Token</span>}
-                  {contextLabel && <span>{contextLabel}</span>}
-                  <small>上下文为最近一次模型请求的输入量，历史由系统自动压缩。</small>
-                </div>
-              }>
-                <Button type="text" shape="circle" icon={<InfoCircleOutlined />} aria-label="查看用量与上下文" title="上下文" />
-              </Popover>}
-            {loading
-              ? <LoadingButton aria-label="停止任务" title="停止任务" />
-              : <SendButton aria-label="发送消息" title="发送消息" disabled={!input.trim()} icon={<ArrowUpOutlined />} />}
-          </div>}
-        />
+    <div className="cowork-composer-block">
+      <div className="cowork-composer">
+        <span className="cowork-composer-surface" aria-hidden="true" />
+        <ComposerLoader active={loading} radius={16} />
+        <div className="cowork-composer-content">
+          {welcome && <header className="cowork-welcome-head">
+            <div className="cowork-welcome-copy">
+              <h1 className="cowork-welcome-title">{ASSISTANT_NAME}</h1>
+              <p className="cowork-welcome-description">想分析哪场考试？告诉我你关注的年级、班级或学科。</p>
+            </div>
+            <img className="cowork-hero" src="/assistant-welcome.png" width={112} height={108} alt="" />
+          </header>}
+          <Sender ref={editor} className="cowork-sender" value={input} loading={loading} readOnly={loading}
+            classNames={{ content: "cowork-sender-content", footer: "cowork-sender-footer" }}
+            autoSize={{ minRows: welcome ? 2 : 1, maxRows: 7 }}
+            submitType="enter"
+            aria-label={pending ? "回复追问" : "输入消息"}
+            aria-describedby="cowork-composer-hint"
+            onChange={(value) => setInput(value.slice(0, pending ? 8000 : 1000))}
+            onKeyDown={(event) => event.nativeEvent.isComposing ? false : undefined}
+            onSubmit={submit} onCancel={stop}
+            placeholder={pending ? "回复助手的问题…" : loading ? "正在分析…" : welcome ? "例如：对比高三年级近三次考试，找出成绩下滑的学科" : "继续追问…"}
+            suffix={false}
+            footer={(_, { components: { SendButton, LoadingButton } }) => <div className="cowork-composer-footer">
+              {welcome ? keyboardHint : <span className="cowork-composer-caption"><BulbOutlined aria-hidden="true" />
+                {pending ? "补充信息后继续分析" : loading ? "正在分析，可随时停止" : "描述你的分析需求"}
+              </span>}
+              <div className="cowork-composer-toolbar">
+                {showUsage && <Popover trigger="click" placement="topRight" content={
+                  <div className="cowork-usage-detail">
+                    <strong>用量与上下文</strong>
+                    {chat.runMetrics.tokenKnown && <span>累计用量 {formatTokenCount(chat.runMetrics.totalTokens, true)} Token</span>}
+                    {contextLabel && <span>{contextLabel}</span>}
+                    <small>上下文为最近一次模型请求的输入量，历史由系统自动压缩。</small>
+                  </div>
+                }>
+                  <Button type="text" shape="circle" icon={<InfoCircleOutlined />} aria-label="查看用量与上下文" title="上下文" />
+                </Popover>}
+              {loading
+                ? <LoadingButton shape="default" aria-label="停止任务" title="停止任务" />
+                : <SendButton shape="default" aria-label="发送消息" title="发送消息" disabled={!input.trim()} icon={<ArrowUpOutlined />} />}
+              </div>
+            </div>}
+          />
+        </div>
       </div>
+      {!welcome && keyboardHint}
     </div>
   );
 
@@ -253,28 +281,25 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
 
   if (welcome) return (
     <section className="cowork-chat cowork-welcome" aria-label="新对话">
+      <div className="cowork-welcome-breadcrumb"><span>AI 学情分析</span><span>新任务</span></div>
       <div className="cowork-welcome-inner">
-        <Welcome variant="borderless" className="cowork-welcome-head"
-          icon={<img src={ASSISTANT_AVATAR} alt="" draggable={false} className="cowork-hero" />}
-          title={ASSISTANT_NAME} description="今天想分析什么？"
-          classNames={{ title: "cowork-welcome-title" }} />
         {composer}
-        <Prompts aria-label="教研场景" wrap classNames={{ list: "cowork-starter-list", item: "cowork-starter" }}
-          items={analysisScenarios.map(({ key, label, detail, icon: Icon }, index) => {
-            const [ink, surface] = [
-              [token.colorPrimaryText, token.colorPrimaryBg], [token.cyan7, token.cyan1],
-              [token.purple7, token.purple1], [token.geekblue7, token.geekblue1],
-            ][index];
-            return { key, label, description: personalScope && key === "reach" ? "查看我的成绩距分数线有多远" : detail,
-              icon: <span className="cowork-starter-icon" style={{ color: ink, background: surface }}><Icon aria-hidden="true" /></span> };
-          })}
-          onItemClick={({ data }) => {
-            const scenario = analysisScenarios.find(({ key }) => key === data.key);
-            if (!scenario) return;
-            setInput(personalScope && scenario.key === "reach"
-              ? "请查看我最近一次考试的成绩，分析与对应本科线、特控线的差距。" : scenario.prompt);
-            window.requestAnimationFrame(() => editor.current?.focus({ cursor: "end" }));
-          }} />
+        <section className="cowork-scenarios" aria-labelledby="cowork-scenarios-title">
+          <h2 id="cowork-scenarios-title">快捷分析</h2>
+          <div className="cowork-starter-list">
+            {analysisScenarios.map(({ key, label, detail, icon: Icon, prompt }) => <button
+              key={key} type="button" className="cowork-starter"
+              onClick={() => {
+                setInput(personalScope && key === "reach"
+                  ? "请查看我最近一次考试的成绩，分析与对应本科线、特控线的差距。" : prompt);
+                window.requestAnimationFrame(() => editor.current?.focus({ cursor: "end" }));
+              }}>
+              <span className="cowork-starter-icon"><Icon aria-hidden="true" /></span>
+              <span className="cowork-starter-copy"><strong>{label}</strong><span>{personalScope && key === "reach" ? "查看我的成绩距分数线有多远" : detail}</span></span>
+              <ArrowUpOutlined className="cowork-starter-arrow" aria-hidden="true" />
+            </button>)}
+          </div>
+        </section>
       </div>
     </section>
   );

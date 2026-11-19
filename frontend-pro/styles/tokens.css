@@ -20,6 +20,7 @@
   /* 实心按钮底色 / hover */
   --color-brand-solid: #2563eb;
   --color-brand-solid-hover: #1d4ed8;
+  --color-on-brand: #ffffff;
   /* 文字型品牌色(链接、激活态文字),白底对比度 5.2:1 */
   --color-brand-ink: #1d4ed8;
   /* 选中/高亮底色与描边 */
@@ -88,6 +89,7 @@
   --font-lg: 16px;
   --font-xl: 20px;
   --font-2xl: 24px;
+  --font-hero: 28px;
 
   /* ---- 动效 ---- */
   --duration-fast: 150ms;

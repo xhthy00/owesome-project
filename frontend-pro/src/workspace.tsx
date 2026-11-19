@@ -1,4 +1,4 @@
-import { FileTextOutlined } from '@ant-design/icons';
+import { AppstoreOutlined, FileTextOutlined } from '@ant-design/icons';
 import { App, Alert, Avatar, Button, Dropdown, Space, Spin, Tooltip, Watermark } from 'antd';
 import { PageContainer } from '@ant-design/pro-components';
 import { history, useLocation } from '@umijs/max';
@@ -9,6 +9,7 @@ import type { CurrentUser } from '@/api/auth';
 import { permissionApi } from '@/api/permission';
 import { clearAuthSession, getAccessToken } from '@/auth/session';
 import { setCachedWatermarkText, userWatermarkText } from '@/utils/userWatermark';
+import { pageWatermarkProps } from '@/components/UserWatermark';
 
 type Session = { token: string; user: CurrentUser; canReadDocs: boolean };
 const SessionContext = createContext<{
@@ -78,7 +79,7 @@ export function WorkspaceGate({ children }: { children: ReactNode }) {
   if (error) return <Alert className="pro-session-screen" type="error" title={error}
     action={<Button onClick={() => setAttempt(previous => previous + 1)}>重试</Button>} />;
   if (!session) return <Spin className="pro-session-screen" />;
-  return <Watermark content={userWatermarkText(session.user.account, session.user.name)}>
+  return <Watermark {...pageWatermarkProps} content={userWatermarkText(session.user.account, session.user.name)}>
     {chatPage ? children : <PageContainer pageHeaderRender={false} className="pro-workspace-page"><div className="pro-business-page">{children}</div></PageContainer>}
   </Watermark>;
 }
@@ -86,11 +87,9 @@ export function WorkspaceGate({ children }: { children: ReactNode }) {
 export function SiderFooter() {
   const { session } = useSession();
   if (!session) return null;
-  const { user } = session;
-  const name = user.name || user.account || '未登录';
   return <div className="pro-sider-footer">
-    <Avatar size={24} className="pro-sider-avatar">{(name || '?').slice(0, 1)}</Avatar>
-    <span className="pro-sider-user" title={name}>{name}</span>
+    <AppstoreOutlined aria-hidden="true" />
+    <span>学情分析工作空间</span>
   </div>;
 }
 

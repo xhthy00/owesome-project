@@ -15,7 +15,7 @@ function dateKey(date: Date) {
 function recentGroups(tasks: Conversation[], now = new Date()) {
   const days = Array.from({ length: 5 }, (_, offset) => {
     const key = dateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset));
-    return { key, label: offset === 0 ? '今天' : offset === 1 ? '昨天' : key, openByDefault: false, tasks: [] as { task: Conversation; time: number }[] };
+    return { key, label: offset === 0 ? '今天' : offset === 1 ? '昨天' : key, tasks: [] as { task: Conversation; time: number }[] };
   });
   const byKey = new Map(days.map(day => [day.key, day]));
   for (const task of tasks) {
@@ -47,6 +47,7 @@ export function TaskMenu() {
   useEffect(() => {
     let active = true;
     setTasks([]);
+    setOpenByDate({});
     if (!session) return;
     async function load() {
       try {
@@ -94,7 +95,7 @@ export function TaskMenu() {
   if (!session) return null;
   const groups = recentGroups(tasks);
   return <div className="pro-task-menu">
-    <Button className="pro-task-new" block icon={<PlusOutlined />} onClick={() => {
+    <Button type="primary" className="pro-task-new" block icon={<PlusOutlined />} onClick={() => {
       window.dispatchEvent(new Event('chat:new-task'));
       history.push('/chat');
     }}>新建任务</Button>
@@ -103,7 +104,7 @@ export function TaskMenu() {
       <Tooltip title="查看全部任务"><Link to="/conversations" aria-label="查看全部任务"><RightOutlined /></Link></Tooltip>
     </div>
     {groups.length ? <Collapse ghost size="small" expandIconPlacement="end"
-      activeKey={groups.filter(group => openByDate[group.key] ?? group.openByDefault).map(group => group.key)}
+      activeKey={groups.filter((group, index) => openByDate[group.key] ?? (index === 0 || group.tasks.some(task => String(task.id) === activeId))).map(group => group.key)}
       onChange={keys => setOpenByDate(Object.fromEntries(groups.map(group => [group.key, keys.includes(group.key)])))}
       items={groups.map(group => ({
         key: group.key,

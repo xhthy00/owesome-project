@@ -1,5 +1,10 @@
 @import "./globals.css";
 
+.pro-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.pro-brand > svg { flex: none; }
+.pro-brand-name { color: var(--color-text-1); font-size: 18px; font-weight: 600; white-space: nowrap; }
+.pro-brand-subtitle { border-inline-start: 1px solid var(--color-border-1); padding-inline-start: 12px; margin-inline-start: 2px; color: var(--color-text-3); font-size: var(--font-xs); font-weight: 400; line-height: 1.5; white-space: nowrap; }
+.pro-account { color: var(--color-text-2); font-size: var(--font-sm); }
 .pro-workspace-page .ant-pro-page-container-children-container { padding-block-end: 28px; }
 .pro-business-page { min-width: 0; max-width: 1560px; margin-inline: auto; }
 .pro-account .ant-avatar { background: var(--ant-color-primary-bg); color: var(--ant-color-primary-text); }
@@ -178,53 +183,31 @@
   .pro-account-name { display: none; }
 }
 
-/* ---------- 侧栏底色（方案 C：浅蓝渐变，和浅灰内容区分层） ---------- */
+/* ---------- 工作空间侧栏 ---------- */
 .ant-layout-sider, .ant-pro-sider {
-  background: linear-gradient(180deg, #f8fbff 0%, #eaf2ff 50%, #dfeafb 100%) !important;
+  background: var(--color-surface-0) !important;
 }
-.ant-layout-sider .ant-layout-sider-children { border-inline-end-color: var(--color-brand-tint-border); }
-.dark .ant-layout-sider, .dark .ant-pro-sider {
-  background: linear-gradient(180deg, #0f172a 0%, #101b2d 55%, #0d1a2b 100%) !important;
-}
-.dark .ant-layout-sider .ant-layout-sider-children { border-inline-end-color: var(--color-border-1); }
+.ant-layout-sider .ant-layout-sider-children { border-inline-end-color: var(--color-border-1); }
 
-/* 侧栏底部纹理：铺在菜单与底栏之间的空白区，随空白高度伸缩、向上渐隐 */
-.pro-sider-gap {
-  flex: 1 1 auto; min-height: 16px; pointer-events: none;
-  background-image:
-    repeating-linear-gradient(60deg, rgba(37, 99, 235, .06) 0 1px, transparent 1px 26px),
-    repeating-linear-gradient(-60deg, rgba(37, 99, 235, .06) 0 1px, transparent 1px 26px);
-  -webkit-mask-image: linear-gradient(to top, #000 0%, rgba(0, 0, 0, .45) 60%, transparent 100%);
-  mask-image: linear-gradient(to top, #000 0%, rgba(0, 0, 0, .45) 60%, transparent 100%);
-}
-.dark .pro-sider-gap {
-  background-image:
-    repeating-linear-gradient(60deg, rgba(147, 197, 253, .08) 0 1px, transparent 1px 26px),
-    repeating-linear-gradient(-60deg, rgba(147, 197, 253, .08) 0 1px, transparent 1px 26px);
-}
+.pro-sider-gap { flex: 1 1 auto; min-height: 16px; pointer-events: none; }
 
-/* ---------- 侧栏（方案 A：层级 / 选中态 / 任务列表 / 底部账号） ---------- */
 /* 三段式：菜单 / 任务列表（独立滚动）/ 固定底栏，底栏不会被任务挤走 */
 .pro-sider-flow { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.pro-sider-flow > .ant-menu { flex: 0 1 auto; min-height: 0; height: auto; overflow-y: auto; border-inline-end: 0 !important; background: transparent; }
+.pro-sider-label { flex: none; padding: 20px 28px 12px; color: var(--color-text-3); font-size: var(--font-xs); letter-spacing: .06em; }
+.pro-sider-flow > .ant-menu { flex: 0 0 auto; min-height: 0; max-height: 55%; height: auto; overflow-y: auto; border-inline-end: 0 !important; background: transparent; }
 .pro-sider-tasks { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px 12px 0; }
 
-/* 一级入口保持清晰的字号，图标按功能区分。 */
-.pro-sider-flow > .ant-menu > .ant-menu-item { position: relative; color: var(--color-text-1); font-size: 15px; font-weight: 600; }
+/* 同一层级统一图标和字重，仅当前位置使用品牌色。 */
+.pro-sider-flow > .ant-menu > .ant-menu-item { position: relative; color: var(--color-text-2); font-size: var(--font-base); font-weight: 500; }
 .ant-menu .anticon.pro-nav-icon {
-  display: inline-grid; width: 24px; height: 24px; flex: none; place-items: center;
-  color: var(--pro-nav-ink); background: var(--pro-nav-bg);
-  border-radius: var(--radius-sm); font-size: 15px; vertical-align: middle;
+  display: inline-grid; width: 20px; height: 20px; flex: none; place-items: center;
+  color: var(--color-text-3); background: transparent; font-size: var(--font-lg); vertical-align: middle;
 }
-.anticon.pro-nav-icon-blue { --pro-nav-ink: var(--accent-blue); --pro-nav-bg: var(--accent-blue-tint); }
-.anticon.pro-nav-icon-violet { --pro-nav-ink: var(--accent-violet); --pro-nav-bg: var(--accent-violet-tint); }
-.anticon.pro-nav-icon-green { --pro-nav-ink: var(--accent-green); --pro-nav-bg: var(--accent-green-tint); }
-.anticon.pro-nav-icon-amber { --pro-nav-ink: var(--accent-amber); --pro-nav-bg: var(--accent-amber-tint); }
-.anticon.pro-nav-icon-teal { --pro-nav-ink: var(--color-success); --pro-nav-bg: var(--color-success-tint); }
+.pro-sider-flow .ant-menu-item-selected .anticon.pro-nav-icon { color: var(--color-brand-ink); }
 
 /* 分组标题通过字重与一级入口区分。 */
 .pro-sider-flow > .ant-menu > .ant-menu-submenu > .ant-menu-submenu-title {
-  margin-top: 6px; color: var(--color-text-2); font-size: 14.5px; font-weight: 500;
+  margin-top: 4px; color: var(--color-text-2); font-size: var(--font-base); font-weight: 500;
 }
 .pro-sider-flow > .ant-menu .ant-menu-submenu-arrow { color: var(--color-text-4); }
 
@@ -238,14 +221,11 @@
 }
 .pro-sider-flow .ant-menu-sub .ant-menu-item-selected::before { background: var(--color-brand-solid); }
 
-/* 选中态：品牌半透明底 + 左侧指示条（在浅蓝侧栏上也能拉开层次） */
+/* 选中态由浅蓝底和文字字重共同标识。 */
 .pro-sider-flow .ant-menu-item-selected {
-  background: color-mix(in srgb, var(--color-brand-solid) 12%, transparent) !important;
+  background: var(--color-brand-tint) !important;
   color: var(--color-brand-ink) !important;
-}
-.pro-sider-flow > .ant-menu > .ant-menu-item-selected::before {
-  content: ""; position: absolute; inset-inline-start: 0; top: 8px; bottom: 8px; width: 3px;
-  border-radius: 0 3px 3px 0; background: var(--color-brand-solid);
+  font-weight: 600;
 }
 
 /* 最近任务区：撑满菜单与底栏之间的空间，自身滚动 */
@@ -253,25 +233,24 @@
   display: flex; flex-direction: column; min-height: 100%; margin: 0; padding: 12px 0 8px;
   border-top: 1px solid var(--color-border-1);
 }
-/* 新建任务：浅品牌底 + 品牌字，轻量但仍是侧栏的主入口 */
+/* 新建任务是侧栏唯一的实心主按钮。 */
 .pro-sider-flow .pro-task-menu .ant-btn.pro-task-new {
-  height: 40px; border: 1px solid var(--color-brand-tint-border); border-radius: 10px;
-  background: var(--color-brand-tint); color: var(--color-brand-ink);
-  font-size: 14px; font-weight: 600; box-shadow: none;
-  transition: background-color 160ms ease, border-color 160ms ease, transform 100ms ease;
+  height: 40px; border: 1px solid var(--color-brand-solid); border-radius: var(--radius-md);
+  background: var(--color-brand-solid); color: var(--color-on-brand);
+  font-size: var(--font-base); font-weight: 500; box-shadow: var(--shadow-1);
+  transition: background-color var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out);
 }
 .pro-sider-flow .pro-task-menu .ant-btn.pro-task-new:hover:not(:disabled) {
-  border-color: var(--color-brand-tint-border);
-  background: var(--color-brand-tint-strong);
-  color: var(--color-brand-ink);
+  border-color: var(--color-brand-solid-hover);
+  background: var(--color-brand-solid-hover);
+  color: var(--color-on-brand);
 }
-.pro-sider-flow .pro-task-menu .ant-btn.pro-task-new:active:not(:disabled) { transform: translateY(1px); }
-.pro-sider-flow .pro-task-menu .ant-btn.pro-task-new .anticon { color: var(--color-brand-ink); font-size: 15px; }
+.pro-sider-flow .pro-task-menu .ant-btn.pro-task-new .anticon { color: inherit; font-size: var(--font-lg); }
 .pro-sider-flow .pro-task-menu .ant-btn.pro-task-new:focus-visible { outline: 2px solid var(--color-brand-solid); outline-offset: 2px; }
-.pro-task-heading { display: flex; align-items: center; justify-content: space-between; margin: 12px 0 4px; padding-inline: 8px; color: var(--color-text-3); font-size: 12px; }
+.pro-task-heading { display: flex; align-items: center; justify-content: space-between; margin: 20px 0 8px; padding-inline: 8px; color: var(--color-text-3); font-size: var(--font-xs); }
 .pro-task-heading a { display: inline-flex; align-items: center; padding: 4px; color: inherit; }
 .pro-task-menu .ant-collapse { background: transparent; }
-.pro-task-menu .ant-collapse .ant-collapse-header { padding: 4px 8px; color: var(--color-text-3); font-size: 11.5px; }
+.pro-task-menu .ant-collapse .ant-collapse-header { padding: 6px 8px; color: var(--color-text-3); font-size: var(--font-xs); }
 .pro-task-menu .ant-collapse .ant-collapse-item .ant-collapse-body { padding: 0; }
 .pro-task-empty { padding: 4px 8px; color: var(--color-text-3); font-size: 12px; }
 
@@ -287,17 +266,17 @@
 .pro-task-menu .ant-conversations-label { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; }
 .pro-task-label { display: flex; flex: 1; min-width: 0; align-items: center; gap: 8px; }
 .pro-task-title { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pro-task-time { flex: none; color: var(--color-text-4); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.pro-task-time { flex: none; color: var(--color-text-3); font-size: var(--font-xs); font-variant-numeric: tabular-nums; }
 .pro-task-menu .ant-conversations-menu-icon { color: var(--color-text-3); }
 
-/* 侧栏底部：账号 / 工作空间 */
+/* 账号统一在顶栏，底部只显示工作空间标识。 */
 .pro-sider-footer {
-  display: flex; align-items: center; gap: 8px; margin-top: auto;
+  display: flex; flex: none; align-items: center; gap: 8px; margin-top: auto;
   padding: 10px 14px; border-top: 1px solid var(--color-border-1);
-  color: var(--color-text-2); font-size: 13px;
+  color: var(--color-text-3); font-size: var(--font-xs);
 }
-.pro-sider-avatar { flex: none; background: var(--color-brand-tint) !important; color: var(--color-brand-ink) !important; font-size: 11px !important; }
-.pro-sider-user { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pro-sider-footer > .anticon { flex: none; }
+.pro-sider-footer > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 问数整页铺满：/chat 不套 PageContainer，由 WorkspaceGate 给 body 加 .pro-chat-page，
    并用 --pro-chat-header-height 记录真实顶栏高度，避免写死 56px。 */
 .pro-chat-route { height: calc(100dvh - var(--pro-chat-header-height, 56px)); display: flex; flex-direction: column; min-height: 0; background: var(--ant-color-bg-container); }
@@ -312,3 +291,13 @@ body.pro-chat-page .ant-pro-layout-content { padding: 0; overflow: hidden; }
 .ant-layout-sider, .ant-layout-sider * { scrollbar-width: none; -ms-overflow-style: none; }
 .ant-layout-sider::-webkit-scrollbar,
 .ant-layout-sider *::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+@media (max-width: 760px) {
+  .pro-brand-subtitle { display: none; }
+  .pro-brand-name { font-size: var(--font-lg); }
+  .pro-task-heading a { min-width: 44px; min-height: 44px; justify-content: center; }
+  .pro-task-menu .ant-conversations-item { min-height: 44px; height: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pro-sider-flow .pro-task-menu .ant-btn.pro-task-new { transition: none; }
+}

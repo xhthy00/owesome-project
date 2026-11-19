@@ -5,13 +5,13 @@ export const CHAT_MENU_TITLE = 'AI 学情分析';
 
 const settings = {
   title: '学情智诊-AI分析平台',
-  colorPrimary: '#1677ff',
+  colorPrimary: '#2563eb',
   layout: 'mix',
   navTheme: 'light',
   contentWidth: 'Fluid',
   fixedHeader: false,
   fixSiderbar: true,
-  siderWidth: 256,
+  siderWidth: 240,
 } satisfies ProLayoutProps;
 
 export default settings;
