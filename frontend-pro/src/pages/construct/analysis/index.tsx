@@ -74,8 +74,9 @@ const OPEN_REPORT_TYPES = new Set([
   "elite_rank_shift"
 ]);
 
-/** 校长/老师可见：本校/本班口径，不含全市局端报告 */
+/** 校长/老师可见：公开达线汇总和本校/本班报告。 */
 const SCHOOL_TEACHER_REPORT_TYPES = new Set([
+  "line_reach",
   "class_overview",
   "grade_comparison",
   "subject_diagnosis",
@@ -377,6 +378,8 @@ export default function AnalysisToolPage() {
     };
   }, [form, v2DatasourceId]);
 
+  const publicLineReach = selected?.report_type === "line_reach";
+
   useEffect(() => {
     if (!datasourceId) {
       setMeta({ schools: [], exams: [], classes: [], subjects: [], cohorts: [] });
@@ -384,8 +387,9 @@ export default function AnalysisToolPage() {
     }
     let cancelled = false;
     setMetaLoading(true);
-    void educationApi
-      .listMetaOptions({
+    const options = publicLineReach
+      ? educationApi.getLineReachMeta().then(({ exams }) => ({ schools: [], exams, classes: [], subjects: [], cohorts: [] }))
+      : educationApi.listMetaOptions({
         datasource_id: datasourceId,
         school_name: schoolName || undefined,
         exam_name: Array.isArray(examName)
@@ -394,7 +398,8 @@ export default function AnalysisToolPage() {
         class_name: className || undefined,
         subject: subjectName || undefined,
         jc: jc || undefined
-      })
+      });
+    void options
       .then((opts) => {
         if (!cancelled) setMeta(opts);
       })
@@ -409,7 +414,7 @@ export default function AnalysisToolPage() {
     return () => {
       cancelled = true;
     };
-  }, [datasourceId, schoolName, examName, className, subjectName, jc]);
+  }, [datasourceId, schoolName, examName, className, subjectName, jc, publicLineReach]);
 
   const toSelectOptions = (items: string[]) => items.map((v) => ({ value: v, label: v }));
 
@@ -435,7 +440,7 @@ export default function AnalysisToolPage() {
 
   const visibleSkills = useMemo(() => {
     if (isV2 && !v2Citywide) {
-      // v2 非市级授权：不提供局端/全市报告；尖子生全市排名需要市级授权。
+      // 非市级账号可用公开达线汇总和本校/本班报告。
       return skills.filter(
         (s) =>
           SCHOOL_TEACHER_REPORT_TYPES.has(s.report_type) &&
@@ -524,7 +529,7 @@ export default function AnalysisToolPage() {
       if (values.compare_exam?.trim()) filters.compare_exam = values.compare_exam.trim();
       if (values.top_n) filters.top_n = String(values.top_n);
       if (values.subject?.trim()) filters.subject = values.subject.trim();
-      if (values.school_name?.trim()) filters.school_name = values.school_name.trim();
+      if (!publicLineReach && values.school_name?.trim()) filters.school_name = values.school_name.trim();
       if (values.student_name?.trim()) filters.student_name = values.student_name.trim();
       if (values.jc?.trim()) filters.jc = values.jc.trim();
 

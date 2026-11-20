@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import sqlite3
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -130,7 +132,7 @@ def _scope(level: str, capabilities=(), **fields) -> ReportScope:
     )
 
 
-def _client(monkeypatch, scope: ReportScope):
+def _client(monkeypatch, scope: ReportScope, execute_sql=None):
     app = FastAPI()
     register_routers(app)
     app.dependency_overrides[get_current_user] = lambda: UserResponse(
@@ -166,12 +168,11 @@ def _client(monkeypatch, scope: ReportScope):
                     ],
                 }
             if "SELECT DISTINCT" in sql and "tb_score_overview" in sql:
-                assert all(value in sql for value in ["高三(1)班", "2026届", "LIKE '物%'"])
                 return {
-                    "columns": ["exam_name"],
-                    "rows": [[name] for name in [
-                        "2026届高三9月月考", "2026届高三10月月考", "2026届高三12月月考",
-                        "2025届高三5月月考",
+                    "columns": ["exam_name", "track"],
+                    "rows": [[name, "物理类"] for name in [
+                        "2026届高三9月月考", "2026届高三10月月考", "2026届高三11月期中",
+                        "2026届高三12月月考",
                     ]],
                 }
             if reference is None and "tb_fraction_bar" in sql:
@@ -248,7 +249,8 @@ def _client(monkeypatch, scope: ReportScope):
                 }
             return await execute(sql)
 
-    monkeypatch.setattr(overview_api, "_build_orchestrator", lambda *a, **k: _Orch())
+    orchestrator = _Orch() if execute_sql is None else SimpleNamespace(_execute_sql=execute_sql)
+    monkeypatch.setattr(overview_api, "_build_orchestrator", lambda *a, **k: orchestrator)
     return TestClient(app)
 
 
@@ -335,3 +337,89 @@ def test_overview_class_without_grade_baseline_reports_capability(monkeypatch):
     data = resp.json()["data"]
     assert any(item["code"] == "capability_missing" for item in data["notices"])
     assert "grade_baseline" not in data["secondary"]
+
+
+@pytest.fixture
+def scored_exams_db():
+    db = sqlite3.connect(":memory:", check_same_thread=False)
+    db.executescript("""
+        CREATE TABLE tb_score_overview (
+            xx TEXT, dq TEXT, jc TEXT, bj TEXT, anon_stu_id TEXT,
+            exam_name TEXT, zf6m REAL, sx REAL, xkkm TEXT
+        );
+        CREATE TABLE tb_exam_batch (batch_name TEXT, exam_time TEXT, jc TEXT, exam_type TEXT);
+        CREATE TABLE tb_fraction_bar (exam_name TEXT, line_name TEXT, threshold REAL, track TEXT);
+
+        INSERT INTO tb_exam_batch VALUES
+            ('2027届高三9月月考', '2026-09-10', '2027', 'city'),
+            ('2027届高三11月期中', '2026-11-10', '2027', 'city'),
+            ('2027届高三11月校考', '2026-11-16', '2027', 'school'),
+            ('2027届高三11月模拟', '2026-11-18', '2027', 'city'),
+            ('2026届补考', '2026-11-19', '2026', 'city');
+        INSERT INTO tb_score_overview VALUES
+            ('A01扬州中学', 'D1', '2027届', '高三(1)班', 's1', '2027届高三9月月考', 600, 110, '物化生'),
+            ('A01扬州中学', 'D1', '2027届', '高三(1)班', 's1', '2027届高三11月期中', 610, 120, '物化生'),
+            ('A01扬州中学', 'D1', '2027届', '高三(2)班', 's2', '2027届高三11月校考', 620, 115, '史政地'),
+            ('A01扬州中学', 'D1', '2027届', '高三(1)班', 's1', '2027届高三11月模拟', NULL, NULL, '物化生'),
+            ('A01扬州中学', 'D1', '2026届', '高三(1)班', 's3', '2026届补考', 630, 130, '物化生');
+        INSERT INTO tb_fraction_bar VALUES
+            ('2027届高三9月月考', '本科线', 500, '物理类'),
+            ('2027届高三11月模拟', '本科线', 500, '物理类'),
+            ('2026届补考', '本科线', 500, '物理类');
+    """)
+    yield db
+    db.close()
+
+
+def _scored_exams_client(monkeypatch, db, level: str, **fields):
+    scope = _scope(level, school_id="A01扬州中学", cohort_id="2027届", **fields)
+
+    async def execute(sql: str):
+        cursor = db.execute(scope.apply_sql(sql, "postgres"))
+        return {"columns": [column[0] for column in cursor.description], "rows": cursor.fetchall()}
+
+    return _client(monkeypatch, scope, execute)
+
+
+def test_class_overview_exams_follow_scope_and_default_to_latest_scored_exam(monkeypatch, scored_exams_db):
+    client = _scored_exams_client(monkeypatch, scored_exams_db, "class", class_id="高三(1)班")
+    path = "/api/v1/education/overview"
+    data = client.get(path).json()["data"]
+    assert data["filters"]["exams"] == ["2027届高三11月期中", "2027届高三9月月考"]
+    assert data["exam_name"] == "2027届高三11月期中"
+    assert data["kpis"] == {"candidates": 1, "by_line": []}
+    assert [row["total"] for row in data["chart"]["rows"]] == [610]
+
+    old = client.get(path, params={"exam_name": "2027届高三9月月考"}).json()["data"]
+    assert old["exam_name"] == "2027届高三9月月考"
+    assert old["kpis"]["by_line"][0]["reached"] == 1
+
+    unauthorized = client.get(path, params={"exam_name": "2026届补考"}).json()["data"]
+    assert unauthorized["exam_name"] == data["exam_name"]
+    assert unauthorized["chart"]["rows"] == data["chart"]["rows"]
+
+    empty = client.get(path, params={"cohort": "2026届"}).json()["data"]
+    assert empty["exam_name"] is None
+    assert empty["filters"]["exams"] == []
+    assert empty["chart"]["rows"] == []
+
+
+def test_grade_overview_retains_counts_when_latest_exam_has_no_lines(monkeypatch, scored_exams_db):
+    client = _scored_exams_client(monkeypatch, scored_exams_db, "grade")
+    data = client.get("/api/v1/education/overview").json()["data"]
+    assert data["exam_name"] == "2027届高三11月校考"
+    assert data["kpis"] == {"candidates": 1, "by_line": []}
+    assert data["chart"]["rows"][0]["label"] == "高三(2)班"
+    assert "no_lines" in {item["code"] for item in data["notices"]}
+
+
+def test_personal_overview_defaults_to_latest_and_all_exams_remains_available(monkeypatch, scored_exams_db):
+    client = _scored_exams_client(monkeypatch, scored_exams_db, "student", student_id="s1")
+    path = "/api/v1/education/overview"
+    latest = client.get(path).json()["data"]
+    assert latest["exam_name"] == "2027届高三11月期中"
+    assert [row["total"] for row in latest["chart"]["rows"]] == [610]
+    history = client.get(path, params={"exam_name": ""}).json()["data"]
+    assert history["exam_name"] == ""
+    assert [row["total"] for row in history["chart"]["rows"]] == [600, 610]
+    assert history["secondary"]["subject_avg"][0]["avg"] == 120

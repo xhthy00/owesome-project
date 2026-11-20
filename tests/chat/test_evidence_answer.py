@@ -163,8 +163,11 @@ def test_successful_comparison_survives_rejected_school_ranking(runtime_harness,
         data for event, data in events if event == "tool_result" and not data.get("success")
     ]
     assert failures[0]["data"]["error_detail"]["reason"] == "reference_grouping_not_allowed"
-    answer = next(data["content"] for event, data in events if event == "summary")
+    summary = next(data for event, data in events if event == "summary")
+    answer = summary["content"]
     assert ANSWER in answer and "无法读取" not in answer
+    assert ("run_status", {"status": "completed"}) in events
+    assert saved[0]["exec_result"]["run_status"] == "completed"
     assert saved[0]["is_success"] and saved[0]["sql_error"] is None
     assert saved[0]["exec_result"]["answer_coverage"]["coverage"] == "complete"
     assert any(not call.get("success") for call in saved[0]["tool_calls"])
@@ -180,11 +183,15 @@ def test_partial_synthesis_keeps_values_without_claiming_whole_question_complete
             tool_call(COMPARISON, "comparison"),
             tool_call(EXTRA_SCHOOL_LIST, "ranking"),
             AIMessage(content="权限不足，没有结果"),
-            verified_reply(coverage="partial", answer="已查到本校数学均分114.50分。"),
+            verified_reply(coverage="partial", answer="已查到本校数学均分114.50分。各校排名尚未取得。"),
         ]
     )
-    answer = next(data["content"] for event, data in events if event == "summary")
-    assert "114.50" in answer and "没有结果" not in answer
+    summary = next(data for event, data in events if event == "summary")
+    answer = summary["content"]
+    assert "114.50" in answer and "各校排名尚未取得" in answer and "没有结果" not in answer
+    assert ("run_status", {"status": "partial"}) in events
+    assert saved[0]["exec_result"]["run_status"] == "partial"
+    assert saved[0]["sql_error"] is None
     assert not saved[0]["is_success"]
     assert saved[0]["exec_result"]["answer_coverage"]["coverage"] == "partial"
 
@@ -211,9 +218,12 @@ def test_revocation_during_answer_synthesis_prevents_republishing_old_values(
             verified_reply(),
         ]
     )
-    answer = next(data["content"] for event, data in events if event == "summary")
+    summary = next(data for event, data in events if event == "summary")
+    answer = summary["content"]
     assert "114.5" not in answer and "89" not in answer
     assert "上下文" in answer and not saved[0]["is_success"]
+    assert ("run_status", {"status": "failed"}) in events
+    assert saved[0]["exec_result"]["run_status"] == "failed"
     assert "answer_coverage" not in saved[0]["exec_result"]
 
 
@@ -239,6 +249,43 @@ def test_model_call_limit_uses_a_table_without_additional_synthesis(runtime_harn
     answer = next(data["content"] for event, data in events if event == "summary")
     assert "114.5" in answer and "89" in answer and "25.5" in answer
     assert saved[0]["exec_result"]["answer_coverage"]["model_generated"] is False
+
+
+@pytest.mark.parametrize("has_result", [True, False])
+def test_execution_failure_only_reports_a_full_failure_without_results(runtime_harness, monkeypatch, has_result):
+    from types import SimpleNamespace
+
+    from src.chat.service import deepagents_runtime as runtime
+    from src.chat.service import semantic_query
+
+    harness = runtime_harness
+    records = configure_comparison(harness, monkeypatch)
+    successful_run = semantic_query.run_sql_with_auto_fix
+    calls = 0
+
+    def execute(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if has_result and calls == 1:
+            return successful_run(*args, **kwargs)
+        return SimpleNamespace(success=False, result=None)
+
+    async def fallback(*, results, **kwargs):
+        return evidence_table(results)
+
+    monkeypatch.setattr(semantic_query, "run_sql_with_auto_fix", execute)
+    monkeypatch.setattr(runtime, "summarize_verified_evidence", fallback)
+    responses = [tool_call(COMPARISON, "main")] if has_result else []
+    responses += [tool_call(COMPARISON, "failed"), AIMessage(content="查询结束。")]
+    events = harness.run(responses)
+    summary = next(data["content"] for event, data in events if event == "summary")
+
+    status = "partial" if has_result else "failed"
+    assert ("run_status", {"status": status}) in events
+    assert records[0]["exec_result"]["run_status"] == status
+    assert ("无法给出本次结果" in summary) is not has_result
+    if has_result:
+        assert "114.5" in summary and "部分查询项未返回数据" in summary
 
 
 def test_empty_success_is_not_misreported_as_an_authorization_change():

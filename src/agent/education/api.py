@@ -293,12 +293,6 @@ def _assert_v2_report_capability(report_scope: Any, report_type: Any) -> None:
         raise ForbiddenException("局端分析报告需要市级数据授权")
     if name == "elite_rank_shift" and not report_scope.allows_city_position():
         raise ForbiddenException("尖子生排名变化报告需要市级数据授权")
-    if (
-        name == "line_reach"
-        and report_scope.needs_grade_reference
-        and not report_scope.allows_grade_reference()
-    ):
-        raise ForbiddenException("当前账号未开通年级均分基准能力，无法生成达线报告")
 
 
 def _raise_if_out_of_scope(
@@ -568,7 +562,8 @@ async def generate_report(
 
     filters = {str(k): str(v) for k, v in (req.filters or {}).items() if v is not None and str(v).strip()}
     ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
-    report_scope = _load_report_scope(current_user, req.datasource_id, int(workspace_oid))
+    public_line_reach = report_type == ReportType.LINE_REACH
+    report_scope = None if public_line_reach else _load_report_scope(current_user, req.datasource_id, int(workspace_oid))
     if report_scope is not None:
         ws_oid = int(workspace_oid)
         _apply_scope_defaults(report_scope, filters)
@@ -643,7 +638,7 @@ async def generate_report(
             if kind == "forbidden":
                 raise ForbiddenException(msg)
             raise BadRequestException(msg)
-    if report_scope is None:
+    if report_scope is None and not public_line_reach:
         _raise_if_out_of_scope(
             int(current_user.id),
             filters.get("class_name") or filters.get("class"),
@@ -660,12 +655,19 @@ async def generate_report(
 
     with get_db_session() as session:
         assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
-    orch = _build_orchestrator(
-        req.datasource_id,
-        ws_oid,
-        user_id=int(current_user.id),
-        report_scope=report_scope,
-    )
+    if public_line_reach:
+        async def resolve_line_reach_schema() -> ScoreSchemaMapping:
+            # The report reads precomputed counts and never uses student score fields.
+            return ScoreSchemaMapping(mode="wide", table="", subject_columns={}, fields={})
+
+        orch = ReportOrchestrator(_public_line_reach_reader(), resolve_line_reach_schema)
+    else:
+        orch = _build_orchestrator(
+            req.datasource_id,
+            ws_oid,
+            user_id=int(current_user.id),
+            report_scope=report_scope,
+        )
     res = await orch.run_spec(spec)
     title = orch._title(spec)
     err = res.error
@@ -1266,12 +1268,13 @@ def _overview_agg_sql(
     exam_name: str,
     track: str,
     include_school: bool = True,
+    allow_without_bars: bool = False,
 ) -> str | None:
     """区县/学校/选科达线聚合 SQL；缺总分列时返回 None。
 
     始终按选科分组，达线 CASE 只比较总分，便于一次查出全市/物理/历史。
     """
-    if not ov_cols or not bars:
+    if not ov_cols or (not bars and not allow_without_bars):
         return None
     total_col = _first_col(ov_cols, ("zf6m", "zf4m", "zf3m", "zf", "total", "total_score"))
     if not total_col:
@@ -1306,7 +1309,7 @@ def _overview_agg_sql(
     return (
         f"SELECT {d_expr} AS district, {s_expr} AS school_name, "
         f"{_track_case_sql(track_col)} AS track, "
-        f"COUNT(*) AS candidates, {', '.join(reached)} "
+        f"{', '.join(['COUNT(*) AS candidates', *reached])} "
         f"FROM tb_score_overview{where_sql} "
         f"{group_by} ORDER BY 1, 2, 3 LIMIT 5000"
     )
@@ -1322,6 +1325,31 @@ async def _load_line_reach_bar_rows(execute) -> list[dict[str, Any]]:
     return await _fetch_dicts(execute, "SELECT * FROM tb_fraction_bar LIMIT 500")
 
 
+def _public_line_reach_reader():
+    """Run the dashboard's fixed cutoff and aggregate queries on the exam source."""
+    from src.common.core.config import get_settings
+    from src.common.core.database import get_db_session
+    from src.common.utils.aes import decrypt_conf
+    from src.datasource.db.db import execute_sql
+
+    with get_db_session() as session:
+        source = _require_exam_datasource(session)
+        db_type = source.type
+        config = {
+            **decrypt_conf(source.configuration),
+            "read_only": True,
+            "query_timeout_seconds": get_settings().chat_query_timeout_seconds,
+        }
+
+    async def read(sql: str) -> dict:
+        ok, _, result = await asyncio.to_thread(execute_sql, db_type, config, sql)
+        if not ok or not isinstance(result, dict):
+            raise RuntimeError("读取达线看板数据失败")
+        return result
+
+    return read
+
+
 @router.get("/dashboards/line-reach/meta")
 async def line_reach_meta(
     datasource_id: str | None = Query(None, description="已忽略；始终解析名为 exam 的数据源"),
@@ -1329,40 +1357,10 @@ async def line_reach_meta(
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     """达线看板筛选项：考试、选科方向。"""
-    from src.agent.education.line_reach import (
-        build_line_reach_payload,
-        can_access_line_reach,
-    )
+    from src.agent.education.line_reach import build_line_reach_payload
 
-    _ = datasource_id
-    ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
-    report_scope = _load_report_scope(current_user, ds_id, int(workspace_oid))
-    if report_scope is not None:
-        if not report_scope.levels & {"city", "district", "school", "grade", "class"}:
-            return error_response(code=403, message="学生账号不可查看达线看板")
-        if (
-            report_scope.needs_grade_reference
-            and not report_scope.allows_grade_reference()
-        ):
-            return error_response(
-                code=403, message="当前账号未开通年级均分基准能力，无法查看达线看板"
-            )
-        scope = _report_legacy_scope(report_scope, scope)
-    if not can_access_line_reach(scope):
-        return error_response(code=403, message="学生账号不可查看达线看板")
-
-    orch = _build_orchestrator(
-        ds_id,
-        ds_oid,
-        user_id=int(current_user.id),
-        report_scope=report_scope,
-    )
-    bar_rows = await _load_line_reach_bar_rows(orch._execute_sql)
-    payload = build_line_reach_payload(
-        bar_rows,
-        [],
-        scope=scope,
-    )
+    bar_rows = await _load_line_reach_bar_rows(_public_line_reach_reader())
+    payload = build_line_reach_payload(bar_rows, [])
     return success_response(
         {
             "accessible": True,
@@ -1383,63 +1381,30 @@ async def line_reach_dashboard(
 ) -> dict:
     """各地区预测线达线看板：全市 KPI + 区县表（可含学校展开）。"""
     from src.agent.education.line_reach import (
-        can_access_line_reach,
         normalize_fraction_bars,
         payload_from_school_agg,
         remap_agg_rows,
         rows_as_dicts,
     )
 
-    _ = datasource_id
-    ds_id, ds_oid, scope = _exam_line_tool_context(current_user)
-    report_scope = _load_report_scope(current_user, ds_id, int(workspace_oid))
-    if report_scope is not None:
-        if not report_scope.levels & {"city", "district", "school", "grade", "class"}:
-            return error_response(code=403, message="学生账号不可查看达线看板")
-        if (
-            report_scope.needs_grade_reference
-            and not report_scope.allows_grade_reference()
-        ):
-            return error_response(
-                code=403, message="当前账号未开通年级均分基准能力，无法查看达线看板"
-            )
-        scope = _report_legacy_scope(report_scope, scope)
-    if not can_access_line_reach(scope):
-        return error_response(code=403, message="学生账号不可查看达线看板")
-
-    orch = _build_orchestrator(
-        ds_id,
-        ds_oid,
-        user_id=int(current_user.id),
-        report_scope=report_scope,
-    )
-    execute = orch._execute_sql
+    execute = _public_line_reach_reader()
     exam = (exam_name or "").strip()
     track_v = (track or "").strip()
-    bar_rows, ov_cols = await asyncio.gather(
+    bar_rows, overview_schema = await asyncio.gather(
         _load_line_reach_bar_rows(execute),
-        _probe_columns(execute, "tb_score_overview"),
+        execute("SELECT * FROM tb_score_overview LIMIT 0"),
     )
+    ov_cols = [str(col) for col in overview_schema.get("columns", [])]
     bars_all = normalize_fraction_bars(bar_rows)
     exams = sorted({str(b.get("exam_name") or "") for b in bars_all if b.get("exam_name")})
     tracks = sorted({str(b.get("track") or "") for b in bars_all if b.get("track")})
     if not exam and exams:
         exam = exams[0]
     use_bars = _filter_bars(bars_all, exam, "")
-    hide_schools = scope.edu_role in ("school_admin", "teacher")
-    agg_sql = _overview_agg_sql(
-        ov_cols, use_bars, exam_name=exam, track="", include_school=not hide_schools
-    )
+    agg_sql = _overview_agg_sql(ov_cols, use_bars, exam_name=exam, track="")
     agg_rows: list[dict[str, Any]] = []
     if agg_sql:
-        if (
-            report_scope is not None
-            and report_scope.needs_grade_reference
-            and report_scope.allows_grade_reference()
-        ):
-            result = await orch._execute_reference(agg_sql, "grade")
-        else:
-            result = await execute(agg_sql)
+        result = await execute(agg_sql)
         agg_rows = rows_as_dicts(result.get("columns") or [], result.get("rows") or [])
 
     def _view(dest_bars: list[dict[str, Any]], view_track: str) -> dict[str, Any]:
@@ -1453,66 +1418,11 @@ async def line_reach_dashboard(
             tracks=tracks,
         )
 
-    citywide_kpis: dict[str, Any] | None = None
-    if (
-        report_scope is not None
-        and not report_scope.citywide
-        and report_scope.allows_city_reference()
-    ):
-        # city_baseline：只允许全市整体 KPI，区县/学校明细仍按授权范围。
-        ref_sql = _overview_agg_sql(
-            ov_cols, use_bars, exam_name=exam, track="", include_school=True
-        )
-        if ref_sql:
-            try:
-                ref_result = await orch._execute_reference(ref_sql, "city")
-                ref_rows = rows_as_dicts(
-                    ref_result.get("columns") or [], ref_result.get("rows") or []
-                )
-                ref_payload = payload_from_school_agg(
-                    remap_agg_rows(ref_rows, use_bars, use_bars),
-                    use_bars,
-                    exam_name=exam,
-                    track="",
-                    exams=exams,
-                    tracks=tracks,
-                )
-                citywide_kpis = ref_payload.get("kpis")
-            except Exception:  # noqa: BLE001 - 基准不可用时保持本范围口径
-                citywide_kpis = None
-
     phys_bars = _filter_bars(use_bars, exam, "物理类")
     hist_bars = _filter_bars(use_bars, exam, "历史类")
     city = _view(use_bars, "")
     physics = _view(phys_bars, "物理类")
     history = _view(hist_bars, "历史类")
-    if citywide_kpis:
-        for p in (city, physics, history):
-            p["kpis"] = citywide_kpis
-    if hide_schools:
-        for p in (city, physics, history):
-            for d in p.get("districts") or []:
-                if isinstance(d, dict):
-                    d["schools"] = []
-    if report_scope is not None and not report_scope.citywide:
-        allowed_districts = {
-            str(x).strip() for x in report_scope.allowed_district_ids() if str(x).strip()
-        }
-        if allowed_districts:
-            for p in (city, physics, history):
-                p["districts"] = [
-                    d
-                    for d in (p.get("districts") or [])
-                    if isinstance(d, dict)
-                    and str(d.get("district") or "").strip() in allowed_districts
-                ]
-        # 只有本校数据时不要把本校数字标成整个区县。
-        if not report_scope.districts and len(report_scope.schools) == 1:
-            label = report_scope.scope_label()
-            for p in (city, physics, history):
-                for d in p.get("districts") or []:
-                    if isinstance(d, dict):
-                        d["district"] = label
 
     def _slice(p: dict[str, Any]) -> dict[str, Any]:
         return {"lines": p.get("lines") or [], "kpis": p.get("kpis") or {}, "districts": p.get("districts") or []}

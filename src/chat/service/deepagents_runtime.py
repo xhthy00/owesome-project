@@ -116,6 +116,7 @@ _PLAN_FAILURE = "本轮未能生成可执行的步骤计划，请重试。"
 _MODEL_REPLY_FAILURE = "本轮未能生成分析结论。"
 _MODEL_OUTPUT_LIMIT = "本轮模型输出达到长度上限，未能完整生成分析。请缩小分析范围或调整模型输出额度。"
 _RUNTIME_FAILURE = "本轮分析执行中断，请重试。"
+_PREDICTION_LINE_QUESTION = re.compile(r"达线|预测线|分数线|本科线|特控线|特招线|贡献分|清北线|南大线|985线|211线")
 # 先缓冲少量正文再开始下发：工具调用轮次常以一句短说明开头，
 # 缓冲区可避免它先闪现再被 answer_discard 清掉。
 _STREAM_PREFIX_CHARS = 24
@@ -487,6 +488,14 @@ async def _run_turn(
             {key: item[key] for key in ("name", "description") if key in item}
             for item in context.get(kind, [])
         ]
+    public_line_reach = any(item["name"] == "v_exam_cutoff_lines" for item in directory["views"])
+    if public_line_reach:
+        directory["public_line_reach"] = True
+    prediction_lines_available = execute and not public_line_reach and explicit_authorization is not None and any(
+        item.get("name") == "tb_score_overview" for item in directory["models"]
+    )
+    if prediction_lines_available:
+        directory["exam_prediction_lines_available"] = True
     context_json = json.dumps(directory, ensure_ascii=False, sort_keys=True)
     preparation_error = ""
     protocol_retried = False
@@ -579,6 +588,7 @@ async def _run_turn(
         if context_lookups >= MAX_CONTEXT_LOOKUPS:
             return json.dumps({"error": "已达到本轮候选探查上限，请根据已有候选确认范围。"}, ensure_ascii=False)
         context_lookups += 1
+        prediction_lines = None
         try:
             validate_context_lookup(sql, context.get("dialect") or "postgres")
             try:
@@ -589,6 +599,8 @@ async def _run_turn(
                 unread_names = list(exc.names)
                 await asyncio.to_thread(lambda: [semantic.describe(name) for name in unread_names])
                 result = await asyncio.to_thread(semantic.run, sql, execute=True)
+            if prediction_lines_available and _PREDICTION_LINE_QUESTION.search(original_question):
+                prediction_lines = await asyncio.to_thread(semantic.prediction_line_context, result)
         except (QuestionAssessmentError, SemanticQueryError) as exc:
             result = {"error": str(exc)}
             if getattr(exc, "detail", None) and exc.detail.get("code") == "AUTH_SCOPE_MISSING":
@@ -641,6 +653,7 @@ async def _run_turn(
             "columns": result["columns"], "rows": result["rows"],
             "row_count": result.get("row_count", len(result["rows"])),
             "rows_truncated": result.get("rows_truncated", False),
+            **({"prediction_lines": prediction_lines} if prediction_lines is not None else {}),
         }, ensure_ascii=False, default=str)
 
     @tool
@@ -1242,6 +1255,24 @@ async def _run_turn(
         f"{_PROMPT}{CLARIFICATION_INSTRUCTIONS if execute and request.conversation_id else ''}\n当前授权范围参考：{scope_for_prompt}。\n"
         f"已发布目录（bundle_id / manifest_hash / dialect / models / views）：{context_json}"
     )
+    if public_line_reach:
+        prompt += (
+            "\n预测线和已发布的达线汇总对所有账号开放。用 v_exam_cutoff_lines 核验考试和读取预测线，"
+            "按问题粒度使用已发布的全市、区县、学校或班级选科达线视图查询汇总。"
+            "核验考试时从 v_exam_cutoff_lines 去重读取 exam_batch_id、exam_name，无需绑定成绩授权元组。"
+            "沿用同考试、同方向、同线种的系统预测线，已有系统线时无需确认线分或补充单科线。"
+            "公开汇总和受授权限制的成绩或贡献分需要分开查询，受限部分的能力不影响公开达线数据。"
+            "合并多个层级的达线结果时，在外层 SELECT 中按计算表达式排序。"
+        )
+    elif prediction_lines_available:
+        prompt += (
+            "\n处理达线率、分数线或贡献分相关问题时，用 lookup_question_context 从 tb_score_overview "
+            "同时读取 exam_batch_id 和 exam_name 核对考试，筛选须包含真实授权元组和适用考试条件。"
+            "唯一考试的核验结果会附带 prediction_lines。沿用系统配置的同考试、同方向、同线种预测线，"
+            "除非用户明确要求模拟自定义分数线。达线率默认按在籍、方向明确且有六门总分的学生计算，"
+            "六门总分达到该方向的线分即达线。不要在已有系统线时追问线分或是否另加单科线。"
+            "预测线读取失败时说明原因，不要让用户手填来绕过故障。"
+        )
     if explicit_authorization is not None:
         capabilities = explicit_authorization.get("capability_catalog") or []
         examples = explicit_authorization.get("reference_examples") or {}
@@ -1546,12 +1577,14 @@ async def _run_turn(
         answer = model_reply_error + "请查看本轮已返回的查询结果。"
     if execute and any(result.get("rows_truncated") for result in evidence):
         answer += "\n查询结果已截断，以上结论仅覆盖返回的数据。"
+    usable_results = any(result.get("rows") for result in evidence)
     if execute and not pending and evidence and permission_recovery.last_error and explicit_authorization is not None:
         try:
             # A failed extra query cannot erase successful evidence. Synthesize the
             # business answer in an isolated, query-free call; host owns error text.
             current_evidence = await revalidate_evidence(semantic.authorization_context, evidence)
             verified = current_evidence.results
+            usable_results = bool(verified)
             finalization_error = current_evidence.error
             if verified:
                 evidence_answer = evidence_table(verified)
@@ -1569,13 +1602,22 @@ async def _run_turn(
                 evidence_answer = None
                 answer = finalization_error.get("user_message", "成功结果需要重新验证，请重新查询。")
                 query_error = answer
+                usable_results = False
+                last_result = None
             elif evidence_answer:
                 answer = evidence_answer.text
                 if evidence_answer.coverage == "complete":
                     query_error = ""
-                    answer += "\n\n补充查询已被当前规则拦截，不影响上述已验证的结果。"
+                    answer += "\n\n补充查询未完成，以上结果已核实。"
                 else:
-                    answer += "\n\n查询说明：" + permission_recovery.public_error()
+                    query_error = query_error or permission_recovery.public_error()
+                    if not evidence_answer.model_generated:
+                        failed_stage = next((
+                            call.get("sub_task") for call in reversed(tool_calls)
+                            if call.get("tool") == "query_semantic" and call.get("success") is False
+                        ), None)
+                        uncovered = f"「{failed_stage}」阶段中的部分查询未返回数据。" if failed_stage else "部分查询项未返回数据。"
+                        answer += "\n\n查询说明：" + uncovered
                 if final_ai_message_id and not (limit_message or model_reply_error or preparation_error):
                     await graph.aupdate_state(config, {"messages": [AIMessage(content=answer, id=final_ai_message_id)],
                         "chat_model_calls": budget.calls if budget else 0,
@@ -1583,6 +1625,7 @@ async def _run_turn(
                     await graph.aupdate_state(config, None, as_node=END)
             else:
                 answer = permission_recovery.public_error()
+                query_error = query_error or answer
             if streamed_text:
                 await emit("answer_discard", {})
                 streamed_text = ""
@@ -1590,7 +1633,11 @@ async def _run_turn(
             await _recover_checkpoint(graph, config, snapshot)
             raise
     elif execute and not pending and evidence and permission_recovery.last_error:
-        answer = permission_recovery.public_error() + "\n已完成的数据见本轮查询结果；未完成部分暂时无法给出结论。"
+        if usable_results:
+            answer += "\n\n部分查询未完成，以上结论仅覆盖已成功返回的数据。"
+        else:
+            answer = permission_recovery.public_error()
+            query_error = query_error or answer
     elif execute and not pending and evidence and query_error:
         answer += "\n部分查询未完成，本轮结论仅覆盖已成功返回的数据。"
     if not execute:
@@ -1637,15 +1684,20 @@ async def _run_turn(
     succeeded = bool(pending or ((evidence or (query_free and answer)) and not (
         limit_message or model_reply_error or preparation_error or query_error
     )))
+    run_status = None
+    if not pending:
+        run_status = "completed" if succeeded else "partial" if usable_results else "failed"
     await emit(
         "step",
         {
             "name": "deepagents",
             "label": "分析问题",
-            "status": "ok" if succeeded else "error",
+            "status": "ok" if succeeded or run_status == "partial" else "error",
         },
     )
     await emit("summary", {"content": answer})
+    if run_status:
+        await emit("run_status", {"status": run_status})
     # The graph has accepted the reply (or ended the old wait). Acknowledge it
     # independently of record persistence, as my-cowork's human lifecycle does.
     if isinstance(payload, Command):
@@ -1660,9 +1712,14 @@ async def _run_turn(
         resolved_question=original_question,
         turn_type="retry" if isinstance(payload, Command) else "standalone",
         sql=last_sql,
-        sql_error=None if succeeded else answer,
+        sql_error=answer if run_status == "failed" else None,
         exec_result={
             **(last_result or {}), "context_boundary": context_key,
+            **({"permission_mode": "model_explicit_v2",
+                "authorization_fingerprint": explicit_authorization["authorization_fingerprint"]}
+               if run_status == "failed" and not last_result and explicit_authorization
+               and "authorization_fingerprint" in explicit_authorization else {}),
+            **({"run_status": run_status} if run_status else {}),
             **({"answer_coverage": {"coverage": evidence_answer.coverage,
                                    "evidence_ids": list(evidence_answer.evidence_ids),
                                    "model_generated": evidence_answer.model_generated}}

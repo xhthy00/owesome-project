@@ -150,7 +150,7 @@ _INSTRUCTIONS = """你只负责把已经成功查询并通过权限校验的数�
 只使用successful_evidence的数值；不要引用失败查询、猜测的数值或历史其他考试。
 围绕original_question及confirmed_followup回答已查到的内容。如果本校均分、全市整体均分和差值均已返回，
 直接说明三个数值、高低及分差，不需要各校均分或校际排名。不能把额外查询失败说成这些数据没查到。
-未覆盖的问题要明确指出，coverage填partial；结果已覆盖原问题填complete。
+未覆盖的请求项要具体指出指标或对照对象，coverage填partial；成功证据已覆盖原问题时，即使还有补充查询，coverage仍填complete。
 引用真正支撑答复的evidence_ids；截断结果不能被当作完整名单或完整统计。
 不要说明权限、SQL报错或系统故障，这些说明由宿主另外处理。"""
 

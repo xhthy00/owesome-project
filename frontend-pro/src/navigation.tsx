@@ -26,10 +26,9 @@ export async function loadMenu(): Promise<MenuDataItem[]> {
     && !(role === 'student' && item.key === 'fraction-bar'));
   const itemOf = ({ key, path, label, icon }: typeof mainRoutes[number]) => ({ key, path, name: label, icon });
   const insights = mainRoutes.filter(item => ['analysis', 'line-reach', 'report-history', 'anomaly-alerts', 'anomaly-rules'].includes(item.key))
-    .filter(item => allowed(item.key)
+    .filter(item => item.key === 'line-reach' || (allowed(item.key)
       && (item.key !== 'anomaly-rules' || admin)
-      && (item.key !== 'line-reach' || role !== 'student')
-      && (item.key !== 'anomaly-alerts' || (role !== 'student' && role !== 'bureau_admin')));
+      && (item.key !== 'anomaly-alerts' || (role !== 'student' && role !== 'bureau_admin'))));
   const menu: MenuDataItem[] = [
     ...(allowed('overview') && role !== 'student' ? [itemOf(mainRoutes[0])] : []),
     { key: 'insights', name: '分析与洞察', icon: <DashboardOutlined className="pro-nav-icon pro-nav-icon-violet" />, children: insights.map(itemOf) },

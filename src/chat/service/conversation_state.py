@@ -51,7 +51,9 @@ def authorization_fingerprint(user_id: int, workspace_oid: int, datasource_id: i
         policy = permission_manifest_for_user(user, workspace_oid, datasource_id)
         if policy is not None:
             assert_workspace_member(session, user, workspace_oid)
-            value["explicit_permission"] = context_for(user, workspace_oid, datasource_id, policy, session=session).fingerprint
+            value["explicit_permission"] = context_for(
+                user, workspace_oid, datasource_id, policy, session=session, allow_empty=True,
+            ).fingerprint
     return fingerprint(value)
 
 
