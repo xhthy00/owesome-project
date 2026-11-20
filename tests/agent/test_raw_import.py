@@ -32,6 +32,7 @@ from src.agent.education.raw_import import (
     _resolve_overview_jc,
     _validate_detail_rows,
     _validate_overview_rows,
+    _write_overview_to_db,
     assert_raw_import_role_allowed,
     build_raw_detail_template,
     build_raw_overview_template,
@@ -272,6 +273,61 @@ def test_parse_overview_keeps_passthrough_others():
     assert "KSH" not in rows[0].others
     assert "YW" not in rows[0].others
     assert "ZF6M" not in rows[0].others
+
+
+def test_overview_write_keeps_grade_columns_missing_on_first_row(monkeypatch):
+    """首行没选化学、生物时，后面行的等级列仍要写入。"""
+    captured: dict[str, list] = {}
+
+    def schema(_db_type, _config, table):
+        if table == "tb_student":
+            return {"id", "school_id", "class", "batch", "jc", "zkcj", "zkmc"}
+        if table == "tb_score_overview":
+            return {
+                "ksh",
+                "exam_name",
+                "exam_batch_id",
+                "sfzh",
+                "xm",
+                "xx",
+                "bj",
+                "jc",
+                "anon_stu_id",
+                "zf6m",
+                "hxdj",
+                "swdj",
+                "zzdj",
+                "dldj",
+            }
+        return set()
+
+    def upsert(_db_type, _config, table, cols, _conflict, rows):
+        if table == "tb_score_overview":
+            captured["cols"] = list(cols)
+            captured["rows"] = [tuple(row.get(col) for col in cols) for row in rows]
+        return len(rows)
+
+    monkeypatch.setattr("src.agent.education.raw_import._schema_columns", schema)
+    monkeypatch.setattr("src.agent.education.raw_import._upsert_dict_rows", upsert)
+    dims = {
+        "batch": {"id": 12, "batch_name": "2027届高三11月期中"},
+        "schools_by_name": {},
+        "exams_by_subject": {},
+    }
+    rows = [
+        RawOverviewRow(2, "1", "s1", "甲", "A01", {}, {"ZF6M": 500.0}, {"ZZDJ": "C", "DLDJ": "B"}),
+        RawOverviewRow(3, "2", "s2", "乙", "A01", {}, {"ZF6M": 510.0}, {"HXDJ": "A", "SWDJ": "B"}),
+    ]
+    _write_overview_to_db("pg", {}, rows, dims, jc=None)
+    cols = captured["cols"]
+    assert "hxdj" in cols
+    assert "swdj" in cols
+    hxdj = cols.index("hxdj")
+    swdj = cols.index("swdj")
+    assert captured["rows"][0][hxdj] is None
+    assert captured["rows"][0][swdj] is None
+    assert captured["rows"][1][hxdj] == "A"
+    assert captured["rows"][1][swdj] == "B"
 
 
 def test_parse_overview_missing_required_columns():
