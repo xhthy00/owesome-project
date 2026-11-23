@@ -6,12 +6,16 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 node_modules/
+.claude/
 dist/
 build/
 *.egg-info/
 .env
 .next
 frontend-pro/.turbopack/
+frontend-pro/node_modules/
+frontend-pro/dist/
+frontend-pro/dist.zip
 frontend-react/tsconfig.tsbuildinfo
 temp/
 testdata/

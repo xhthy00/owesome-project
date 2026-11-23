@@ -6,6 +6,7 @@ import {
   updateReportReview,
   replaceRecordReports,
   type ClarifyPayload,
+  type RunStatus,
   type TaskPlanStage
 } from "@/api/adapter/chatAdapter";
 import { notifyConversationChanged, snippetConversationTitle } from "@/utils/conversationTitle";
@@ -27,6 +28,7 @@ export type Message = {
   content: string;
   runId?: string;
   createdAt?: number;
+  runStatus?: RunStatus;
 };
 
 export type ExecutionStep = {
@@ -457,9 +459,11 @@ export function useChat() {
       let latestSql = "";
       const stripBootstrap = (prev: ExecutionStep[]) => prev.filter((s) => s.id !== bootstrapId);
       const withRun = <T extends object>(item: T): T & { runId: string } => ({ ...item, runId });
-      const writeAssistant = (content: string) => {
+      const writeAssistant = (content: string, runStatus?: RunStatus) => {
         latest = content;
-        setMessages((prev) => prev.map((msg) => (msg.id === assistantId ? { ...msg, content, createdAt: Date.now() } : msg)));
+        setMessages((prev) => prev.map((msg) => msg.id === assistantId
+          ? { ...msg, content, createdAt: Date.now(), runStatus: runStatus ?? msg.runStatus }
+          : msg));
       };
       /** 流式增量：追加到当前助手消息，不覆盖已生成正文 */
       const appendAssistant = (delta: string) => {
@@ -924,6 +928,9 @@ export function useChat() {
                 setSummaryByRunId((prev) => ({ ...prev, [runId]: safeContent }));
               }
             },
+            onRunStatus: (runStatus) => {
+              setMessages((prev) => prev.map((msg) => msg.id === assistantId ? { ...msg, runStatus } : msg));
+            },
             onClarify: (payload) => {
               nextInterrupt = payload.interrupt_id;
               const prompt = asText(payload.prompt);
@@ -976,7 +983,7 @@ export function useChat() {
                 ? "\n你的账号权限正常；这是查询写法/口径问题。"
                 : "";
               setActivity("本轮分析遇到问题，请查看右侧详情");
-              writeAssistant(`${title}：${safeMsg}${note}`);
+              writeAssistant(`${title}：${safeMsg}${note}`, "failed");
               setExecutionSteps((prev) => [
                 ...stripBootstrap(prev).map((step) =>
                   step.runId === runId && step.status === "running"
@@ -1133,7 +1140,7 @@ export function useChat() {
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (activeRunIdRef.current === runId) {
-          writeAssistant(`请求失败：${asText(msg)}`);
+          writeAssistant(`请求失败：${asText(msg)}`, "failed");
         }
       } finally {
         // 收尾：丢弃未渲染的流式分片（结论以 summary 为准），避免定时器在流结束后再改气泡
@@ -1263,13 +1270,24 @@ export function useChat() {
       if (asText(record.question).trim()) {
         nextMessages.push({ id: `u-${record.id}`, role: "user", content: asText(record.question), runId: recordRunId, createdAt });
       }
-      const answer = asText(record.summary || record.reasoning || "").trim();
-      if (answer) {
-        nextMessages.push({ id: `a-${record.id}`, role: "assistant", content: answer, runId: recordRunId, createdAt: finishedAt });
+      let answer = asText(record.summary || record.reasoning || "").trim();
+      let runStatus = record.exec_result?.run_status;
+      if (!runStatus && !record.exec_result?.clarify) {
+        if (record.exec_result?.answer_coverage?.coverage === "partial") {
+          runStatus = "partial";
+          answer = answer.replace(
+            /(^|\n)查询说明：查询执行失败，无法给出本次结果，请联系管理员检查数据源。$/,
+            "$1查询说明：部分查询项未返回数据，以上为已查到的结果。"
+          );
+        } else if (record.is_success === true) runStatus = "completed";
+        else if (record.is_success === false) runStatus = "failed";
+      }
+      if (answer || runStatus) {
+        nextMessages.push({ id: `a-${record.id}`, role: "assistant", content: answer, runId: recordRunId, createdAt: finishedAt, runStatus });
       }
       if (asText(record.summary).trim()) {
-        nextSummary = asText(record.summary);
-        nextSummaryByRunId[recordRunId] = asText(record.summary);
+        nextSummary = answer;
+        nextSummaryByRunId[recordRunId] = answer;
       }
       deriveReportsFromRecord(record).forEach((r, idx) => {
         nextReports.push({

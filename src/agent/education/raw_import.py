@@ -1324,6 +1324,20 @@ def _cols_for_write(preferred: list[str] | tuple[str, ...], available: set[str])
     return list(preferred)
 
 
+def _append_row_keys(preferred: list[str], rows: list[dict]) -> None:
+    """把每一行实际带上的列补进写入列表。
+
+    空单元格不会放进行 dict。只看第一行会漏掉后面才出现的列，
+    例如首行是历史方向、化学和生物等级为空，整表的 hxdj、swdj 都不会落库。
+    """
+    seen = set(preferred)
+    for row in rows:
+        for key in row:
+            if key not in seen:
+                preferred.append(key)
+                seen.add(key)
+
+
 def _write_overview_to_db(
     db_type: str,
     config: dict[str, Any],
@@ -1348,9 +1362,7 @@ def _write_overview_to_db(
     ov_preferred: list[str] = list(_OVERVIEW_CORE_COLS)
     ov_preferred.extend(code.lower() for code in _SUBJECT_CODE_TO_NAME)
     ov_preferred.extend(("zf3m", "zf4m", "zf6m"))
-    if ov_rows:
-        extras = [k for k in ov_rows[0] if k not in ov_preferred]
-        ov_preferred.extend(extras)
+    _append_row_keys(ov_preferred, ov_rows)
     ov_cols = _cols_for_write(ov_preferred, ov_available)
     st_cols = _cols_for_write(_STUDENT_WRITE_COLS, st_available)
     sc_cols = _cols_for_write(_SCORE_WRITE_COLS, sc_available)

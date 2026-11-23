@@ -14,12 +14,14 @@ from sqlglot.optimizer.qualify import qualify
 from sqlglot.optimizer.scope import traverse_scope
 
 from src.agent.education.privacy_mode import apply_result_privacy, apply_sql_privacy
+from src.agent.education.line_reach import normalize_fraction_bars
 from src.chat.service.semantic_permission_validator import (
     PermissionValidator,
     verify_compiled_permissions,
 )
 from src.common.core.config import DataSemanticBinding, Settings
 from src.common.core.database import get_db_session
+from src.datasource.db.db import execute_sql
 from src.datasource.edu_connection import parse_edu_database_url
 from src.datasource.service.education_authorization import (
     AuthorizationError,
@@ -31,6 +33,7 @@ from src.datasource.service.query_permission import (
     apply_permissions_for_execute,
     collect_row_predicate_sqls,
     filter_exec_result_by_column_permissions,
+    qualify_edu_row_predicates,
     validate_sql_column_permissions,
 )
 from src.datasource.service.semantic_permission_contract import (
@@ -54,6 +57,18 @@ _SERVICE_RETRY_BACKOFF_SECONDS = 0.5
 _DIALECTS = {"pg": "postgres", "mysql": "mysql"}
 # The database can contain user-defined functions. Admit the analytical operations used by MDL.
 _FUNCTIONS = frozenset(SQL_GRAMMAR.functions)
+
+# These published views return cutoffs or grouped reach statistics. Keep the
+# exception on the view, even when its definition reads the score fact table.
+PUBLIC_LINE_REACH_VIEWS = {
+    "v_exam_cutoff_lines": {"tb_fraction_bar"},
+    "v_city_line_reach": {"tb_score_indicator"},
+    "v_district_line_reach": {"tb_score_indicator"},
+    "v_school_line_reach": {"tb_score_indicator"},
+    "v_class_combo_line_reach": {"tb_fraction_bar", "tb_score_overview"},
+    "v_line_reach_change": {"tb_exam_batch", "tb_score_indicator"},
+    "v_tier_line_reach": {"tb_school", "tb_score_indicator"},
+}
 
 
 class SemanticQueryError(ValueError):
@@ -155,6 +170,38 @@ def _check_sources(tree, allowed=None, *, schema=""):
     return sources
 
 
+def _order_public_postgres_set(tree):
+    """Sort computed keys outside a set operation, where PostgreSQL allows them."""
+    if not isinstance(tree, exp.SetOperation) or not (order := tree.args.get("order")):
+        return tree
+    computed = [
+        item.this for item in order.expressions
+        if not isinstance(item.this, exp.Column)
+        and not (isinstance(item.this, exp.Literal) and item.this.is_int)
+    ]
+    if not computed or not all(isinstance(item, exp.Case) for item in computed):
+        return tree
+
+    identifiers = []
+    for item in tree.selects:
+        identifier = item.args.get("alias") if isinstance(item, exp.Alias) else item.this
+        if not isinstance(identifier, exp.Identifier):
+            return tree
+        identifiers.append(identifier)
+    if len({item.name.lower() for item in identifiers}) != len(identifiers):
+        return tree
+    names = {item.name for item in identifiers}
+    if any(column.table or column.name not in names for column in order.find_all(exp.Column)):
+        return tree
+
+    combined = tree.copy()
+    outer = exp.select(*(exp.Column(this=item.copy()) for item in identifiers)).from_("ordered_results")
+    for key in ("order", "limit", "offset"):
+        outer.set(key, combined.args.get(key))
+        combined.set(key, None)
+    return outer.with_("ordered_results", as_=combined, copy=False)
+
+
 def _check_published_columns(tree, dialect, published_columns):
     # Only check columns that can be attributed to a specific published relation. Wren still
     # resolves unqualified columns across joins, CTE outputs, and correlated scopes.
@@ -236,7 +283,7 @@ class SemanticQuery:
         if (policy.bundle_id, policy.manifest_hash) != (binding["bundle_id"], binding["manifest_hash"]):
             raise AuthorizationError("AUTH_MAPPING_MISSING", "权限映射与当前语义发布物不一致")
         assert_workspace_member(session, user, self.workspace_oid)
-        return context_for(user, self.workspace_oid, self.datasource_id, policy, session=session)
+        return context_for(user, self.workspace_oid, self.datasource_id, policy, session=session, allow_empty=True)
 
     def authorization_context(self):
         # Legacy datasources keep their existing context contract.
@@ -331,7 +378,11 @@ class SemanticQuery:
             for kind in ("models", "views"):
                 result[kind] = []
                 for item in self._context.get(kind, []):
-                    relation = policy.relations.get(item["name"].lower())
+                    name = item["name"].lower()
+                    if kind == "views" and name in PUBLIC_LINE_REACH_VIEWS:
+                        result[kind].append(item)
+                        continue
+                    relation = policy.relations.get(name)
                     if relation is not None:
                         result[kind].append({"name": item["name"], "description": item.get("description", ""),
                                              "columns": [{k: v for k, v in col.items() if k in {"name", "type", "description"}}
@@ -414,6 +465,64 @@ class SemanticQuery:
                 raise SemanticContractError("QUERY_SQL_UNSUPPORTED", str(exc)) from exc
             raise
 
+    def prediction_line_context(self, candidate: dict) -> dict | None:
+        """Read official thresholds for one exam proven visible by the v2 lookup."""
+        if (
+            candidate.get("permission_mode") != "model_explicit_v2"
+            or candidate.get("rows_truncated")
+            or candidate.get("tables") != ["tb_score_overview"]
+        ):
+            return None
+        db_type, config = parse_edu_database_url(self.settings.database_edu_url)
+        dialect = _DIALECTS[db_type]
+        select = _query(candidate["sql"], dialect)
+        # Only accept batch IDs and names that come directly from the verified facts.
+        if not isinstance(select, exp.Select) or len(list(select.find_all(exp.Select))) != 1:
+            return None
+        aliases = {item.unalias().name.lower(): item.alias_or_name for item in select.expressions
+                   if isinstance(item.unalias(), exp.Column)}
+        columns = candidate["columns"]
+        id_column = aliases.get("exam_batch_id")
+        name_column = aliases.get("exam_name")
+        if id_column not in columns or name_column not in columns:
+            return None
+        id_index, name_index = columns.index(id_column), columns.index(name_column)
+        exams = {(row[id_index], row[name_index]) for row in candidate["rows"]}
+        if len(exams) != 1:
+            return None
+        batch, name = exams.pop()
+        if type(batch) is not int or batch <= 0 or not isinstance(name, str) or not name.strip():
+            return None
+
+        try:
+            authorization = self._fresh_authorization()
+            if authorization is None or authorization.fingerprint != candidate["authorization_fingerprint"]:
+                raise AuthorizationError("AUTH_CONTEXT_STALE", "考试查询后授权已变化，请重新提问")
+            sql = exp.select("*").from_(exp.Table(
+                this=exp.to_identifier("tb_fraction_bar", quoted=True),
+                db=exp.to_identifier(authorization.manifest.physical_schema, quoted=True),
+            )).where(
+                exp.column("exam_batch_id").eq(batch),
+                exp.column("exam_name").eq(exp.Literal.string(name)),
+            ).sql(dialect=dialect)
+            ok, _, result = execute_sql(db_type, {
+                **config, "read_only": True, "query_timeout_seconds": self.settings.chat_query_timeout_seconds,
+            }, sql)
+            current = self._fresh_authorization()
+            if current is None or current.fingerprint != authorization.fingerprint:
+                raise AuthorizationError("AUTH_REVOKED", "读取预测线时授权已变化，结果已丢弃")
+        except AuthorizationError as exc:
+            raise SemanticAuthorizationError(exc) from exc
+
+        lines = normalize_fraction_bars([
+            dict(zip(result["columns"], row)) for row in result["rows"]
+        ]) if ok else []
+        return {
+            "exam_batch_id": batch, "exam_name": name,
+            "status": ("configured" if lines else "missing") if ok else "unavailable",
+            "lines": lines,
+        }
+
     def _run(self, sql: str, *, execute: bool = True):
         context = self.context()
         binding = {key: context[key] for key in ("bundle_id", "manifest_hash")}
@@ -464,6 +573,17 @@ class SemanticQuery:
                     name: (kind, relation, {field["name"]: field for field in columns})
                     for name, (kind, relation, columns) in published_columns.items()
                 })
+            permission_context = self._fresh_authorization() if getattr(self.settings, "database_edu_url", "") else None
+            if used_names <= (used_views & PUBLIC_LINE_REACH_VIEWS.keys()):
+                if dialect == "postgres":
+                    logical = _order_public_postgres_set(logical)
+                plan = self._plan(logical.sql(dialect=dialect), binding, dialect)
+                return self._execute_public_line_reach(
+                    plan, binding, db_type, dialect, config, execute, logical, used_names, permission_context,
+                )
+            if permission_context is not None and not permission_context.grants:
+                raise AuthorizationError("AUTH_SCOPE_OUTSIDE_GRANT", "当前账号可查询公开达线汇总；此查询需要有效的教育授权")
+            proof = PermissionValidator(permission_context).prove(logical) if permission_context else None
             permission_context = self._fresh_authorization()
             proof = PermissionValidator(permission_context).prove(logical)
             plan = self._plan(logical.sql(dialect=dialect), binding, dialect)
@@ -494,6 +614,49 @@ class SemanticQuery:
             raise
         except SqlglotError as exc:
             raise SemanticQueryError("无法解析语义 SQL 或生成的物理计划。") from exc
+
+    def _execute_public_line_reach(self, plan, binding, db_type, dialect, config, execute, logical, views, authorization):
+        with get_db_session() as session:
+            user = get_user_by_id(session, self.user_id)
+            if user is None or int(user.status) != 1:
+                raise AuthorizationError("AUTH_REVOKED", "账号不可用")
+            assert_datasource_accessible(session, user, self.datasource_id, self.workspace_oid)
+
+        schema = authorization.manifest.physical_schema if authorization else (
+            "public" if dialect == "postgres" else config["database"]
+        )
+        if authorization and any(
+            config.get(key) != value for key, value in authorization.manifest.connection.model_dump().items()
+        ):
+            raise AuthorizationError("AUTH_MAPPING_MISSING", "实际连接不属于审核的数据源，查询已停止")
+        tree = _query(plan["physical_sql"], dialect, compiled=True)
+        physical_tables = set().union(*(PUBLIC_LINE_REACH_VIEWS[name] for name in views))
+        sources = _check_sources(tree, schema=schema)
+        if any(table.name.lower() not in physical_tables for _, table in sources):
+            raise SemanticContractError("QUERY_PLAN_INVALID", "达线视图引用了未发布的数据表")
+        for _, table in sources:
+            table.set("db", exp.to_identifier(schema, quoted=True))
+
+        result = {}
+        if execute:
+            limit = tree.args.get("limit")
+            if limit is None or not isinstance(limit.expression, exp.Literal) or not limit.expression.is_int or int(limit.expression.this) > _MAX_ROWS:
+                tree = tree.limit(_MAX_ROWS + 1)
+            ok, _, data = execute_sql(db_type, {
+                **config, "read_only": True, "query_timeout_seconds": self.settings.chat_query_timeout_seconds,
+            }, tree.sql(dialect=dialect))
+            if not ok or not isinstance(data, dict):
+                raise SemanticContractError("QUERY_EXECUTION_FAILED", "达线汇总查询失败，请检查数据源")
+            rows = data["rows"]
+            result = {"columns": data["columns"], "rows": rows[:_MAX_ROWS],
+                      "row_count": min(len(rows), _MAX_ROWS), "rows_truncated": len(rows) > _MAX_ROWS}
+        if authorization:
+            current = self._fresh_authorization()
+            if current is None or current.fingerprint != authorization.fingerprint:
+                raise AuthorizationError("AUTH_CONTEXT_STALE", "查询期间账号授权发生变化，请重新查询")
+            result.update(permission_mode="model_explicit_v2", authorization_fingerprint=authorization.fingerprint)
+        return jsonable_encoder({**result, **binding, "sql": logical.sql(dialect=dialect),
+                                 "tables": sorted(views), "plan_request_id": plan.get("request_id")})
 
     def _execute_explicit(self, plan, binding, db_type, dialect, config, execute, logical, authorization, proof):
         if dialect != authorization.manifest.dialect:

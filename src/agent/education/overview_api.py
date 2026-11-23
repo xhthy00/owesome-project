@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -105,6 +106,39 @@ def _where_sql(parts: list[str]) -> str:
     return (" WHERE " + " AND ".join(parts)) if parts else ""
 
 
+def _scoped_exams_sql(ov_cols: list[str], *, cohort: str, class_name: str) -> str | None:
+    exam_col = _first_col(ov_cols, ("exam_name", "exam", "ksmc"))
+    total_col = _first_col(ov_cols, ("zf6m", "zf4m", "zf3m", "zf", "total", "total_score"))
+    if not exam_col or not total_col:
+        return None
+    class_col = _first_col(ov_cols, ("bj", "class", "class_name"))
+    track_col = _first_col(ov_cols, ("xkkm", "xkqk", "track", "xkfx"))
+    exam = _ident(exam_col)
+    score_columns = [total_col, *_subject_columns(ov_cols)]
+    valid_score = " OR ".join(f"{_ident(column)} IS NOT NULL" for column in score_columns)
+    where = _where_sql([
+        f"{exam} <> ''",
+        f"({valid_score})",
+        _cohort_filter(ov_cols, cohort),
+        f"{_ident(class_col)} = '{_sql_quote(class_name)}'" if class_name and class_col else "",
+    ])
+    # 与成绩明细走相同的执行器，学校、届别、班级/个人授权会下推到此查询。
+    return f"SELECT DISTINCT {exam} AS exam_name, {_track_case_sql(track_col)} AS track FROM tb_score_overview{where}"
+
+
+def _exam_batches(
+    rows: list[dict[str, Any]], scoped_cohort: str,
+) -> dict[str, tuple[datetime, str, str]]:
+    dates: dict[str, set[tuple[datetime, str, str]]] = {}
+    for row in rows:
+        name = str(row.get("batch_name") or "").strip()
+        when = _parse_exam_time(row.get("exam_time"))
+        if name and when:
+            cohort = str(row.get("jc") or scoped_cohort).strip().removesuffix("届")
+            dates.setdefault(name, set()).add((when, cohort, str(row.get("exam_type") or "")))
+    return {name: next(iter(values)) for name, values in dates.items() if len(values) == 1}
+
+
 def _class_agg_sql(
     ov_cols: list[str],
     bars: list[dict[str, Any]],
@@ -114,7 +148,7 @@ def _class_agg_sql(
     cohort: str = "",
 ) -> str | None:
     """学校/年级：按班级聚合达线人数/率。"""
-    if not ov_cols or not bars:
+    if not ov_cols:
         return None
     total_col = _first_col(ov_cols, ("zf6m", "zf4m", "zf3m", "zf", "total", "total_score"))
     class_col = _first_col(ov_cols, ("bj", "class", "class_name"))
@@ -144,7 +178,7 @@ def _class_agg_sql(
     return (
         f"SELECT {d_expr} AS district, {c_expr} AS school_name, "
         f"{_track_case_sql(track_col)} AS track, "
-        f"COUNT(*) AS candidates, {', '.join(reached)} "
+        f"{', '.join(['COUNT(*) AS candidates', *reached])} "
         f"FROM tb_score_overview{where} "
         f"GROUP BY 1, 2, 3 ORDER BY 1, 2, 3 LIMIT 5000"
     )
@@ -324,40 +358,18 @@ def _class_trend_point(
 async def _class_exam_trends(
     execute, ov_cols: list[str], *, exam: str, track: str, cohort: str,
     class_name: str, students: list[dict[str, Any]], bars: list[dict[str, Any]],
-    scoped_cohort: str,
+    exams: list[str], batches: dict[str, tuple[datetime, str, str]],
 ) -> list[dict[str, Any]]:
-    exam_col = _first_col(ov_cols, ("exam_name", "exam", "ksmc"))
-    if not exam_col or not students or len(students) >= 1000:
+    if not students or len(students) >= 1000:
         return []
-
-    # Date and cohort come from the batch catalog. The class data is always
-    # read through the same authorized executor and filters as the current exam.
-    dates: dict[str, set[tuple[datetime, str, str]]] = {}
-    for row in await _fetch_dicts(execute, "SELECT batch_name, exam_time, jc, exam_type FROM tb_exam_batch"):
-        name = str(row.get("batch_name") or "").strip()
-        when = _parse_exam_time(row.get("exam_time"))
-        if name and when:
-            batch_cohort = str(row.get("jc") or scoped_cohort).strip().removesuffix("届")
-            dates.setdefault(name, set()).add((when, batch_cohort, str(row.get("exam_type") or "")))
-    batches = {name: next(iter(values)) for name, values in dates.items() if len(values) == 1}
     anchor = batches.get(exam)
     if not anchor or not anchor[1]:
         return []
     anchor_time, anchor_cohort, anchor_type = anchor
-    track_col = _first_col(ov_cols, ("xkkm", "xkqk", "track", "xkfx"))
-    class_col = _first_col(ov_cols, ("bj", "class", "class_name"))
-    where = _where_sql([
-        _track_sql_predicate(track_col, track),
-        _cohort_filter(ov_cols, cohort),
-        f"{_ident(class_col)} = '{_sql_quote(class_name)}'" if class_name and class_col else "",
-    ])
-    scoped_exams = await _fetch_dicts(
-        execute, f"SELECT DISTINCT {_ident(exam_col)} AS exam_name FROM tb_score_overview{where}"
-    )
     history = sorted({
         (batch[0], name)
-        for row in scoped_exams
-        if (name := str(row.get("exam_name") or "")) != exam
+        for name in exams
+        if name != exam
         and (batch := batches.get(name))
         and batch[0] < anchor_time
         and batch[1:] == (anchor_cohort, anchor_type)
@@ -376,11 +388,10 @@ def _filters(
     *,
     scope: dict[str, Any],
     exams: list[str],
-    bars: list[dict[str, Any]],
+    tracks: list[str],
     lines: list[dict[str, Any]],
     ov_cols: list[str],
 ) -> dict[str, Any]:
-    tracks = sorted({str(bar.get("track") or "") for bar in bars if bar.get("track")})
     return {
         "exams": exams,
         "tracks": tracks,
@@ -403,7 +414,7 @@ def _actions(level: str) -> list[dict[str, str]]:
 
 @router.get("/overview")
 async def education_overview(
-    exam_name: str = Query("", max_length=200),
+    exam_name: str | None = Query(None, max_length=200),
     track: str = Query("", max_length=40),
     line_key: str = Query("", max_length=200),
     cohort: str = Query("", max_length=100),
@@ -427,41 +438,60 @@ async def education_overview(
     )
     execute = orch._execute_sql
     ov_cols = await _probe_columns(execute, "tb_score_overview")
-    bar_rows = await _load_line_reach_bar_rows(execute)
-    bars_all = normalize_fraction_bars(bar_rows)
-    exams = sorted({str(bar.get("exam_name") or "") for bar in bars_all if bar.get("exam_name")})
-    exam = (exam_name or "").strip() or (exams[0] if exams else "")
-    bars = filter_fraction_bars(bars_all, exam_name=exam, track="")
+    exam_sql = _scoped_exams_sql(ov_cols, cohort=cohort, class_name=class_name)
+    exam_rows = await _fetch_dicts(execute, exam_sql) if exam_sql else []
+    tracks = sorted({row["track"] for row in exam_rows if row.get("track")})
+    scored_exams = {
+        str(row["exam_name"]) for row in exam_rows
+        if row.get("exam_name") and (track not in {"物理类", "历史类"} or row.get("track") == track)
+    }
     scope = scope_payload(report_scope, level)
     dimension = dimension_for_level(level)
     notices: list[dict[str, str]] = []
     secondary: dict[str, Any] = {}
 
-    if not ov_cols or (not bars and level in {"city", "district", "school", "grade"}) or (
-        level == "class" and not exam
-    ):
+    if not scored_exams:
         return success_response(
             {
                 "level": level,
                 "scope": scope,
+                "exam_name": None,
                 "filters": _filters(
-                    scope=scope, exams=exams, bars=bars_all, lines=[], ov_cols=ov_cols
+                    scope=scope, exams=[], tracks=tracks, lines=[], ov_cols=ov_cols
                 ),
                 "kpis": {"candidates": 0, "by_line": []},
                 "chart": {"dimension": dimension, "metric": "rate", "rows": []},
                 "table": {"dimension": dimension, "columns": [], "rows": []},
                 "secondary": {},
-                "notices": [notice("no_data", "当前学情库没有可用的达线配置或成绩数据")],
+                "notices": [notice("no_data", "当前授权范围及筛选下暂无考试成绩")],
                 "actions": _actions(level),
             }
         )
+
+    load_batches = _fetch_dicts(execute, "SELECT batch_name, exam_time, jc, exam_type FROM tb_exam_batch")
+    bars_all: list[dict[str, Any]] = []
+    if level == "student":
+        batch_rows = await load_batches
+    else:
+        batch_rows, bar_rows = await asyncio.gather(load_batches, _load_line_reach_bar_rows(execute))
+        bars_all = normalize_fraction_bars(bar_rows)
+    batches = _exam_batches(
+        batch_rows, cohort or (report_scope.cohorts[0] if len(report_scope.cohorts) == 1 else "")
+    )
+    exams = sorted(scored_exams, key=lambda name: (batches.get(name, (datetime.min, "", ""))[0], name), reverse=True)
+    requested = (exam_name or "").strip()
+    # 学生可主动切换为历次成绩；首次进入与失效选项均回退到最近的授权考试。
+    exam = requested if requested in scored_exams else exams[0]
+    if level == "student" and exam_name == "":
+        exam = ""
+    bars = filter_fraction_bars(bars_all, exam_name=exam, track="")
 
     # 学校级跨多校时先看学校对比；单校时看本校班级。
     if level == "school" and len(report_scope.schools) > 1:
         dimension = "school"
         rows = await _fetch_dicts(
             execute,
-            _overview_agg_sql(ov_cols, bars, exam_name=exam, track=track, include_school=True),
+            _overview_agg_sql(ov_cols, bars, exam_name=exam, track=track, allow_without_bars=True),
         )
         payload = payload_from_school_agg(rows, bars, exam_name=exam, track=track)
         chart_rows = school_chart_rows(payload)
@@ -471,7 +501,7 @@ async def education_overview(
         dimension = "district" if level == "city" else "school"
         rows = await _fetch_dicts(
             execute,
-            _overview_agg_sql(ov_cols, bars, exam_name=exam, track=track, include_school=True),
+            _overview_agg_sql(ov_cols, bars, exam_name=exam, track=track, allow_without_bars=True),
         )
         payload = payload_from_school_agg(rows, bars, exam_name=exam, track=track)
         chart_rows = (
@@ -515,7 +545,7 @@ async def education_overview(
         secondary["class_trends"] = await _class_exam_trends(
             execute, ov_cols, exam=exam, track=track, cohort=cohort,
             class_name=class_name, students=students, bars=bars_all,
-            scoped_cohort=cohort or (report_scope.cohorts[0] if len(report_scope.cohorts) == 1 else ""),
+            exams=exams, batches=batches,
         )
         if report_scope.has("grade_baseline"):
             grade_sql = _grade_avg_sql(
@@ -567,7 +597,13 @@ async def education_overview(
     else:  # student
         dimension = "exam"
         rows = await _fetch_dicts(
-            execute, _student_exam_sql(ov_cols, exam_name=exam_name)
+            execute, _student_exam_sql(ov_cols, exam_name=exam)
+        )
+        # 历次成绩时间正序，最后一项的科目分对应最新一场。
+        exam_order = {name: index for index, name in enumerate(exams)}
+        rows = sorted(
+            (row for row in rows if row.get("exam_name") in exam_order),
+            key=lambda row: exam_order[row["exam_name"]], reverse=True,
         )
         chart_rows = [
             {
@@ -595,16 +631,19 @@ async def education_overview(
         )
     if level == "class":
         notices.append(notice("class_scope", "班级级不展示班级间排名"))
+    elif level != "student" and chart_rows and not lines:
+        notices.append(notice("no_lines", "该考试尚未配置分数线"))
 
     metric = "total" if dimension in {"student", "exam"} else "rate"
     return success_response(
         {
             "level": level,
             "scope": scope,
+            "exam_name": exam,
             "filters": _filters(
                 scope=scope,
                 exams=exams,
-                bars=bars,
+                tracks=tracks,
                 lines=lines,
                 ov_cols=ov_cols,
             ),

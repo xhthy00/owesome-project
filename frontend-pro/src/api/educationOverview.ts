@@ -54,6 +54,7 @@ export interface OverviewFilters {
 
 export interface OverviewResult {
   level: OverviewLevel | "";
+  exam_name?: string | null;
   scope?: OverviewScope;
   filters?: OverviewFilters;
   kpis?: {
@@ -132,7 +133,7 @@ async function authHeaders(): Promise<HeadersInit> {
 export async function getEducationOverview(query: OverviewQuery = {}): Promise<OverviewResult> {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(query)) {
-    if (value) params.set(key, value);
+    if (value || (key === 'exam_name' && value === '')) params.set(key, value);
   }
   const qs = params.toString();
   const resp = await fetch(`${getApiBaseUrl()}/education/overview${qs ? `?${qs}` : ""}`, {

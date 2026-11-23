@@ -1,0 +1,22 @@
+services:
+  app:
+    image: repo.wegoo.ltd:31135/edu/awesome-data:3.1
+    container_name: awesome-pro
+    restart: unless-stopped
+    env_file:
+      - ./.env
+    environment:
+      TZ: Asia/Shanghai
+    ports:
+      - "127.0.0.1:8001:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 60s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"

@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+from contextlib import nullcontext
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -9,6 +11,7 @@ from pydantic import ValidationError
 
 from src.chat.schemas import ChatRequest
 from src.chat.service import deepagents_runtime as runtime
+from src.chat.service import semantic_query
 from src.chat.service.question_assessment import (
     QuestionAssessment,
     QuestionAssessmentError,
@@ -181,6 +184,91 @@ def test_discovery_then_review_interrupts_before_analysis_and_rechecks_answer(re
     assert len(executed) == 2
 
 
+@pytest.mark.parametrize("status", ["configured", "missing", "unavailable"])
+def test_prediction_lines_follow_a_verified_batch_and_match_both_keys(monkeypatch, status):
+    semantic = semantic_query.SemanticQuery(SimpleNamespace(
+        database_edu_url="postgresql://localhost/exam", chat_query_timeout_seconds=10,
+    ), 1, 1, 7)
+    authorization = SimpleNamespace(fingerprint="current", manifest=SimpleNamespace(physical_schema="public"))
+    monkeypatch.setattr(semantic, "_fresh_authorization", lambda: authorization)
+
+    def read(db_type, config, sql):
+        assert db_type == "pg" and config["read_only"] is True
+        assert "exam_batch_id = 12" in sql and "exam_name = '2027届高三11月期中'" in sql
+        if status == "unavailable":
+            return False, "connection refused", None
+        return True, "", {
+            "columns": ["exam_name", "wl_score_bk", "ls_score_bk"],
+            "rows": [["2027届高三11月期中", 419, 419]] if status == "configured" else [],
+        }
+
+    monkeypatch.setattr(semantic_query, "execute_sql", read)
+    candidate = {
+        "sql": "SELECT DISTINCT exam_batch_id, exam_name FROM tb_score_overview",
+        "columns": ["exam_batch_id", "exam_name"], "rows": [[12, "2027届高三11月期中"]],
+        "tables": ["tb_score_overview"], "permission_mode": "model_explicit_v2",
+        "authorization_fingerprint": "current",
+    }
+    assert semantic.prediction_line_context({**candidate, "rows_truncated": True}) is None
+    assert semantic.prediction_line_context({**candidate, "rows": [[12, "期中"], [13, "期末"]]}) is None
+    assert semantic.prediction_line_context({
+        **candidate, "sql": "SELECT DISTINCT jc AS exam_batch_id, exam_name FROM tb_score_overview",
+    }) is None
+    with pytest.raises(semantic_query.SemanticAuthorizationError):
+        semantic.prediction_line_context({**candidate, "authorization_fingerprint": "stale"})
+
+    result = semantic.prediction_line_context(candidate)
+    assert result["status"] == status
+    assert {(line["track"], line["threshold"]) for line in result["lines"]} == (
+        {("物理类", 419), ("历史类", 419)} if status == "configured" else set()
+    )
+
+
+def test_prediction_lines_reach_reviewer_before_the_clarification_form(reviewed, monkeypatch):
+    args, events, records, _ = reviewed
+    exam = "2027届高三11月期中"
+    monkeypatch.setattr(runtime.SemanticQuery, "authorization_context", lambda _self: {})
+    monkeypatch.setattr(runtime.SemanticQuery, "context", lambda _self: {
+        "models": [{"name": "tb_score_overview"}], "dialect": "postgres",
+    })
+    candidate = {"columns": ["exam_batch_id", "exam_name"], "rows": [[12, exam]]}
+    monkeypatch.setattr(runtime.SemanticQuery, "run", lambda *_a, **_kw: candidate)
+
+    def load_lines(_self, result):
+        assert result is candidate
+        return {"exam_batch_id": 12, "status": "configured", "lines": [
+            {"line_name": "本科线", "track": "物理类", "threshold": 419},
+            {"line_name": "本科线", "track": "历史类", "threshold": 419},
+        ]}
+
+    monkeypatch.setattr(runtime.SemanticQuery, "prediction_line_context", load_lines)
+
+    class RecordingModel(ToolCallingModel):
+        def _generate(self, messages, *a, **kw):
+            if "独立条件评估器" in str(messages[0].content):
+                payload = json.loads(messages[-1].content)
+                assert payload["published_directory"]["exam_prediction_lines_available"] is True
+                for item in payload["conversation"]:
+                    if item["name"] == "lookup_question_context" and item["role"] == "tool":
+                        assert json.loads(item["content"])["prediction_lines"]["lines"][0]["threshold"] == 419
+                        return super()._generate(messages, *a, **kw)
+                assert len(self.responses) == 3
+            return super()._generate(messages, *a, **kw)
+
+    model = RecordingModel(responses=[
+        assessment("lookup"), AIMessage(content="", tool_calls=[call(
+            "lookup_question_context", "batch", sql="SELECT DISTINCT exam_batch_id, exam_name FROM tb_score_overview",
+        )]),
+        assessment("clarify", question="请确认自定义对照基准", fields=[
+            {"label": "对照基准", "kind": "text", "required": True},
+        ]),
+    ])
+    asyncio.run(runtime.run_chat_stream(request=request(f"分析{exam}本科线达线率，并使用自定义对照基准"), model=model, **args))
+    assert any(event == "clarify" for event, _ in events)
+    assert [field["label"] for field in records[-1]["exec_result"]["fields"]] == ["对照基准"]
+    assert records[-1]["tool_calls"][0]["data"]["prediction_lines"]["status"] == "configured"
+
+
 @pytest.mark.parametrize("response", [
     AIMessage(content="条件大概够了，可以直接查"),
     AIMessage(content="", tool_calls=[call("query_semantic", "bypass", sql="SELECT value FROM exam_facts")]),
@@ -327,3 +415,89 @@ def test_one_bounded_format_repair_can_recover_without_releasing_queries_early(r
     assert [c["tool"] for c in records[-1]["tool_calls"]] == ["query_semantic"]
     assert not any(e == "error" for e, _ in events)
 
+
+
+@pytest.fixture
+def semantic(monkeypatch):
+    query = semantic_query.SemanticQuery(SimpleNamespace(
+        database_edu_url="postgresql://localhost/exam", chat_query_timeout_seconds=10,
+    ), 1, 1, 7)
+    binding = {"bundle_id": "edu", "manifest_hash": "release"}
+    relation = SimpleNamespace(columns={"zf6m": "zf6m"}, forbidden_columns=())
+    manifest = SimpleNamespace(
+        relations={"tb_score_overview": relation}, physical_schema="public",
+        connection=SimpleNamespace(model_dump=lambda: {"database": "exam"}),
+    )
+    authorization = SimpleNamespace(manifest=manifest, grants=(), fingerprint="active")
+    monkeypatch.setattr(query, "_binding", lambda: binding)
+    monkeypatch.setattr(query, "_permission_manifest", lambda: manifest)
+    monkeypatch.setattr(query, "_fresh_authorization", lambda: authorization)
+    monkeypatch.setattr(query, "_call", lambda *_a, **_kw: {
+        **binding, "dialect": "postgres",
+        "models": [{"name": "tb_score_overview", "columns": [{"name": "zf6m"}]}],
+        "views": [
+            {"name": "v_exam_cutoff_lines", "columns": [{"name": "threshold"}]},
+            {"name": "v_cutoff_subject_contribution", "columns": [{"name": "threshold"}]},
+        ],
+    })
+    monkeypatch.setattr(semantic_query, "get_db_session", lambda: nullcontext(object()))
+    monkeypatch.setattr(semantic_query, "get_user_by_id", lambda *_: SimpleNamespace(status=1))
+    monkeypatch.setattr(semantic_query, "assert_datasource_accessible", lambda *_: None)
+    return query
+
+
+def test_public_cutoff_readable_without_grants_but_scores_are_scoped(semantic, monkeypatch):
+    assert [view["name"] for view in semantic.context()["views"]] == ["v_exam_cutoff_lines"]
+    semantic.describe("v_exam_cutoff_lines")
+    monkeypatch.setattr(semantic, "_plan", lambda *_: {
+        "physical_sql": 'SELECT wl_score_bk AS threshold FROM "public".tb_fraction_bar',
+    })
+
+    def read(db_type, config, sql):
+        assert db_type == "pg" and config["read_only"]
+        assert 'FROM "public".tb_fraction_bar' in sql
+        return True, "", {"columns": ["threshold"], "rows": [[419]]}
+
+    monkeypatch.setattr(semantic_query, "execute_sql", read)
+    assert semantic.run("SELECT threshold FROM v_exam_cutoff_lines")["rows"] == [[419]]
+    with pytest.raises(semantic_query.SemanticAuthorizationError, match="有效的教育授权"):
+        semantic.run("SELECT zf6m FROM tb_score_overview")
+    with pytest.raises(semantic_query.SemanticAuthorizationError, match="有效的教育授权"):
+        semantic.run("SELECT b.threshold, s.zf6m FROM v_exam_cutoff_lines b CROSS JOIN tb_score_overview s")
+
+
+def test_public_cutoff_plan_cannot_read_another_table(semantic, monkeypatch):
+    semantic.describe("v_exam_cutoff_lines")
+    monkeypatch.setattr(semantic, "_plan", lambda *_: {
+        "physical_sql": 'SELECT zf6m AS threshold FROM "public".tb_score_overview',
+    })
+    monkeypatch.setattr(semantic_query, "execute_sql", lambda *_: pytest.fail("unexpected SQL execution"))
+    with pytest.raises(semantic_query.SemanticQueryError):
+        semantic.run("SELECT threshold FROM v_exam_cutoff_lines")
+
+
+def test_public_union_case_order_is_fixed_before_planning(semantic, monkeypatch):
+    semantic.describe("v_exam_cutoff_lines")
+    plans = []
+
+    def plan(sql, *_):
+        plans.append(sql)
+        return {"physical_sql": 'SELECT wl_score_bk AS threshold FROM "public".tb_fraction_bar'}
+
+    monkeypatch.setattr(semantic, "_plan", plan)
+    monkeypatch.setattr(semantic_query, "execute_sql", lambda *_: (
+        True, "", {"columns": ["对照层级", "threshold"], "rows": [["本班", 419], ["全市", 419]]},
+    ))
+    combined = (
+        "SELECT '本班' AS 对照层级, threshold FROM v_exam_cutoff_lines "
+        "UNION ALL SELECT '全市', threshold FROM v_exam_cutoff_lines"
+    )
+    result = semantic.run(f"{combined} ORDER BY CASE 对照层级 WHEN '本班' THEN 1 ELSE 2 END LIMIT 2 OFFSET 1")
+    assert result["rows"][0] == ["本班", 419]
+    assert len(plans) == 1
+    assert f"WITH ordered_results AS ({combined})" in plans[0]
+    assert "FROM ordered_results ORDER BY CASE 对照层级" in plans[0]
+    assert plans[0].endswith("LIMIT 2 OFFSET 1")
+
+    semantic.run(f"{combined} ORDER BY 1")
+    assert plans[1] == f"{combined} ORDER BY 1"

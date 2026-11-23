@@ -52,9 +52,13 @@ export default function ScopeOverview() {
   const eduScope = session?.user.edu_scope;
   const level = data?.level || LEVELS.find(item => eduScope?.levels?.includes(item));
   const personal = level === 'student';
-  const scopeLabel = data?.scope?.label || eduScope?.scope_label || '';
+  const sessionScopeLabel = eduScope?.scope_label ?? '';
+  const scopeLabel = level === 'class'
+    ? [eduScope?.school_name?.trim(), data?.scope?.label].filter(Boolean).join(' · ') || sessionScopeLabel
+    : data?.scope?.label || sessionScopeLabel;
   const filters = data?.filters;
   const exams = filters?.exams ?? [];
+  const selectedExam = data?.exam_name ?? undefined;
   const tracks = filters?.tracks ?? [];
   const cohorts = filters?.cohorts ?? [];
   const classes = filters?.classes ?? [];
@@ -70,9 +74,9 @@ export default function ScopeOverview() {
   const filterBar = filters && (
     <>
       {exams.length > 0 && <Select aria-label="考试筛选" placeholder="选择考试"
-        value={exam ?? (personal ? '' : exams[0])}
+        value={selectedExam}
         options={personal ? [{ value: '', label: '全部考试' }, ...selectOptions(exams)] : selectOptions(exams)}
-        onChange={value => setExam(value || undefined)} className="pro-overview-exam-filter" />}
+        onChange={setExam} className="pro-overview-exam-filter" />}
       {!personal && tracks.length > 0 && <Select aria-label="科类筛选" value={track ?? ''}
         options={[{ value: '', label: '全部科类' }, ...selectOptions(tracks)]}
         onChange={value => setTrack(value || undefined)} />}
@@ -103,11 +107,12 @@ export default function ScopeOverview() {
       {data && (personal ? (
         <PersonalOverviewResults data={data} controls={controls} />
       ) : <>
-        <ReachMetrics candidates={data.kpis?.candidates} lines={byLine} scores={classResults ? scores : undefined} candidateSeries={candidateSeries} exam={exam ?? exams[0]}
+        <ReachMetrics candidates={data.kpis?.candidates} lines={byLine} scores={classResults ? scores : undefined} candidateSeries={candidateSeries} exam={selectedExam}
           classTrends={data.secondary?.class_trends} classResults={classResults}
           units={dimension && rows.length > 1 ? { count: rows.length, label: dimension } : undefined} />
         {classResults ? <ClassOverviewResults data={data} support={support} controls={controls} empty={empty} /> :
-          dimension ? <ReachComparison dimension={dimension} rows={rows} lines={filters?.lines?.length ? filters.lines : byLine} empty={empty}
+          dimension ? <ReachComparison dimension={dimension} rows={rows} lines={filters?.lines?.length ? filters.lines : byLine}
+            empty={empty || data.notices?.find(item => item.code === 'no_lines')?.message}
             summary={data.kpis} controls={controls} /> :
             <OverviewAnalysisCard controls={controls} items={[{ key: 'overview', label: '成绩分析', children:
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={empty || '当前筛选下暂无成绩数据'} />,

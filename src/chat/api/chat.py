@@ -70,6 +70,32 @@ class _ChatStreamingResponse(StreamingResponse):
                 await asyncio.wait({task})
 
 
+def _edu_out_of_scope_message(
+    user_id: int,
+    question: str,
+    *,
+    datasource_id: int | None = None,
+    workspace_oid: int | None = None,
+) -> str | None:
+    """教师/校管点名越权班校时拒绝；读范围失败则放行。"""
+    from src.agent.education.query_parse import is_line_reach_query
+    from src.datasource.service.education_authorization import manifest_for
+    if is_line_reach_query(question):
+        return None  # Published reach views have their own access path; SQL still scopes other data.
+    if datasource_id is not None and manifest_for(datasource_id) is not None:
+        return None  # v2 SQL proof handles multi-grant ranges; legacy name regex does not.
+    from datasource.service.edu_permission import edu_scope_dict_for_user_id
+    from src.agent.education.scope_guard import out_of_scope_question
+
+    return out_of_scope_question(
+        edu_scope_dict_for_user_id(user_id),
+        question,
+        datasource_id=datasource_id,
+        workspace_oid=workspace_oid,
+        connection_factory=edu_db_connection,
+    )
+
+
 # ============== Conversation Management ==============
 
 @router.post("/conversations", summary="Create conversation")

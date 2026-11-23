@@ -36,6 +36,8 @@ export type Conversation = {
   update_time?: string;
 };
 
+export type RunStatus = "completed" | "partial" | "failed";
+
 export type ConversationRecord = {
   id: number;
   question: string;
@@ -44,6 +46,7 @@ export type ConversationRecord = {
   finish_time?: string;
   reasoning?: string;
   summary?: string;
+  is_success?: boolean;
   total_tokens?: number | null;
   elapsed_ms?: number | null;
   steps?: Array<{ name?: string; label?: string; status?: string; elapsed_ms?: number; detail?: string; sub_task_index?: number; round?: number }>;
@@ -72,7 +75,18 @@ export type ConversationRecord = {
     };
   }>;
   sql?: string;
-  exec_result?: (ClarifyPayload & { columns?: string[]; rows?: unknown[][]; row_count?: number; clarify?: boolean; context_usage?: ContextUsage; human_reply_to?: string; human_answer?: string; human_cancelled_to?: string }) | null;
+  exec_result?: (ClarifyPayload & {
+    columns?: string[];
+    rows?: unknown[][];
+    row_count?: number;
+    clarify?: boolean;
+    context_usage?: ContextUsage;
+    human_reply_to?: string;
+    human_answer?: string;
+    human_cancelled_to?: string;
+    run_status?: RunStatus;
+    answer_coverage?: { coverage: "complete" | "partial" };
+  }) | null;
   chart_type?: string;
   chart_config?: Record<string, unknown> | null;
   reports?: Array<{
@@ -200,6 +214,7 @@ type StreamHandlers = {
   /** 作废当前已展示的草稿（该轮其实是工具调用，不是最终结论） */
   onAnswerDiscard?: () => void;
   onSummary?: (content: string) => void;
+  onRunStatus?: (status: RunStatus) => void;
   onUsage?: (payload: ContextUsage & {
     prompt_tokens?: number;
     completion_tokens?: number;
@@ -390,6 +405,13 @@ export async function sendMessageStream(
         case "summary":
           handlers.onSummary?.((data.content as string) ?? "");
           break;
+        case "run_status": {
+          const status = data.status;
+          if (status === "completed" || status === "partial" || status === "failed") {
+            handlers.onRunStatus?.(status);
+          }
+          break;
+        }
         case "usage":
           handlers.onUsage?.({
             prompt_tokens: typeof data.prompt_tokens === "number" ? data.prompt_tokens : undefined,

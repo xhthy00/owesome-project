@@ -149,8 +149,10 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
     .find((question) => question && question.status !== "answered" && question.status !== "cancelled");
   const latestArtifacts = [...chat.reports, ...chat.queryResults].some((item) => item.runId === latestRun);
   const activePreview = preview && users.some((item) => item.runId === preview.runId) ? preview : undefined;
-  const planComplete = stages.length > 0 && stages.every((stage) => stage.status === "completed");
   const waiting = Boolean(pending) && !loading;
+  const runStatus = messages.find(item => item.role === "assistant" && item.runId === latestRun)?.runStatus;
+  const headerStatus = loading ? "running" : waiting ? "waiting" : runStatus ?? "settled";
+  const statusLabel = { running: "分析中", waiting: "待回复", completed: "已完成", partial: "部分完成", failed: "查询失败", settled: "已结束" }[headerStatus];
   const contextLabel = formatContextUsage(chat.runMetrics.contextUsage);
   const showUsage = !welcome && (chat.runMetrics.tokenKnown || Boolean(contextLabel));
 
@@ -268,9 +270,7 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
       <h1 title={chat.conversationTitle || users[0]?.content}>{chat.conversationTitle || snippetConversationTitle(users[0]?.content || "")}</h1>
     </div>
     <div className="cowork-header-actions">
-      <span className="cowork-run-state" data-state={loading ? "running" : waiting ? "waiting" : planComplete ? "completed" : "settled"}>
-        {loading ? "分析中" : waiting ? "待回复" : planComplete ? "已完成" : "已结束"}
-      </span>
+      <span className="cowork-run-state" data-state={headerStatus}>{statusLabel}</span>
       <Button type={progressOpen && !activePreview ? "default" : "text"} size="small" className="cowork-progress-trigger"
         title="任务进度" aria-label="任务进度" aria-expanded={progressOpen && !activePreview} icon={<ApartmentOutlined />}
         onClick={() => { setPreview(undefined); setProgressOpen(Boolean(activePreview) || !progressOpen); }}>

@@ -104,6 +104,35 @@ def test_generate_report_rejects_bureau_types_without_city_scope(monkeypatch):
     assert captured == {}
 
 
+def test_generate_public_line_reach_does_not_require_grade_reference(monkeypatch):
+    from src.agent.education import api
+
+    client, restricted = _client(monkeypatch, _scope())
+    read = object()
+    captured = {}
+
+    class PublicOrchestrator:
+        def __init__(self, execute, resolve_schema):
+            assert execute is read
+
+        async def run_spec(self, spec):
+            captured.update(spec.filters)
+            return SimpleNamespace(html="<div>全市达线</div>", stats={"count": 1}, error=None, spec=spec)
+
+        def _title(self, spec):
+            return "达线报告"
+
+    monkeypatch.setattr(api, "_public_line_reach_reader", lambda: read)
+    monkeypatch.setattr(api, "ReportOrchestrator", PublicOrchestrator)
+    response = client.post(
+        "/api/v1/education/generate-report",
+        json={"datasource_id": 1, "report_type": "line_reach", "filters": {"exam_name": "期中"}},
+    )
+    assert response.json()["data"]["error"] is None
+    assert captured == {"exam_name": "期中"}
+    assert restricted == {}
+
+
 def test_generate_report_rejects_elite_rank_shift_without_city_scope(monkeypatch):
     client, captured = _client(monkeypatch, _scope())
     r = client.post(

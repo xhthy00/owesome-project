@@ -271,6 +271,7 @@ def context_for(
     *,
     now=None,
     session=None,
+    allow_empty=False,
 ):
     if user is None or int(getattr(user, "status", 0)) != 1:
         raise AuthorizationError("AUTH_REVOKED", "账号不可用")
@@ -283,7 +284,7 @@ def context_for(
         for g in document.grants
         if g.workspace_oid == workspace_oid and g.datasource_id == datasource_id and g.active(now)
     )
-    if not grants:
+    if not grants and not allow_empty:
         raise AuthorizationError("AUTH_SCOPE_OUTSIDE_GRANT", "当前数据源没有有效的教育授权")
     for grant in grants:
         validate_grant_catalog(grant, manifest)
@@ -341,7 +342,7 @@ class AuthorizationContext(StrictModel):
                 student_scope,
                 "授权范围内的排名、分数分布、均分/及格率等聚合",
                 "授权范围与参照基准的对照（需对应 capability）",
-            ],
+            ] if self.grants else [],
             "scope_not_answers": [
                 "授权范围外的其他班级/学校明细",
                 "未开通的学生个人全校名次、跨校排名",
@@ -431,7 +432,7 @@ def record_accessible(session, actor, conversation, record):
     try:
         assert_workspace_member(session, actor, conversation.oid)
         ctx = context_for(
-            actor, conversation.oid, conversation.datasource_id, policy, session=session
+            actor, conversation.oid, conversation.datasource_id, policy, session=session, allow_empty=True,
         )
         stored = json.loads(record.exec_result or "{}")
         return (
