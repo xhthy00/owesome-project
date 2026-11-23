@@ -31,7 +31,6 @@ from system.workspace_scope import get_workspace_oid
 def mock_query_scope(monkeypatch):
     # Keep heartbeat tests independent from DB authorization without invalid IDs.
     monkeypatch.setattr(chat_api_mod, "_assert_query_scope", lambda *_a: None)
-    monkeypatch.setattr(chat_api_mod, "_edu_out_of_scope_message", lambda *_a, **_kw: None)
 
 
 def _build_app() -> FastAPI:

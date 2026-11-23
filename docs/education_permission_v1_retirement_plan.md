@@ -413,3 +413,14 @@ V2 已经具备授权模型、查询执行链、管理页和报表/工具适配�
 - `import src.common.router, src.main` 通过（应用可启动）。
 - 定向测试：异常提醒、成绩导入、V2 权限、范围下推、聊天路由、分析范围共 151 项通过。
 - 全量 pytest 仍受分支既有坏模块（`intent_detect`、`sql_generator`、`core.action` 缺失）影响，与本次审计无关。
+
+### 合并后修复（2026-11-23）
+
+`origin/edu-rev` 合并（`aedef38`）把少量旧 hunk 带回了已删除 V1 的文件，导致应用启动失败：
+
+- `chat/service/semantic_query.py` 重新 import 了已删除的 `qualify_edu_row_predicates`（启动即 `ImportError`）。
+- `chat/api/chat.py` 恢复了 `_edu_out_of_scope_message` 及对 `edu_permission` / `scope_guard` 的 import。
+- `agent/education/api.py` 的 `list_meta_options` 恢复 `parse_edu_scope`，并恢复了一处调用已删除函数 `_raise_if_out_of_scope` 的死分支。
+- 测试 `test_chat_stream_keepalive.py`、`test_education_api.py` 恢复了对已删除函数/模块的引用。
+
+已按删除时的规则重新清理，并验证 `import src.main` 通过、定向 71 项测试通过、全量 collection 仅剩 11 个与本次无关的既有缺失模块错误。

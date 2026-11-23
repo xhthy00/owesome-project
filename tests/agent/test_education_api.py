@@ -171,10 +171,6 @@ def _auth_client(monkeypatch):
         fake_exec_by_user_id,
     )
     monkeypatch.setattr(
-        "datasource.service.edu_permission.edu_scope_dict_for_user_id",
-        lambda _uid: {},
-    )
-    monkeypatch.setattr(
         "src.agent.education.api.assert_datasource_accessible",
         lambda session, user, datasource_id, workspace_oid: SimpleNamespace(
             id=datasource_id, oid=workspace_oid
@@ -511,7 +507,7 @@ def test_meta_options_school_scope_filters_schools():
     """配置了 school_name 时，学校下拉只保留权限内学校。"""
     import asyncio
 
-    from datasource.service.edu_permission import EduScope
+    from datasource.service.edu_scope_view import EduScope
     from src.agent.education.api import _load_meta_options
     from src.agent.education.orchestrator import ReportOrchestrator
     from src.agent.education.schema_mapping import ScoreSchemaMapping

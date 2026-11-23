@@ -33,7 +33,6 @@ from src.datasource.service.query_permission import (
     apply_permissions_for_execute,
     collect_row_predicate_sqls,
     filter_exec_result_by_column_permissions,
-    qualify_edu_row_predicates,
     validate_sql_column_permissions,
 )
 from src.datasource.service.semantic_permission_contract import (

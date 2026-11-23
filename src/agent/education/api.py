@@ -579,14 +579,6 @@ async def generate_report(
             if kind == "forbidden":
                 raise ForbiddenException(msg)
             raise BadRequestException(msg)
-    if report_scope is None and not public_line_reach:
-        _raise_if_out_of_scope(
-            int(current_user.id),
-            filters.get("class_name") or filters.get("class"),
-            filters.get("school_name") or filters.get("school"),
-            datasource_id=req.datasource_id,
-            workspace_oid=workspace_oid,
-        )
     spec = ReportSpec(
         report_type=report_type,
         audience=audience,
@@ -873,14 +865,14 @@ async def list_meta_options(
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     """分析工具下拉：从数据源拉取学校/届次/考试/班级/科目可选值（带教育权限）。"""
-    from datasource.service.edu_permission import parse_edu_scope
+    from datasource.service.edu_scope_view import EduScope
     from src.common.core.database import get_db_session
     from src.system.crud.crud_user import get_user_by_id
 
     with get_db_session() as session:
         assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
         user = get_user_by_id(session, int(current_user.id))
-        edu_scope = parse_edu_scope(user)
+        edu_scope = EduScope()
 
     report_scope = _load_report_scope(current_user, datasource_id, workspace_oid)
     orch = _build_orchestrator(
