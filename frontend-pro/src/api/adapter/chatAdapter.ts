@@ -115,7 +115,7 @@ export type ConversationRecord = {
     index: number;
     sub_task?: string;
     sub_task_agent?: string;
-    state: "pending" | "running" | "ok" | "error";
+    state: "pending" | "running" | "ok" | "error" | "failed" | "skipped";
     error?: string;
     row_count?: number;
   }>;
@@ -130,6 +130,8 @@ export type ConversationDetail = Conversation & {
 export type TaskPlanStage = {
   content: string;
   status: "pending" | "in_progress" | "completed" | "failed";
+  /** 轮末由宿主标注：失败、本轮未执行、或只做了一半。 */
+  state?: "failed" | "skipped" | "incomplete";
 };
 
 export type ChatStreamPayload = {

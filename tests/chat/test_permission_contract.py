@@ -695,3 +695,144 @@ def test_invalid_compiler_sql_is_terminal_and_never_repaired_by_the_model(monkey
         query.run(OWN)
     assert caught.value.detail["category"] == "compiled_plan_unverifiable"
     assert not caught.value.detail["retryable"] and not executions
+
+
+def test_execution_failure_is_repairable_three_times_then_stops_only_that_stage():
+    """数据库拒绝 SQL 时给三次带 db_error 的修复；用尽后只封该阶段。"""
+    from src.chat.service.semantic_query import SemanticContractError
+    from src.datasource.service.semantic_permission_contract import RECOVERY_CONTRACT
+
+    detail = SemanticContractError(
+        "QUERY_EXECUTION_FAILED",
+        "已验证查询执行失败，请检查数据源",
+        db_error="function round(double precision, integer) does not exist",
+    ).detail
+    recovery = PermissionRecovery()
+
+    for remaining in (2, 1, 0):
+        offered = recovery.reject(detail, stage=0)
+        assert offered["recovery_action"] == "repair_sql" and offered["retryable"] is True
+        assert offered["execution_repair_required"] is True
+        assert offered["remaining_execution_repairs"] == remaining
+        assert offered["db_error"].startswith("function round(")
+        assert "db_error" in offered["repair_hint"]
+        assert not recovery.blocked and not recovery.stage_blocked(0)
+
+    terminal = recovery.reject(detail, stage=0)
+    assert terminal["recovery_action"] == "contact_admin" and terminal["retryable"] is False
+    assert terminal["remaining_execution_repairs"] == 0
+    # 只停掉出错阶段：其余阶段仍可查询，整轮不会被一次执行失败带走。
+    assert recovery.stage_blocked(0) and not recovery.blocked
+    assert not recovery.stage_blocked(1)
+    assert recovery.remaining(1) == RECOVERY_CONTRACT.max_sql_repairs + 1
+
+
+def test_execution_failure_keeps_the_database_error_for_the_model_and_the_log(monkeypatch, caplog):
+    from src.chat.service import semantic_query
+
+    query, _, _ = execution_query(monkeypatch)
+    monkeypatch.setattr(
+        semantic_query,
+        "run_sql_with_auto_fix",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            success=False,
+            result=None,
+            message=(
+                "SQL execution failed: function round(double precision, integer) "
+                "does not exist"
+            ),
+        ),
+    )
+    with caplog.at_level("WARNING"):
+        with pytest.raises(semantic_query.SemanticContractError) as caught:
+            query.run(OWN)
+    detail = caught.value.detail
+    assert detail["category"] == "execution_failed"
+    assert detail["db_error"] == (
+        "function round(double precision, integer) does not exist"
+    )
+    # 用户文案保持通用，原始报错只进模型诊断与日志。
+    assert "round(" not in detail["user_message"]
+    assert any(
+        "round(double precision, integer)" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_execution_failure_repair_continues_the_turn(runtime_harness, monkeypatch):
+    from langchain_core.messages import AIMessage
+
+    from src.chat.service.semantic_query import SemanticContractError
+
+    harness = runtime_harness
+    original = harness.query.run
+    calls = 0
+
+    def run(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise SemanticContractError(
+                "QUERY_EXECUTION_FAILED",
+                "已验证查询执行失败，请检查数据源",
+                db_error="function round(double precision, integer) does not exist",
+            )
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(harness.query, "run", run)
+    events = harness.run(
+        [
+            tool_call(OWN, "fails"),
+            tool_call(OWN, "repaired"),
+            AIMessage(content="修正后完成：本校数学均分114.50分。"),
+        ]
+    )
+    assert calls == 2
+    failed = next(
+        data for event, data in events if event == "tool_result" and data["success"] is False
+    )
+    detail = failed["data"]["error_detail"]
+    assert detail["recovery_action"] == "repair_sql"
+    assert "round(double precision" in detail["db_error"]
+    assert ("summary", {"content": "修正后完成：本校数学均分114.50分。"}) in events
+
+
+def test_unexecuted_stages_are_reported_as_failed_or_skipped(runtime_harness, monkeypatch):
+    from langchain_core.messages import AIMessage
+
+    from src.chat.service.semantic_query import SemanticContractError
+
+    harness = runtime_harness
+
+    def plan():
+        return AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "write_todos",
+                    "id": "plan",
+                    "args": {
+                        "todos": [
+                            {"content": "取本班各科均分", "status": "in_progress"},
+                            {"content": "取低分人数分布", "status": "pending"},
+                            {"content": "汇总报告", "status": "pending"},
+                        ]
+                    },
+                }
+            ],
+        )
+
+    def run(*_args, **_kwargs):
+        raise SemanticContractError(
+            "QUERY_EXECUTION_FAILED",
+            "已验证查询执行失败，请检查数据源",
+            db_error="function round(double precision, integer) does not exist",
+        )
+
+    monkeypatch.setattr(harness.query, "run", run)
+    events = harness.run([plan(), tool_call(OWN, "fail-1"), tool_call(OWN, "fail-2"),
+                          AIMessage(content="只能给出部分结论")])
+    stages = [data for event, data in events if event == "task_plan"][-1]["stages"]
+    assert [stage.get("state") for stage in stages] == ["failed", "skipped", "skipped"]
+    saved = harness.persisted[0]["plan_states"]
+    assert [row["state"] for row in saved] == ["failed", "skipped", "skipped"]

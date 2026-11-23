@@ -133,11 +133,16 @@ export function ChatTaskProgress({ stages, steps, running, waiting }: {
             </div>
           </div>
           <ThoughtChain className="cowork-stage-chain" line items={stages.map((stage, index) => {
+              // 宿主在轮末标注的阶段结论优先于 todo 的三态推断。
+              const hostState = running || waiting ? undefined : stage.state;
               const unconfirmed = !running && !waiting && (stage.status === "pending" || stage.status === "in_progress");
-              const status = stage.status === "completed" ? "success" : stage.status === "failed" ? "error" :
-                unconfirmed ? "abort" : stage.status === "in_progress" && running ? "loading" : undefined;
-              const label = unconfirmed ? "未确认完成" :
-                { pending: "待执行", in_progress: waiting ? "待继续" : "进行中", completed: "已完成", failed: "未完成" }[stage.status];
+              const status = stage.status === "completed" ? "success"
+                : hostState === "failed" || stage.status === "failed" ? "error"
+                  : hostState === "skipped" || hostState === "incomplete" ? "abort"
+                    : unconfirmed ? "abort" : stage.status === "in_progress" && running ? "loading" : undefined;
+              const label = hostState === "failed" ? "失败" : hostState === "skipped" ? "本轮未执行"
+                : hostState === "incomplete" ? "未完成" : unconfirmed ? "未确认完成" :
+                  { pending: "待执行", in_progress: waiting ? "待继续" : "进行中", completed: "已完成", failed: "未完成" }[stage.status];
               const related = steps.filter((step) => step.toolName && (
                 step.stageContent ? step.stageContent === stage.content : step.subTaskIndex === index
               ));

@@ -367,6 +367,12 @@ class PermissionRecovery:
 
     max_repairs: int = RECOVERY_CONTRACT.max_sql_repairs
     stage_repairs: dict[object, int] = field(default_factory=dict)
+    # 执行失败多是模型 SQL 的方言/类型问题：同一阶段允许带数据库报错连续修复 3 次。
+    # 数据库一次只报一个错，复杂查询（多函数/多类型）往往要改两三轮才通过；
+    # 这里只放宽“能拿到 db_error 的执行失败”，不改授权/编译类失败，也不进
+    # RECOVERY_CONTRACT（避免改变 query_contract 指纹而让历史会话上下文失效）。
+    max_execution_repairs: int = 3
+    execution_repairs: dict[object, int] = field(default_factory=dict)
     blocked: bool = False
     blocked_stages: set[object] = field(default_factory=set)
     skipped: list[dict] = field(default_factory=list)
@@ -400,13 +406,21 @@ class PermissionRecovery:
             # 越出授权范围的数据项：记缺口后继续，不封禁、不扣预算、不触发重新合成。
             self._record_skip(error, stage=stage, tool=tool)
             return error
+        if self._allow_execution_repair(error, stage=stage, tool=tool):
+            return error
         self.last_error = error
         if tool != "query_semantic":
             # Discovery failures are reported, but they do not spend SQL repairs.
             self.last_error["remaining_sql_repairs"] = self.remaining(stage)
             return self.last_error
         if self.last_error.get("recovery_action") != "repair_sql":
-            self.blocked = True
+            # 执行失败说明数据源本身可用、只是这条 SQL 跑不通：只封禁出错阶段，
+            # 让计划里的其他阶段（尤其是从未执行过的阶段）仍有机会取数。
+            if error.get("code") == "QUERY_EXECUTION_FAILED" and stage is not None:
+                self.blocked_stages.add(stage)
+                self.last_error["remaining_execution_repairs"] = 0
+            else:
+                self.blocked = True
             self.last_error["remaining_sql_repairs"] = 0
             if self._terminal_error is None:
                 self._terminal_error = self.last_error
@@ -430,6 +444,36 @@ class PermissionRecovery:
             if self._terminal_error is None:
                 self._terminal_error = self.last_error
         return self.last_error
+
+    def _allow_execution_repair(self, error, *, stage, tool):
+        """数据库拒绝了一条可证明的查询：给模型带 ``db_error`` 的有界修复机会。
+
+        只有真正执行到数据库的查询才放宽（``query_semantic``）；授权、编译和候选
+        探查失败仍按原分类处理。每个阶段最多 ``max_execution_repairs`` 次，
+        用尽后回到终止路径并只封该阶段。
+        """
+        if error.get("code") != "QUERY_EXECUTION_FAILED" or tool != "query_semantic":
+            return False
+        if self.blocked or self.stage_blocked(stage):
+            return False
+        used = self.execution_repairs.get(stage, 0)
+        if used >= self.max_execution_repairs:
+            return False
+        self.execution_repairs[stage] = used + 1
+        error.update(
+            recovery_action="repair_sql",
+            retryable=True,
+            sql_repair_required=True,
+            execution_repair_required=True,
+            remaining_execution_repairs=self.max_execution_repairs - used - 1,
+            repair_hint=(
+                "数据库拒绝了这条 SQL（通常是方言、函数或参数类型不匹配）。"
+                "按 db_error 修正后重新提交；仍失败会继续返回数据库报错，"
+                "但不要改变业务口径，也不要向用户索取授权。"
+            ),
+        )
+        self.last_error = error
+        return True
 
     def _record_skip(self, error, *, stage, tool):
         label = str(

@@ -268,6 +268,44 @@ def _query_free_question(text: str) -> bool:
     ))
 
 
+_PLAN_STATE_BY_TODO = {
+    "completed": "ok", "in_progress": "running", "pending": "pending", "failed": "error",
+}
+
+
+def _stage_outcomes(todos, tool_calls, *, pending: bool, interrupted: bool):
+    """轮末阶段结论：模型只能写 pending/in_progress/completed，失败/未执行由宿主补。
+
+    只在轮次异常结束（查询失败、阶段或整轮停用、预算/准备失败）时标注；正常但
+    尚未推进的计划仍保留“未确认完成”，避免把模型正常的中间态误报成失败。
+    """
+    if not todos:
+        return []
+    any_failed = any(
+        call.get("tool") == "query_semantic" and call.get("success") is False
+        for call in tool_calls
+    )
+    rows = []
+    for index, todo in enumerate(todos):
+        status = todo.get("status")
+        state = ""
+        if interrupted and not pending:
+            if status == "in_progress":
+                state = "failed" if any_failed else "incomplete"
+            elif status == "pending":
+                state = "skipped"
+        plan_state = _PLAN_STATE_BY_TODO.get(status, "pending")
+        if state == "failed":
+            plan_state = "failed"
+        elif state == "skipped":
+            plan_state = "skipped"
+        rows.append({
+            "index": index, "content": todo["content"], "status": status,
+            "state": state, "plan_state": plan_state,
+        })
+    return rows
+
+
 class _ChatState(AgentState):
     remaining_steps: Annotated[int, PrivateStateAttr, RemainingStepsManager]
     chat_model_calls: NotRequired[Annotated[int, PrivateStateAttr]]
@@ -994,7 +1032,9 @@ async def _run_turn(
                 "不要直接输出结论，不要只在正文里追问或声称正在等待用户。"
             ), additional_kwargs={"chat_runtime_instruction": True}))
             return {**update, "jump_to": "model"}
-        if not permission_recovery.blocked and not message.tool_calls and any(todo["status"] == "pending" for todo in state.get("todos", [])):
+        if (not permission_recovery.blocked and not permission_recovery.blocked_stages
+                and not message.tool_calls
+                and any(todo["status"] == "pending" for todo in state.get("todos", []))):
             completion_attempts += 1
             if completion_attempts > 2:
                 preparation_error = "本轮计划仍有未执行阶段，分析尚未完成。"
@@ -1051,7 +1091,9 @@ async def _run_turn(
                     f"宿主错误类别为{permission_recovery.last_error['category']}，"
                     f"恢复动作为{permission_recovery.last_error['recovery_action']}。"
                     "按宿主分类说明未完成部分，不能猜测账号未获授权。"
-                    "未执行的阶段保持未完成，不得虚报完成；已有可信数据保留在结果中。"
+                    "未执行的阶段保持未完成，不得虚报完成；失败/未执行由宿主标注，"
+                    "步骤内容只写分析目标，不要把原因写进标题。"
+                    "已有可信数据保留在结果中。"
                 ),
             )
         elif permission_recovery.stage_blocked(active_stage_index()):
@@ -1688,6 +1730,27 @@ async def _run_turn(
     run_status = None
     if not pending:
         run_status = "completed" if succeeded else "partial" if usable_results else "failed"
+    # 模型只有 pending/in_progress/completed 三种 todo 状态，失败与未执行由宿主在轮末标注，
+    # 前端据此区分“失败 / 未执行 / 未确认完成”。
+    outcomes = _stage_outcomes(
+        todos,
+        tool_calls,
+        pending=bool(pending),
+        interrupted=bool(
+            permission_recovery.last_error or permission_recovery.blocked
+            or permission_recovery.blocked_stages or limit_message
+            or model_reply_error or preparation_error
+        ),
+    )
+    if any(row["state"] for row in outcomes):
+        await emit("task_plan", {"stages": [
+            {
+                "content": row["content"],
+                "status": row["status"],
+                **({"state": row["state"]} if row["state"] else {}),
+            }
+            for row in outcomes
+        ]})
     await emit(
         "step",
         {
@@ -1742,8 +1805,7 @@ async def _run_turn(
         agent_mode=request.agent_mode,
         plans=[todo["content"] for todo in todos] or None,
         plan_states=[
-            {"index": index, "state": {"completed": "ok", "in_progress": "running", "pending": "pending", "failed": "error"}[todo["status"]]}
-            for index, todo in enumerate(todos)
+            {"index": row["index"], "state": row["plan_state"]} for row in outcomes
         ] or None,
         tool_calls=tool_calls,
         summary=answer,

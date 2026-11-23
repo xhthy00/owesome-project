@@ -1342,7 +1342,8 @@ export function useChat() {
         nextTaskPlanByRunId[recordRunId] = record.plans.map((content, index) => {
           const state = record.plan_states?.find((stage) => stage.index === index)?.state;
           const status = state === "ok" ? "completed" : state === "running" ? "in_progress" : state === "error" ? "failed" : "pending";
-          return { content, status };
+          const stageState = state === "failed" || state === "skipped" ? state : undefined;
+          return { content, status, ...(stageState ? { state: stageState } : {}) };
         });
       }
 

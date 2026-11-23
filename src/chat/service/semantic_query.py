@@ -1,5 +1,6 @@
 """Plan read-only queries against a published semantic model and reuse host permissions."""
 
+import logging
 import time
 from difflib import get_close_matches
 from threading import Lock
@@ -49,6 +50,10 @@ from system.workspace_scope import assert_datasource_accessible
 _MAX_ROWS = 200
 _MAX_DESCRIBE_NAMES = 12
 _MAX_FIELD_ERRORS = 64
+# 执行报错要回给模型修复，也要留在日志/审计里；原文可能很长，截断到可诊断的长度。
+_MAX_DB_ERROR_CHARS = 300
+
+logger = logging.getLogger(__name__)
 # A 503 means the planner/executor rejected the call before doing any work
 # (busy, stopping or not ready), so a bounded retry is safe for plan and execute.
 _SERVICE_UNAVAILABLE_RETRIES = 2
@@ -155,10 +160,27 @@ class SemanticQueryError(ValueError):
     """A query that could not be planned or safely executed."""
 
 
+def _db_error_hint(message: str) -> str:
+    """把数据源报错压成一行诊断：去掉通用前缀，保留数据库原始原因。
+
+    模型需要这段原文才能修 SQL，管理员也需要它在日志/审计里定位问题；
+    ``user_message`` 仍然是面向用户的通用文案。
+    """
+    text = str(message or "").strip()
+    for prefix in ("SQL execution failed:", "SQL execution failed："):
+        if text.startswith(prefix):
+            text = text[len(prefix):].strip()
+            break
+    text = " ".join(text.split())
+    if len(text) > _MAX_DB_ERROR_CHARS:
+        text = text[: _MAX_DB_ERROR_CHARS - 1] + "…"
+    return text
+
+
 class SemanticContractError(SemanticQueryError):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, **details):
         super().__init__(message)
-        self.detail = permission_error_detail(code, message)
+        self.detail = permission_error_detail(code, message, **details)
 
 
 class SemanticViewDescriptionRequiredError(SemanticQueryError):
@@ -729,11 +751,16 @@ class SemanticQuery:
             limit = tree.args.get("limit")
             if limit is None or not isinstance(limit.expression, exp.Literal) or not limit.expression.is_int or int(limit.expression.this) > _MAX_ROWS:
                 tree = tree.limit(_MAX_ROWS + 1)
-            ok, _, data = execute_sql(db_type, {
+            ok, message, data = execute_sql(db_type, {
                 **config, "read_only": True, "query_timeout_seconds": self.settings.chat_query_timeout_seconds,
             }, tree.sql(dialect=dialect))
             if not ok or not isinstance(data, dict):
-                raise SemanticContractError("QUERY_EXECUTION_FAILED", "达线汇总查询失败，请检查数据源")
+                logger.warning("public line-reach SQL execution failed (%s): %s", db_type, message)
+                raise SemanticContractError(
+                    "QUERY_EXECUTION_FAILED",
+                    "达线汇总查询失败，请检查数据源",
+                    db_error=_db_error_hint(message),
+                )
             rows = data["rows"]
             result = {"columns": data["columns"], "rows": rows[:_MAX_ROWS],
                       "row_count": min(len(rows), _MAX_ROWS), "rows_truncated": len(rows) > _MAX_ROWS}
@@ -774,7 +801,13 @@ class SemanticQuery:
             if current is None or current.fingerprint != authorization.fingerprint:
                 raise AuthorizationError("AUTH_REVOKED", "查询期间权限发生变化，结果已丢弃")
             if not outcome.success or not isinstance(outcome.result, dict):
-                raise SemanticContractError("QUERY_EXECUTION_FAILED", "已验证查询执行失败，请检查数据源")
+                db_message = getattr(outcome, "message", "") or ""
+                logger.warning("verified SQL execution failed (%s): %s", db_type, db_message)
+                raise SemanticContractError(
+                    "QUERY_EXECUTION_FAILED",
+                    "已验证查询执行失败，请检查数据源",
+                    db_error=_db_error_hint(db_message),
+                )
             result = apply_result_privacy(outcome.result) or outcome.result
             if tuple(result.get("columns", ())) != proof.output_columns:
                 raise AuthorizationError("AUTH_PHYSICAL_PROOF_FAILED", "数据库结果字段与已验证输出契约不一致")
