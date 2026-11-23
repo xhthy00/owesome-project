@@ -1730,7 +1730,7 @@ async def _run_turn(
     run_status = None
     if not pending:
         run_status = "completed" if succeeded else "partial" if usable_results else "failed"
-    # 模型只有 pending/in_progress/completed 三种 todo 状态，失败与未执行由宿主在轮末标注，
+    # 模型只有 pending/in_progress/completed 三种状态，失败与未执行由宿主在轮末标注，
     # 前端据此区分“失败 / 未执行 / 未确认完成”。
     outcomes = _stage_outcomes(
         todos,

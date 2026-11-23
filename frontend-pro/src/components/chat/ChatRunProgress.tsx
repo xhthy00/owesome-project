@@ -133,7 +133,7 @@ export function ChatTaskProgress({ stages, steps, running, waiting }: {
             </div>
           </div>
           <ThoughtChain className="cowork-stage-chain" line items={stages.map((stage, index) => {
-              // 宿主在轮末标注的阶段结论优先于 todo 的三态推断。
+              // 宿主在轮末标注的阶段结论优先于三态推断。
               const hostState = running || waiting ? undefined : stage.state;
               const unconfirmed = !running && !waiting && (stage.status === "pending" || stage.status === "in_progress");
               const status = stage.status === "completed" ? "success"
