@@ -152,6 +152,13 @@ class RecoveryContract(ContractModel):
 RECOVERY_CONTRACT = RecoveryContract()
 # 一轮里最多向用户交代这么多“被跳过”的数据项，避免答案被缺口说明淹没。
 _MAX_SKIPPED_ITEMS = 8
+# 用户可见的缺口名称。技术 message 只用于日志和模型修正，不能直接进答案；
+# 具体点位可用 ``skip_label`` 覆盖，未覆盖时按错误码落到这里的业务分类。
+_DEFAULT_SKIP_LABELS = {
+    "AUTH_COLUMN_FORBIDDEN": "受限字段",
+    "AUTH_SCOPE_OUTSIDE_GRANT": "授权范围外的数据",
+    "AUTH_FEATURE_NOT_AVAILABLE": "未开通的分析能力",
+}
 CONTRACT_INSTRUCTIONS = (
     "SQL由模型完整生成，宿主不补WHERE。多授权按完整元组OR组合。implicit_scope无需编造数据库字段。"
     "metrics/aggregate_expressions的键是指标标识，必须展开为批准的表达式；宽表直接按各科字段计算。"
@@ -322,8 +329,15 @@ def permission_error_detail(code, message, *, retryable=None, **details):
         "context_changed": "查询上下文或校验契约已变化，请重新发起问题。",
         "compiled_plan_unverifiable": "编译结果未通过安全校验，查询已停止，请联系管理员处理。",
     }[category]
+    # 缺口文案是宿主对用户解释的“数据项名称”，不能回落到技术错误 message。
+    skip_label = (
+        str(details.get("skip_label") or _DEFAULT_SKIP_LABELS.get(code, "部分数据项"))
+        if action == "skip"
+        else ""
+    )
     return {
         **details,
+        **({"skip_label": skip_label} if skip_label else {}),
         "code": code,
         "message": message,
         "category": category,
@@ -418,7 +432,11 @@ class PermissionRecovery:
         return self.last_error
 
     def _record_skip(self, error, *, stage, tool):
-        label = str(error.get("skip_label") or error.get("message") or "").strip()
+        label = str(
+            error.get("skip_label")
+            or _DEFAULT_SKIP_LABELS.get(error.get("code"), "")
+            or "部分数据项"
+        ).strip()
         if not label or len(self.skipped) >= _MAX_SKIPPED_ITEMS:
             return
         if any(item.get("label") == label for item in self.skipped):
@@ -426,6 +444,13 @@ class PermissionRecovery:
         self.skipped.append(
             {"label": label, "code": error.get("code"), "stage": stage, "tool": tool}
         )
+
+    def gap_items(self):
+        """结构化缺口，供 SSE / 历史记录复用；只暴露业务名称与错误码。"""
+        return [
+            {"label": item["label"], "code": item.get("code")}
+            for item in self.skipped
+        ]
 
     def gap_note(self):
         """被跳过、需要向用户交代的数据项；缺口文案由宿主追加，模型不重复解释。"""

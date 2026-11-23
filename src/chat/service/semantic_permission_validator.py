@@ -664,16 +664,28 @@ class PermissionValidator:
                     if col.table != alias:
                         continue
                     if col.name in policy.forbidden_columns:
-                        fail("AUTH_COLUMN_FORBIDDEN", "查询引用了禁止使用的字段")
+                        fail(
+                            "AUTH_COLUMN_FORBIDDEN",
+                            "查询引用了禁止使用的字段",
+                            skip_label="个人身份或敏感字段",
+                        )
                     if col.name in policy.filter_only_columns:
                         where = select.args.get("where")
                         if where is None or col not in list(where.find_all(exp.Column)):
-                            fail("AUTH_COLUMN_FORBIDDEN", "该字段仅可用于授权范围过滤")
+                            fail(
+                                "AUTH_COLUMN_FORBIDDEN",
+                                "该字段仅可用于授权范围过滤",
+                                skip_label="仅限授权范围过滤的字段",
+                            )
                         # No arbitrary predicates, derived tests or field-to-field probes.
                         if not isinstance(col.parent, (exp.EQ, exp.In)) or not any(
                             col.name in column_values(branch, alias) for branch in terms(where.this)
                         ):
-                            fail("AUTH_COLUMN_FORBIDDEN", "仅过滤字段必须使用明确授权值")
+                            fail(
+                                "AUTH_COLUMN_FORBIDDEN",
+                                "仅过滤字段必须使用明确授权值",
+                                skip_label="仅限授权范围过滤的字段",
+                            )
                         scope_key = next(
                             (k for k, v in policy.scope_columns.items() if v == col.name), None
                         )
@@ -682,7 +694,11 @@ class PermissionValidator:
                             column_values(branch, alias).get(col.name, set()) <= permitted
                             for branch in terms(where.this)
                         ):
-                            fail("AUTH_COLUMN_FORBIDDEN", "仅过滤字段不可用于探查其他单位或个人")
+                            fail(
+                                "AUTH_COLUMN_FORBIDDEN",
+                                "仅过滤字段不可用于探查其他单位或个人",
+                                skip_label="仅限授权范围过滤的字段",
+                            )
         internal = [
             (alias, flow)
             for alias, flow in sources.items()

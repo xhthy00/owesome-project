@@ -38,6 +38,17 @@ export type Conversation = {
 
 export type RunStatus = "completed" | "partial" | "failed";
 
+/** 宿主跳过的数据项（越权/未开通能力）；文案由后端给出，前端不自行拼接。 */
+export type QueryGap = {
+  label: string;
+  code?: string;
+};
+
+export type QueryGapsPayload = {
+  items: QueryGap[];
+  note?: string;
+};
+
 export type ConversationRecord = {
   id: number;
   question: string;
@@ -86,6 +97,7 @@ export type ConversationRecord = {
     human_cancelled_to?: string;
     run_status?: RunStatus;
     answer_coverage?: { coverage: "complete" | "partial" };
+    query_gaps?: QueryGapsPayload;
   }) | null;
   chart_type?: string;
   chart_config?: Record<string, unknown> | null;
@@ -215,6 +227,8 @@ type StreamHandlers = {
   onAnswerDiscard?: () => void;
   onSummary?: (content: string) => void;
   onRunStatus?: (status: RunStatus) => void;
+  /** 本轮因授权/能力限制被宿主跳过的数据项（结构化，answer 正文仍保留兜底文案） */
+  onQueryGaps?: (payload: QueryGapsPayload) => void;
   onUsage?: (payload: ContextUsage & {
     prompt_tokens?: number;
     completion_tokens?: number;
@@ -409,6 +423,25 @@ export async function sendMessageStream(
           const status = data.status;
           if (status === "completed" || status === "partial" || status === "failed") {
             handlers.onRunStatus?.(status);
+          }
+          break;
+        }
+        case "query_gaps": {
+          const items = Array.isArray(data.items)
+            ? data.items
+                .map((item): QueryGap | undefined => {
+                  const row = item as Record<string, unknown>;
+                  const label = typeof row.label === "string" ? row.label.trim() : "";
+                  if (!label) return undefined;
+                  return { label, code: typeof row.code === "string" ? row.code : undefined };
+                })
+                .filter((item): item is QueryGap => Boolean(item))
+            : [];
+          if (items.length) {
+            handlers.onQueryGaps?.({
+              items,
+              note: typeof data.note === "string" ? data.note : undefined
+            });
           }
           break;
         }

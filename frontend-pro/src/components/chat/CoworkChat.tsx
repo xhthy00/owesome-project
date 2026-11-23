@@ -327,6 +327,12 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
               const lastResult = results[results.length - 1];
               const chartRec = chat.chartByRunId[runId];
               const answer = assistant ? visibleMessage(assistant) : "";
+              const gapNote = assistant?.queryGapsNote ?? "";
+              const trimmedAnswer = answer.trimEnd();
+              const displayAnswer = gapNote && trimmedAnswer.endsWith(gapNote)
+                ? trimmedAnswer.slice(0, -gapNote.length).trimEnd()
+                : answer;
+              const gapLabels = (assistant?.queryGaps ?? []).map((gap) => gap.label).filter(Boolean);
               const thinkText = (chat.thinkByRunId[runId] || "").trim() || mergeThinkText(
                 assistant ? extractThinkFromText(assistant.content) : "",
                 extractThinkFromSteps(steps)
@@ -347,11 +353,20 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
                     <Bubble<React.ReactNode> variant="borderless" className="cowork-response"
                       classNames={{ body: "cowork-response-body", content: "cowork-answer" }}
                       header={<span className="cowork-assistant-label"><img src={ASSISTANT_AVATAR} alt="" />智学助手</span>}
-                      footer={!running && answer && assistant ? <CopyRow item={assistant} /> : undefined}
+                      footer={!running && displayAnswer && assistant ? <CopyRow item={assistant} /> : undefined}
                       content={<>
                       <ReactMarkdown components={eduMarkdownComponents} remarkPlugins={markdownPlugins}>
-                        {answer || (results.length ? "这轮未生成分析结论，请查看已返回的查询结果。" : "这轮未生成分析结论，请重新提问。")}
+                        {displayAnswer || (results.length ? "这轮未生成分析结论，请查看已返回的查询结果。" : "这轮未生成分析结论，请重新提问。")}
                       </ReactMarkdown>
+                      {gapLabels.length ? (
+                        <div className="cowork-answer-gaps" role="note">
+                          <InfoCircleOutlined aria-hidden="true" />
+                          <span>
+                            <strong>已跳过：</strong>{gapLabels.join("；")}
+                            <span className="cowork-answer-gaps-hint">不在当前账号的查询范围内，本次结论未包含这些数据。</span>
+                          </span>
+                        </div>
+                      ) : null}
                       {!running && lastResult ? (
                         <AnswerVisual
                           question={user.content}
@@ -399,7 +414,8 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
       {activePreview && (lg ? <aside className="cowork-preview" aria-label="结果预览">
         <div className="cowork-preview-header"><strong>结果预览</strong><button type="button" className="cowork-icon" aria-label="关闭预览" onClick={() => setPreview(undefined)}><CloseCircleOutlined /></button></div>
         <div className="cowork-preview-body">{previewBody}</div>
-      </aside> : <Drawer title="结果预览" width="min(100%, 560px)" open onClose={() => setPreview(undefined)}>{previewBody}</Drawer>)}
+      </aside> : <Drawer title="结果预览" width="min(100%, 560px)" open onClose={() => setPreview(undefined)}
+        styles={{ body: { padding: 16, background: "var(--color-surface-0)" } }}>{previewBody}</Drawer>)}
       {progressOpen && !activePreview && (lg ? <aside className="cowork-task-panel" aria-label="任务进度">
         <header><ApartmentOutlined aria-hidden="true" /><strong>任务进度</strong>
           <button type="button" className="cowork-icon" aria-label="折叠任务进度" title="折叠任务进度" onClick={() => setProgressOpen(false)}><RightOutlined /></button>

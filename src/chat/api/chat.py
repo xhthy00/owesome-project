@@ -453,6 +453,8 @@ async def _semantic_sql_response(chat_request, http_request, session, current_us
             record_id=record_id, result=events.get("result"), steps=steps,
             reasoning=events.get("summary", {}).get("content", ""),
         )
+        if gaps := events.get("query_gaps"):
+            data["query_gaps"] = gaps
         if clarification:
             data["clarify"] = clarification
     else:

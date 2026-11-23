@@ -1628,10 +1628,19 @@ async def _run_turn(
             query_error = query_error or answer
     elif execute and not pending and evidence and query_error and not permission_recovery.skipped:
         answer += "\n部分查询未完成，本轮结论仅覆盖已成功返回的数据。"
+    query_gaps: list[dict] = []
+    gap_note = ""
     if execute and not pending:
         gap_note = permission_recovery.gap_note()
         if gap_note and gap_note not in answer:
             answer += "\n\n" + gap_note
+        query_gaps = permission_recovery.gap_items()
+        if query_gaps:
+            # 结构化缺口：前端可据此单独提示，不必从答案正文里解析“查询说明”。
+            await emit(
+                "query_gaps",
+                {"items": query_gaps, **({"note": gap_note} if gap_note else {})},
+            )
     if not execute:
         return 0
     if (
@@ -1716,6 +1725,8 @@ async def _run_turn(
                                    "evidence_ids": list(evidence_answer.evidence_ids),
                                    "model_generated": evidence_answer.model_generated}}
                if evidence_answer else {}),
+            **({"query_gaps": {"items": query_gaps, **({"note": gap_note} if gap_note else {})}}
+               if query_gaps else {}),
             **({"question_assessment": {key: value for key, value in question_assessment.items()
                                        if key not in {"after_tool", "call_id"}}} if question_assessment else {}),
             **({"human_reply_to": request.resume_interrupt_id, "human_answer": request.question}

@@ -10,7 +10,6 @@ import {
   FullscreenOutlined,
   LineChartOutlined,
   PieChartOutlined,
-  TableOutlined,
   FilePdfOutlined,
   FileWordOutlined
 } from "@ant-design/icons";
@@ -88,41 +87,39 @@ function QueryResultTable({
   maxHeight?: string | number;
 }) {
   const headers = labelColumns(columns);
+  const numericColumns = columns.map((_, index) => rows.length > 0 && rows.every((row) => {
+    const value = (row as unknown[])[index];
+    return value == null || value === "" || typeof value === "number";
+  }));
   return (
-    <div
-      className="overflow-auto rounded-md border border-[#e5e7eb] dark:border-[#2f3441]"
-      style={maxHeight != null ? { maxHeight } : undefined}
-    >
-      <table className="min-w-full border-collapse text-xs">
-        <thead className="sticky top-0 z-[1] bg-[#f8fafc] dark:bg-[#141923]">
-          <tr>
-            {columns.map((col, index) => (
-              <th
-                key={col}
-                className="whitespace-nowrap border border-[#e5e7eb] px-2 py-1 text-left dark:border-[#2f3441]"
-              >
-                {headers[index]}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row, idx) => (
-            <tr key={idx} className={isTargetRankRow(columns, row as unknown[]) ? "bg-[#eff6ff] dark:bg-[#172554]" : undefined}>
-              {columns.map((col, colIdx) => (
-                <td
-                  key={`${idx}-${col}`}
-                  className="whitespace-nowrap border border-[#e5e7eb] px-2 py-1 dark:border-[#2f3441]"
-                >
-                  {formatQueryCell((row as unknown[])[colIdx])}
-                </td>
+    <div className="cowork-data-table" style={maxHeight != null ? { maxHeight } : undefined}>
+      <div className="cowork-data-table-scroll">
+        <table>
+          <thead>
+            <tr>
+              {columns.map((col, index) => (
+                <th key={col} className={numericColumns[index] ? "is-num" : undefined}>{headers[index]}</th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="sticky bottom-0 flex items-center justify-between gap-2 bg-white px-2 py-2 dark:bg-[#11131a]">
-        <span className="text-[11px] text-[#98a2b3]">{`共 ${rowCount} 行`}</span>
+          </thead>
+          <tbody>
+            {rows.map((row, idx) => (
+              <tr key={idx} className={isTargetRankRow(columns, row as unknown[]) ? "is-target" : undefined}>
+                {columns.map((col, colIdx) => (
+                  <td
+                    key={`${idx}-${col}`}
+                    className={numericColumns[colIdx] ? "is-num" : undefined}
+                  >
+                    {formatQueryCell((row as unknown[])[colIdx])}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="cowork-data-table-foot">
+        <span>{`共 ${rowCount} 行`}</span>
         <Pagination
           size="small"
           current={page}
@@ -514,43 +511,55 @@ export default function ChatExecutionPanel({
         </div>
       ) : null}
       {activeQuery ? (
-        <div className="rounded-xl border border-[#d9e2ef] bg-white p-4 dark:border-[#2f3441] dark:bg-[#11131a]">
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-md border border-[#d9e2ef] bg-[#f8fafc] p-2 dark:border-[#334155] dark:bg-[#141923]">
-            <div className="flex items-center gap-2">
-              <span className="text-[11px] text-[#98a2b3]">查询集</span>
-              <select
-                value={activeQueryIndex}
-                onChange={(e) => setSelectedQueryIndex(Number(e.target.value))}
-                className="rounded-md border border-[#d9e2ef] bg-white px-2 py-1 text-xs text-[#475467] dark:border-[#334155] dark:bg-[#0f172a] dark:text-[#cbd5e1]"
-              >
-                {scopedQueryResults.map((item, idx) => (
-                  <option key={item.key} value={idx}>
-                    {queryDisplayLabels[idx]}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex items-center gap-1">
-              {preferQueryTable ? null : (
-                <button
-                  onClick={() => setResultTab("chart")}
-                  className={`rounded px-2 py-1 text-[11px] ${effectiveResultTab === "chart" ? "bg-[#dbeafe] text-[#1d4ed8]" : "text-[#667085]"}`}
+        <div className="cowork-preview-result">
+          <div className="cowork-preview-toolbar">
+            <label className="cowork-preview-field">
+              <span className="cowork-preview-field-label">查询集</span>
+              <span className="cowork-select-wrap">
+                <select
+                  aria-label="选择查询集"
+                  value={activeQueryIndex}
+                  onChange={(e) => setSelectedQueryIndex(Number(e.target.value))}
+                  className="cowork-select"
                 >
-                  图表
+                  {scopedQueryResults.map((item, idx) => (
+                    <option key={item.key} value={idx}>
+                      {queryDisplayLabels[idx]}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            </label>
+            <div className="cowork-preview-toolbar-actions">
+              <div className="cowork-seg" role="tablist" aria-label="结果视图">
+                {preferQueryTable ? null : (
+                  <button
+                    type="button"
+                    role="tab"
+                    aria-selected={effectiveResultTab === "chart"}
+                    className={`cowork-seg-item${effectiveResultTab === "chart" ? " is-active" : ""}`}
+                    onClick={() => setResultTab("chart")}
+                  >
+                    图表
+                  </button>
+                )}
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={effectiveResultTab === "data"}
+                  className={`cowork-seg-item${effectiveResultTab === "data" ? " is-active" : ""}`}
+                  onClick={() => setResultTab("data")}
+                >
+                  数据
                 </button>
-              )}
+              </div>
               <button
-                onClick={() => setResultTab("data")}
-                className={`rounded px-2 py-1 text-[11px] ${effectiveResultTab === "data" ? "bg-[#dbeafe] text-[#1d4ed8]" : "text-[#667085]"}`}
-              >
-                数据
-              </button>
-              <button
+                type="button"
+                className="cowork-ghost-button"
                 onClick={() => {
                   setResultTab("data");
                   setShowQueryDialog(true);
                 }}
-                className="ml-1 inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] text-[#3b82f6] hover:bg-[#dbeafe]"
                 title="全屏查看数据表"
               >
                 <FullscreenOutlined />
@@ -560,50 +569,64 @@ export default function ChatExecutionPanel({
           </div>
 
           {effectiveResultTab === "chart" ? (
-            <div className="rounded-md border border-[#e5e7eb] p-3 dark:border-[#2f3441]">
-              <div className="mb-2 flex items-center justify-between">
-                <div className="text-xs font-semibold text-[#344054] dark:text-[#cbd5e1]">
+            <div className="cowork-preview-chart">
+              <div className="cowork-preview-chart-head">
+                <div className="cowork-preview-chart-title">
                   {queryDisplayLabels[activeQueryIndex] || "图表展示"}
                 </div>
-                <div className="flex items-center gap-1 rounded-md border border-[#d9e2ef] p-1 dark:border-[#334155]">
+                <div className="cowork-chart-tools" role="group" aria-label="图表类型">
                   <button
+                    type="button"
+                    title="柱状图"
+                    aria-pressed={chartType === "column"}
+                    className={`cowork-chart-tool${chartType === "column" ? " is-active" : ""}`}
                     onClick={() => setChartType("column")}
-                    className={`rounded p-1 ${chartType === "column" ? "bg-[#dbeafe] text-[#1d4ed8]" : "text-[#667085]"}`}
                   >
                     <BarChartOutlined />
                   </button>
                   <button
+                    type="button"
+                    title="条形图"
+                    aria-pressed={chartType === "bar"}
+                    className={`cowork-chart-tool${chartType === "bar" ? " is-active" : ""}`}
                     onClick={() => setChartType("bar")}
-                    className={`rounded p-1 ${chartType === "bar" ? "bg-[#dbeafe] text-[#1d4ed8]" : "text-[#667085]"}`}
                   >
-                    <TableOutlined />
+                    <BarChartOutlined className="cowork-chart-tool-rotate" />
                   </button>
                   <button
+                    type="button"
+                    title="折线图"
+                    aria-pressed={chartType === "line"}
+                    className={`cowork-chart-tool${chartType === "line" ? " is-active" : ""}`}
                     onClick={() => {
                       setChartType("line");
                       setShowChartLabel(true);
                     }}
-                    className={`rounded p-1 ${chartType === "line" ? "bg-[#dbeafe] text-[#1d4ed8]" : "text-[#667085]"}`}
                   >
                     <LineChartOutlined />
                   </button>
                   <button
+                    type="button"
+                    title="饼图"
+                    aria-pressed={chartType === "pie"}
+                    className={`cowork-chart-tool${chartType === "pie" ? " is-active" : ""}`}
                     onClick={() => setChartType("pie")}
-                    className={`rounded p-1 ${chartType === "pie" ? "bg-[#dbeafe] text-[#1d4ed8]" : "text-[#667085]"}`}
                   >
                     <PieChartOutlined />
                   </button>
-                  <span className="mx-1 h-3 w-px bg-[#d9e2ef] dark:bg-[#334155]" />
+                  <span className="cowork-chart-divider" aria-hidden="true" />
                   <button
+                    type="button"
+                    title={showChartLabel ? "隐藏数值标签" : "显示数值标签"}
+                    aria-pressed={showChartLabel}
+                    className={`cowork-chart-tool${showChartLabel ? " is-active" : ""}`}
                     onClick={() => setShowChartLabel((prev) => !prev)}
-                    className={`rounded p-1 ${showChartLabel ? "bg-[#dbeafe] text-[#1d4ed8]" : "text-[#667085]"}`}
-                    title={showChartLabel ? "隐藏标签" : "显示标签"}
                   >
                     {showChartLabel ? <EyeOutlined /> : <EyeInvisibleOutlined />}
                   </button>
                 </div>
               </div>
-              <div className="h-[340px] rounded-md bg-white p-2 dark:bg-[#0f172a]">
+              <div className="cowork-preview-chart-body">
                 <G2Chart
                   type={chartType}
                   columns={activeQuery.columns}
@@ -627,11 +650,13 @@ export default function ChatExecutionPanel({
               maxHeight={360}
             />
           ) : null}
-
         </div>
-      ) : null}
+      ) : (
+        <div className="cowork-preview-empty">本轮暂无可预览的查询结果</div>
+      )}
       <Modal
         title={queryDisplayLabels[activeQueryIndex] || "查询结果"}
+        className="cowork-data-modal"
         open={showQueryDialog}
         onCancel={() => setShowQueryDialog(false)}
         footer={null}

@@ -6,6 +6,7 @@ import {
   updateReportReview,
   replaceRecordReports,
   type ClarifyPayload,
+  type QueryGap,
   type RunStatus,
   type TaskPlanStage
 } from "@/api/adapter/chatAdapter";
@@ -29,6 +30,10 @@ export type Message = {
   runId?: string;
   createdAt?: number;
   runStatus?: RunStatus;
+  /** 本轮被宿主跳过的数据项；用于在答案下方单独提示，避免只靠正文里的“查询说明”。 */
+  queryGaps?: QueryGap[];
+  /** 后端追加到正文末尾的缺口说明，前端渲染时去重，避免同一句话出现两次。 */
+  queryGapsNote?: string;
 };
 
 export type ExecutionStep = {
@@ -931,6 +936,11 @@ export function useChat() {
             onRunStatus: (runStatus) => {
               setMessages((prev) => prev.map((msg) => msg.id === assistantId ? { ...msg, runStatus } : msg));
             },
+            onQueryGaps: ({ items, note }) => {
+              setMessages((prev) => prev.map((msg) => msg.id === assistantId
+                ? { ...msg, queryGaps: items, queryGapsNote: note ?? msg.queryGapsNote }
+                : msg));
+            },
             onClarify: (payload) => {
               nextInterrupt = payload.interrupt_id;
               const prompt = asText(payload.prompt);
@@ -1282,8 +1292,18 @@ export function useChat() {
         } else if (record.is_success === true) runStatus = "completed";
         else if (record.is_success === false) runStatus = "failed";
       }
+      const savedGaps = record.exec_result?.query_gaps;
       if (answer || runStatus) {
-        nextMessages.push({ id: `a-${record.id}`, role: "assistant", content: answer, runId: recordRunId, createdAt: finishedAt, runStatus });
+        nextMessages.push({
+          id: `a-${record.id}`,
+          role: "assistant",
+          content: answer,
+          runId: recordRunId,
+          createdAt: finishedAt,
+          runStatus,
+          queryGaps: savedGaps?.items?.length ? savedGaps.items : undefined,
+          queryGapsNote: savedGaps?.note
+        });
       }
       if (asText(record.summary).trim()) {
         nextSummary = answer;

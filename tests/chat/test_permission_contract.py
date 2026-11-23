@@ -272,7 +272,10 @@ def runtime_harness(monkeypatch):
     async def emit(event, data):
         events.append((event, data))
 
+    persisted = []
+
     async def persist(**kwargs):
+        persisted.append(kwargs)
         return 1
 
     monkeypatch.setattr(runtime, "persist_turn", persist)
@@ -292,7 +295,14 @@ def runtime_harness(monkeypatch):
         )
         return events
 
-    return SimpleNamespace(run=run, query=query, events=events, plans=plans, executions=executions)
+    return SimpleNamespace(
+        run=run,
+        query=query,
+        events=events,
+        persisted=persisted,
+        plans=plans,
+        executions=executions,
+    )
 
 
 def tool_call(sql, id_):
@@ -442,6 +452,51 @@ def test_feature_not_available_is_skipped_instead_of_blocking_the_turn():
     assert detail["is_permission_issue"] is False
 
 
+def test_skip_codes_use_business_labels_instead_of_technical_messages():
+    from src.datasource.service.semantic_permission_contract import (
+        permission_error_detail,
+    )
+
+    for code, expected in [
+        ("AUTH_COLUMN_FORBIDDEN", "受限字段"),
+        ("AUTH_SCOPE_OUTSIDE_GRANT", "授权范围外的数据"),
+        ("AUTH_FEATURE_NOT_AVAILABLE", "未开通的分析能力"),
+    ]:
+        detail = permission_error_detail(code, "技术细节：column id_card 不在允许列")
+        assert detail["skip_label"] == expected
+        assert "column" not in detail["skip_label"]
+    # 点位明确的错误可以覆盖默认分类。
+    detail = permission_error_detail(
+        "AUTH_FEATURE_NOT_AVAILABLE", "该视图仅市级可读", skip_label="达线率（学校/班级明细）"
+    )
+    assert detail["skip_label"] == "达线率（学校/班级明细）"
+
+
+def test_gap_items_and_note_share_deduplicated_business_labels():
+    recovery = PermissionRecovery()
+    for code in (
+        "AUTH_COLUMN_FORBIDDEN",
+        "AUTH_SCOPE_OUTSIDE_GRANT",
+        "AUTH_FEATURE_NOT_AVAILABLE",
+    ):
+        recovery.reject(AuthorizationError(code, f"技术细节：{code}").detail, stage=0)
+    # 同一错误码重复出现不重复记缺口。
+    recovery.reject(
+        AuthorizationError("AUTH_COLUMN_FORBIDDEN", "技术细节：again").detail, stage=0
+    )
+    items = recovery.gap_items()
+    assert [item["label"] for item in items] == [
+        "受限字段",
+        "授权范围外的数据",
+        "未开通的分析能力",
+    ]
+    assert all(item["code"].startswith("AUTH_") for item in items)
+    note = recovery.gap_note()
+    for item in items:
+        assert item["label"] in note
+    assert "技术细节" not in note
+
+
 def test_skipped_denial_keeps_the_turn_open_without_spending_repairs():
     from src.datasource.service.semantic_permission_contract import RECOVERY_CONTRACT
 
@@ -557,6 +612,15 @@ def test_skipped_denial_keeps_the_model_answer_and_appends_the_gap(
     assert "查询说明：达线率（学校/班级达线明细）" in answer
     assert "部分查询未完成" not in answer
     assert not any(event == "error" for event, _ in events)
+    gaps = [data for event, data in events if event == "query_gaps"]
+    assert len(gaps) == 1
+    assert gaps[0]["items"] == [
+        {"label": "达线率（学校/班级达线明细）", "code": "AUTH_FEATURE_NOT_AVAILABLE"}
+    ]
+    assert gaps[0]["note"] in answer
+    # 历史回放与前端刷新都从 exec_result.query_gaps 读取，保证与 SSE 同源。
+    saved = harness.persisted[0]["exec_result"]["query_gaps"]
+    assert saved == gaps[0]
 
 
 def test_metric_id_error_explains_expression_without_reaching_planner(monkeypatch):

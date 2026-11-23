@@ -125,6 +125,17 @@
 .cowork-answer pre { overflow-x: auto; border-radius: 8px; padding: 12px; background: var(--cowork-soft); }
 .cowork-answer a { text-decoration: underline; }
 .cowork-answer .cowork-answer-disclaimer { margin: 20px 0 0; padding-top: 12px; border-top: 1px solid var(--cowork-border); color: var(--cowork-muted); font-size: 12px; line-height: 1.6; }
+/* 被宿主跳过的数据项：独立提示，不从正文“查询说明”里解析。 */
+.cowork-chat .cowork-answer .cowork-answer-gaps {
+  display: flex; align-items: flex-start; gap: 8px;
+  margin: 16px 0 0; padding: 10px 12px;
+  border: 1px solid var(--cowork-border); border-radius: 8px;
+  background: var(--cowork-soft); color: var(--cowork-muted);
+  font-size: 12.5px; line-height: 1.6; overflow-wrap: anywhere;
+}
+.cowork-chat .cowork-answer .cowork-answer-gaps > .anticon { flex: none; margin-top: 3px; }
+.cowork-chat .cowork-answer .cowork-answer-gaps strong { color: var(--cowork-text); font-weight: 600; }
+.cowork-chat .cowork-answer .cowork-answer-gaps-hint { display: block; margin-top: 2px; }
 .cowork-worklog { width: 100%; margin: 4px 0; color: var(--cowork-muted); font-size: 12px; }
 .cowork-worklog > summary, .cowork-task-section > summary { display: flex; min-height: 44px; align-items: center; gap: 8px; cursor: pointer; list-style: none; }
 .cowork-worklog summary::-webkit-details-marker, .cowork-task-panel summary::-webkit-details-marker, .cowork-task-body summary::-webkit-details-marker { display: none; }
@@ -263,9 +274,129 @@
 .cowork-human-summary { padding: 10px 12px; border: 1px solid var(--cowork-border); border-radius: 10px; background: var(--cowork-card); font-size: 14px; }
 .cowork-human-summary summary { cursor: pointer; color: var(--cowork-muted); }
 .cowork-human-summary p { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.cowork-preview { display: flex; width: min(48%, 680px); min-width: 360px; flex-direction: column; border-left: 1px solid var(--cowork-border); background: var(--cowork-card); }
-.cowork-preview-header { border-bottom: 1px solid var(--cowork-border); }
-.cowork-preview-body { flex: 1; min-height: 0; overflow: auto; padding: 12px; }
+.cowork-preview { display: flex; width: min(48%, 680px); min-width: 360px; flex-direction: column; border-left: 1px solid var(--cowork-border); background: var(--color-surface-0); }
+.cowork-preview-header { border-bottom: 1px solid var(--cowork-border); background: var(--cowork-card); }
+.cowork-preview-body { flex: 1; min-height: 0; overflow: auto; padding: 16px; background: var(--color-surface-0); }
+/* ---------- 结果预览：查询集 / 图表 / 数据 ---------- */
+.cowork-preview-result { display: flex; min-width: 0; flex-direction: column; gap: 12px; }
+.cowork-preview-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--cowork-border); border-radius: var(--radius-lg); background: var(--cowork-card);
+}
+.cowork-preview-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.cowork-preview-field { display: inline-flex; min-width: 0; flex: 1 1 220px; align-items: center; gap: 8px; }
+.cowork-preview-field-label { flex: none; color: var(--cowork-muted); font-size: 12px; }
+.cowork-select-wrap { position: relative; display: inline-flex; min-width: 0; flex: 1 1 auto; align-items: center; }
+.cowork-select-wrap::after {
+  content: ""; position: absolute; right: 11px; top: 50%; width: 6px; height: 6px;
+  border-right: 1.5px solid var(--cowork-muted); border-bottom: 1.5px solid var(--cowork-muted);
+  transform: translateY(-70%) rotate(45deg); pointer-events: none;
+}
+.cowork-select {
+  appearance: none; width: 100%; min-height: 30px; max-width: 320px; padding: 0 28px 0 10px;
+  border: 1px solid var(--cowork-border); border-radius: var(--radius-md);
+  background: var(--cowork-card); color: var(--cowork-text);
+  font: inherit; font-size: 12px; text-overflow: ellipsis; cursor: pointer;
+  transition: border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
+}
+.cowork-select:hover { border-color: var(--color-border-2); }
+.cowork-select:focus-visible { outline: none; border-color: var(--color-brand-tint-border); box-shadow: var(--focus-ring); }
+.cowork-seg {
+  display: inline-flex; align-items: center; gap: 2px; padding: 2px;
+  border: 1px solid var(--cowork-border); border-radius: var(--radius-md); background: var(--color-surface-0);
+}
+.cowork-seg-item {
+  min-height: 26px; padding: 0 10px; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--cowork-muted); font: inherit; font-size: 12px; cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+.cowork-seg-item:hover { color: var(--cowork-text); }
+.cowork-seg-item.is-active { background: var(--cowork-card); color: var(--cowork-text); font-weight: 600; box-shadow: var(--shadow-1); }
+.cowork-seg-item:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.cowork-ghost-button {
+  display: inline-flex; min-height: 30px; align-items: center; gap: 5px; padding: 0 9px;
+  border: 1px solid transparent; border-radius: var(--radius-md);
+  background: transparent; color: var(--cowork-muted); font: inherit; font-size: 12px; cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+.cowork-ghost-button:hover { background: var(--cowork-soft); color: var(--cowork-brand-ink); }
+.cowork-ghost-button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.cowork-preview-chart {
+  border: 1px solid var(--cowork-border); border-radius: var(--radius-lg); background: var(--cowork-card);
+}
+.cowork-preview-chart-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px 4px; }
+.cowork-preview-chart-title {
+  min-width: 0; overflow: hidden; color: var(--cowork-text); font-size: 13px; font-weight: 600;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.cowork-chart-tools {
+  display: inline-flex; flex: none; align-items: center; gap: 2px; padding: 2px;
+  border: 1px solid var(--cowork-border); border-radius: var(--radius-md); background: var(--color-surface-0);
+}
+.cowork-chart-tool {
+  display: grid; width: 26px; height: 24px; place-items: center;
+  border: 0; border-radius: var(--radius-sm); background: transparent;
+  color: var(--cowork-muted); font-size: 13px; cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+}
+.cowork-chart-tool:hover { color: var(--cowork-text); background: var(--cowork-soft); }
+.cowork-chart-tool.is-active { color: var(--cowork-brand-ink); background: var(--color-brand-tint-strong); }
+.cowork-chart-tool:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.cowork-chart-tool-rotate { transform: rotate(90deg); }
+.cowork-chart-divider { width: 1px; height: 14px; margin: 0 3px; background: var(--cowork-border); }
+.cowork-preview-chart-body { padding: 4px 8px 8px; }
+.cowork-preview-empty {
+  padding: 40px 16px; border: 1px dashed var(--cowork-border); border-radius: var(--radius-lg);
+  color: var(--cowork-muted); font-size: 13px; text-align: center;
+}
+.cowork-data-table {
+  display: flex; min-height: 0; flex-direction: column; overflow: hidden;
+  border: 1px solid var(--cowork-border); border-radius: var(--radius-lg); background: var(--cowork-card);
+}
+.cowork-data-table-scroll { min-height: 0; flex: 1; overflow: auto; }
+.cowork-data-table table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 12.5px; }
+.cowork-data-table thead th {
+  position: sticky; top: 0; z-index: 3; padding: 8px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--cowork-action) 18%, var(--cowork-border));
+  background: linear-gradient(180deg, var(--cowork-soft), color-mix(in srgb, var(--cowork-soft) 55%, var(--cowork-card)));
+  color: var(--cowork-brand-ink); font-size: 11.5px; font-weight: 700;
+  letter-spacing: .015em; text-align: left; white-space: nowrap;
+}
+.cowork-data-table tbody td {
+  padding: 9px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--cowork-border) 72%, transparent);
+  color: var(--cowork-text); white-space: nowrap;
+}
+.cowork-data-table th:first-child, .cowork-data-table td:first-child {
+  position: sticky; left: 0; z-index: 2;
+  box-shadow: 1px 0 0 color-mix(in srgb, var(--cowork-border) 80%, transparent);
+}
+.cowork-data-table th:first-child {
+  z-index: 4;
+  background: linear-gradient(180deg, var(--cowork-soft), color-mix(in srgb, var(--cowork-soft) 55%, var(--cowork-card)));
+}
+.cowork-data-table td:first-child { background: var(--cowork-card); }
+.cowork-data-table tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--cowork-action) 2.5%, var(--cowork-card)); }
+.cowork-data-table tbody tr:nth-child(even) td:first-child { background: color-mix(in srgb, var(--cowork-action) 2.5%, var(--cowork-card)); }
+.cowork-data-table tbody tr:hover td { background: color-mix(in srgb, var(--cowork-action) 7%, var(--cowork-card)); }
+.cowork-data-table tbody tr:hover td:first-child { background: color-mix(in srgb, var(--cowork-action) 7%, var(--cowork-card)); }
+.cowork-data-table tbody tr.is-target td { background: color-mix(in srgb, var(--cowork-action) 9%, var(--cowork-card)); }
+.cowork-data-table tbody tr.is-target td:first-child { background: color-mix(in srgb, var(--cowork-action) 9%, var(--cowork-card)); }
+.cowork-data-table tbody tr:last-child td { border-bottom: 0; }
+.cowork-data-table td.is-num, .cowork-data-table th.is-num { text-align: right; font-variant-numeric: tabular-nums; }
+.cowork-data-table td.is-num { font-weight: 600; }
+.cowork-data-table-foot {
+  display: flex; flex: none; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 10px; border-top: 1px solid var(--cowork-border);
+  background: var(--cowork-card); color: var(--cowork-muted); font-size: 12px;
+}
+.cowork-data-table-foot .ant-pagination { margin: 0; }
+.cowork-data-table-foot .ant-pagination-item,
+.cowork-data-table-foot .ant-pagination-prev,
+.cowork-data-table-foot .ant-pagination-next { border-radius: var(--radius-sm); font-size: 12px; }
+.cowork-data-modal .ant-modal-content { padding: 16px; border-radius: var(--radius-xl); }
+.cowork-data-modal .ant-modal-header { margin-bottom: 12px; }
 .cowork-task-panel { flex: none; border-left: 1px solid var(--cowork-border); background: var(--cowork-card); }
 .cowork-task-panel { display: flex; width: clamp(280px, 26%, 320px); min-height: 0; flex-direction: column; }
 .cowork-task-panel > header { display: flex; min-height: 44px; flex: none; align-items: center; gap: 8px; padding: 0 10px 0 14px; border-bottom: 1px solid var(--cowork-border); }

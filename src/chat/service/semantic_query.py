@@ -664,7 +664,11 @@ class SemanticQuery:
                     plan, binding, db_type, dialect, config, execute, logical, used_names, permission_context,
                 )
             if permission_context is not None and not permission_context.grants:
-                raise AuthorizationError("AUTH_SCOPE_OUTSIDE_GRANT", "当前账号可查询公开达线汇总；此查询需要有效的教育授权")
+                raise AuthorizationError(
+                    "AUTH_SCOPE_OUTSIDE_GRANT",
+                    "当前账号可查询公开达线汇总；此查询需要有效的教育授权",
+                    skip_label="成绩明细（需要教育授权）",
+                )
             proof = PermissionValidator(permission_context).prove(logical) if permission_context else None
             permission_context = self._fresh_authorization()
             proof = PermissionValidator(permission_context).prove(logical)
