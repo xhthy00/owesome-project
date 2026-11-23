@@ -104,33 +104,27 @@ def test_generate_report_rejects_bureau_types_without_city_scope(monkeypatch):
     assert captured == {}
 
 
-def test_generate_public_line_reach_does_not_require_grade_reference(monkeypatch):
-    from src.agent.education import api
+def test_generate_line_reach_requires_grade_reference_for_class_scope(monkeypatch):
+    client, captured = _client(monkeypatch, _scope())
+    response = client.post(
+        "/api/v1/education/generate-report",
+        json={"datasource_id": 1, "report_type": "line_reach", "filters": {"exam_name": "期中"}},
+    )
+    assert response.json()["code"] == 403
+    assert "年级" in response.json()["message"]
+    assert captured == {}
 
-    client, restricted = _client(monkeypatch, _scope())
-    read = object()
-    captured = {}
 
-    class PublicOrchestrator:
-        def __init__(self, execute, resolve_schema):
-            assert execute is read
-
-        async def run_spec(self, spec):
-            captured.update(spec.filters)
-            return SimpleNamespace(html="<div>全市达线</div>", stats={"count": 1}, error=None, spec=spec)
-
-        def _title(self, spec):
-            return "达线报告"
-
-    monkeypatch.setattr(api, "_public_line_reach_reader", lambda: read)
-    monkeypatch.setattr(api, "ReportOrchestrator", PublicOrchestrator)
+def test_generate_line_reach_uses_scoped_orchestrator_for_city_scope(monkeypatch):
+    client, captured = _client(
+        monkeypatch, _scope(citywide=True, levels=("city",), classes=())
+    )
     response = client.post(
         "/api/v1/education/generate-report",
         json={"datasource_id": 1, "report_type": "line_reach", "filters": {"exam_name": "期中"}},
     )
     assert response.json()["data"]["error"] is None
-    assert captured == {"exam_name": "期中"}
-    assert restricted == {}
+    assert captured["kwargs"]["report_scope"] is not None
 
 
 def test_generate_report_rejects_elite_rank_shift_without_city_scope(monkeypatch):

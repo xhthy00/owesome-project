@@ -282,6 +282,8 @@ V2 已经具备授权模型、查询执行链、管理页和报表/工具适配�
 - 2026-11-23：按 D1–D5 决策定稿；新增 §3.2.1 学生匿名 ID 反查规则；维护类入口改为平台管理员；新增 D7（成绩库读页面）。
 - 2026-11-23：D7 定稿为“适配 V2”；新增 §6.1 适配方案（取数源对齐、`overview_predicate` 下推、测试与前端）；P4 调整为 3–4 人日，总工期 14–21 人日。
 - 2026-11-23：D7 补充——平台管理员不要求 grants，可直接查看成绩库全量；非管理员仍按 grants 下推范围。
+- 2026-11-23：达线看板与 `line_reach` 报告改为按 V2 范围下推（走 `execute_report_sql`），删除“public line reach”直读；班级/学生级需 `grade_baseline` 才能查看，页面按接口返回的 `scope` 显示范围标签。
+- 2026-11-23：修复聊天侧达线视图越权——`semantic_query.PUBLIC_LINE_REACH_VIEWS` 原先把 `v_district_line_reach` / `v_school_line_reach` / `v_line_reach_change` / `v_tier_line_reach` / `v_class_combo_line_reach` 当作公开视图，跳过权限证明；现仅 `v_exam_cutoff_lines`（分数线配置）保持公开，其余明细视图要求 `level=city` 授权，否则返回 `AUTH_SCOPE_OUTSIDE_GRANT`。
 
 ## 附录 A：如果直接移除 V1 的影响
 

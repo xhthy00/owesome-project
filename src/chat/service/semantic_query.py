@@ -69,6 +69,26 @@ PUBLIC_LINE_REACH_VIEWS = {
     "v_tier_line_reach": {"tb_school", "tb_score_indicator"},
 }
 
+# 分数线/计划线是参考配置，任何有授权的账号都可读；区县/学校/班级/变化/分层的
+# 达线明细属于业务数据，只允许市级（city）授权查询，否则会把本范围外的学校数据放出去。
+CITYWIDE_ONLY_PUBLIC_VIEWS = frozenset(PUBLIC_LINE_REACH_VIEWS) - {"v_exam_cutoff_lines"}
+
+
+def _is_citywide_authorization(context) -> bool:
+    return context is not None and any(
+        getattr(grant, "level", "") == "city" for grant in context.grants
+    )
+
+
+def assert_public_line_reach_allowed(used_views, context) -> None:
+    """公开达线视图同样受 V2 范围约束：明细类视图必须市级授权。"""
+    restricted = set(used_views) & CITYWIDE_ONLY_PUBLIC_VIEWS
+    if restricted and not _is_citywide_authorization(context):
+        raise AuthorizationError(
+            "AUTH_SCOPE_OUTSIDE_GRANT",
+            "区县/学校达线明细仅市级数据授权可查；本范围的达线数据请使用「达线看板」",
+        )
+
 
 class SemanticQueryError(ValueError):
     """A query that could not be planned or safely executed."""
@@ -573,7 +593,9 @@ class SemanticQuery:
                     for name, (kind, relation, columns) in published_columns.items()
                 })
             permission_context = self._fresh_authorization() if getattr(self.settings, "database_edu_url", "") else None
-            if used_names <= (used_views & PUBLIC_LINE_REACH_VIEWS.keys()):
+            public_views = used_views & PUBLIC_LINE_REACH_VIEWS.keys()
+            if used_names <= public_views:
+                assert_public_line_reach_allowed(public_views, permission_context)
                 if dialect == "postgres":
                     logical = _order_public_postgres_set(logical)
                 plan = self._plan(logical.sql(dialect=dialect), binding, dialect)

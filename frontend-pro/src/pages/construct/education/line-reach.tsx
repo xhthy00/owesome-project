@@ -42,12 +42,6 @@ const SECTION_CARD_STYLES = {
   body: { padding: "12px 16px 16px" }
 } as const;
 
-const SCOPE_OPTIONS: { label: string; value: ScopeTab }[] = [
-  { label: "全市（物理+历史）", value: "all" },
-  { label: "物理", value: "physics" },
-  { label: "历史", value: "history" }
-];
-
 function trackForTab(tab: ScopeTab): string | undefined {
   if (tab === "physics") return "物理类";
   if (tab === "history") return "历史类";
@@ -121,6 +115,8 @@ export default function LineReachPage() {
   const [denied, setDenied] = useState("");
   const [exams, setExams] = useState<string[]>([]);
   const [views, setViews] = useState<Record<ScopeTab, LineReachView> | null>(null);
+  const [scopeInfo, setScopeInfo] = useState<{ citywide: boolean; label: string; levels: string[] } | null>(null);
+  const scopeLabel = scopeInfo && !scopeInfo.citywide ? scopeInfo.label : "全市";
 
   const result: LineReachResult | null = views
     ? {
@@ -141,6 +137,7 @@ export default function LineReachPage() {
         exam_name: examName || undefined
       });
       setExams(data.exams || []);
+      setScopeInfo(data.scope ?? null);
       const nextViews: Record<ScopeTab, LineReachView> = {
         all: data.views?.all || { lines: data.lines, kpis: data.kpis, districts: data.districts },
         physics: data.views?.physics || { lines: data.lines, kpis: data.kpis, districts: data.districts },
@@ -149,7 +146,7 @@ export default function LineReachPage() {
       setViews(nextViews);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "加载达线看板失败";
-      if (msg.includes("无权") || msg.includes("学生")) {
+      if (msg.includes("无权") || msg.includes("学生") || msg.includes("授权")) {
         setDenied(msg);
         setViews(null);
       } else {
@@ -263,7 +260,11 @@ export default function LineReachPage() {
           />
           <Segmented
             value={scopeTab}
-            options={SCOPE_OPTIONS}
+            options={[
+              { label: `${scopeLabel}（物理+历史）`, value: "all" },
+              { label: "物理", value: "physics" },
+              { label: "历史", value: "history" }
+            ]}
             onChange={(v) => setScopeTab(v as ScopeTab)}
           />
           <Button icon={<ReloadOutlined />} onClick={() => void loadData()} loading={loading}>
@@ -303,7 +304,7 @@ export default function LineReachPage() {
                 variant="borderless"
                 className={`${PANEL_CARD} mb-4`}
                 styles={SECTION_CARD_STYLES}
-                title={<span className="text-[15px] font-semibold text-[#0f172a] dark:text-[#f1f5f9]">各区达线率</span>}
+                title={<span className="text-[15px] font-semibold text-[#0f172a] dark:text-[#f1f5f9]">{scopeInfo && !scopeInfo.citywide ? `${scopeInfo.label}达线率` : "各区达线率"}</span>}
                 extra={
                   lines.length > 1 ? (
                     <Select
@@ -335,7 +336,7 @@ export default function LineReachPage() {
                 variant="borderless"
                 className={PANEL_CARD}
                 styles={SECTION_CARD_STYLES}
-                title={<span className="text-[15px] font-semibold text-[#0f172a] dark:text-[#f1f5f9]">区县达线明细</span>}
+                title={<span className="text-[15px] font-semibold text-[#0f172a] dark:text-[#f1f5f9]">{scopeInfo && !scopeInfo.citywide ? `${scopeInfo.label}达线明细` : "区县达线明细"}</span>}
               >
                 <Table<LineReachDistrictRow>
                   size="small"

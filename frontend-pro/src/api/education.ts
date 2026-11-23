@@ -1151,11 +1151,18 @@ export interface LineReachDistrictRow {
   schools: LineReachSchoolRow[];
 }
 
+export interface LineReachScope {
+  citywide: boolean;
+  label: string;
+  levels: string[];
+}
+
 export interface LineReachMeta {
   accessible: boolean;
   exams: string[];
   tracks: string[];
   lines: LineReachLineMeta[];
+  scope?: LineReachScope;
 }
 
 export interface LineReachQuery {
@@ -1171,6 +1178,7 @@ export interface LineReachView {
 
 export interface LineReachResult {
   accessible: boolean;
+  scope?: LineReachScope;
   exam_name: string;
   track: string;
   exams: string[];

@@ -293,6 +293,12 @@ def _assert_v2_report_capability(report_scope: Any, report_type: Any) -> None:
         raise ForbiddenException("局端分析报告需要市级数据授权")
     if name == "elite_rank_shift" and not report_scope.allows_city_position():
         raise ForbiddenException("尖子生排名变化报告需要市级数据授权")
+    if (
+        name == "line_reach"
+        and report_scope.needs_grade_reference
+        and not report_scope.allows_grade_reference()
+    ):
+        raise ForbiddenException("当前账号未开通年级均分基准能力，无法生成达线报告")
 
 
 @router.post("/batch-report")
@@ -513,26 +519,23 @@ async def generate_report(
 
     filters = {str(k): str(v) for k, v in (req.filters or {}).items() if v is not None and str(v).strip()}
     ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
-    public_line_reach = report_type == ReportType.LINE_REACH
-    report_scope = None if public_line_reach else _load_report_scope(current_user, req.datasource_id, int(workspace_oid))
-    if report_scope is not None:
-        ws_oid = int(workspace_oid)
-        _apply_scope_defaults(report_scope, filters)
-        _assert_scope_targets(report_scope, filters)
-        _assert_v2_report_capability(report_scope, report_type)
+    report_scope = _load_report_scope(current_user, req.datasource_id, int(workspace_oid))
+    ws_oid = int(workspace_oid)
+    _apply_scope_defaults(report_scope, filters)
+    _assert_scope_targets(report_scope, filters)
+    _assert_v2_report_capability(report_scope, report_type)
     if report_type in (
         ReportType.LINE_SHIFT,
         ReportType.ABSENCE,
         ReportType.CLASS_LINE_REACH,
         ReportType.ELITE_RANK_SHIFT,
     ):
-        if report_scope is not None:
-            role = report_scope.legacy_role()
-            if role in ("school_admin", "teacher") and not filters.get("school_name"):
-                if len(report_scope.schools) == 1:
-                    filters["school_name"] = _plain_school_label(report_scope.schools[0])
-                else:
-                    raise BadRequestException("当前账号授权多所学校，请先选择学校")
+        role = report_scope.legacy_role()
+        if role in ("school_admin", "teacher") and not filters.get("school_name"):
+            if len(report_scope.schools) == 1:
+                filters["school_name"] = _plain_school_label(report_scope.schools[0])
+            else:
+                raise BadRequestException("当前账号授权多所学校，请先选择学校")
         if report_type == ReportType.LINE_SHIFT:
             from src.agent.education.line_shift import line_shift_request_error
 
@@ -588,19 +591,12 @@ async def generate_report(
 
     with get_db_session() as session:
         assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
-    if public_line_reach:
-        async def resolve_line_reach_schema() -> ScoreSchemaMapping:
-            # The report reads precomputed counts and never uses student score fields.
-            return ScoreSchemaMapping(mode="wide", table="", subject_columns={}, fields={})
-
-        orch = ReportOrchestrator(_public_line_reach_reader(), resolve_line_reach_schema)
-    else:
-        orch = _build_orchestrator(
-            req.datasource_id,
-            ws_oid,
-            user_id=int(current_user.id),
-            report_scope=report_scope,
-        )
+    orch = _build_orchestrator(
+        req.datasource_id,
+        ws_oid,
+        user_id=int(current_user.id),
+        report_scope=report_scope,
+    )
     res = await orch.run_spec(spec)
     title = orch._title(spec)
     err = res.error
@@ -1258,29 +1254,39 @@ async def _load_line_reach_bar_rows(execute) -> list[dict[str, Any]]:
     return await _fetch_dicts(execute, "SELECT * FROM tb_fraction_bar LIMIT 500")
 
 
-def _public_line_reach_reader():
-    """Run the dashboard's fixed cutoff and aggregate queries on the exam source."""
-    from src.common.core.config import get_settings
-    from src.common.core.database import get_db_session
-    from src.common.utils.aes import decrypt_conf
-    from src.datasource.db.db import execute_sql
-
-    with get_db_session() as session:
-        source = _require_exam_datasource(session)
-        db_type = source.type
-        config = {
-            **decrypt_conf(source.configuration),
-            "read_only": True,
-            "query_timeout_seconds": get_settings().chat_query_timeout_seconds,
-        }
+def _scoped_line_reach_reader(
+    current_user: UserResponse,
+    workspace_oid: int,
+    datasource_id: int,
+    report_scope: Any,
+):
+    """达线看板的固定 SQL 读取器：按 V2 范围下推后只读执行。"""
+    from src.datasource.service.execute_with_permission import (
+        execute_report_sql_by_user_id,
+    )
 
     async def read(sql: str) -> dict:
-        ok, _, result = await asyncio.to_thread(execute_sql, db_type, config, sql)
-        if not ok or not isinstance(result, dict):
-            raise RuntimeError("读取达线看板数据失败")
+        success, message, result, _sql_run = await asyncio.to_thread(
+            execute_report_sql_by_user_id,
+            int(current_user.id),
+            int(datasource_id),
+            int(workspace_oid),
+            sql,
+            scope=report_scope,
+        )
+        if not success or not isinstance(result, dict):
+            raise RuntimeError(message or "读取达线看板数据失败")
         return result
 
     return read
+
+
+def _line_reach_scope_meta(report_scope: Any) -> dict[str, Any]:
+    return {
+        "citywide": bool(report_scope.citywide),
+        "label": report_scope.scope_label(),
+        "levels": sorted(report_scope.levels),
+    }
 
 
 @router.get("/dashboards/line-reach/meta")
@@ -1289,10 +1295,21 @@ async def line_reach_meta(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    """达线看板筛选项：考试、选科方向。"""
+    """达线看板筛选项：考试、选科方向（按当前账号 V2 范围）。"""
     from src.agent.education.line_reach import build_line_reach_payload
 
-    bar_rows = await _load_line_reach_bar_rows(_public_line_reach_reader())
+    datasource_id = _fixed_source_datasource_id()
+    report_scope = _load_report_scope(current_user, datasource_id, int(workspace_oid))
+    if not report_scope.levels & {"city", "district", "school", "grade", "class"}:
+        return error_response(code=403, message="学生账号不可查看达线看板")
+    if report_scope.needs_grade_reference and not report_scope.allows_grade_reference():
+        return error_response(
+            code=403, message="当前账号未开通年级均分基准能力，无法查看达线看板"
+        )
+    execute = _scoped_line_reach_reader(
+        current_user, int(workspace_oid), datasource_id, report_scope
+    )
+    bar_rows = await _load_line_reach_bar_rows(execute)
     payload = build_line_reach_payload(bar_rows, [])
     return success_response(
         {
@@ -1300,6 +1317,7 @@ async def line_reach_meta(
             "exams": payload.get("exams") or [],
             "tracks": payload.get("tracks") or [],
             "lines": payload.get("lines") or [],
+            "scope": _line_reach_scope_meta(report_scope),
         }
     )
 
@@ -1321,7 +1339,17 @@ async def line_reach_dashboard(
         rows_as_dicts,
     )
 
-    execute = _public_line_reach_reader()
+    datasource_id = _fixed_source_datasource_id()
+    report_scope = _load_report_scope(current_user, datasource_id, int(workspace_oid))
+    if not report_scope.levels & {"city", "district", "school", "grade", "class"}:
+        return error_response(code=403, message="学生账号不可查看达线看板")
+    if report_scope.needs_grade_reference and not report_scope.allows_grade_reference():
+        return error_response(
+            code=403, message="当前账号未开通年级均分基准能力，无法查看达线看板"
+        )
+    execute = _scoped_line_reach_reader(
+        current_user, int(workspace_oid), datasource_id, report_scope
+    )
     exam = (exam_name or "").strip()
     track_v = (track or "").strip()
     bar_rows, overview_schema = await asyncio.gather(
@@ -1368,6 +1396,7 @@ async def line_reach_dashboard(
         picked = history
     payload = dict(picked)
     payload["accessible"] = True
+    payload["scope"] = _line_reach_scope_meta(report_scope)
     payload["views"] = {"all": _slice(city), "physics": _slice(physics), "history": _slice(history)}
     return success_response(payload)
 
