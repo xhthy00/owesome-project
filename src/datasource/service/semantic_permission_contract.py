@@ -150,6 +150,8 @@ class RecoveryContract(ContractModel):
 
 
 RECOVERY_CONTRACT = RecoveryContract()
+# 一轮里最多向用户交代这么多“被跳过”的数据项，避免答案被缺口说明淹没。
+_MAX_SKIPPED_ITEMS = 8
 CONTRACT_INSTRUCTIONS = (
     "SQL由模型完整生成，宿主不补WHERE。多授权按完整元组OR组合。implicit_scope无需编造数据库字段。"
     "metrics/aggregate_expressions的键是指标标识，必须展开为批准的表达式；宽表直接按各科字段计算。"
@@ -258,8 +260,12 @@ _ERROR_RULES = {
     "AUTH_SCOPE_MISSING": ("query_invalid", "sql_validation", "repair_sql"),
     "AUTH_RELEASE_SHAPE_INVALID": ("query_invalid", "sql_validation", "repair_sql"),
     "AUTH_QUERY_SHAPE_UNSUPPORTED": ("query_unsupported", "sql_validation", "repair_sql"),
-    "AUTH_COLUMN_FORBIDDEN": ("access_denied", "authorization", "stop"),
-    "AUTH_SCOPE_OUTSIDE_GRANT": ("access_denied", "authorization", "stop"),
+    # 账号本身可用，只是这项数据/字段不在其授权范围内：跳过该项继续作答。
+    # 跳过不终止整轮、不占用 SQL 修正预算，也不写 last_error，避免收尾改走
+    # “重新合成”分支而把模型正常生成的结论换掉。见 PermissionRecovery.reject。
+    "AUTH_COLUMN_FORBIDDEN": ("access_denied", "authorization", "skip"),
+    "AUTH_SCOPE_OUTSIDE_GRANT": ("access_denied", "authorization", "skip"),
+    "AUTH_FEATURE_NOT_AVAILABLE": ("query_unsupported", "sql_validation", "skip"),
     "AUTH_REVOKED": ("access_denied", "authorization", "stop"),
     "AUTH_MAPPING_MISSING": ("policy_invalid", "policy_loading", "contact_admin"),
     "AUTH_CONTEXT_INVALID": ("policy_invalid", "policy_loading", "contact_admin"),
@@ -277,6 +283,7 @@ _ERROR_RULES = {
 _ERROR_DOMAIN = {
     "AUTH_COLUMN_FORBIDDEN": "authorization",
     "AUTH_SCOPE_OUTSIDE_GRANT": "authorization",
+    "AUTH_FEATURE_NOT_AVAILABLE": "capability",
     "AUTH_REVOKED": "authorization",
     "AUTH_RELEASE_SHAPE_INVALID": "sql_shape",
     "AUTH_SCOPE_MISSING": "sql_shape",
@@ -326,6 +333,7 @@ def permission_error_detail(code, message, *, retryable=None, **details):
         "failure_stage": stage,
         "recovery_action": action,
         "retryable": can_repair,
+        "skipped": action == "skip",
         "sql_repair_required": can_repair,
         "requires_user_input": False,
         "user_message": public,
@@ -347,6 +355,7 @@ class PermissionRecovery:
     stage_repairs: dict[object, int] = field(default_factory=dict)
     blocked: bool = False
     blocked_stages: set[object] = field(default_factory=set)
+    skipped: list[dict] = field(default_factory=list)
     last_error: dict | None = None
     _terminal_error: dict | None = field(default=None, repr=False)
 
@@ -367,12 +376,17 @@ class PermissionRecovery:
             return self.last_error
         # Normalize older tool adapters too; a caller cannot relabel a denial as
         # repairable or let a model-provided flag reopen a terminal failure.
-        self.last_error = permission_error_detail(
+        error = permission_error_detail(
             detail["code"],
             detail.get("message", "查询校验失败"),
             retryable=detail.get("retryable"),
             **{k: v for k, v in detail.items() if k not in {"code", "message", "retryable"}},
         )
+        if error.get("recovery_action") == "skip":
+            # 越出授权范围的数据项：记缺口后继续，不封禁、不扣预算、不触发重新合成。
+            self._record_skip(error, stage=stage, tool=tool)
+            return error
+        self.last_error = error
         if tool != "query_semantic":
             # Discovery failures are reported, but they do not spend SQL repairs.
             self.last_error["remaining_sql_repairs"] = self.remaining(stage)
@@ -402,6 +416,27 @@ class PermissionRecovery:
             if self._terminal_error is None:
                 self._terminal_error = self.last_error
         return self.last_error
+
+    def _record_skip(self, error, *, stage, tool):
+        label = str(error.get("skip_label") or error.get("message") or "").strip()
+        if not label or len(self.skipped) >= _MAX_SKIPPED_ITEMS:
+            return
+        if any(item.get("label") == label for item in self.skipped):
+            return
+        self.skipped.append(
+            {"label": label, "code": error.get("code"), "stage": stage, "tool": tool}
+        )
+
+    def gap_note(self):
+        """被跳过、需要向用户交代的数据项；缺口文案由宿主追加，模型不重复解释。"""
+        labels = [item["label"] for item in self.skipped]
+        if not labels:
+            return ""
+        return (
+            "查询说明："
+            + "；".join(dict.fromkeys(labels))
+            + " 不在当前账号的查询范围内，已跳过，本次结论未包含这些指标。"
+        )
 
     def success(self):
         if not self.blocked and not self.blocked_stages:

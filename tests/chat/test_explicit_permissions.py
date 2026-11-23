@@ -422,6 +422,12 @@ def test_reference_end_to_end_service_keeps_pools_internal(monkeypatch, sql, ctx
     assert "physical_sql" not in result
 
 
+def test_rank_query_prefers_self_rank_when_both_capabilities_granted():
+    ctx = context("district", capabilities=("city_baseline", "district_self_rank"))
+    proof = prove(RANK, ctx)
+    assert proof.releases
+
+
 def test_reference_pool_cannot_be_consumed_via_extra_query_path():
     sql = RANK.replace(
         "SELECT r.district_id,ROUND(r.mean_score,2) AS own_mean,r.city_rank,r.units FROM ranks r\nWHERE r.district_id='D1' AND r.units>=3",

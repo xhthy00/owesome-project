@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from dataclasses import dataclass
 from html import escape
@@ -14,6 +15,8 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.datasource.service.semantic_permission_contract import permission_error_detail
+
+logger = logging.getLogger(__name__)
 
 
 class VerifiedAnswer(BaseModel):
@@ -156,7 +159,7 @@ _INSTRUCTIONS = """你只负责把已经成功查询并通过权限校验的数�
 
 
 async def summarize_verified_evidence(
-    *, model, question, followup, results, tool_choice, callbacks=(), timeout_seconds=30
+    *, model, question, followup, results, tool_choice, callbacks=(), timeout_seconds=60
 ):
     """One bounded synthesis call; it has no query tools or permission decisions."""
     fallback = evidence_table(results)
@@ -209,6 +212,7 @@ async def summarize_verified_evidence(
         return EvidenceAnswer(
             answer.answer.strip(), answer.coverage, tuple(answer.evidence_ids), True
         )
-    except Exception:
+    except Exception as exc:
         # No unsafe text or a new query is used if synthesis is unavailable.
+        logger.warning("verified answer synthesis fell back: %s", exc, exc_info=True)
         return fallback

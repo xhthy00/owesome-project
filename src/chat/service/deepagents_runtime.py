@@ -612,12 +612,11 @@ async def _run_turn(
                 or exc.detail.get("recovery_action")
                 or explicit_authorization is not None and isinstance(exc, SemanticFieldError)
             ):
-                permission_recovery.reject(
+                result["error_detail"] = permission_recovery.reject(
                     {"message": str(exc), **exc.detail},
                     stage=active_stage_index(),
                     tool="lookup",
                 )
-                result["error_detail"] = permission_recovery.last_error
             detail = getattr(exc, "detail", None) or {}
             log_tool_call_fire_and_forget(
                 agent_name="DeepAgents",
@@ -706,12 +705,11 @@ async def _run_turn(
                 if (str(exc.detail.get("code", "")).startswith("AUTH_")
                         or exc.detail.get("recovery_action")
                         or explicit_authorization is not None and isinstance(exc, SemanticFieldError)):
-                    permission_recovery.reject(
+                    result["error_detail"] = permission_recovery.reject(
                         {"message": str(exc), **exc.detail},
                         stage=stage_index,
                         tool="query_semantic",
                     )
-                    result["error_detail"] = permission_recovery.last_error
         else:
             query_error = ""
             permission_recovery.success()
@@ -1033,6 +1031,14 @@ async def _run_turn(
             model_request = model_request.override(system_prompt=(
                 f"{model_request.system_prompt}\n最近一次查询有宿主判定的技术失败。"
                 "按error_detail.recovery_action修正或停止，不能要求用户确认继续或重新授权。"
+            ))
+        if permission_recovery.skipped:
+            skipped = "；".join(
+                dict.fromkeys(item["label"] for item in permission_recovery.skipped)
+            )
+            model_request = model_request.override(system_prompt=(
+                f"{model_request.system_prompt}\n以下数据项因授权或能力限制已被宿主跳过：{skipped}。"
+                "不要重复提交同类查询；缺口说明由宿主追加，直接基于已取得的数据作答。"
             ))
         if permission_recovery.blocked:
             model_request = model_request.override(
@@ -1575,6 +1581,7 @@ async def _run_turn(
                         model=model, question=original_question, followup=request.question,
                         results=verified, tool_choice=_tool_choice_for(model, "submit_verified_answer"),
                         callbacks=config.get("callbacks", ()),
+                        timeout_seconds=settings.chat_synthesis_timeout_seconds,
                     )
                 after = await revalidate_evidence(semantic.authorization_context, evidence,
                                                   expected=current_evidence.fingerprint)
@@ -1619,8 +1626,12 @@ async def _run_turn(
         else:
             answer = permission_recovery.public_error()
             query_error = query_error or answer
-    elif execute and not pending and evidence and query_error:
+    elif execute and not pending and evidence and query_error and not permission_recovery.skipped:
         answer += "\n部分查询未完成，本轮结论仅覆盖已成功返回的数据。"
+    if execute and not pending:
+        gap_note = permission_recovery.gap_note()
+        if gap_note and gap_note not in answer:
+            answer += "\n\n" + gap_note
     if not execute:
         return 0
     if (

@@ -140,9 +140,10 @@ def test_explicitly_approved_count_metric_matches_advertised_output_permission()
 @pytest.mark.parametrize(
     "code,category,action",
     [
-        ("AUTH_SCOPE_OUTSIDE_GRANT", "access_denied", "stop"),
+        ("AUTH_SCOPE_OUTSIDE_GRANT", "access_denied", "skip"),
+        ("AUTH_FEATURE_NOT_AVAILABLE", "query_unsupported", "skip"),
         ("AUTH_REVOKED", "access_denied", "stop"),
-        ("AUTH_COLUMN_FORBIDDEN", "access_denied", "stop"),
+        ("AUTH_COLUMN_FORBIDDEN", "access_denied", "skip"),
         ("AUTH_SCOPE_MISSING", "query_invalid", "repair_sql"),
         ("AUTH_RELEASE_SHAPE_INVALID", "query_invalid", "repair_sql"),
         ("AUTH_QUERY_SHAPE_UNSUPPORTED", "query_unsupported", "repair_sql"),
@@ -159,11 +160,12 @@ def test_error_taxonomy_cannot_be_relabeled_by_a_caller(code, category, action):
     assert error.detail["category"] == category
     assert error.detail["recovery_action"] == action
     assert error.detail["retryable"] is (action == "repair_sql")
+    assert error.detail["skipped"] is (action == "skip")
     assert not error.detail["requires_user_input"]
     recovery = PermissionRecovery()
     recovery.reject(error.detail)
-    assert recovery.blocked is (action != "repair_sql")
-    assert recovery.human_retry_blocked
+    assert recovery.blocked is (action not in {"repair_sql", "skip"})
+    assert recovery.human_retry_blocked is (action != "skip")
 
 
 def test_recovery_budget_survives_successes_and_terminal_state_cannot_reopen():
@@ -424,6 +426,137 @@ def test_partial_success_preserves_results_but_replaces_wrong_failure_explanatio
     assert sum(event == "result" for event, _ in events) == 1
     answer = next(data["content"] for event, data in events if event == "summary")
     assert "编译结果未通过安全校验" in answer and "没开通" not in answer
+
+
+def test_feature_not_available_is_skipped_instead_of_blocking_the_turn():
+    from src.datasource.service.semantic_permission_contract import (
+        permission_error_detail,
+    )
+
+    detail = permission_error_detail("AUTH_FEATURE_NOT_AVAILABLE", "该视图仅市级可读")
+    assert detail["category"] == "query_unsupported"
+    assert detail["failure_domain"] == "capability"
+    assert detail["recovery_action"] == "skip"
+    assert detail["skipped"] is True
+    assert detail["retryable"] is False
+    assert detail["is_permission_issue"] is False
+
+
+def test_skipped_denial_keeps_the_turn_open_without_spending_repairs():
+    from src.datasource.service.semantic_permission_contract import RECOVERY_CONTRACT
+
+    recovery = PermissionRecovery()
+    detail = recovery.reject(
+        AuthorizationError(
+            "AUTH_FEATURE_NOT_AVAILABLE", "仅市级可读", skip_label="达线率（学校/班级达线明细）"
+        ).detail,
+        stage=0,
+    )
+    assert detail["recovery_action"] == "skip" and detail["skipped"] is True
+    # 跳过不写 last_error：收尾不会因此改走“重新合成”，模型答案得以保留。
+    assert recovery.last_error is None
+    assert not recovery.blocked and not recovery.human_retry_blocked
+    assert not recovery.stage_blocked(0)
+    assert recovery.remaining(0) == RECOVERY_CONTRACT.max_sql_repairs + 1
+    # 同一条拒绝重复出现时只记一次缺口。
+    recovery.reject(
+        AuthorizationError(
+            "AUTH_FEATURE_NOT_AVAILABLE", "仅市级可读", skip_label="达线率（学校/班级达线明细）"
+        ).detail,
+        stage=0,
+    )
+    assert len(recovery.skipped) == 1
+    # 预算仍然完整：后续真正需要修 SQL 的失败还有全部修正次数。
+    for _ in range(RECOVERY_CONTRACT.max_sql_repairs):
+        recovery.reject(AuthorizationError("AUTH_SCOPE_MISSING", "缺过滤条件").detail, stage=0)
+    assert not recovery.blocked
+    recovery.success()
+    assert "达线率（学校/班级达线明细）" in recovery.gap_note()
+
+
+def test_repeated_skipped_denials_do_not_block_the_query_stage(runtime_harness, monkeypatch):
+    """同一项数据被连拒 3 次（截图场景）后，后续查询仍可执行，结论照常生成。"""
+
+    from langchain_core.messages import AIMessage
+
+    harness = runtime_harness
+    original = harness.query.run
+    calls = 0
+
+    def run(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls <= 3:
+            raise SemanticAuthorizationError(
+                AuthorizationError(
+                    "AUTH_FEATURE_NOT_AVAILABLE",
+                    "该达线明细视图仅支持市级或本区县授权",
+                    skip_label="达线率（学校/班级达线明细）",
+                )
+            )
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(harness.query, "run", run)
+    events = harness.run(
+        [
+            tool_call(OWN, "denied-1"),
+            tool_call(OWN, "denied-2"),
+            tool_call(OWN, "denied-3"),
+            tool_call(OWN, "ok"),
+            AIMessage(content="班级样本51人，均为物化生；生物均分59.75分。"),
+        ]
+    )
+    # 第 4 次查询没有被阶段封禁挡住：跳过不等于技术失败。
+    assert calls == 4
+    assert ("run_status", {"status": "completed"}) in events
+    answer = next(data["content"] for event, data in events if event == "summary")
+    assert answer.startswith("班级样本51人")
+    assert answer.count("查询说明：") == 1
+    assert "部分查询未完成" not in answer
+
+
+def test_skipped_denial_keeps_the_model_answer_and_appends_the_gap(
+    runtime_harness, monkeypatch
+):
+    from langchain_core.messages import AIMessage
+
+    from src.chat.service import deepagents_runtime as runtime
+
+    harness = runtime_harness
+    original = harness.query.run
+    calls = 0
+
+    def run(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise SemanticAuthorizationError(
+                AuthorizationError(
+                    "AUTH_FEATURE_NOT_AVAILABLE",
+                    "该达线明细视图仅支持市级或本区县授权",
+                    skip_label="达线率（学校/班级达线明细）",
+                )
+            )
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(harness.query, "run", run)
+
+    async def forbidden(**_kwargs):
+        raise AssertionError("权限拒绝被跳过后不应改走重新合成")
+
+    monkeypatch.setattr(runtime, "summarize_verified_evidence", forbidden)
+    events = harness.run(
+        [
+            tool_call(OWN, "own"),
+            tool_call(OWN, "denied"),
+            AIMessage(content="本校数学均分114.50分，全市均分89.00分。"),
+        ]
+    )
+    answer = next(data["content"] for event, data in events if event == "summary")
+    assert answer.startswith("本校数学均分114.50分")
+    assert "查询说明：达线率（学校/班级达线明细）" in answer
+    assert "部分查询未完成" not in answer
+    assert not any(event == "error" for event, _ in events)
 
 
 def test_metric_id_error_explains_expression_without_reaching_planner(monkeypatch):

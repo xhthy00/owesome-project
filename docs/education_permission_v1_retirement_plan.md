@@ -284,6 +284,10 @@ V2 已经具备授权模型、查询执行链、管理页和报表/工具适配�
 - 2026-11-23：D7 补充——平台管理员不要求 grants，可直接查看成绩库全量；非管理员仍按 grants 下推范围。
 - 2026-11-23：达线看板与 `line_reach` 报告改为按 V2 范围下推（走 `execute_report_sql`），删除“public line reach”直读；班级/学生级需 `grade_baseline` 才能查看，页面按接口返回的 `scope` 显示范围标签。
 - 2026-11-23：修复聊天侧达线视图越权——`semantic_query.PUBLIC_LINE_REACH_VIEWS` 原先把 `v_district_line_reach` / `v_school_line_reach` / `v_line_reach_change` / `v_tier_line_reach` / `v_class_combo_line_reach` 当作公开视图，跳过权限证明；现仅 `v_exam_cutoff_lines`（分数线配置）保持公开，其余明细视图要求 `level=city` 授权，否则返回 `AUTH_SCOPE_OUTSIDE_GRANT`。
+- 2026-11-23：按“区县账号应能看本区达线”调整：`v_district_line_reach` 对区县授权放行，执行时在编译后的 `tb_score_indicator` 上强制注入 `district IN (本区县)`；学校/全市/变化/分层明细仍仅市级可读。
+- 2026-11-23：能力判定改为按 SQL 形状选择——按 `district` 分组的排名查询优先 `district_self_rank`，不再被排序靠前的 `city_baseline` 抢先匹配；新增 `AUTH_FEATURE_NOT_AVAILABLE`（`query_unsupported` + `repair_sql`），仅市级可读的视图不再按 `access_denied` 终止整轮，模型可换口径重试。
+- 2026-11-23：越出授权的数据项改为「跳过」而不是终止：`AUTH_SCOPE_OUTSIDE_GRANT` / `AUTH_COLUMN_FORBIDDEN` / `AUTH_FEATURE_NOT_AVAILABLE` 落到 `recovery_action=skip`，不封禁整轮、不封禁阶段、不占用 SQL 修正预算，也不写 `last_error`（收尾不再因此改走重新合成）。缺口由宿主追加一句 `PermissionRecovery.gap_note`（同项去重），结论仍由模型正常生成。账号吊销、策略/上下文/契约类错误维持原终止语义。
+- 2026-11-23：收尾合成（把已验证结果整理成结论）超时由 30 秒放宽到 60 秒，并改为可配置 `chat_synthesis_timeout_seconds`（5–600）；合成降级时记录 warning，避免再出现"答案退化成裸表格且无原因可查"。
 
 ## 附录 A：如果直接移除 V1 的影响
 

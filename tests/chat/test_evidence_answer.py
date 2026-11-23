@@ -251,6 +251,49 @@ def test_model_call_limit_uses_a_table_without_additional_synthesis(runtime_harn
     assert saved[0]["exec_result"]["answer_coverage"]["model_generated"] is False
 
 
+def test_synthesis_timeout_default_and_setting_are_widened():
+    import inspect
+
+    from src.common.core.config import Settings
+
+    default = inspect.signature(
+        summarize_verified_evidence
+    ).parameters["timeout_seconds"].default
+    assert default == 60
+    assert Settings(_env_file=None).chat_synthesis_timeout_seconds == 60
+
+
+def test_synthesis_call_gets_the_configured_timeout(runtime_harness, monkeypatch):
+    from src.chat.service import deepagents_runtime as runtime
+    from src.chat.service.evidence_answer import EvidenceAnswer
+    from src.common.core.config import Settings
+
+    harness = runtime_harness
+    configure_comparison(harness, monkeypatch)
+    monkeypatch.setattr(
+        runtime,
+        "get_settings",
+        lambda: Settings(
+            _env_file=None, chat_max_steps=12, chat_synthesis_timeout_seconds=120
+        ),
+    )
+    seen = {}
+
+    async def capture(**kwargs):
+        seen.update(kwargs)
+        return EvidenceAnswer("已核实结论", "complete", (1,), True)
+
+    monkeypatch.setattr(runtime, "summarize_verified_evidence", capture)
+    harness.run(
+        [
+            tool_call(COMPARISON, "comparison"),
+            tool_call(EXTRA_SCHOOL_LIST, "ranking"),
+            AIMessage(content="权限不足"),
+        ]
+    )
+    assert seen["timeout_seconds"] == 120
+
+
 @pytest.mark.parametrize("has_result", [True, False])
 def test_execution_failure_only_reports_a_full_failure_without_results(runtime_harness, monkeypatch, has_result):
     from types import SimpleNamespace

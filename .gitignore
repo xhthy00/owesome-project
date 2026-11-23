@@ -12,6 +12,7 @@ build/
 *.egg-info/
 .env
 .next
+.dsh-tmp
 frontend-pro/.turbopack/
 frontend-pro/node_modules/
 frontend-pro/dist/

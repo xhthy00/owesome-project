@@ -481,6 +481,7 @@ class PermissionValidator:
         rejected_filters = []
         if len(branches) == 1:
             vals = column_values(branches[0], alias)
+            candidates = []
             for grant in self.context.grants:
                 for capability in grant.capabilities:
                     rule = rules.capabilities.get(capability)
@@ -558,15 +559,20 @@ class PermissionValidator:
                             and len(vals.get(policy.subject_column, ())) != 1
                         ):
                             continue
-                        self.record_scan(name, alias, branches, capability)
-                        return Flow(
-                            "reference_raw",
-                            columns,
-                            name,
-                            capability,
-                            grant.id,
-                            grant.district_id or "",
-                        )
+                        candidates.append((grant, capability))
+            if candidates:
+                grant, capability = self._choose_reference_capability(
+                    candidates, scope, policy, rules
+                )
+                self.record_scan(name, alias, branches, capability)
+                return Flow(
+                    "reference_raw",
+                    columns,
+                    name,
+                    capability,
+                    grant.id,
+                    grant.district_id or "",
+                )
         if rejected_filters:
             fail(
                 "AUTH_SCOPE_MISSING",
@@ -580,6 +586,26 @@ class PermissionValidator:
             "读取范围不属于完整授权元组，或缺少授权范围/历史条件",
             source_alias=alias,
         )
+
+    def _choose_reference_capability(self, candidates, scope, policy, rules):
+        """按 SQL 形状选择能力：按区县分组的排名查询优先 ``district_self_rank``。"""
+        select = scope.expression
+        group_columns: set[str] = set()
+        if isinstance(select, exp.Select):
+            group = select.args.get("group")
+            for item in group.expressions if group else ():
+                group_columns.update(column.name for column in item.find_all(exp.Column))
+        rank_unit = policy.scope_columns.get("district_id")
+        if rank_unit and rank_unit in group_columns:
+            for grant, capability in candidates:
+                rule = rules.capabilities.get(capability)
+                if rule is not None and rule.release == "self_rank":
+                    return grant, capability
+        for grant, capability in candidates:
+            rule = rules.capabilities.get(capability)
+            if rule is not None and rule.release == "baseline":
+                return grant, capability
+        return candidates[0]
 
     def record_scan(self, name, alias, branches, kind):
         # Compare logical/compiled scan populations as well as permission boundaries.

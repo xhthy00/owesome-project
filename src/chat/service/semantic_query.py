@@ -80,14 +80,75 @@ def _is_citywide_authorization(context) -> bool:
     )
 
 
-def assert_public_line_reach_allowed(used_views, context) -> None:
-    """公开达线视图同样受 V2 范围约束：明细类视图必须市级授权。"""
-    restricted = set(used_views) & CITYWIDE_ONLY_PUBLIC_VIEWS
-    if restricted and not _is_citywide_authorization(context):
-        raise AuthorizationError(
-            "AUTH_SCOPE_OUTSIDE_GRANT",
-            "区县/学校达线明细仅市级数据授权可查；本范围的达线数据请使用「达线看板」",
+def _granted_districts(context) -> tuple[str, ...]:
+    if context is None:
+        return ()
+    return tuple(
+        sorted(
+            {
+                str(grant.district_id)
+                for grant in context.grants
+                if getattr(grant, "level", "") == "district"
+                and getattr(grant, "district_id", None)
+            }
         )
+    )
+
+
+def assert_public_line_reach_allowed(used_views, context) -> None:
+    """公开达线视图同样受 V2 范围约束。
+
+    - ``v_exam_cutoff_lines``（分数线配置）任何有授权账号都可读；
+    - ``v_district_line_reach`` 对区县授权放行，执行时强制注入本区县过滤；
+    - 其余学校/全市/变化/分层明细视图仅市级授权可读。
+    """
+    restricted = set(used_views) & CITYWIDE_ONLY_PUBLIC_VIEWS
+    if not restricted or _is_citywide_authorization(context):
+        return
+    if restricted == {"v_district_line_reach"} and _granted_districts(context):
+        return
+    raise AuthorizationError(
+        "AUTH_FEATURE_NOT_AVAILABLE",
+        "该达线明细视图仅支持市级或本区县授权；请改用「达线看板」或本范围聚合口径",
+        skip_label="达线率（学校/班级达线明细）",
+        repair_hint=(
+            "本账号范围无法查询任何 v_*_line_reach 明细视图，换用同族视图仍会被拒。"
+            "该数据项已跳过：不要重复提交达线率查询，改用分数线阈值、本班/年级均分与分档分布作答。"
+        ),
+    )
+
+
+def _direct_tables(select) -> list:
+    tables = []
+    for table in select.find_all(exp.Table):
+        parent = table.parent
+        while parent is not None and not isinstance(parent, exp.Select):
+            parent = parent.parent
+        if parent is select:
+            tables.append(table)
+    return tables
+
+
+def _apply_public_line_reach_scope(tree, views, context) -> None:
+    """区县账号读 ``v_district_line_reach`` 时强制注入本区县过滤。"""
+    if context is None or _is_citywide_authorization(context):
+        return
+    districts = _granted_districts(context)
+    if not districts or "v_district_line_reach" not in views:
+        return
+    # 编译后的物理 SQL 读的是视图底层表（PUBLIC_LINE_REACH_VIEWS 映射），
+    # 因此过滤要加在底层表的 district 列上。
+    targets = PUBLIC_LINE_REACH_VIEWS["v_district_line_reach"]
+    for select in tree.find_all(exp.Select):
+        for table in _direct_tables(select):
+            if table.name.lower() not in targets:
+                continue
+            column = exp.column("district", table=table.alias_or_name, quoted=True)
+            select.where(
+                exp.In(this=column, expressions=[exp.Literal.string(item) for item in districts]),
+                append=True,
+                copy=False,
+            )
 
 
 class SemanticQueryError(ValueError):
@@ -651,6 +712,7 @@ class SemanticQuery:
         ):
             raise AuthorizationError("AUTH_MAPPING_MISSING", "实际连接不属于审核的数据源，查询已停止")
         tree = _query(plan["physical_sql"], dialect, compiled=True)
+        _apply_public_line_reach_scope(tree, views, authorization)
         physical_tables = set().union(*(PUBLIC_LINE_REACH_VIEWS[name] for name in views))
         sources = _check_sources(tree, schema=schema)
         if any(table.name.lower() not in physical_tables for _, table in sources):
