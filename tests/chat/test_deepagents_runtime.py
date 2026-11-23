@@ -592,20 +592,27 @@ def test_view_query_can_be_resubmitted_after_reading_fields(monkeypatch):
 
 
 def test_view_query_auto_reads_fields_without_another_model_round(monkeypatch):
-    """直接查询视图时宿主自动补读字段并重试，模型不必再单独跑一轮 describe。"""
-    sql = "SELECT average_score FROM exam_summary"
-    described, events = [], []
+    """启用权限清单时，查询未读取字段的视图也会在同一次工具调用中恢复。"""
+    view = "v_district_line_reach"
+    sql = f"SELECT reach_rate FROM {view}"
+    binding = {"bundle_id": "edu", "manifest_hash": "a" * 64}
+    context = {**binding, "dialect": "postgres", "views": [{"name": view}]}
+    authorization = SimpleNamespace(grants=[SimpleNamespace(level="city")], model_context=dict)
+    plans, events = [], []
 
-    def describe(_self, name):
-        described.append(name)
-        return {"name": name, "columns": [{"name": "average_score"}]}
+    def plan(_self, submitted_sql, _binding, _dialect):
+        plans.append(submitted_sql)
+        return {"physical_sql": "SELECT reach_rate FROM tb_score_indicator"}
 
-    def run_query(_self, submitted_sql, *, execute):
-        if not described:
-            raise semantic_query.SemanticViewDescriptionRequiredError(
-                "请先用 describe_semantic_model 读取视图字段。", ["exam_summary"]
-            )
-        return {"sql": submitted_sql, "tables": ["tb_score"]}
+    def execute_view(_self, _plan, _binding, _db_type, dialect, _config, execute, logical, views, auth):
+        assert execute and auth is authorization
+        return {
+            **binding,
+            "sql": logical.sql(dialect=dialect),
+            "tables": sorted(views),
+            "columns": ["reach_rate"],
+            "rows": [[0.5]],
+        }
 
     model = ToolCallingModel(
         responses=[
@@ -616,12 +623,13 @@ def test_view_query_auto_reads_fields_without_another_model_round(monkeypatch):
             AIMessage(content="完成"),
         ]
     )
-    monkeypatch.setattr(semantic_query.SemanticQuery, "context", lambda _self: {})
-    monkeypatch.setattr(semantic_query.SemanticQuery, "describe", describe)
-    monkeypatch.setattr(semantic_query.SemanticQuery, "run", run_query)
-    monkeypatch.setattr(deepagents_runtime, "edu_scope_dict_for_user_id", lambda _uid: {})
+    monkeypatch.setattr(semantic_query.SemanticQuery, "context", lambda _self: context)
+    monkeypatch.setattr(semantic_query.SemanticQuery, "_permission_manifest", lambda _self: object())
+    monkeypatch.setattr(semantic_query.SemanticQuery, "_fresh_authorization", lambda _self: authorization)
+    monkeypatch.setattr(semantic_query.SemanticQuery, "_plan", plan)
+    monkeypatch.setattr(semantic_query.SemanticQuery, "_execute_public_line_reach", execute_view)
     monkeypatch.setattr(deepagents_runtime, "log_tool_call_fire_and_forget", lambda **_kw: None)
-    settings = Settings(_env_file=None, chat_max_steps=None)
+    settings = Settings(_env_file=None, database_edu_url="postgresql://reader:example@edu-db/exam_data")
     monkeypatch.setattr(deepagents_runtime, "get_settings", lambda: settings)
 
     async def emit(event, payload):
@@ -629,21 +637,19 @@ def test_view_query_auto_reads_fields_without_another_model_round(monkeypatch):
 
     asyncio.run(
         deepagents_runtime.run_chat_stream(
-            request=ChatRequest(datasource_id=4, question="语文均分是多少"),
+            request=ChatRequest(datasource_id=4, question="市直达线率是多少"),
             current_user_id=7,
             workspace_oid=1,
             emit=emit,
             checkpointer=InMemorySaver(),
             model=model,
-            execute=False,
         )
     )
 
-    assert described == ["exam_summary"]
-    assert sum(
-        event == "tool_call" and payload["tool"] == "query_semantic" for event, payload in events
-    ) == 1
+    assert plans == [f'SELECT * FROM "{view}" LIMIT 0', sql]
+    assert [payload["tool"] for event, payload in events if event == "tool_call"] == ["query_semantic"]
     assert any(event == "sql" and payload["sql"] == sql for event, payload in events)
+    assert ("run_status", {"status": "completed"}) in events
     assert not any(
         event == "tool_result" and payload.get("success") is False for event, payload in events
     )

@@ -562,6 +562,8 @@ class SemanticQuery:
             return self._run(sql, execute=execute)
         except AuthorizationError as exc:
             raise SemanticAuthorizationError(exc) from exc
+        except SemanticViewDescriptionRequiredError:
+            raise
         except SemanticQueryError as exc:
             if not hasattr(exc, "detail") and self._permission_manifest() is not None:
                 raise SemanticContractError("QUERY_SQL_UNSUPPORTED", str(exc)) from exc
