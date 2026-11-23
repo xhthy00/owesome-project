@@ -266,7 +266,7 @@ export default function EduPermissionV2() {
         {required[level].filter(key => key !== "city_id").map(key => <Form.Item key={key} name={key} label={fieldLabels[key]} rules={[{ required: true, message: `请选择${fieldLabels[key]}` }]}>
           {key === "student_id" ? <Input /> : <Select showSearch options={options(key)} onChange={() => { for (const k of required[level].slice(required[level].indexOf(key) + 1)) form.setFieldValue(k as keyof EduGrantV2, undefined); }} />}
         </Form.Item>)}
-        <Form.Item name="capabilities" label="对照能力"><Checkbox.Group options={(level === "class" ? ["grade_baseline"] : level === "district" ? ["city_baseline", "district_self_rank"] : level === "school" ? ["city_baseline"] : []).map(value => ({ value, label: capabilityLabels[value] }))} /></Form.Item>
+        <Form.Item name="capabilities" label="对照能力"><Checkbox.Group options={(level === "city" ? ["city_baseline", "grade_baseline"] : level === "class" ? ["grade_baseline"] : level === "district" ? ["city_baseline", "district_self_rank"] : level === "school" ? ["city_baseline"] : []).map(value => ({ value, label: capabilityLabels[value] }))} /></Form.Item>
         <Form.Item name="enabled" valuePropName="checked"><Checkbox>启用授权</Checkbox></Form.Item>
         <details><summary>有效期与委派设置</summary>
           <Form.Item name="can_delegate" valuePropName="checked"><Checkbox>允许在此范围内委派授权（同时需要工作空间管理身份）</Checkbox></Form.Item>

@@ -836,3 +836,39 @@ def test_unexecuted_stages_are_reported_as_failed_or_skipped(runtime_harness, mo
     assert [stage.get("state") for stage in stages] == ["failed", "skipped", "skipped"]
     saved = harness.persisted[0]["plan_states"]
     assert [row["state"] for row in saved] == ["failed", "skipped", "skipped"]
+
+
+def test_city_scope_can_carry_baseline_capabilities():
+    """全市授权也要能勾选对照能力：city 允许 baseline，不允许需自身区县的排名。"""
+    from src.datasource.service.education_authorization import EducationGrant
+
+    for capability in ("city_baseline", "grade_baseline"):
+        grant = EducationGrant(
+            id="city",
+            workspace_oid=1,
+            datasource_id=4,
+            level="city",
+            city_id="C1",
+            capabilities=(capability,),
+        )
+        assert grant.capabilities == (capability,)
+    with pytest.raises(ValidationError):
+        EducationGrant(
+            id="city",
+            workspace_oid=1,
+            datasource_id=4,
+            level="city",
+            city_id="C1",
+            capabilities=("district_self_rank",),
+        )
+
+    ctx = context("city", capabilities=("city_baseline", "grade_baseline"))
+    granted = {
+        item["id"]: item["granted"]
+        for item in ctx.model_context()["capability_catalog"]
+    }
+    assert granted == {
+        "grade_baseline": True,
+        "city_baseline": True,
+        "district_self_rank": False,
+    }

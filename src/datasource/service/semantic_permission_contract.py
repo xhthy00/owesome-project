@@ -65,13 +65,13 @@ CAPABILITIES = {
         pool_scope_keys=("city_id", "school_id", "cohort_id"),
         reference_unit_key="class_id",
         release="baseline",
-        grant_levels=("class",),
+        grant_levels=("city", "class"),
     ),
     "city_baseline": CapabilityContract(
         pool_scope_keys=("city_id", "cohort_id"),
         reference_unit_key="school_id",
         release="baseline",
-        grant_levels=("district", "school"),
+        grant_levels=("city", "district", "school"),
     ),
     "district_self_rank": CapabilityContract(
         pool_scope_keys=("city_id", "cohort_id"),
