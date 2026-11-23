@@ -56,8 +56,8 @@ frontend-react/
 | `/construct/education/line-reach` | `pages/construct/education/line-reach.tsx` | 达线看板：KPI 卡 + 各区达线率 G2Chart 柱图 + 区县/学校嵌套展开表 | ✅ 教育 |
 | `/construct/skills` | `pages/construct/skills/index.tsx` | 技能市场：读 `public/education_skills.json`，复制 prompt / 一键生成（跳分析工具 `?report_type=`）/ 探索广场打开 | ✅ 教育 |
 | `/construct/permission` | `pages/construct/permission/index.tsx` → re-export `config.tsx` → re-export `data-rules.tsx` | **数据权限**（746 行）：规则组卡片 + 行/列权限编辑（expression_tree JSON 可视化 + 列拒绝列表）+ 受限用户 | ✅ 真实 |
-| `/construct/permission/edu` | `pages/construct/permission/edu.tsx` → `edu-permission.tsx` | **教育权限**（643 行）：edu_role（bureau_admin/school_admin/teacher/student）四级范围配置、CSV 批量绑定、生效权限 SQL 预览 | ✅ 教育 |
-| `/construct/permission/users` | `pages/construct/permission/users.tsx` | 用户管理（增用户、展示 edu_role 标签） | ✅ 真实 |
+| `/construct/permission/edu` | `pages/construct/permission/edu.tsx` → `edu-permission.tsx` | **教育权限**：V2 授权编辑（工作空间/数据源绑定的 grants、CSV 批量导入、生效预览）；V1 四级角色面板与旧接口已删除 | ✅ 教育 |
+| `/construct/permission/users` | `pages/construct/permission/users.tsx` | 用户管理（增用户；教育角色列已随 V1 删除） | ✅ 真实 |
 | `/construct/permission/workspaces` | `pages/construct/permission/workspaces.tsx` | 工作空间管理 + 成员增删/管理员切换 | ✅ 真实 |
 | `/construct/permission/members` | `pages/construct/permission/members.tsx` | 成员列表（只读） | ✅ 真实 |
 | `/construct/permission/menu` | `pages/construct/permission/menu.tsx` | 菜单可见性开关（`GET/POST /permission/menu-visibility`） | ✅ 真实 |
@@ -72,7 +72,7 @@ frontend-react/
 
 | 组件 | 职责（一句话） |
 |---|---|
-| `src/components/layout/side-bar.tsx` | 全局侧边栏：12 个路由 + 权限/日志子菜单折叠、`menuVisibility` 显隐、按 `edu_scope.edu_role` 过滤（bureau_admin/student 隐藏异常提醒，student 隐藏达线看板/分数线）、历史会话按「今天/昨天/日期」分组 | 
+| `src/components/layout/side-bar.tsx` | 全局侧边栏：12 个路由 + 权限/日志子菜单折叠、`menuVisibility` 显隐、按 `edu_scope.levels / citywide` 过滤（学生隐藏总览/达线/分数线，市级隐藏异常提醒）、历史会话按「今天/昨天/日期」分组 | 
 | `src/components/chat/ChatContentContainer.tsx` | 左侧对话流：按 user 消息 runId 聚合成「轮次」，滚动跟随/贴底、欢迎面板、followup 建议 |
 | `src/components/chat/ChatExecutionPanel.tsx` | 右侧专家执行面板（1126 行）：分析过程/摘要两 Tab、四角色分组步骤树、单 Agent 扁平时间线、报告 iframe + 多报告下拉切换、复制/下载 HTML、PDF/Word 导出、建议编辑、审核、查询结果 chart/data/sql 三视图 |
 | `src/components/chat/G2Chart.tsx` | @antv/g2 v5 声明式封装：column/bar/line/pie 四类型、自动推断 x/y 轴、单色 dashboard 模式、% 域上限、数值标签 |
@@ -173,7 +173,7 @@ frontend-react/
 | 异常规则配置 | `pages/construct/education/anomaly-rules.tsx` | `getReportConfig/updateReportConfig/resetReportConfig`；百分比↔ratio 换算（`/100`） |
 | 预测分数线 | `pages/construct/education/fraction-bar.tsx` | `listFractionBar/upsertFractionBar/recomputeScoreIndicator`；**按数据源名称 "exam" 查找**（`EXAM_DS_NAME`） |
 | 达线看板 | `pages/construct/education/line-reach.tsx` | `getLineReach`（all/physics/history 三视图）、KPI 卡 + G2Chart + 区县/学校嵌套表；同样依赖 "exam" 数据源 |
-| 教育权限 | `pages/construct/permission/edu-permission.tsx` | `permissionApi.listEduRoles/getUserEduScope/updateUserEduScope/batchBindEduScope/previewEduEffective`；CSV 批量绑定（前端读文件为文本再 POST） |
+| 教育权限 | `pages/construct/permission/edu-permission.tsx` | 仅 `EduPermissionV2`：`eduV2Users/eduV2Catalog/getEduV2/saveEduV2/previewEduV2/batchEduV2`（V1 的 7 个方法与 4 个类型已删除） |
 | 数据权限 | `pages/construct/permission/data-rules.tsx` | 规则组 CRUD；行权限 `expression_tree`（relation/conditions JSON）可视化编辑器 + 列权限拒绝列表（`enable:false` 归一化） |
 | 技能市场 | `pages/construct/skills/index.tsx` + `public/education_skills.json` | 9 个技能（9 类 report_type）；`?report_type=` 深链到分析工具；`prefill_prompt` 深链到首页 |
 
@@ -196,7 +196,7 @@ frontend-react/
 - **登录态** = localStorage token 存在性 + `_app.tsx` 首次 `getCurrentUser()` 探活；过期统一走 401 重定向（`apiRequest` 或手写 fetch 的 401 分支）。
 - **工作空间**：顶栏 Select（`_app.tsx LayoutWrapper`）→ localStorage + `workspace:changed` 事件 + 主内容区 `key={mainContentKey}` 强制 remount 刷新全页数据；所有请求头带 `X-Workspace-Oid`。
 - **平台管理员**：`side-bar.tsx` 用 `account==="admin" && id===1` 判定（绕过 `menuVisibility` 过滤）；`users.tsx` 同样硬编码。
-- **教育角色**：`CurrentUser.edu_scope.edu_role`（`src/api/auth.ts:24`）驱动侧栏显隐（bureau_admin/student 隐藏异常提醒、student 隐藏达线看板/分数线）与异常提醒页 `accessible` 拦截。
+- **教育范围**：`CurrentUser.edu_scope.levels / citywide`（`src/api/auth.ts`）驱动侧栏显隐（学生隐藏总览/达线/分数线、市级隐藏异常提醒）与异常提醒页 `accessible` 拦截；`edu_role` 只作为 `/me` 的兼容标记保留。
 - **菜单权限**：`permissionApi.getMenuVisibility()` 后端下发 `{menuKey: boolean}`，非平台管理员按此过滤侧栏。
 - **行/列级数据权限**：前端只负责配置（data-rules/edu-permission），执行在服务端 SQL 注入（`previewEduEffective` 可预览合并后的 SQL）。
 

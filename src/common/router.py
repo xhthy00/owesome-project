@@ -11,7 +11,6 @@ from src.agent.education.overview_api import router as education_overview_router
 from src.agent.education.school_api import router as school_router
 from src.agent.education.score_library_api import router as score_library_router
 from system.api.docs import router as system_docs_router
-from system.api.edu_permission import router as edu_permission_router
 from system.api.edu_permission_v2 import router as edu_permission_v2_router
 from system.api.permission import router as permission_router
 from system.api.system import router as system_router
@@ -26,7 +25,6 @@ def get_all_routers() -> list:
         system_docs_router,
         user_router,
         permission_router,
-        edu_permission_router,
         edu_permission_v2_router,
         workspace_router,
         datasource_router,

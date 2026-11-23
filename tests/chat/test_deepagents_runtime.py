@@ -993,7 +993,6 @@ def test_chat_sse_disconnect_waits_for_checkpoint_cleanup(monkeypatch, disconnec
     from src.chat.api import chat
 
     monkeypatch.setattr(chat, "_assert_query_scope", lambda *_a: None)
-    monkeypatch.setattr(chat, "_edu_out_of_scope_message", lambda *_a, **_kw: None)
 
     async def run():
         disconnect = asyncio.Event()
@@ -1126,10 +1125,8 @@ def test_chat_sse_resumes_deepagents_across_requests(monkeypatch, max_steps):
     monkeypatch.setattr(
         deepagents_runtime, "get_default_llm", lambda: type("LLM", (), {"_llm": model})()
     )
-    monkeypatch.setattr(deepagents_runtime, "out_of_scope_question", lambda *_a, **_kw: None)
     monkeypatch.setattr(deepagents_runtime, "edu_scope_dict_for_user_id", lambda _uid: {})
     monkeypatch.setattr(chat, "assert_datasource_accessible", lambda *_a: None)
-    monkeypatch.setattr(chat, "_edu_out_of_scope_message", lambda *_a, **_kw: None)
     monkeypatch.setattr(
         chat.chat_crud,
         "get_conversation_by_id",
@@ -1354,30 +1351,6 @@ def test_planned_parallel_queries_have_no_fixed_cap(monkeypatch, final_answer):
     else:
         assert records[0]["is_success"]
         assert records[0]["summary"] == final_answer
-
-
-def test_chat_scope_check_looks_up_school_in_edu_database(monkeypatch):
-    from datasource.service import edu_permission
-    from src.chat.api import chat
-    from src.datasource.db import db
-
-    monkeypatch.setattr(
-        edu_permission,
-        "edu_scope_dict_for_user_id",
-        lambda _uid: {"edu_role": "school_admin", "school_id": "GZ_123"},
-    )
-    config = {"host": "edu-db"}
-    monkeypatch.setattr(chat, "edu_db_connection", lambda: ("pg", config))
-
-    def execute(db_type, actual_config, sql):
-        assert db_type == "pg" and actual_config is config and "FROM tb_school" in sql
-        return True, "", {"rows": [["GZ_123", "扬州中学", "扬州中学"]]}
-
-    monkeypatch.setattr(db, "execute_sql", execute)
-    assert chat._edu_out_of_scope_message(7, "扬州中学均分", datasource_id=4) is None
-    assert (
-        chat._edu_out_of_scope_message(7, "新华中学均分", datasource_id=4) == "当前数据无权限访问"
-    )
 
 
 def test_describe_view_uses_data_semantic_plan_without_execution(monkeypatch):

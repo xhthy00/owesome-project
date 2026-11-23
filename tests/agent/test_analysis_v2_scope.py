@@ -1,4 +1,4 @@
-"""分析工具在 v2 分级权限下的范围/能力行为。"""
+﻿"""分析工具在 v2 分级权限下的范围/能力行为。"""
 
 from types import SimpleNamespace
 
@@ -195,8 +195,9 @@ def test_city_position_requires_city_scope_even_with_city_baseline():
         ("/api/v1/education/anomaly-alerts", False),
         ("/api/v1/education/exam-library", False),
         ("/api/v1/education/exam-library/42", False),
-        ("/api/v1/education/paper-import/preview-stream", False),
-        ("/api/v1/education/paper-import/execute", False),
+        ("/api/v1/education/score-library", False),
+        ("/api/v1/education/paper-import/preview-stream", True),
+        ("/api/v1/education/paper-import/execute", True),
         ("/api/v1/education/score-import/execute", True),
         ("/api/v1/education/raw-score-import/batches", True),
         ("/api/v1/education/fraction-bar", True),

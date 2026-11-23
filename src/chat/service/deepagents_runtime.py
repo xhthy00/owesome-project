@@ -44,10 +44,8 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 from sqlalchemy.engine import make_url
 
-from datasource.service.edu_permission import edu_scope_dict_for_user_id
 from src.agent.adapter.usage_sink import EmitFn, usage_tracking
 from src.agent.audit.tool_call_log import log_tool_call_fire_and_forget
-from src.agent.education.scope_guard import out_of_scope_question
 from src.chat.schemas import ChatRequest
 from src.chat.service.chart_spec import (
     build_tool_chart_spec,
@@ -88,7 +86,6 @@ from src.chat.service.semantic_query import (
 )
 from src.chat.service.turn_records import persist_turn
 from src.common.core.config import get_settings
-from src.datasource.edu_connection import edu_db_connection
 from src.datasource.service.semantic_permission_contract import (
     PermissionRecovery,
 )
@@ -491,8 +488,7 @@ async def _run_turn(
     preparation_error = ""
     protocol_retried = False
     model_reply_error = ""
-    scope = ({"edu_role": "v2", **explicit_authorization} if explicit_authorization is not None
-             else await asyncio.to_thread(edu_scope_dict_for_user_id, user_id))
+    scope = {"edu_role": "v2", **explicit_authorization} if explicit_authorization is not None else {}
     # Keep the prompt readable: examples and the capability catalog are rendered
     # as dedicated sections below instead of being repeated inside the JSON blob.
     scope_for_prompt = (
@@ -1344,21 +1340,6 @@ async def _run_turn(
         await emit("error", {"error": "当前会话有待回复的追问，请通过追问卡片回复，或明确输入“换个问题”开始新提问。"})
         return 0
     if pending_interrupt and not new_question:
-        original_question = next(
-            (message.content for message in reversed(history) if isinstance(message, HumanMessage)),
-            request.question,
-        )
-        denial = await asyncio.to_thread(
-            out_of_scope_question,
-            scope,
-            original_question,
-            datasource_id=datasource_id,
-            workspace_oid=workspace_oid,
-            connection_factory=edu_db_connection,
-        )
-        if denial:
-            await emit("error", {"error": denial})
-            return 0
         needs_plan = execute and _planning_required(original_question)
         if budget is not None:
             budget.calls = snapshot.values.get("chat_model_calls", 0)

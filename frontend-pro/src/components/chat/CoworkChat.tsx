@@ -24,6 +24,9 @@ import { extractThinkFromSteps, extractThinkFromText, mergeThinkText, splitThink
 
 const markdownPlugins = [remarkGfm];
 
+/** 每个回答末尾的固定提示，与正文分开渲染，复制答案时不会带出去。 */
+const ANSWER_DISCLAIMER = "AI 可能会出错。请核查重要信息。";
+
 const analysisScenarios = [
   { key: "comparison", label: "成绩对比", detail: "查看总分与各科变化", icon: BarChartOutlined,
     prompt: "请对比我有权查看的范围内近三次可比考试的成绩，展示总分均分和各科变化。" },
@@ -131,7 +134,7 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
     void getCurrentUser().then((user) => {
       if (!current) return;
       const scope = user.edu_scope;
-      setPersonalScope(scope?.edu_role === "student" || Boolean(scope?.levels?.length === 1 && scope.levels[0] === "student"));
+      setPersonalScope(Boolean(scope?.levels?.length === 1 && scope.levels[0] === "student"));
     }).catch(() => {});
     return () => { current = false; };
   }, []);
@@ -361,6 +364,7 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
                           onOpenPreview={() => setPreview({ runId, kind: "data" })}
                         />
                       ) : null}
+                      <p className="cowork-answer-disclaimer" role="note">{ANSWER_DISCLAIMER}</p>
                       </>} />
                   </>}
                   {(reports.length > 0 || results.length > 0) && <div className="cowork-artifacts">

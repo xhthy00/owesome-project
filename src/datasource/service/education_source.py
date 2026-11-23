@@ -80,6 +80,15 @@ def city_identity():
     return EDUCATION_RESOURCE_ID
 
 
+def is_fixed_education_source(datasource_id) -> bool:
+    """``datasource_id`` 是否就是 DATABASE_EDU_URL 绑定的固定学情库。"""
+    try:
+        _, _, _, configured_id, _ = source_settings()
+    except AuthorizationError:
+        return False
+    return int(datasource_id) == int(configured_id)
+
+
 def has_environment_authorization(user, workspace_oid, datasource_id):
     variables = getattr(user, "system_variables", None)
     if not isinstance(variables, dict) or AUTH_KEY not in variables:

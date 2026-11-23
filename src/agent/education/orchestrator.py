@@ -1560,13 +1560,6 @@ class ReportOrchestrator:
         # 老师的行级权限在 SQL 层把成绩限制在所带班级，算不出全校年级对照——
         # 传开关让年级对照列显示「—」，不用所带班级冒充全校。
         grade_rates_hidden = self._scope_role() == "teacher"
-        if not grade_rates_hidden and self._user_id and self._report_scope is None:
-            from src.datasource.service.edu_permission import edu_scope_dict_for_user_id
-
-            grade_rates_hidden = (
-                str(edu_scope_dict_for_user_id(self._user_id).get("edu_role") or "")
-                == "teacher"
-            )
         return build_class_line_reach_report(
             exam_name=exam_name,
             compare_exam=compare_exam,
@@ -1616,10 +1609,6 @@ class ReportOrchestrator:
         top_n = parse_top_n(spec.filters.get("top_n"))
 
         role = self._scope_role()
-        if not role and self._user_id and self._report_scope is None:
-            from src.datasource.service.edu_permission import edu_scope_dict_for_user_id
-
-            role = str(edu_scope_dict_for_user_id(self._user_id).get("edu_role") or "")
 
         # 学校：教育局可不选（全市）；下钻/校长/老师点校
         schools = sql_result_to_dicts(await self._execute_sql(school_select_sql()))

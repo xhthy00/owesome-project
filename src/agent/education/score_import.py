@@ -11,7 +11,7 @@ from typing import Any, Literal
 from openpyxl import load_workbook
 
 from datasource.db.db import WriteDbSession, execute_sql
-from datasource.service.edu_permission import EduScope
+from datasource.service.edu_scope_view import EduScope
 from src.agent.education.schema_mapping import load_schema_from_config
 
 ImportType = Literal["total", "detail"]
@@ -208,54 +208,19 @@ def parse_excel(file_bytes: bytes, import_type: ImportType) -> list[ParsedRow]:
     return parsed
 
 
-def assert_import_role_allowed(scope: EduScope) -> str | None:
-    if not scope.edu_role:
-        return "未配置教育角色，无法导入成绩"
-    if scope.edu_role == "student":
-        return "学生角色不允许导入成绩"
-    return None
-
-
-def _check_row_scope(scope: EduScope, class_name: str, school_id: str) -> str | None:
-    if scope.edu_role == "bureau_admin":
-        return None
-    if scope.edu_role == "teacher":
-        if scope.class_names and class_name not in scope.class_names:
-            return f"班级「{class_name}」不在您的权限范围"
-        return None
-    if scope.edu_role == "school_admin":
-        if scope.school_id and school_id and school_id != scope.school_id:
-            return "学校不在您的权限范围"
-        return None
-    return None
-
-
 def _resolve_school_id(
-    scope: EduScope,
     row_school_id: str,
     student_school_id: str,
     override_school_id: str,
 ) -> tuple[str | None, str | None]:
-    """返回 (school_id, error_message)。优先使用 Excel 中的学校编号。"""
+    """返回 (school_id, error_message)。导入入口只对平台管理员开放，不做账号级范围拦截。"""
     if row_school_id:
-        sid = row_school_id.strip()
-        if scope.edu_role == "school_admin" and scope.school_id and sid != scope.school_id:
-            return None, "学校编号与您的权限不一致"
-        if scope.edu_role == "teacher" and scope.school_id and sid != scope.school_id:
-            return None, "学校编号与您的权限不一致"
-        return sid, None
-    if scope.edu_role in ("teacher", "school_admin"):
-        sid = (scope.school_id or "").strip()
-        if not sid:
-            return None, "当前用户未配置 school_id"
-        return sid, None
-    if scope.edu_role == "bureau_admin":
-        if student_school_id:
-            return student_school_id, None
-        if override_school_id:
-            return override_school_id.strip(), None
-        return None, "请指定 school_id，或确保 tb_student 含 school_id 且学生已关联学校"
-    return None, "无法解析 school_id"
+        return row_school_id.strip(), None
+    if student_school_id:
+        return student_school_id, None
+    if override_school_id:
+        return override_school_id.strip(), None
+    return None, "请指定 school_id，或确保 tb_student 含 school_id 且学生已关联学校"
 
 
 def _resolve_exam(
@@ -544,10 +509,6 @@ def validate_and_resolve(
     *,
     override_school_id: str = "",
 ) -> tuple[list[ResolvedRow], list[ImportErrorRow]]:
-    role_err = assert_import_role_allowed(scope)
-    if role_err:
-        return [], [ImportErrorRow(row=0, field="权限", message=role_err)]
-
     exam_names = {r.exam_name for r in rows if r.exam_name}
     exam_ids = {r.exam_id for r in rows if r.exam_id}
     student_ids = {r.student_id for r in rows if r.student_id}
@@ -626,15 +587,10 @@ def validate_and_resolve(
 
         student_school = str(student.get("school_id") or "") if student_has_school_id else ""
         school_id, school_err = _resolve_school_id(
-            scope, row.school_id, student_school, override_school_id
+            row.school_id, student_school, override_school_id
         )
         if school_err or not school_id:
             errors.append(ImportErrorRow(row.row_num, "学校", school_err or "无法确定 school_id"))
-            continue
-
-        scope_err = _check_row_scope(scope, row.class_name, school_id)
-        if scope_err:
-            errors.append(ImportErrorRow(row.row_num, "权限", scope_err))
             continue
 
         exam_score_raw = exam.get("exam_score")

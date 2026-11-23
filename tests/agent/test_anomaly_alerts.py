@@ -6,14 +6,12 @@ from datetime import datetime
 
 from sqlmodel import Session, SQLModel, create_engine, select
 
-from datasource.service.edu_permission import EduScope
 from src.agent.education.alert_service import (
     ANOMALY_REPORT,
     STATUS_CONFIRMED,
     STATUS_PENDING,
     alert_to_dict,
     build_dedupe_key,
-    can_access_anomaly_alerts,
     confirm_alert,
     list_alerts,
     upsert_alert_events,
@@ -27,14 +25,6 @@ def _session() -> Session:
     engine = create_engine("sqlite:///:memory:")
     SQLModel.metadata.create_all(engine, tables=[EduAnomalyAlert.__table__])
     return Session(engine)
-
-
-def test_can_access_roles():
-    assert can_access_anomaly_alerts(EduScope(edu_role="school_admin", school_id="YZZX"))
-    assert can_access_anomaly_alerts(EduScope(edu_role="teacher", school_id="YZZX", class_names=["高三(10)班"]))
-    assert not can_access_anomaly_alerts(EduScope(edu_role="bureau_admin"))
-    assert not can_access_anomaly_alerts(EduScope(edu_role="student", student_id="1"))
-    assert not can_access_anomaly_alerts(EduScope())
 
 
 def test_upsert_report_keeps_confirmed_status():
@@ -74,8 +64,9 @@ def test_upsert_report_keeps_confirmed_status():
     assert row.status == STATUS_PENDING
     assert row.anomaly_type == ANOMALY_REPORT
 
-    scope = EduScope(edu_role="school_admin", school_id="YZZX")
-    confirmed = confirm_alert(session, int(row.id), scope, workspace_oid=1, user_id=9, note="已谈心")
+    confirmed = confirm_alert(
+        session, int(row.id), workspace_oid=1, user_id=9, note="已谈心", school_ids=["YZZX"]
+    )
     assert confirmed is not None
     assert confirmed.status == STATUS_CONFIRMED
     assert confirmed.confirm_note == "已谈心"
@@ -121,9 +112,7 @@ def test_upsert_from_at_risk_is_one_report():
     )
     assert stats["detected"] == 1
     assert stats["inserted"] == 1
-    rows, total = list_alerts(
-        session, EduScope(edu_role="school_admin", school_id="YZZX"), workspace_oid=1
-    )
+    rows, total = list_alerts(session, school_ids=["YZZX"], workspace_oid=1)
     assert total == 1
     d = alert_to_dict(rows[0])
     assert d["anomaly_type"] == ANOMALY_REPORT
@@ -173,8 +162,12 @@ def test_teacher_list_filters_by_class():
         )
     session.commit()
 
-    teacher = EduScope(edu_role="teacher", school_id="YZZX", class_names=["高三(10)班"])
-    rows, total = list_alerts(session, teacher, workspace_oid=1)
+    rows, total = list_alerts(
+        session,
+        school_ids=["YZZX"],
+        allowed_classes=["高三(10)班"],
+        workspace_oid=1,
+    )
     assert total == 1
     assert rows[0].class_name == "高三(10)班"
     d = alert_to_dict(rows[0])
@@ -209,9 +202,7 @@ def test_legacy_student_rows_consolidated_on_list():
         )
     session.commit()
 
-    rows, total = list_alerts(
-        session, EduScope(edu_role="school_admin", school_id="YZZX"), workspace_oid=1
-    )
+    rows, total = list_alerts(session, school_ids=["YZZX"], workspace_oid=1)
     assert total == 1
     assert rows[0].anomaly_type == ANOMALY_REPORT
     assert alert_to_dict(rows[0])["counts"]["critical"] == 2
@@ -240,7 +231,6 @@ def test_v2_list_alerts_filters_by_granted_schools_and_classes():
         )
     rows, total = list_alerts(
         session,
-        EduScope(edu_role="school_admin", school_id="YZZX"),
         workspace_oid=1,
         school_ids=["YZZX"],
         allowed_classes=["高三(10)班"],

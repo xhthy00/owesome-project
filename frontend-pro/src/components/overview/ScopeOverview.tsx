@@ -3,7 +3,6 @@ import { useEffect, useState } from 'react';
 import { getEducationOverview } from '@/api/educationOverview';
 import type { OverviewLevel, OverviewResult } from '@/api/educationOverview';
 import { useSession } from '@/workspace';
-import LegacyOverview from './LegacyOverview';
 import { OverviewActions, OverviewAlerts, OverviewAnalysisCard, OverviewFilters, OverviewHeader, ReachComparison, ReachMetrics } from './OverviewPanels';
 import { ClassOverviewResults, PersonalOverviewResults } from './OverviewResults';
 
@@ -46,7 +45,9 @@ export default function ScopeOverview() {
     return () => { active = false; };
   }, [exam, track, cohort, classFilter, refresh, session?.user.id]);
 
-  if (data?.fallback) return <LegacyOverview />;
+  if (data?.fallback) {
+    return <Alert type="warning" showIcon message="当前账号没有分级授权范围，请由管理员在「教育权限」中配置" />;
+  }
 
   const eduScope = session?.user.edu_scope;
   const level = data?.level || LEVELS.find(item => eduScope?.levels?.includes(item));

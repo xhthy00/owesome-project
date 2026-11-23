@@ -19,7 +19,6 @@ def _build_app(monkeypatch) -> FastAPI:
     app = FastAPI()
     app.state.chat_checkpointer = object()
     app.include_router(chat_router, prefix="/api/v1")
-    monkeypatch.setattr("src.chat.api.chat._edu_out_of_scope_message", lambda *_a, **_kw: None)
 
     class _AuthUser:
         id = 1
@@ -148,28 +147,3 @@ def test_chat_stream_emits_x_trace_id_header(monkeypatch):
     assert tid_2, f"X-Trace-Id missing, headers={headers_2}"
     assert tid_1 != tid_2, "每次请求应分配独立 trace_id"
     assert len(tid_1) >= 8 and tid_1 != "-"
-
-
-def test_chat_stream_denies_teacher_other_class_before_runner(monkeypatch):
-    from src.agent.education.scope_guard import OUT_OF_SCOPE_MESSAGE
-    from src.chat.api.chat import _edu_out_of_scope_message
-
-    app = _build_app(monkeypatch)
-    monkeypatch.setattr("src.chat.api.chat._edu_out_of_scope_message", _edu_out_of_scope_message)
-    calls = []
-    _patch_agent(monkeypatch, calls)
-    monkeypatch.setattr(
-        "datasource.service.edu_permission.edu_scope_dict_for_user_id",
-        lambda _uid: {
-            "edu_role": "teacher",
-            "school_name": "扬州中学",
-            "class_names": ["高一(1)班"],
-        },
-    )
-    body = _stream_body(
-        TestClient(app),
-        {"question": "高一(3)班数学均分", "datasource_id": 1, "agent_mode": "team"},
-    )
-    assert not calls
-    assert OUT_OF_SCOPE_MESSAGE in body
-    assert "event: error" in body

@@ -279,20 +279,6 @@ def test_control_plane_cannot_be_used_to_take_over_another_grant(application, mo
         monkeypatch.setattr(auth_deps, "get_user_by_id", lambda *_: ordinary)
         with pytest.raises(UnauthorizedException):
             auth_deps.get_current_user("unused", session)
-        from starlette.requests import Request
-
-        ordinary.status = 1
-        ordinary.system_variables = {AUTH_KEY: {"managed_resources": ["1:4"], "grants": []}}
-        legacy_request = Request(
-            {
-                "type": "http",
-                "method": "GET",
-                "path": "/api/v1/education/score-library",
-                "headers": [],
-            }
-        )
-        with pytest.raises(ForbiddenException):
-            auth_deps.get_current_user("unused", session, legacy_request)
 
 
 def test_permission_preview_checks_semantic_sql_without_planning_or_executing(

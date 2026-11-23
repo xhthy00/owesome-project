@@ -401,22 +401,6 @@ def _actions(level: str) -> list[dict[str, str]]:
     return common
 
 
-def _legacy_payload(level: str, scope: Any) -> dict[str, Any]:
-    label = str(getattr(scope, "school_name", "") or getattr(scope, "school_id", "") or "")
-    return {
-        "level": level,
-        "fallback": "legacy_line_reach",
-        "scope": {"label": label, "levels": [level] if level else [], "capabilities": []},
-        "filters": {},
-        "kpis": {"candidates": 0, "by_line": []},
-        "chart": {"dimension": "", "metric": "rate", "rows": []},
-        "table": {"dimension": "", "columns": [], "rows": []},
-        "secondary": {},
-        "notices": [notice("legacy_scope", "旧版权限账号请使用达线看板")],
-        "actions": _actions(level),
-    }
-
-
 @router.get("/overview")
 async def education_overview(
     exam_name: str = Query("", max_length=200),
@@ -434,8 +418,6 @@ async def education_overview(
     level = derive_level(report_scope, legacy_scope)
     if not level:
         raise ForbiddenException("当前账号没有可用的教育数据范围")
-    if report_scope is None:
-        return success_response(_legacy_payload(level, legacy_scope))
 
     orch = _build_orchestrator(
         ds_id,

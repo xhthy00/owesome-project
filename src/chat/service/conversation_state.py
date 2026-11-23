@@ -8,7 +8,6 @@ from langchain_core.messages import AIMessage, HumanMessage
 from datasource.models.permission import DsPermission, DsRule
 from src.agent.education.privacy_mode import is_anonymize_display_enabled
 from src.common.core.database import get_db_session
-from src.datasource.service.edu_permission import load_edu_permission_config
 from src.system.crud.crud_user import get_user_by_id
 from system.authz import bypasses_column_visibility, bypasses_data_row_column_scope
 from system.workspace_scope import assert_datasource_accessible
@@ -40,7 +39,6 @@ def authorization_fingerprint(user_id: int, workspace_oid: int, datasource_id: i
             "bypass_columns": bypasses_column_visibility(session, user),
             "permissions": sorted((item.model_dump() for item in permissions), key=lambda x: x["id"]),
             "rules": sorted((item.model_dump() for item in rules), key=lambda x: x["id"]),
-            "education": load_edu_permission_config(),
             "anonymize": is_anonymize_display_enabled(),
         }
         from src.datasource.service.education_authorization import (

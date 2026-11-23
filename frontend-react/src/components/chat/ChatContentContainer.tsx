@@ -4,6 +4,7 @@ import { ExecutionStep, Message, ReportPayload } from "@/hooks/useChat";
 import type { RunMetrics } from "@/utils/runMetrics";
 import type { ClarifyPayload } from "@/api/adapter/chatAdapter";
 import { getCurrentUser } from "@/api/auth";
+import { legacyRoleOf } from "@/api/eduScope";
 import {
   ASSISTANT_NAME,
   ASSISTANT_WELCOME_DESC,
@@ -52,7 +53,7 @@ function WelcomePanel({ onPick }: { onPick: (text: string) => void }) {
 
   useEffect(() => {
     void getCurrentUser()
-      .then((user) => setEduRole(user.edu_scope?.edu_role || null))
+      .then((user) => setEduRole(legacyRoleOf(user.edu_scope) || null))
       .catch(() => setEduRole(null));
   }, []);
 

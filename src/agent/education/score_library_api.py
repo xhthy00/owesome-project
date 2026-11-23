@@ -16,7 +16,7 @@ router = APIRouter(prefix="/education/score-library", tags=["education-score-lib
 
 def _db(current_user: UserResponse, workspace_oid: int):
     from common.core.database import get_db_session
-    from datasource.service.edu_permission import parse_edu_scope
+    from datasource.service.edu_scope_view import EduScope
     from src.agent.education.raw_import import resolve_edu_datasource_id
     from src.agent.education.score_library import resolve_score_access
     from src.agent.resource.tool.business import _load_datasource
@@ -30,7 +30,7 @@ def _db(current_user: UserResponse, workspace_oid: int):
         user = get_user_by_id(session, int(current_user.id))
         if user is None:
             raise ForbiddenException("用户不存在")
-        scope = parse_edu_scope(user)
+        scope = EduScope()
         try:
             access = resolve_score_access(scope, privileged=is_platform_admin(user))
         except ValueError as exc:

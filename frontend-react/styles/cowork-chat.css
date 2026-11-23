@@ -103,6 +103,7 @@
 .cowork-answer ol { list-style: decimal; padding-inline-start: 1.5em; }
 .cowork-answer pre { overflow-x: auto; border-radius: 8px; padding: 12px; background: var(--cowork-soft); }
 .cowork-answer a { text-decoration: underline; }
+.cowork-answer .cowork-answer-disclaimer { margin: 20px 0 0; padding-top: 12px; border-top: 1px solid var(--cowork-border); color: var(--cowork-muted); font-size: 12px; line-height: 1.6; }
 .cowork-worklog { width: 100%; margin: 4px 0; color: var(--cowork-muted); font-size: 12px; }
 .cowork-worklog > summary, .cowork-task-section > summary { display: flex; min-height: 44px; align-items: center; gap: 8px; cursor: pointer; list-style: none; }
 .cowork-worklog summary::-webkit-details-marker, .cowork-task-panel summary::-webkit-details-marker, .cowork-task-body summary::-webkit-details-marker { display: none; }

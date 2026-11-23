@@ -32,7 +32,6 @@ def host(monkeypatch):
     monkeypatch.setattr(runtime, "authorization_fingerprint", lambda *_a: "authorized")
     monkeypatch.setattr(runtime, "load_conversation_history", lambda *_a: [])
     monkeypatch.setattr(runtime, "_thread_lock", lambda *_a: nullcontext())
-    monkeypatch.setattr(runtime, "out_of_scope_question", lambda *_a, **_kw: None)
     events, records, graphs = [], [], []
 
     async def emit(event, payload):

@@ -462,7 +462,7 @@ _purge_legacy_student_alerts(L587) → upsert_alert_events(L290)
 | `test_student_privacy.py`（6） | 姓名列过滤/改写/剥离 + 事实问计划禁明文 |
 | 其它 | `test_education_charts`(4)、`test_school_intervention`(5)、`test_report_type_display`(6)、`test_report_edit`(2)、`test_diagnostic_dynamic`(3)、`test_trend_tracking_report`(7)、`test_edu_scope_context`(5)、`test_education_prompt_context`(4)、`test_education_integration`(1,唯一 ReAct 端到端)、`test_score_indicator`(2) |
 
-**相邻层（非 `agent/education` 目录）教育覆盖**：`tests/datasource/test_edu_permission.py`（21 例）与 `tests/system/test_edu_permission_api.py`（4 例）覆盖 `datasource/service/edu_permission.py`（EduScope 解析/谓词生成/SQL 限定）；`tests/agent/test_agent_runner.py`、`tests/agent/test_planner.py` 覆盖 query_parse/planner 的教育集成点（如 `is_school_exam_report_query`、计划纠偏）。
+**相邻层（非 `agent/education` 目录）教育覆盖**：V1 的 `edu_permission.py` 与其测试已随 V1 下线删除，改由 `tests/chat/test_explicit_permissions.py`、`tests/datasource/test_education_report_scope.py` 覆盖 V2 grants 与范围下推；`tests/agent/test_agent_runner.py`、`tests/agent/test_planner.py` 覆盖 query_parse/planner 的教育集成点（如 `is_school_exam_report_query`、计划纠偏）。
 
 ### 7.2 覆盖缺口
 

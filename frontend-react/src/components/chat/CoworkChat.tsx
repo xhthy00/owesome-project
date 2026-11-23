@@ -9,6 +9,7 @@ import { createPortal } from "react-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getCurrentUser } from "@/api/auth";
+import { legacyRoleOf } from "@/api/eduScope";
 import AnswerVisual from "@/components/chat/AnswerVisual";
 import ChatExecutionPanel from "@/components/chat/ChatExecutionPanel";
 import { ChatComposerStatus, ChatTaskProgress, ChatWorkLog, runActivity } from "@/components/chat/ChatRunProgress";
@@ -21,6 +22,9 @@ import { formatContextUsage, formatTokenCount } from "@/utils/runMetrics";
 import { extractThinkFromSteps, extractThinkFromText, mergeThinkText, splitThinkContent } from "@/utils/toolLabels";
 
 const markdownPlugins = [remarkGfm];
+
+/** 每个回答末尾的固定提示，与正文分开渲染，复制答案时不会带出去。 */
+const ANSWER_DISCLAIMER = "AI 可能会出错。请核查重要信息。";
 
 type ChatViewState = Pick<ReturnType<typeof useChat>,
   "messages" | "loading" | "send" | "stop" | "datasourceId" | "setDatasourceId" | "conversationId" |
@@ -110,7 +114,7 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
   useEffect(() => {
     let current = true;
     void getCurrentUser().then((user) => {
-      if (current) setSuggestions(getAssistantSuggestions(user.edu_scope?.edu_role));
+      if (current) setSuggestions(getAssistantSuggestions(legacyRoleOf(user.edu_scope)));
     }).catch(() => { if (current) setSuggestions(getAssistantSuggestions()); });
     return () => { current = false; };
   }, []);
@@ -308,6 +312,7 @@ export default function CoworkChat({ chat }: { chat: ChatViewState }) {
                           onOpenPreview={() => setPreview({ runId, kind: "data" })}
                         />
                       ) : null}
+                      <p className="cowork-answer-disclaimer" role="note">{ANSWER_DISCLAIMER}</p>
                     </div>
                     {!running && answer && assistant && <CopyRow item={assistant} />}
                   </>}

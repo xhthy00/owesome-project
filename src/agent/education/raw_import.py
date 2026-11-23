@@ -23,7 +23,7 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from datasource.db.db import WriteDbSession, execute_sql
-from datasource.service.edu_permission import EduScope
+from datasource.service.edu_scope_view import EduScope
 from src.agent.education.question_parser import (
     align_detail_question_columns,
     parse_questions_from_headers,

@@ -11,16 +11,14 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook
 
 from common.router import register_routers
-from datasource.service.edu_permission import EduScope
+from datasource.service.edu_scope_view import EduScope
 from src.agent.education.score_import import (
     ImportErrorRow,
     ParsedRow,
     ResolvedRow,
     _build_detail_upsert_sql,
     _build_score_upsert_sql,
-    _check_row_scope,
     _resolve_exam,
-    assert_import_role_allowed,
     import_result_to_dict,
     parse_excel,
     preview_import,
@@ -183,17 +181,6 @@ def test_validate_fills_subject_from_exam(monkeypatch):
     assert resolved[0].subject_name == "英语"
 
 
-def test_assert_import_role_allowed_blocks_student():
-    err = assert_import_role_allowed(EduScope(edu_role="student"))
-    assert err is not None
-
-
-def test_check_row_scope_teacher_class():
-    scope = EduScope(edu_role="teacher", school_id="1", class_names=["高一(1)班"])
-    assert _check_row_scope(scope, "高一(2)班", "1") is not None
-    assert _check_row_scope(scope, "高一(1)班", "1") is None
-
-
 def test_validate_student_not_found_marks_create(monkeypatch):
     monkeypatch.setattr(
         "src.agent.education.score_import._load_dimensions",
@@ -244,8 +231,7 @@ def test_validate_score_exceeds_exam_score(monkeypatch):
         ),
     )
     rows = [ParsedRow(2, "试卷A", "STU001", "高一(1)班", score=150.0)]
-    scope = EduScope(edu_role="school_admin", school_id="1")
-    resolved, errors = validate_and_resolve(rows, "total", scope, "pg", {})
+    resolved, errors = validate_and_resolve(rows, "total", EduScope(), "pg", {}, override_school_id="1")
     assert not resolved
     assert any("满分" in e.message for e in errors)
 

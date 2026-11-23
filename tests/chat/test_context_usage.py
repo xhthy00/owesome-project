@@ -113,7 +113,6 @@ def test_authorization_fingerprint_tracks_rule_and_privacy_changes(monkeypatch):
     monkeypatch.setattr(state, "assert_datasource_accessible", lambda *_a: None)
     monkeypatch.setattr(state, "bypasses_data_row_column_scope", lambda *_a: False)
     monkeypatch.setattr(state, "bypasses_column_visibility", lambda *_a: False)
-    monkeypatch.setattr(state, "load_edu_permission_config", lambda: {})
     monkeypatch.setattr(state, "is_anonymize_display_enabled", lambda: True)
     first = state.authorization_fingerprint(7, 1, 4)
     assert first == state.authorization_fingerprint(7, 1, 4)

@@ -211,10 +211,10 @@ def _build_orchestrator(
 
 
 def _load_report_scope(current_user: UserResponse, datasource_id: int, workspace_oid: int):
-    """加载当前账号的 v2 分析工具范围；旧账号返回 None。"""
+    """加载当前账号的 V2 分析工具范围；没有授权即拒绝，不回退 V1。"""
     variables = getattr(current_user, "system_variables", None)
     if not isinstance(variables, dict) or "edu_auth_v2" not in variables:
-        return None
+        raise ForbiddenException("当前账号没有有效的教育授权，请联系管理员配置")
     from src.common.core.database import get_db_session
     from src.datasource.service.education_report_scope import (
         ReportScopeError,
@@ -301,26 +301,6 @@ def _assert_v2_report_capability(report_scope: Any, report_type: Any) -> None:
         raise ForbiddenException("当前账号未开通年级均分基准能力，无法生成达线报告")
 
 
-def _raise_if_out_of_scope(
-    user_id: int,
-    *parts: Any,
-    datasource_id: int | None = None,
-    workspace_oid: int | None = None,
-) -> None:
-    from common.exceptions.base import ForbiddenException
-    from datasource.service.edu_permission import edu_scope_dict_for_user_id
-    from src.agent.education.scope_guard import out_of_scope_named
-
-    msg = out_of_scope_named(
-        edu_scope_dict_for_user_id(int(user_id)),
-        *parts,
-        datasource_id=datasource_id,
-        workspace_oid=workspace_oid,
-    )
-    if msg:
-        raise ForbiddenException(msg)
-
-
 @router.post("/batch-report")
 @audit_access(datasource_id_arg="req.datasource_id", query_arg="req.question")
 async def batch_report(
@@ -346,18 +326,8 @@ async def batch_report(
         assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
     ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
     report_scope = _load_report_scope(current_user, req.datasource_id, int(workspace_oid))
-    if report_scope is not None:
-        # v2 授权绑定工作空间，忽略请求体里的 workspace_oid，避免跨空间取数。
-        ws_oid = int(workspace_oid)
-    if report_scope is None:
-        _raise_if_out_of_scope(
-            int(current_user.id),
-            question,
-            *req.class_names,
-            (req.filters or {}).get("school_name") or (req.filters or {}).get("school"),
-            datasource_id=req.datasource_id,
-            workspace_oid=workspace_oid,
-        )
+    # v2 授权绑定工作空间，忽略请求体里的 workspace_oid，避免跨空间取数。
+    ws_oid = int(workspace_oid)
     orch = _build_orchestrator(
         req.datasource_id,
         ws_oid,
@@ -452,27 +422,8 @@ async def diagnostic_report(
         assert_datasource_accessible(session, current_user, req.datasource_id, workspace_oid)
     ws_oid = req.workspace_oid if req.workspace_oid is not None else workspace_oid
     report_scope = _load_report_scope(current_user, req.datasource_id, int(workspace_oid))
-    if report_scope is not None:
-        # v2 授权绑定工作空间，忽略请求体里的 workspace_oid，避免跨空间取数。
-        ws_oid = int(workspace_oid)
-    if report_scope is None:
-        _raise_if_out_of_scope(
-            int(current_user.id),
-            req.question,
-            datasource_id=req.datasource_id,
-            workspace_oid=workspace_oid,
-        )
-    else:
-        from src.agent.education.scope_guard import out_of_scope_question
-
-        denied = out_of_scope_question(
-            _report_legacy_scope(report_scope),
-            req.question,
-            datasource_id=req.datasource_id,
-            workspace_oid=ws_oid,
-        )
-        if denied:
-            raise ForbiddenException(denied)
+    # v2 授权绑定工作空间，忽略请求体里的 workspace_oid，避免跨空间取数。
+    ws_oid = int(workspace_oid)
     orch = _build_orchestrator(
         req.datasource_id,
         ws_oid,
@@ -587,16 +538,6 @@ async def generate_report(
                     filters["school_name"] = _plain_school_label(report_scope.schools[0])
                 else:
                     raise BadRequestException("当前账号授权多所学校，请先选择学校")
-        else:
-            from datasource.service.edu_permission import edu_scope_dict_for_user_id
-
-            scope = edu_scope_dict_for_user_id(int(current_user.id))
-            role = str(scope.get("edu_role") or "").strip()
-            if role in ("school_admin", "teacher") and not filters.get("school_name"):
-                bound = str(scope.get("school_name") or scope.get("school_id") or "").strip()
-                if not bound:
-                    raise BadRequestException("当前账号未绑定学校，无法生成该报告")
-                filters["school_name"] = bound
         if report_type == ReportType.LINE_SHIFT:
             from src.agent.education.line_shift import line_shift_request_error
 
@@ -643,14 +584,6 @@ async def generate_report(
             if kind == "forbidden":
                 raise ForbiddenException(msg)
             raise BadRequestException(msg)
-    if report_scope is None:
-        _raise_if_out_of_scope(
-            int(current_user.id),
-            filters.get("class_name") or filters.get("class"),
-            filters.get("school_name") or filters.get("school"),
-            datasource_id=req.datasource_id,
-            workspace_oid=workspace_oid,
-        )
     spec = ReportSpec(
         report_type=report_type,
         audience=audience,
@@ -930,14 +863,14 @@ async def list_meta_options(
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     """分析工具下拉：从数据源拉取学校/届次/考试/班级/科目可选值（带教育权限）。"""
-    from datasource.service.edu_permission import parse_edu_scope
+    from datasource.service.edu_scope_view import EduScope
     from src.common.core.database import get_db_session
     from src.system.crud.crud_user import get_user_by_id
 
     with get_db_session() as session:
         assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
         user = get_user_by_id(session, int(current_user.id))
-        edu_scope = parse_edu_scope(user)
+        edu_scope = EduScope()
 
     report_scope = _load_report_scope(current_user, datasource_id, workspace_oid)
     orch = _build_orchestrator(
@@ -1043,7 +976,7 @@ async def _load_meta_options(
     report_scope: Any = None,
 ) -> dict[str, list[str]]:
     """按 edu schema 查 DISTINCT；SQL 经权限执行，并按 edu_scope 再收敛选项。"""
-    from datasource.service.edu_permission import EduScope
+    from datasource.service.edu_scope_view import EduScope
 
     execute = orch._execute_sql
     mapping = await orch._resolve_schema()
@@ -1561,14 +1494,14 @@ def _require_exam_datasource(session: Any) -> Any:
 
 def _exam_line_tool_context(current_user: UserResponse) -> tuple[int, int, Any]:
     """返回 (datasource_id, ds_oid, edu_scope)。"""
-    from datasource.service.edu_permission import parse_edu_scope
+    from datasource.service.edu_scope_view import EduScope
     from src.common.core.database import get_db_session
     from system.crud.crud_user import get_user_by_id
 
     with get_db_session() as session:
         ds = _require_exam_datasource(session)
         user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
+        scope = EduScope()
         return int(ds.id), int(ds.oid), scope
 
 
@@ -1576,7 +1509,7 @@ def _report_legacy_scope(report_scope: Any, fallback: Any = None) -> Any:
     """v2 范围 → 旧模板/旧校验可用的 EduScope（只用于展示与既有入参校验）。"""
     if report_scope is None:
         return fallback
-    from datasource.service.edu_permission import EduScope
+    from datasource.service.edu_scope_view import EduScope
 
     return EduScope(
         edu_role=report_scope.legacy_role(),
@@ -1643,22 +1576,6 @@ def _scope_school_ids(report_scope: Any, datasource_id: int, workspace_oid: int)
     return sorted(ids)
 
 
-def _alert_scope_filters(report_scope: Any, workspace_oid: int) -> tuple[Any, list[str] | None, list[str] | None]:
-    """v2 异常提醒过滤：返回 (旧 EduScope, 学校ID集合, 班级集合)。"""
-    from datasource.service.edu_permission import EduScope
-
-    if report_scope is None:
-        return EduScope(), None, None
-    synthetic = _report_legacy_scope(report_scope, EduScope())
-    if not report_scope.can_view_anomaly_alerts():
-        return synthetic, [], []
-    school_ids = _scope_school_ids(
-        report_scope, int(report_scope.datasource_id), int(workspace_oid)
-    )
-    allowed_classes = list(report_scope.allowed_class_ids()) or None
-    return synthetic, school_ids, allowed_classes
-
-
 def _fixed_source_datasource_id() -> int:
     from src.datasource.service.education_source import source_settings
 
@@ -1667,33 +1584,22 @@ def _fixed_source_datasource_id() -> int:
 
 
 def _anomaly_scope(current_user: UserResponse, workspace_oid: int):
-    """返回 (EduScope, school_ids, allowed_classes, 拒绝文案)。v2 走 grants。"""
-    from datasource.service.edu_permission import parse_edu_scope
-    from src.common.core.database import get_db_session
-    from system.crud.crud_user import get_user_by_id
-
-    with get_db_session() as session:
-        user = get_user_by_id(session, int(current_user.id))
-        edu_scope = parse_edu_scope(user)
+    """返回 (school_ids, allowed_classes, 拒绝文案)。范围只来自 V2 grants。"""
     report_scope = _load_report_scope(
         current_user, _fixed_source_datasource_id(), int(workspace_oid)
     )
-    if report_scope is None:
-        return edu_scope, None, None, None
     if not report_scope.can_view_anomaly_alerts():
-        return (
-            _report_legacy_scope(report_scope, edu_scope),
-            [],
-            [],
-            "教育局/学生账号不提供校内异常提醒",
-        )
-    scope, school_ids, allowed_classes = _alert_scope_filters(report_scope, workspace_oid)
-    return scope, school_ids, allowed_classes, None
+        return [], [], "教育局/学生账号不提供校内异常提醒"
+    school_ids = _scope_school_ids(
+        report_scope, int(report_scope.datasource_id), int(workspace_oid)
+    )
+    allowed_classes = list(report_scope.allowed_class_ids()) or None
+    return school_ids, allowed_classes, None
 
 
 def _exam_line_actor(current_user: UserResponse) -> tuple[int, int, Any, Any]:
     """返回 (datasource_id, ds_oid, edu_scope, actor)。"""
-    from datasource.service.edu_permission import parse_edu_scope
+    from datasource.service.edu_scope_view import EduScope
     from src.agent.education.exam_library import build_actor
     from src.common.core.database import get_db_session
     from system.crud.crud_user import get_user_by_id
@@ -1703,7 +1609,7 @@ def _exam_line_actor(current_user: UserResponse) -> tuple[int, int, Any, Any]:
         user = get_user_by_id(session, int(current_user.id))
         if user is None:
             raise ForbiddenException("用户不存在")
-        scope = parse_edu_scope(user)
+        scope = EduScope()
         return int(ds.id), int(ds.oid), scope, build_actor(user, scope)
 
 
@@ -1889,7 +1795,7 @@ async def preview_score_import(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    from datasource.service.edu_permission import parse_edu_scope
+    from datasource.service.edu_scope_view import EduScope
     from src.agent.education.score_import import import_result_to_dict, preview_import
     from src.agent.resource.tool.business import _load_datasource
     from src.common.core.database import get_db_session
@@ -1902,7 +1808,7 @@ async def preview_score_import(
     with get_db_session() as session:
         assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
         user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
+        scope = EduScope()
 
     db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
     result = preview_import(
@@ -1925,7 +1831,7 @@ async def execute_score_import(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    from datasource.service.edu_permission import parse_edu_scope
+    from datasource.service.edu_scope_view import EduScope
     from src.agent.education.score_import import import_result_to_dict, import_scores
     from src.agent.resource.tool.business import _load_datasource
     from src.common.core.database import get_db_session
@@ -1938,7 +1844,7 @@ async def execute_score_import(
     with get_db_session() as session:
         assert_datasource_accessible(session, current_user, datasource_id, workspace_oid)
         user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
+        scope = EduScope()
 
     db_type, config, _ = _load_datasource(datasource_id, workspace_oid)
     result = import_scores(
@@ -2018,14 +1924,10 @@ async def list_anomaly_alerts(
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
     """校长/老师查看本校（本班）异常提醒；教育局不可见。"""
-    from src.agent.education.alert_service import (
-        alert_to_dict,
-        can_access_anomaly_alerts,
-        list_alerts,
-    )
+    from src.agent.education.alert_service import alert_to_dict, list_alerts
     from src.common.core.database import get_db_session
 
-    scope, school_ids, allowed_classes, denied = _anomaly_scope(
+    school_ids, allowed_classes, denied = _anomaly_scope(
         current_user, int(workspace_oid)
     )
     if denied:
@@ -2038,18 +1940,8 @@ async def list_anomaly_alerts(
             }
         )
     with get_db_session() as session:
-        if not can_access_anomaly_alerts(scope):
-            return success_response(
-                {
-                    "accessible": False,
-                    "total": 0,
-                    "items": [],
-                    "message": "教育局/学生账号不提供校内异常提醒",
-                }
-            )
         rows, total = list_alerts(
             session,
-            scope,
             workspace_oid=int(workspace_oid),
             status=(status or "").strip() or None,
             limit=limit,
@@ -2072,25 +1964,18 @@ async def get_anomaly_alert(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    from src.agent.education.alert_service import (
-        alert_to_dict,
-        can_access_anomaly_alerts,
-        get_alert_for_scope,
-    )
+    from src.agent.education.alert_service import alert_to_dict, get_alert_for_scope
     from src.common.core.database import get_db_session
 
-    scope, school_ids, allowed_classes, denied = _anomaly_scope(
+    school_ids, allowed_classes, denied = _anomaly_scope(
         current_user, int(workspace_oid)
     )
     if denied:
         return error_response(code=403, message=denied)
     with get_db_session() as session:
-        if not can_access_anomaly_alerts(scope):
-            return error_response(code=403, message="无权查看异常提醒")
         row = get_alert_for_scope(
             session,
             int(alert_id),
-            scope,
             workspace_oid=int(workspace_oid),
             school_ids=school_ids,
             allowed_classes=allowed_classes,
@@ -2116,26 +2001,19 @@ async def confirm_anomaly_alert(
     current_user: UserResponse = Depends(get_current_user),
     workspace_oid: int = Depends(get_workspace_oid),
 ) -> dict:
-    from src.agent.education.alert_service import (
-        alert_to_dict,
-        can_access_anomaly_alerts,
-        confirm_alert,
-    )
+    from src.agent.education.alert_service import alert_to_dict, confirm_alert
     from src.common.core.database import get_db_session
 
     note = (payload.note if payload else None) or ""
-    scope, school_ids, allowed_classes, denied = _anomaly_scope(
+    school_ids, allowed_classes, denied = _anomaly_scope(
         current_user, int(workspace_oid)
     )
     if denied:
         return error_response(code=403, message=denied)
     with get_db_session() as session:
-        if not can_access_anomaly_alerts(scope):
-            return error_response(code=403, message="无权确认异常提醒")
         row = confirm_alert(
             session,
             int(alert_id),
-            scope,
             workspace_oid=int(workspace_oid),
             user_id=int(current_user.id),
             note=note,
@@ -2159,7 +2037,7 @@ async def confirm_anomaly_alert(
 def _prepare_raw_import(current_user: UserResponse, workspace_oid: int, *, write: bool = False):
     from common.core.database import get_db_session
     from common.exceptions.base import ForbiddenException
-    from datasource.service.edu_permission import parse_edu_scope
+    from datasource.service.edu_scope_view import EduScope
     from src.agent.education.raw_import import (
         assert_raw_import_role_allowed,
         resolve_edu_datasource_id,
@@ -2174,7 +2052,7 @@ def _prepare_raw_import(current_user: UserResponse, workspace_oid: int, *, write
             raise BadRequestException("当前工作空间未登记 edu 业务库，无法导入原始成绩")
         assert_datasource_accessible(session, current_user, ds_id, workspace_oid)
         user = get_user_by_id(session, int(current_user.id))
-        scope = parse_edu_scope(user)
+        scope = EduScope()
         privileged = bool(is_platform_admin(user))
         see_all = privileged or scope.edu_role == "bureau_admin"
         err = assert_raw_import_role_allowed(scope, privileged=privileged, write=write)

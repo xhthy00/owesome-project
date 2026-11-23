@@ -108,10 +108,9 @@ export function canManageExamBatches(user: CurrentUser | null): boolean {
 
 export function canAccessExamLibrary(user: CurrentUser): boolean {
   if (canManageExamBatches(user)) return true;
-  const scope = user.edu_scope;
-  return scope?.edu_role === "v2"
-    ? Boolean(scope.levels?.some((level) => ["city", "school", "class"].includes(level)))
-    : scope?.edu_role !== "student";
+  const levels = user.edu_scope?.levels;
+  return Array.isArray(levels)
+    && levels.some((level) => ["city", "school", "class"].includes(level));
 }
 
 export function canCreateExam(user: CurrentUser | null): boolean {

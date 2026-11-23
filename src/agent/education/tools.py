@@ -7115,29 +7115,11 @@ def build_line_reach_report_data_tool(
 
 
 def _research_edu_scope(ctx: dict[str, Any], uid: int | None) -> dict[str, Any]:
-    """教研工具专用：运行时 ctx 通常没有 edu_scope，按 user_id 补读。不改其他工具。"""
+    """教研工具专用：只使用运行时 ctx 携带的 V2 范围，不再回查 V1 教育角色。"""
     constraints = ctx.get("constraints") if isinstance(ctx.get("constraints"), dict) else {}
     edu = constraints.get("edu_scope") if isinstance(constraints.get("edu_scope"), dict) else None
     if not isinstance(edu, dict) or not edu:
         edu = ctx.get("edu_scope") if isinstance(ctx.get("edu_scope"), dict) else {}
-    if isinstance(edu, dict) and edu.get("edu_role"):
-        return edu
-    if not uid:
-        return edu if isinstance(edu, dict) else {}
-    try:
-        from datasource.service.edu_permission import edu_scope_summary
-        from src.common.core.database import get_db_session
-        from src.system.crud.crud_user import get_user_by_id
-
-        with get_db_session() as session:
-            user = get_user_by_id(session, int(uid))
-            if user is None:
-                return edu if isinstance(edu, dict) else {}
-            loaded = edu_scope_summary(user)
-            if isinstance(loaded, dict) and loaded.get("edu_role"):
-                return loaded
-    except Exception:
-        logger.warning("学科教研：读取 edu_scope 失败 user_id=%s", uid, exc_info=True)
     return edu if isinstance(edu, dict) else {}
 
 
@@ -7885,7 +7867,6 @@ def query_contribution_weak_tool(
         pick_school_filter_token,
         school_subject_avg_sql,
     )
-    from src.agent.education.scope_guard import lookup_bound_school_labels
     from src.agent.education.line_reach_report import (
         exam_batch_select_sql,
         ordered_exam_names,
@@ -7922,11 +7903,6 @@ def query_contribution_weak_tool(
         )
         if display:
             looked.append(display)
-        looked.extend(
-            lookup_bound_school_labels(
-                sid, datasource_id=int(ds_id), workspace_oid=ws_oid
-            )
-        )
     school = pick_school_filter_token(
         named=named, arg=arg, bound_name=bound_name, looked_up=looked
     )

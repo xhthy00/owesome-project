@@ -86,10 +86,11 @@ function LayoutWrapper({
         if (!active) return;
         const anonymize = privacy?.anonymize_display !== false;
         const scope = user.edu_scope || {};
+        const levels = Array.isArray(scope.levels) ? scope.levels : [];
         const schoolId = String(scope.school_id || "").trim();
         const schoolName = schoolHeaderLabel(String(scope.school_name || "").trim());
         const showSchoolPlain =
-          scope.edu_role === "school_admin" &&
+          (levels.includes("school") || levels.includes("grade")) &&
           !anonymize &&
           !!schoolName &&
           !looksLikeSchoolToken(schoolName);
@@ -112,7 +113,9 @@ function LayoutWrapper({
         setLoginAccount(account);
         setLoginName(name);
         setHideWorkspaceSwitcher(
-          Boolean(user.is_platform_admin) || scope.edu_role === "bureau_admin"
+          Boolean(user.is_platform_admin) ||
+            Boolean(scope.citywide) ||
+            (Array.isArray(scope.levels) && scope.levels.includes("city"))
         );
         setCachedWatermarkText(userWatermarkText(account, name));
         const fromStorage = Number(window.localStorage.getItem(WORKSPACE_OID_KEY) || "");

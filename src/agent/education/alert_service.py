@@ -10,7 +10,6 @@ from typing import Any
 from sqlalchemy import func
 from sqlmodel import Session, col, select
 
-from datasource.service.edu_permission import EduScope
 from src.agent.education.config import (
     ANOMALY_CRITICAL,
     ANOMALY_IMBALANCED,
@@ -50,18 +49,6 @@ def _format_alert_dt(value: datetime | None) -> str | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(_TZ_CN).strftime("%Y-%m-%d %H:%M:%S")
-
-# 教育局 / 学生不看校内异常待办
-_BLOCKED_ROLES = frozenset({"bureau_admin", "student", ""})
-
-
-def can_access_anomaly_alerts(scope: EduScope) -> bool:
-    """校长、老师可访问；教育局与学生不可见。"""
-    role = (scope.edu_role or "").strip()
-    if role in _BLOCKED_ROLES:
-        return False
-    return role in {"school_admin", "teacher"}
-
 
 def build_dedupe_key(
     *,
@@ -250,11 +237,6 @@ def alert_to_dict(row: EduAnomalyAlert) -> dict[str, Any]:
     }
 
 
-def _scope_filter_clause(scope: EduScope):
-    """返回 (school_id 条件可用?, class 列表)。调用方负责拼 query。"""
-    return (scope.school_id or "").strip(), list(scope.class_names or [])
-
-
 def _consolidate_legacy_to_reports(
     session: Session,
     *,
@@ -327,7 +309,6 @@ def _consolidate_legacy_to_reports(
 
 def list_alerts(
     session: Session,
-    scope: EduScope,
     *,
     workspace_oid: int,
     status: str | None = None,
@@ -336,12 +317,11 @@ def list_alerts(
     school_ids: list[str] | None = None,
     allowed_classes: list[str] | None = None,
 ) -> tuple[list[EduAnomalyAlert], int]:
-    if not can_access_anomaly_alerts(scope):
+    """按调用方已校验的授权学校/班级过滤；两者都缺失时返回空（失败关闭）。"""
+    if school_ids is None and allowed_classes is None:
         return [], 0
-
-    school_id, class_names = _scope_filter_clause(scope)
     if school_ids is not None:
-        # v2：授权学校集合（空集合表示无可见学校，直接返回空）
+        # 空集合表示无可见学校，直接返回空
         if not school_ids:
             return [], 0
         for sid in school_ids:
@@ -351,13 +331,6 @@ def list_alerts(
                 )
             except Exception:  # noqa: BLE001
                 logger.exception("consolidate legacy anomaly alerts failed school=%s", sid)
-    elif school_id:
-        try:
-            _consolidate_legacy_to_reports(
-                session, workspace_oid=workspace_oid, school_id=school_id
-            )
-        except Exception:  # noqa: BLE001
-            logger.exception("consolidate legacy anomaly alerts failed school=%s", school_id)
 
     filters = [
         EduAnomalyAlert.workspace_oid == int(workspace_oid),
@@ -365,14 +338,10 @@ def list_alerts(
     ]
     if school_ids is not None:
         filters.append(col(EduAnomalyAlert.school_id).in_(school_ids))
-    elif school_id:
-        filters.append(EduAnomalyAlert.school_id == school_id)
     if allowed_classes is not None:
         if not allowed_classes:
             return [], 0
         filters.append(col(EduAnomalyAlert.class_name).in_(allowed_classes))
-    elif scope.edu_role == "teacher" and class_names:
-        filters.append(col(EduAnomalyAlert.class_name).in_(class_names))
     if status in {STATUS_PENDING, STATUS_CONFIRMED}:
         filters.append(EduAnomalyAlert.status == status)
 
@@ -391,38 +360,27 @@ def list_alerts(
 def get_alert_for_scope(
     session: Session,
     alert_id: int,
-    scope: EduScope,
     *,
     workspace_oid: int,
     school_ids: list[str] | None = None,
     allowed_classes: list[str] | None = None,
 ) -> EduAnomalyAlert | None:
-    if not can_access_anomaly_alerts(scope):
+    """只返回落在调用方授权学校/班级内的提醒；两者都缺失时拒绝。"""
+    if school_ids is None and allowed_classes is None:
         return None
     row = session.get(EduAnomalyAlert, alert_id)
     if row is None or int(row.workspace_oid) != int(workspace_oid):
         return None
-    if school_ids is not None:
-        if str(row.school_id or "") not in set(school_ids):
-            return None
-    else:
-        school_id, _class_names = _scope_filter_clause(scope)
-        if school_id and row.school_id != school_id:
-            return None
-    if allowed_classes is not None:
-        if str(row.class_name or "") not in set(allowed_classes):
-            return None
-    else:
-        _school_id, class_names = _scope_filter_clause(scope)
-        if scope.edu_role == "teacher" and class_names and row.class_name not in class_names:
-            return None
+    if school_ids is not None and str(row.school_id or "") not in set(school_ids):
+        return None
+    if allowed_classes is not None and str(row.class_name or "") not in set(allowed_classes):
+        return None
     return row
 
 
 def confirm_alert(
     session: Session,
     alert_id: int,
-    scope: EduScope,
     *,
     workspace_oid: int,
     user_id: int,
@@ -433,7 +391,6 @@ def confirm_alert(
     row = get_alert_for_scope(
         session,
         alert_id,
-        scope,
         workspace_oid=workspace_oid,
         school_ids=school_ids,
         allowed_classes=allowed_classes,
@@ -1056,7 +1013,6 @@ __all__ = [
     "SOURCE_TIER_ALERT",
     "ANOMALY_REPORT",
     "alert_to_dict",
-    "can_access_anomaly_alerts",
     "confirm_alert",
     "detect_and_upsert_for_exam",
     "get_alert_for_scope",

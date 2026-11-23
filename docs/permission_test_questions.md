@@ -2,7 +2,7 @@
 
 > 适用入口：`/api/v1/chat-stream`、`/generate-sql`、`/execute-sql`，以及教育报告生成。
 > 两套权限模型都要覆盖：
-> - **v1**：`ds_rules` / `ds_permission` 行列权限 + `system_variables.edu_role` 四级模板（`bureau_admin` / `school_admin` / `teacher` / `student`）。
+> - **v1（已下线）**：`ds_rules` / `ds_permission` 行列权限保留；`system_variables.edu_role` 四级模板、谓词注入与 `/permission/edu/*` 已删除，改用 v2 grants（`level=city/district/school/grade/class/student`）。
 > - **v2**：`sys_user.system_variables.edu_auth_v2` 显式授权，模型生成完整语义 SQL，宿主做逻辑证明与物理数据流验证。
 >
 > 演示库为扬州高中数据：只有**高三、高二**；考试为 `高三3月`、`高三5月模拟`、`高二期末`。
@@ -14,7 +14,7 @@
 
 | 代号 | 配置 | 用途 |
 |------|------|------|
-| 市局 | `edu_role=bureau_admin`（或 v2 `level=city`） | 全量对照 |
+| 市局 | v2 `level=city`（旧 `edu_role=bureau_admin` 已下线） | 全量对照 |
 | 校长 | `school_admin` + `school_id=GZ_19D9D68D` | 本校范围 |
 | 教师 | `teacher` + `GZ_19D9D68D` + `高三(1)班`、`高三(2)班` | 本班范围 |
 | 学生 | `student` + `student_id=GZ_19D9D68D_85DE9080` | 本人范围 |

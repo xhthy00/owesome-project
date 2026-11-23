@@ -10,7 +10,7 @@ import re
 from collections import defaultdict
 from typing import Any
 
-from datasource.service.edu_permission import EduScope
+from datasource.service.edu_scope_view import EduScope
 
 __all__ = [
     "aggregate_district_line_reach",

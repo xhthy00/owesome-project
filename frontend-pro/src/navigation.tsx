@@ -16,22 +16,25 @@ export async function loadMenu(): Promise<MenuDataItem[]> {
   ]);
   if (getAccessToken() !== token) return [];
   const admin = Boolean(user.is_platform_admin || user.is_super_admin);
-  const role = user.edu_scope?.edu_role;
+  const levels = Array.isArray(user.edu_scope?.levels) ? user.edu_scope.levels : [];
+  const citywide = Boolean(user.edu_scope?.citywide);
+  const isStudent = levels.length > 0 && levels.every(level => level === 'student');
   const allowed = (key: string) => admin || visibility?.[key] !== false;
-  const canSeeScore = admin || role === 'bureau_admin' || role === 'school_admin';
+  // 成绩库读接口在 V1 下线后只对平台管理员开放，非管理员不再展示入口。
+  const canSeeScore = admin;
   const resources = resourceSubRoutes.filter(item => allowed(item.key)
     && (item.key !== 'school' || admin)
     && (item.key !== 'raw-score-import' || canSeeScore)
     && (item.key !== 'exam-library' || canAccessExamLibrary(user))
-    && !(role === 'student' && item.key === 'fraction-bar'));
+    && !(isStudent && item.key === 'fraction-bar'));
   const itemOf = ({ key, path, label, icon }: typeof mainRoutes[number]) => ({ key, path, name: label, icon });
   const insights = mainRoutes.filter(item => ['analysis', 'line-reach', 'report-history', 'anomaly-alerts', 'anomaly-rules'].includes(item.key))
     .filter(item => allowed(item.key)
       && (item.key !== 'anomaly-rules' || admin)
-      && (item.key !== 'line-reach' || role !== 'student')
-      && (item.key !== 'anomaly-alerts' || (role !== 'student' && role !== 'bureau_admin')));
+      && (item.key !== 'line-reach' || !isStudent)
+      && (item.key !== 'anomaly-alerts' || (!isStudent && !citywide)));
   const menu: MenuDataItem[] = [
-    ...(allowed('overview') && role !== 'student' ? [itemOf(mainRoutes[0])] : []),
+    ...(allowed('overview') && !isStudent ? [itemOf(mainRoutes[0])] : []),
     { key: 'insights', name: '分析与洞察', icon: <DashboardOutlined className="pro-nav-icon pro-nav-icon-violet" />, children: insights.map(itemOf) },
     ...(allowed('resource') && resources.length ? [{ key: 'resource', name: '数据管理', icon: mainRoutes.find(item => item.key === 'resource')?.icon, children: resources.map(itemOf) }] : []),
     ...(allowed('permission') ? [{ key: 'permission', name: '权限管理', icon: mainRoutes.find(item => item.key === 'permission')?.icon, children: permissionSubRoutes.map(itemOf) }] : []),

@@ -78,18 +78,6 @@ def test_named_other_type_keeps_bound_pool():
     assert rank_pool_school_type("高三(1)班在引领校中的全市排名", _PRINCIPAL) == "引领"
 
 
-def test_cross_tier_named_type_denied_for_principal():
-    from src.agent.education.scope_guard import CROSS_TIER_MESSAGE, out_of_scope_question
-
-    q = "2026届高三1月期末 高三(1)班在发展校中的全市排名"
-    assert out_of_scope_question(_PRINCIPAL, q) == CROSS_TIER_MESSAGE
-    assert out_of_scope_question(_TEACHER, "新华中学高三(1)班在引领校中的全市排名") == (
-        CROSS_TIER_MESSAGE
-    )
-    assert out_of_scope_question(_PRINCIPAL, "高三(1)班在引领校中的全市排名") is None
-    assert out_of_scope_question(_BUREAU, q) is None
-
-
 def test_unrestricted_and_school_scope_escape():
     assert wants_unrestricted_school_type_rank("扬州中学高三(1)班不限校类全市排名")
     assert rank_pool_school_type("扬州中学高三(1)班不限校类全市排名", _PRINCIPAL) is None
@@ -172,75 +160,6 @@ def test_strength_verdict_uses_peer_label():
 def test_bound_school_type_ignores_other():
     assert bound_school_type_from_edu({"school_type": "其他校"}) is None
     assert bound_school_type_from_edu({"xxlb": "引领高中"}) == "引领"
-
-
-def test_filter_rank_rows_keeps_only_bound_school():
-    from src.agent.education.scope_guard import filter_rank_rows_to_bound_school
-
-    sql = (
-        "SELECT xx, avg_score, RANK() OVER (ORDER BY avg_score DESC) AS rk "
-        "FROM tb_score_overview GROUP BY xx"
-    )
-    result = {
-        "columns": ["xx", "avg_score", "rk"],
-        "rows": [
-            ["扬州中学", 112.96, 1],
-            ["B04安宜中学", 82.92, 14],
-            ["新华中学", 89.99, 9],
-        ],
-        "row_count": 3,
-    }
-    edu = {"edu_role": "school_admin", "school_name": "安宜中学"}
-    out = filter_rank_rows_to_bound_school(result, sql, edu)
-    assert out is not None
-    assert out["rows"] == [["B04安宜中学", 82.92, 14]]
-    assert out.get("peer_rank_clipped")
-    bureau = filter_rank_rows_to_bound_school(
-        result, sql, {"edu_role": "bureau_admin", "school_name": "安宜中学"}
-    )
-    assert bureau is not None
-    assert len(bureau["rows"]) == 3
-
-
-def test_filter_rank_rows_resolves_school_id_when_name_missing(monkeypatch):
-    from src.agent.education import scope_guard as sg
-
-    def _fake_lookup(school_id, *, datasource_id=None, workspace_oid=None):
-        assert school_id == "GZ_E62620B2"
-        if not datasource_id:
-            return []
-        return ["B04安宜中学"]
-
-    monkeypatch.setattr(sg, "lookup_bound_school_labels", _fake_lookup)
-    sql = (
-        "SELECT xx, avg_score, RANK() OVER (ORDER BY avg_score DESC) AS rk "
-        "FROM tb_score_overview GROUP BY xx"
-    )
-    result = {
-        "columns": ["xx", "avg_score", "rk"],
-        "rows": [
-            ["扬州中学", 112.96, 1],
-            ["B04安宜中学", 82.92, 14],
-        ],
-        "row_count": 2,
-    }
-    edu = {"edu_role": "school_admin", "school_id": "GZ_E62620B2", "school_name": None}
-    out = sg.filter_rank_rows_to_bound_school(result, sql, edu, datasource_id=2)
-    assert out is not None
-    assert out["rows"] == [["B04安宜中学", 82.92, 14]]
-    assert out.get("peer_rank_clipped")
-
-    no_lookup = sg.filter_rank_rows_to_bound_school(result, sql, edu)
-    assert no_lookup is not None
-    assert no_lookup["rows"] == []
-    own_only = {
-        "columns": ["xx", "avg_score", "rk"],
-        "rows": [["B04安宜中学", 82.92, 14]],
-        "row_count": 1,
-    }
-    kept = sg.filter_rank_rows_to_bound_school(own_only, sql, edu)
-    assert kept is not None
-    assert kept["rows"] == [["B04安宜中学", 82.92, 14]]
 
 
 def test_principal_school_strength_does_not_ask_class():

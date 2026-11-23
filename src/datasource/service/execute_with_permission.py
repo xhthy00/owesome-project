@@ -8,11 +8,21 @@ from sqlalchemy.orm import Session
 
 from datasource.service.query_permission import (
     apply_permissions_for_execute,
-    expand_overview_xx_school_code_literals,
     filter_exec_result_by_column_permissions,
     validate_sql_column_permissions,
 )
 from system.models.user import SysUser
+
+
+def _reject_fixed_education_source(datasource_id: int) -> None:
+    """固定学情库只接受 V2 证明后的语义 SQL。"""
+    from src.datasource.service.education_authorization import AuthorizationError
+    from src.datasource.service.education_source import is_fixed_education_source
+
+    if is_fixed_education_source(datasource_id):
+        raise AuthorizationError(
+            "AUTH_QUERY_SHAPE_UNSUPPORTED", "此数据源只接受已验证的语义SQL，请使用智能问数入口"
+        )
 
 
 def execute_sql_with_permission(
@@ -32,14 +42,15 @@ def execute_sql_with_permission(
     """
     from src.datasource.service.education_authorization import reject_unverified_execution
     reject_unverified_execution(datasource_id, user)
+    _reject_fixed_education_source(datasource_id)
     from datasource.service.sql_auto_fix import format_auto_fix_note, run_sql_with_auto_fix
 
     def _prepare(raw: str) -> str:
-        if user is not None:
-            return apply_permissions_for_execute(
-                session, user, datasource_id, db_type, raw, tables_hint
-            )
-        return expand_overview_xx_school_code_literals(raw, db_type)
+        if user is None:
+            return raw
+        return apply_permissions_for_execute(
+            session, user, datasource_id, db_type, raw, tables_hint
+        )
 
     sql_run = _prepare(sql)
     if user is not None:
@@ -89,6 +100,7 @@ def execute_sql_with_permission_by_user_id(
     """按 user_id 加载用户并执行（教育工具 / API 便捷入口）。"""
     from src.datasource.service.education_authorization import reject_unverified_execution
     reject_unverified_execution(datasource_id)
+    _reject_fixed_education_source(datasource_id)
     from src.agent.resource.tool.business import _load_datasource
     from src.common.core.database import get_db_session
     from src.system.crud.crud_user import get_user_by_id

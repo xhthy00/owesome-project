@@ -227,8 +227,9 @@ export default function ScoreLibraryPage() {
   useEffect(() => {
     void getCurrentUser()
       .then((user) => {
-        const role = user.edu_scope?.edu_role || "";
-        setSchoolScoped(role === "school_admin" && !user.is_platform_admin && !user.is_super_admin);
+        const levels = Array.isArray(user.edu_scope?.levels) ? user.edu_scope.levels : [];
+        const schoolScoped = levels.includes("school") || levels.includes("grade");
+        setSchoolScoped(schoolScoped && !user.is_platform_admin && !user.is_super_admin);
         setCanImport(canCreateExam(user));
       })
       .catch(() => setSchoolScoped(false));

@@ -21,20 +21,16 @@ from src.chat.service.semantic_permission_validator import (
 from src.common.core.config import DataSemanticBinding, Settings
 from src.common.core.database import get_db_session
 from src.datasource.edu_connection import parse_edu_database_url
-from src.datasource.service.edu_permission import build_edu_row_predicates, parse_edu_scope
 from src.datasource.service.education_authorization import (
-    AUTH_KEY,
     AuthorizationError,
     assert_workspace_member,
     context_for,
     manifest_for,
-    read_authorization,
 )
 from src.datasource.service.query_permission import (
     apply_permissions_for_execute,
     collect_row_predicate_sqls,
     filter_exec_result_by_column_permissions,
-    qualify_edu_row_predicates,
     validate_sql_column_permissions,
 )
 from src.datasource.service.semantic_permission_contract import (
@@ -206,36 +202,6 @@ def _check_published_columns(tree, dialect, published_columns):
                 )
 
 
-def _verify_row_filters(session, user, datasource_id, db_type, dialect, tree):
-    """Fail closed when the existing rewriter cannot attach a predicate to a scan."""
-    if bypasses_data_row_column_scope(user):
-        return
-    edu = build_edu_row_predicates(user, db_type)
-    school = parse_edu_scope(user).school_name
-    for select, table in _sources(tree):
-        predicates = collect_row_predicate_sqls(
-            session, user.id, datasource_id, [table.name], db_type
-        )
-        scan = exp.select("1").from_(table.copy()).sql(dialect=dialect)
-        predicates += qualify_edu_row_predicates(scan, edu, db_type, school_name=school)
-        if not predicates:
-            continue
-        where = select.args.get("where")
-        applied = _conjuncts(where.this) if where else set()
-        for predicate in predicates:
-            expected = _conjuncts(parse_one(predicate, read=dialect))
-            if not expected <= applied:
-                raise SemanticQueryError("原行权限无法安全应用到此语义计划，请调整模型或查询。")
-
-
-def _conjuncts(node):
-    if isinstance(node, exp.Paren):
-        return _conjuncts(node.this)
-    if isinstance(node, exp.And):
-        return _conjuncts(node.left) | _conjuncts(node.right)
-    return {node.sql(normalize=True)}
-
-
 class SemanticQuery:
     """One request's published context, bound to the authorized datasource and user."""
 
@@ -264,14 +230,8 @@ class SemanticQuery:
     def _authorization(self, session, user):
         policy = self._permission_manifest()
         if policy is None:
-            variables = getattr(user, "system_variables", None) or {}
-            if AUTH_KEY in variables:
-                document = read_authorization(user)
-                if f"{self.workspace_oid}:{self.datasource_id}" in document.managed_resources or any(
-                    g.workspace_oid == self.workspace_oid and g.datasource_id == self.datasource_id for g in document.grants
-                ):
-                    raise AuthorizationError("AUTH_MAPPING_MISSING", "数据源的v2权限映射已移除，不能回退旧执行路径")
-            return None
+            # 教育权限只有 V2 事实源；没有发布映射/授权就拒绝，不回退旧执行路径。
+            raise AuthorizationError("AUTH_SCOPE_OUTSIDE_GRANT", "当前数据源没有有效的教育授权")
         binding = self._binding()
         if (policy.bundle_id, policy.manifest_hash) != (binding["bundle_id"], binding["manifest_hash"]):
             raise AuthorizationError("AUTH_MAPPING_MISSING", "权限映射与当前语义发布物不一致")
@@ -299,9 +259,8 @@ class SemanticQuery:
                 self._environment_permission = environment_manifest(self.workspace_oid, self.datasource_id, settings=self.settings)
             else:
                 self._environment_permission = None
-            if self._permission_manifest() is None:
-                return self._authorization(session, user)
-            assert_datasource_accessible(session, user, self.datasource_id, self.workspace_oid)
+            if self._permission_manifest() is not None:
+                assert_datasource_accessible(session, user, self.datasource_id, self.workspace_oid)
             return self._authorization(session, user)
 
     def _binding(self):
@@ -505,12 +464,20 @@ class SemanticQuery:
                     name: (kind, relation, {field["name"]: field for field in columns})
                     for name, (kind, relation, columns) in published_columns.items()
                 })
-            permission_context = self._fresh_authorization() if getattr(self.settings, "database_edu_url", "") else None
-            proof = PermissionValidator(permission_context).prove(logical) if permission_context else None
+            permission_context = self._fresh_authorization()
+            proof = PermissionValidator(permission_context).prove(logical)
             plan = self._plan(logical.sql(dialect=dialect), binding, dialect)
-            if permission_context is not None:
-                return self._execute_explicit(plan, binding, db_type, dialect, config, execute, logical, permission_context, proof)
-            return self._prepare_and_execute(plan, binding, db_type, dialect, config, execute)
+            return self._execute_explicit(
+                plan,
+                binding,
+                db_type,
+                dialect,
+                config,
+                execute,
+                logical,
+                permission_context,
+                proof,
+            )
         except SemanticFieldError as exc:
             policy = self._permission_manifest()
             relation = policy.relations.get(exc.detail.get("source", {}).get("relation", "").lower()) if policy else None
@@ -572,79 +539,3 @@ class SemanticQuery:
                                  "query_contract": {"version": CONTRACT_VERSION,
                                                     "prover_version": PROVER_VERSION,
                                                     "fingerprint": proof.contract_fingerprint}})
-
-    def _prepare_and_execute(self, plan, binding, db_type, dialect, config, execute):
-        with get_db_session() as session:
-            user = get_user_by_id(session, self.user_id)
-            if user is None:
-                raise SemanticQueryError("用户权限已失效。")
-            self._authorization(session, user)  # rejects a removed v2 mapping; no legacy fallback
-            assert_datasource_accessible(session, user, self.datasource_id, self.workspace_oid)
-            schema = "public" if dialect == "postgres" else config["database"]
-            tree = _query(plan["physical_sql"], dialect, compiled=True)
-            tables = sorted({table.name for _, table in _check_sources(tree, schema=schema)})
-            physical_sql, _ = apply_sql_privacy(tree.sql(dialect=dialect))
-            sql_run = apply_permissions_for_execute(
-                session,
-                user,
-                self.datasource_id,
-                db_type,
-                physical_sql,
-                tables_hint=tables,
-            )
-            secured = _query(sql_run, dialect)
-            # The existing rewrite can add tables required by permission predicates.
-            sources = _check_sources(secured, schema=schema)
-            _verify_row_filters(session, user, self.datasource_id, db_type, dialect, secured)
-            for _, table in sources:
-                table.set("db", exp.to_identifier(schema, quoted=True))
-            sql_run = secured.sql(dialect=dialect)
-            error = validate_sql_column_permissions(
-                session, user, self.datasource_id, db_type, sql_run
-            )
-            if error:
-                raise SemanticQueryError(error)
-            result = {}
-            if execute:
-                limit = secured.args.get("limit")
-                if (
-                    limit is None
-                    or not isinstance(limit.expression, exp.Literal)
-                    or not limit.expression.is_int
-                ):
-                    secured = secured.limit(_MAX_ROWS + 1)
-                elif int(limit.expression.this) > _MAX_ROWS:
-                    secured = secured.limit(_MAX_ROWS + 1)
-                sql_run = secured.sql(dialect=dialect)
-                outcome = run_sql_with_auto_fix(
-                    sql_run, db_type=db_type, config={
-                        **config, "read_only": True,
-                        "query_timeout_seconds": self.settings.chat_query_timeout_seconds,
-                    }, max_fix_attempts=0
-                )
-                if not outcome.success or not isinstance(outcome.result, dict):
-                    raise SemanticQueryError("语义查询执行失败，请检查发布物和数据源映射。")
-                result = filter_exec_result_by_column_permissions(
-                    session,
-                    user,
-                    self.datasource_id,
-                    db_type,
-                    sql_run,
-                    outcome.result,
-                )
-                result = apply_result_privacy(result) or result
-                rows = result.get("rows", [])
-                result.update(
-                    rows=rows[:_MAX_ROWS],
-                    row_count=min(len(rows), _MAX_ROWS),
-                    rows_truncated=len(rows) > _MAX_ROWS,
-                )
-            return jsonable_encoder(
-                {
-                    **result,
-                    "sql": sql_run,
-                    "tables": tables,
-                    **binding,
-                    "plan_request_id": plan.get("request_id"),
-                }
-            )

@@ -56,7 +56,7 @@ class ApplyBody(BaseModel):
 
 def _db(current_user: UserResponse, workspace_oid: int):
     from common.core.database import get_db_session
-    from datasource.service.edu_permission import parse_edu_scope
+    from datasource.service.edu_scope_view import EduScope
     from src.agent.education.exam_library import build_actor, build_scoped_actor
     from src.datasource.edu_connection import edu_db_connection
     from src.datasource.service.education_authorization import AUTH_KEY, AuthorizationError
@@ -69,23 +69,17 @@ def _db(current_user: UserResponse, workspace_oid: int):
         user = get_user_by_id(session, int(current_user.id))
         if user is None:
             raise ForbiddenException("用户不存在")
-        actor = build_actor(user, parse_edu_scope(user))
+        actor = build_actor(user, EduScope())
         variables = getattr(user, "system_variables", None)
-        if not actor.can_maintain and isinstance(variables, dict) and AUTH_KEY in variables:
-            try:
-                _, db_type, config, ds_id, _ = source_settings()
-                report_scope = load_report_scope(session, user, workspace_oid, ds_id)
-            except AuthorizationError as exc:
-                raise ForbiddenException(exc.detail.get("user_message") or str(exc)) from exc
-            if report_scope is None or not report_scope.levels & {"city", "school", "class"}:
-                raise ForbiddenException("当前账号没有试卷库访问权限")
-        else:
-            if not actor.can_maintain and actor.edu_role == "student":
-                raise ForbiddenException("学生账号不能访问试卷库")
-            try:
-                db_type, config = edu_db_connection()
-            except ValueError as exc:
-                raise BadRequestException(str(exc)) from exc
+        if not isinstance(variables, dict) or AUTH_KEY not in variables:
+            raise ForbiddenException("当前账号没有有效的教育授权，请联系管理员配置")
+        try:
+            _, db_type, config, ds_id, _ = source_settings()
+            report_scope = load_report_scope(session, user, workspace_oid, ds_id)
+        except AuthorizationError as exc:
+            raise ForbiddenException(exc.detail.get("user_message") or str(exc)) from exc
+        if report_scope is None or not report_scope.levels & {"city", "school", "class"}:
+            raise ForbiddenException("当前账号没有试卷库访问权限")
     if report_scope is not None:
         actor = _call(lambda: build_scoped_actor(db_type, config, actor, report_scope.grants))
     return db_type, config, actor

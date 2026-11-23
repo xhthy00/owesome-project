@@ -397,6 +397,11 @@ def validate_grant_catalog(grant: EducationGrant, manifest: PermissionManifest):
 
 
 def reject_unverified_execution(datasource_id: int, user=None):
+    """拦截已登记 V2 授权或配置了发布映射的数据源上的直连执行。
+
+    只用于**执行**入口；加载数据源配置（``_load_datasource``）不应调用本函数，
+    否则报告链路连连接都无法建立。
+    """
     managed = user is not None and any(
         key.endswith(f":{datasource_id}") for key in read_authorization(user).managed_resources
     )

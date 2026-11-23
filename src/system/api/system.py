@@ -132,14 +132,8 @@ def get_me(
     workspace_oid: int = Depends(get_workspace_oid),
 ):
     """Get current user info."""
-    from datasource.service.edu_permission import (
-        edu_scope_summary,
-        looks_like_school_token,
-        lookup_school_display_name,
-    )
-
     db_user = get_user_by_id(session, current_user.id)
-    edu_scope = edu_scope_summary(db_user) if db_user else {}
+    edu_scope: dict = {}
     raw_variables = getattr(db_user, "system_variables", None)
     if isinstance(raw_variables, dict) and "edu_auth_v2" in raw_variables:
         # v2：分析工具/前端需要资源数据源、范围层级、学校/班级与能力。
@@ -154,24 +148,6 @@ def get_me(
             edu_scope = scope.summary() if scope is not None else {"edu_role": "v2"}
         except Exception:
             edu_scope = {"edu_role": "v2"}
-    if edu_scope and edu_scope.get("edu_role") != "v2":
-        sid = str(edu_scope.get("school_id") or "").strip()
-        stored = str(edu_scope.get("school_name") or "").strip()
-        looked = ""
-        if sid:
-            try:
-                looked = lookup_school_display_name(
-                    session, sid, workspace_oid=int(current_user.oid)
-                )
-            except Exception:
-                looked = ""
-        plain = ""
-        for cand in (looked, stored):
-            if cand and not looks_like_school_token(cand):
-                plain = cand
-                break
-        if plain:
-            edu_scope["school_name"] = plain
     return success_response(
         data={
             "id": current_user.id,

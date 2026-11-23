@@ -122,6 +122,23 @@ it("shows the streamed thinking above the answer", () => {
   expect(screen.getByText("先确认考试口径，再汇总均分。")).toBeVisible();
 });
 
+it("ends every answer with the AI fallibility note", () => {
+  render(<CoworkChat chat={chatState({
+    messages: [
+      { id: "q1", runId: "r1", role: "user", content: "第一问" },
+      { id: "a1", runId: "r1", role: "assistant", content: "第一问的结论。" },
+      { id: "q2", runId: "r2", role: "user", content: "第二问" },
+      { id: "a2", runId: "r2", role: "assistant", content: "第二问的结论。" },
+    ],
+  })} />);
+  const notes = screen.getAllByRole("note");
+  expect(notes).toHaveLength(2);
+  for (const note of notes) {
+    expect(note).toHaveTextContent("AI 可能会出错。请核查重要信息。");
+    expect(note.parentElement?.lastElementChild).toBe(note);
+  }
+});
+
 it("keeps IME confirmation local and submits the composed message with the selected datasource", () => {
   const chat = chatState();
   render(<CoworkChat chat={chat} />);

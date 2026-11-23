@@ -16,15 +16,6 @@ from common.core.database import get_session
 from common.core.security import get_password_hash
 from common.exceptions.base import BadRequestException, ForbiddenException, NotFoundException
 from common.schemas.response import success_response
-from datasource.service.edu_permission import (
-    EduScope,
-    clear_edu_scope_from_variables,
-    edu_scope_summary,
-    merge_edu_scope_into_variables,
-    parse_edu_scope,
-    resolve_scope_school,
-    validate_edu_scope,
-)
 from system.api.auth_deps import get_current_user
 from system.authz import (
     SYS_ROLE_PLATFORM_ADMIN,
@@ -35,7 +26,6 @@ from system.authz import (
 )
 from system.models.user import SysUser
 from system.models.workspace import SysUserWorkspace
-from system.schemas import EduScopePayload
 from system.workspace_scope import get_workspace_oid
 
 router = APIRouter(prefix="/user", tags=["user"])
@@ -158,8 +148,6 @@ def pager_users(
     rows = q.offset((page_num - 1) * page_size).limit(page_size).all()
     items = []
     for item in rows:
-        scope = parse_edu_scope(item)
-        summary = edu_scope_summary(item)
         items.append(
             {
                 "id": item.id,
@@ -171,13 +159,6 @@ def pager_users(
                 "language": item.language,
                 "origin": item.origin,
                 "create_time": item.create_time,
-                "edu_role": scope.edu_role or None,
-                "edu_role_label": summary.get("edu_role_label"),
-                "school_id": scope.school_id or None,
-                "school_name": scope.school_name or None,
-                "class_names": scope.class_names or None,
-                "student_id": scope.student_id or None,
-                "edu_remark": scope.remark or None,
                 "sys_role": effective_sys_role(item),
             }
         )
@@ -421,79 +402,4 @@ def update_user_sys_role(
     return success_response(
         data={"id": row.id, "sys_role": effective_sys_role(row)},
         message="管理员权限已更新",
-    )
-
-
-@router.get("/{user_id}/edu-scope")
-def get_user_edu_scope(
-    user_id: int,
-    session: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
-):
-    _ = current_user
-    row = session.query(SysUser).filter(SysUser.id == user_id).first()
-    if not row:
-        raise NotFoundException("User not found")
-    scope = parse_edu_scope(row)
-    return success_response(data={"user_id": row.id, "account": row.account, **scope.to_dict()})
-
-
-@router.put("/{user_id}/edu-scope")
-def update_user_edu_scope(
-    user_id: int,
-    payload: EduScopePayload,
-    session: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
-    workspace_oid: int = Depends(get_workspace_oid),
-    datasource_id: int | None = Query(None),
-):
-    if not can_manage_data_permissions(session, current_user):
-        raise ForbiddenException("仅系统管理员或工作空间管理员可管理教育权限")
-    row = session.query(SysUser).filter(SysUser.id == user_id).first()
-    if not row:
-        raise NotFoundException("User not found")
-    scope = EduScope(
-        edu_role=str(payload.edu_role or "").strip(),
-        school_id=str(payload.school_id or "").strip(),
-        school_name=str(payload.school_name or "").strip(),
-        class_names=list(payload.class_names or []),
-        student_id=str(payload.student_id or "").strip(),
-        remark=str(payload.edu_remark or "").strip()[:80],
-    )
-    resolve_err = resolve_scope_school(
-        session, scope, datasource_id=datasource_id, workspace_oid=workspace_oid
-    )
-    if resolve_err:
-        raise BadRequestException(resolve_err)
-    errors = validate_edu_scope(scope)
-    if errors:
-        raise BadRequestException("; ".join(errors))
-    row.system_variables = merge_edu_scope_into_variables(row.system_variables, scope)
-    session.commit()
-    session.refresh(row)
-    return success_response(
-        data={"user_id": row.id, **parse_edu_scope(row).to_dict()},
-        message="教育权限范围已更新",
-    )
-
-
-@router.delete("/{user_id}/edu-scope")
-def delete_user_edu_scope(
-    user_id: int,
-    session: Session = Depends(get_session),
-    current_user=Depends(get_current_user),
-):
-    """移除用户的教育四级数据权限（保留 system_variables 中的其他字段）。"""
-    if not can_manage_data_permissions(session, current_user):
-        raise ForbiddenException("仅系统管理员或工作空间管理员可管理教育权限")
-    row = session.query(SysUser).filter(SysUser.id == user_id).first()
-    if not row:
-        raise NotFoundException("User not found")
-    had_scope = bool(parse_edu_scope(row).edu_role)
-    row.system_variables = clear_edu_scope_from_variables(row.system_variables)
-    session.commit()
-    session.refresh(row)
-    return success_response(
-        data={"user_id": row.id, **parse_edu_scope(row).to_dict()},
-        message="教育权限已删除" if had_scope else "该用户本无教育权限配置",
     )

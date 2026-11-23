@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datasource.service.edu_permission import EduScope
+from datasource.service.edu_scope_view import EduScope
 from src.agent.education.line_reach import (
     aggregate_district_line_reach,
     build_line_reach_payload,

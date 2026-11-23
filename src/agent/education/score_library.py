@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from datasource.db.db import WriteDbSession
-from datasource.service.edu_permission import EduScope
+from datasource.service.edu_scope_view import EduScope
 
 # 再选科目展示赋分，其余展示原始分。键是试卷科目名。
 SCORE_SUBJECTS: dict[str, str] = {

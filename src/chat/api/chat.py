@@ -70,29 +70,6 @@ class _ChatStreamingResponse(StreamingResponse):
                 await asyncio.wait({task})
 
 
-def _edu_out_of_scope_message(
-    user_id: int,
-    question: str,
-    *,
-    datasource_id: int | None = None,
-    workspace_oid: int | None = None,
-) -> str | None:
-    """教师/校管点名越权班校时拒绝；读范围失败则放行。"""
-    from src.datasource.service.education_authorization import manifest_for
-    if datasource_id is not None and manifest_for(datasource_id) is not None:
-        return None  # v2 SQL proof handles multi-grant ranges; legacy name regex does not.
-    from datasource.service.edu_permission import edu_scope_dict_for_user_id
-    from src.agent.education.scope_guard import out_of_scope_question
-
-    return out_of_scope_question(
-        edu_scope_dict_for_user_id(user_id),
-        question,
-        datasource_id=datasource_id,
-        workspace_oid=workspace_oid,
-        connection_factory=edu_db_connection,
-    )
-
-
 # ============== Conversation Management ==============
 
 @router.post("/conversations", summary="Create conversation")
@@ -440,10 +417,6 @@ async def _semantic_sql_response(chat_request, http_request, session, current_us
     from src.chat.service.deepagents_runtime import run_chat_stream
 
     _assert_query_scope(session, current_user, workspace_oid, chat_request)
-    denied = await asyncio.to_thread(
-        _edu_out_of_scope_message, current_user.id, chat_request.question, datasource_id=chat_request.datasource_id,
-        workspace_oid=workspace_oid,
-    )
     events = {}
     steps = []
     record_id = 0
@@ -454,20 +427,17 @@ async def _semantic_sql_response(chat_request, http_request, session, current_us
         else:
             events[event] = data
 
-    if denied:
-        events["error"] = {"error": denied}
-    else:
-        request = chat_request if execute else chat_request.model_copy(
-            update={"conversation_id": None, "resume_interrupt_id": None},
+    request = chat_request if execute else chat_request.model_copy(
+        update={"conversation_id": None, "resume_interrupt_id": None},
+    )
+    try:
+        record_id = await run_chat_stream(
+            request=request, current_user_id=current_user.id, workspace_oid=workspace_oid,
+            emit=emit, checkpointer=http_request.app.state.chat_checkpointer, execute=execute,
         )
-        try:
-            record_id = await run_chat_stream(
-                request=request, current_user_id=current_user.id, workspace_oid=workspace_oid,
-                emit=emit, checkpointer=http_request.app.state.chat_checkpointer, execute=execute,
-            )
-        except Exception:
-            logger.exception("DataSemantic SQL request failed")
-            events["error"] = {"error": "语义问数执行失败，请稍后重试。"}
+    except Exception:
+        logger.exception("DataSemantic SQL request failed")
+        events["error"] = {"error": "语义问数执行失败，请稍后重试。"}
 
     plan = events.get("sql", {})
     clarification = events.get("clarify")
@@ -546,24 +516,6 @@ async def chat_stream(
     )
 
     current_user_id = current_user.id
-    denied = await asyncio.to_thread(
-        _edu_out_of_scope_message, int(current_user_id),
-        chat_request.question,
-        datasource_id=chat_request.datasource_id,
-        workspace_oid=workspace_oid,
-    )
-    if denied:
-
-        async def deny_stream() -> AsyncGenerator[str, None]:
-            yield _sse_event("error", {"error": denied})
-            yield _sse_event("done", {"record_id": 0})
-
-        return StreamingResponse(
-            deny_stream(),
-            media_type="text/event-stream",
-            headers={**_SSE_HEADERS, "X-Trace-Id": trace_id},
-        )
-
     queue: asyncio.Queue = asyncio.Queue()
     sentinel = object()
 

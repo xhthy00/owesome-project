@@ -9,6 +9,7 @@ import {
 } from "@ant-design/icons";
 import { permissionApi } from "@/api/permission";
 import { getCurrentUser, type CurrentUser } from "@/api/auth";
+import { isCitywideScope, isStudentScope } from "@/api/eduScope";
 import { Tooltip } from "antd";
 import Image from "next/image";
 import Link from "next/link";
@@ -185,18 +186,16 @@ export default function SideBar() {
   }, [groupedHistory]);
 
   const visibleResourceRoutes = useMemo(() => {
-    const eduRole = currentUser?.edu_scope?.edu_role || "";
-    const canSeeScoreLibrary =
-      isPlatformAdmin ||
-      Boolean(currentUser?.is_super_admin) ||
-      eduRole === "bureau_admin" ||
-      eduRole === "school_admin";
+    const scope = currentUser?.edu_scope;
+    const student = isStudentScope(scope);
+    // 成绩库读接口在 V1 下线后只对平台管理员开放。
+    const canSeeScoreLibrary = isPlatformAdmin || Boolean(currentUser?.is_super_admin);
     if (!isPlatformAdmin && menuVisibility.resource === false) return [];
     return resourceSubRoutes.filter((item) => {
       if (!isPlatformAdmin && menuVisibility[item.key] === false) return false;
       if (!canSeeScoreLibrary && item.key === "raw-score-import") return false;
       if (!isPlatformAdmin && item.key === "school") return false;
-      if (eduRole === "student" && (item.key === "exam-library" || item.key === "fraction-bar")) {
+      if (student && (item.key === "exam-library" || item.key === "fraction-bar")) {
         return false;
       }
       return true;
@@ -204,13 +203,14 @@ export default function SideBar() {
   }, [
     isPlatformAdmin,
     menuVisibility,
-    currentUser?.edu_scope?.edu_role,
+    currentUser?.edu_scope,
     currentUser?.is_super_admin
   ]);
 
   const visibleRoutes = useMemo(() => {
-    const eduRole = currentUser?.edu_scope?.edu_role || "";
-    const hideAnomalyAlerts = eduRole === "bureau_admin" || eduRole === "student";
+    const scope = currentUser?.edu_scope;
+    const student = isStudentScope(scope);
+    const hideAnomalyAlerts = isCitywideScope(scope) || student;
     let list = mainRoutes;
     if (!isPlatformAdmin) {
       list = mainRoutes.filter(
@@ -223,14 +223,14 @@ export default function SideBar() {
     if (hideAnomalyAlerts) {
       list = list.filter((item) => item.key !== "anomaly-alerts");
     }
-    if (eduRole === "student") {
+    if (student) {
       list = list.filter((item) => item.key !== "line-reach");
     }
     return list;
   }, [
     isPlatformAdmin,
     menuVisibility,
-    currentUser?.edu_scope?.edu_role,
+    currentUser?.edu_scope,
     visibleResourceRoutes.length
   ]);
 

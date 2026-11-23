@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
 
 from common.router import register_routers
-from datasource.service.edu_permission import EduScope
+from datasource.service.edu_scope_view import EduScope
 from src.agent.education.raw_import import (
     RawDetailRow,
     RawOverviewRow,
@@ -207,7 +207,7 @@ def test_resolve_edu_datasource_id_missing_returns_none(monkeypatch):
 
 
 def test_raw_import_role_rejects_teacher():
-    from datasource.service.edu_permission import EduScope
+    from datasource.service.edu_scope_view import EduScope
 
     teacher_err = assert_raw_import_role_allowed(EduScope(edu_role="teacher"))
     assert isinstance(teacher_err, str)

@@ -218,7 +218,6 @@ const COLUMN_WIDTH = {
   account: 160,
   name: 140,
   email: 208,
-  eduRole: 128,
   role: 104,
   workspace: 96,
   actions: 208
@@ -230,13 +229,6 @@ const TABLE_SCROLL_X = Object.values(COLUMN_WIDTH).reduce((sum, w) => sum + w, 0
     { title: "账号", dataIndex: "account", width: COLUMN_WIDTH.account },
     { title: "名称", dataIndex: "name", width: COLUMN_WIDTH.name },
     { title: "邮箱", dataIndex: "email", width: COLUMN_WIDTH.email },
-    {
-      title: "教育角色",
-      dataIndex: "edu_role",
-      width: COLUMN_WIDTH.eduRole,
-      render: (v: string | null | undefined) =>
-        v ? <Tag color="geekblue">{v}</Tag> : <Tag>未配置</Tag>
-    },
     {
       title: "角色",
       dataIndex: "sys_role",

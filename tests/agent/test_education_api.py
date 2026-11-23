@@ -225,32 +225,6 @@ def test_generate_report_class_overview(monkeypatch):
     assert data["title"]
 
 
-def test_generate_report_denies_teacher_other_class(monkeypatch):
-    from src.agent.education.scope_guard import OUT_OF_SCOPE_MESSAGE
-
-    client = _auth_client(monkeypatch)
-    monkeypatch.setattr(
-        "datasource.service.edu_permission.edu_scope_dict_for_user_id",
-        lambda _uid: {
-            "edu_role": "teacher",
-            "school_name": "扬州中学",
-            "class_names": ["高一(1)班"],
-        },
-    )
-    r = client.post(
-        "/api/v1/education/generate-report",
-        json={
-            "datasource_id": 1,
-            "report_type": "class_overview",
-            "filters": {"class_name": "高一(3)班", "exam_name": "期中"},
-        },
-    )
-    assert r.status_code == 200
-    body = r.json()
-    assert body["code"] == 403
-    assert body["message"] == OUT_OF_SCOPE_MESSAGE
-
-
 def test_generate_report_rejects_unsupported_type(monkeypatch):
     client = _auth_client(monkeypatch)
     r = client.post(
